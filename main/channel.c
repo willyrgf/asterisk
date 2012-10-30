@@ -206,14 +206,20 @@ static const struct {
 	{ AST_CAUSE_UNALLOCATED, "UNALLOCATED", "Unallocated (unassigned) number" },
 	{ AST_CAUSE_NO_ROUTE_TRANSIT_NET, "NO_ROUTE_TRANSIT_NET", "No route to specified transmit network" },
 	{ AST_CAUSE_NO_ROUTE_DESTINATION, "NO_ROUTE_DESTINATION", "No route to destination" },
+	{ AST_CAUSE_MISDIALLED_TRUNK_PREFIX, "MISDIALLED_TRUNK_PREFIX", "Misdialed trunk prefix" },
 	{ AST_CAUSE_CHANNEL_UNACCEPTABLE, "CHANNEL_UNACCEPTABLE", "Channel unacceptable" },
 	{ AST_CAUSE_CALL_AWARDED_DELIVERED, "CALL_AWARDED_DELIVERED", "Call awarded and being delivered in an established channel" },
+	{ AST_CAUSE_PRE_EMPTED, "PRE_EMPTED", "Pre-empted" },
+	{ AST_CAUSE_NUMBER_PORTED_NOT_HERE, "NUMBER_PORTED_NOT_HERE", "Number ported elsewhere" },
 	{ AST_CAUSE_NORMAL_CLEARING, "NORMAL_CLEARING", "Normal Clearing" },
 	{ AST_CAUSE_USER_BUSY, "USER_BUSY", "User busy" },
 	{ AST_CAUSE_NO_USER_RESPONSE, "NO_USER_RESPONSE", "No user responding" },
 	{ AST_CAUSE_NO_ANSWER, "NO_ANSWER", "User alerting, no answer" },
+	{ AST_CAUSE_SUBSCRIBER_ABSENT, "SUBSCRIBER_ABSENT", "Subscriber absent" },
 	{ AST_CAUSE_CALL_REJECTED, "CALL_REJECTED", "Call Rejected" },
 	{ AST_CAUSE_NUMBER_CHANGED, "NUMBER_CHANGED", "Number changed" },
+	{ AST_CAUSE_REDIRECTED_TO_NEW_DESTINATION, "REDIRECTED_TO_NEW_DESTINATION", "Redirected to new destination" },
+	{ AST_CAUSE_ANSWERED_ELSEWHERE, "ANSWERED_ELSEWHERE", "Answered elsewhere" },
 	{ AST_CAUSE_DESTINATION_OUT_OF_ORDER, "DESTINATION_OUT_OF_ORDER", "Destination out of order" },
 	{ AST_CAUSE_INVALID_NUMBER_FORMAT, "INVALID_NUMBER_FORMAT", "Invalid number format" },
 	{ AST_CAUSE_FACILITY_REJECTED, "FACILITY_REJECTED", "Facility rejected" },
@@ -225,7 +231,6 @@ static const struct {
 	{ AST_CAUSE_SWITCH_CONGESTION, "SWITCH_CONGESTION", "Switching equipment congestion" },
 	{ AST_CAUSE_ACCESS_INFO_DISCARDED, "ACCESS_INFO_DISCARDED", "Access information discarded" },
 	{ AST_CAUSE_REQUESTED_CHAN_UNAVAIL, "REQUESTED_CHAN_UNAVAIL", "Requested channel not available" },
-	{ AST_CAUSE_PRE_EMPTED, "PRE_EMPTED", "Pre-empted" },
 	{ AST_CAUSE_FACILITY_NOT_SUBSCRIBED, "FACILITY_NOT_SUBSCRIBED", "Facility not subscribed" },
 	{ AST_CAUSE_OUTGOING_CALL_BARRED, "OUTGOING_CALL_BARRED", "Outgoing call barred" },
 	{ AST_CAUSE_INCOMING_CALL_BARRED, "INCOMING_CALL_BARRED", "Incoming call barred" },
@@ -679,7 +684,7 @@ static void ast_chan_trace_destroy_cb(void *data)
 }
 
 /*! \brief Datastore to put the linked list of ast_chan_trace and trace status */
-static const struct ast_datastore_info ast_chan_trace_datastore_info = {
+static const const struct ast_datastore_info ast_chan_trace_datastore_info = {
 	.type = "ChanTrace",
 	.destroy = ast_chan_trace_destroy_cb
 };
@@ -1382,6 +1387,7 @@ struct ast_channel *ast_dummy_channel_alloc(void)
 {
 	struct ast_channel *tmp;
 	struct varshead *headp;
+	int x;
 
 #if defined(REF_DEBUG)
 	tmp = __ao2_alloc_debug(sizeof(*tmp), ast_dummy_channel_destructor, "dummy channel",
@@ -1400,6 +1406,22 @@ struct ast_channel *ast_dummy_channel_alloc(void)
 	if ((ast_string_field_init(tmp, 128))) {
 		return ast_channel_unref(tmp);
 	}
+
+	/*
+	 * Init file descriptors to unopened state just in case
+	 * autoservice is called on the channel or something tries to
+	 * read a frame from it.
+	 */
+	tmp->timingfd = -1;
+	for (x = 0; x < ARRAY_LEN(tmp->alertpipe); ++x) {
+		tmp->alertpipe[x] = -1;
+	}
+	for (x = 0; x < ARRAY_LEN(tmp->fds); ++x) {
+		tmp->fds[x] = -1;
+	}
+#ifdef HAVE_EPOLL
+	tmp->epfd = -1;
+#endif
 
 	headp = &tmp->varshead;
 	AST_LIST_HEAD_INIT_NOLOCK(headp);
@@ -2499,6 +2521,13 @@ static void ast_dummy_channel_destructor(void *obj)
 	struct ast_channel *chan = obj;
 	struct ast_var_t *vardata;
 	struct varshead *headp;
+	struct ast_datastore *datastore;
+
+	/* Get rid of each of the data stores on the channel */
+	while ((datastore = AST_LIST_REMOVE_HEAD(&chan->datastores, entry))) {
+		/* Free the data store */
+		ast_datastore_free(datastore);
+	}
 
 	headp = &chan->varshead;
 
@@ -2520,7 +2549,7 @@ static void ast_dummy_channel_destructor(void *obj)
 	ast_string_field_free_memory(chan);
 }
 
-struct ast_datastore *ast_channel_datastore_alloc(const struct ast_datastore_info *info, const char *uid)
+struct ast_datastore *ast_channel_datastore_alloc(const const struct ast_datastore_info *info, const char *uid)
 {
 	return ast_datastore_alloc(info, uid);
 }
@@ -2561,7 +2590,7 @@ int ast_channel_datastore_remove(struct ast_channel *chan, struct ast_datastore 
 	return AST_LIST_REMOVE(&chan->datastores, datastore, entry) ? 0 : -1;
 }
 
-struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const struct ast_datastore_info *info, const char *uid)
+struct ast_datastore *ast_channel_datastore_find(struct ast_channel *chan, const const struct ast_datastore_info *info, const char *uid)
 {
 	struct ast_datastore *datastore = NULL;
 	
@@ -3151,8 +3180,8 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 		*exception = 0;
 	
 	if ((sz = n * AST_MAX_FDS + nfds)) {
-		pfds = alloca(sizeof(*pfds) * sz);
-		fdmap = alloca(sizeof(*fdmap) * sz);
+		pfds = ast_alloca(sizeof(*pfds) * sz);
+		fdmap = ast_alloca(sizeof(*fdmap) * sz);
 	} else {
 		/* nothing to allocate and no FDs to check */
 		return NULL;
@@ -3486,7 +3515,6 @@ int ast_waitfor(struct ast_channel *c, int ms)
 	return ms;
 }
 
-/* XXX never to be called with ms = -1 */
 int ast_waitfordigit(struct ast_channel *c, int ms)
 {
 	return ast_waitfordigit_full(c, ms, -1, -1);
@@ -3535,8 +3563,10 @@ int ast_settimeout(struct ast_channel *c, unsigned int rate, int (*func)(const v
 	return res;
 }
 
-int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
+int ast_waitfordigit_full(struct ast_channel *c, int timeout_ms, int audiofd, int cmdfd)
 {
+	struct timeval start = ast_tvnow();
+
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(c, AST_FLAG_ZOMBIE) || ast_check_hangup(c))
 		return -1;
@@ -3544,15 +3574,29 @@ int ast_waitfordigit_full(struct ast_channel *c, int ms, int audiofd, int cmdfd)
 	/* Only look for the end of DTMF, don't bother with the beginning and don't emulate things */
 	ast_set_flag(c, AST_FLAG_END_DTMF_ONLY);
 
-	/* Wait for a digit, no more than ms milliseconds total. */
-	
-	while (ms) {
+	/* Wait for a digit, no more than timeout_ms milliseconds total.
+	 * Or, wait indefinitely if timeout_ms is <0.
+	 */
+	while (ast_tvdiff_ms(ast_tvnow(), start) < timeout_ms || timeout_ms < 0) {
 		struct ast_channel *rchan;
 		int outfd=-1;
+		int ms;
+
+		if (timeout_ms < 0) {
+			ms = timeout_ms;
+		} else {
+			ms = timeout_ms - ast_tvdiff_ms(ast_tvnow(), start);
+			if (ms < 0) {
+				ms = 0;
+			}
+		}
 
 		errno = 0;
+		/* While ast_waitfor_nandfds tries to help by reducing the timeout by how much was waited,
+		 * it is unhelpful if it waited less than a millisecond.
+		 */
 		rchan = ast_waitfor_nandfds(&c, 1, &cmdfd, (cmdfd > -1) ? 1 : 0, NULL, &outfd, &ms);
-		
+
 		if (!rchan && outfd < 0 && ms) {
 			if (errno == 0 || errno == EINTR)
 				continue;
@@ -4707,7 +4751,7 @@ static void plc_ds_destroy(void *data)
 	ast_free(plc);
 }
 
-static struct ast_datastore_info plc_ds_info = {
+static const struct ast_datastore_info plc_ds_info = {
 	.type = "plc",
 	.destroy = plc_ds_destroy,
 };
@@ -6053,7 +6097,7 @@ static void xfer_ds_destroy(void *data)
 	ast_free(ds);
 }
 
-static const struct ast_datastore_info xfer_ds_info = {
+static const const struct ast_datastore_info xfer_ds_info = {
 	.type = "xfer_colp",
 	.destroy = xfer_ds_destroy,
 };
@@ -6396,7 +6440,7 @@ static void masquerade_colp_transfer(struct ast_channel *transferee, struct xfer
 		sizeof(connected_line_data), &colp->target_id, NULL);
 	if (payload_size != -1) {
 		frame_size = payload_size + sizeof(*frame_payload);
-		frame_payload = alloca(frame_size);
+		frame_payload = ast_alloca(frame_size);
 		frame_payload->action = AST_FRAME_READ_ACTION_CONNECTED_LINE_MACRO;
 		frame_payload->payload_size = payload_size;
 		memcpy(frame_payload->payload, connected_line_data, payload_size);
@@ -6653,6 +6697,10 @@ int ast_do_masquerade(struct ast_channel *original)
 
 	/* Keep the same language.  */
 	ast_string_field_set(original, language, clonechan->language);
+
+	/* Keep the same parkinglot. */
+	ast_string_field_set(original, parkinglot, clonechan->parkinglot);
+
 	/* Copy the FD's other than the generator fd */
 	for (x = 0; x < AST_MAX_FDS; x++) {
 		if (x != AST_GENERATOR_FD)
@@ -8014,6 +8062,15 @@ static const struct ast_data_entry channel_providers[] = {
 	AST_DATA_ENTRY("/asterisk/core/channeltypes", &channeltypes_provider),
 };
 
+static void channels_shutdown(void)
+{
+	ast_data_unregister(NULL);
+	if (channels) {
+		ao2_ref(channels, -1);
+		channels = NULL;
+	}
+}
+
 void ast_channels_init(void)
 {
 	channels = ao2_container_alloc(NUM_CHANNEL_BUCKETS,
@@ -8024,6 +8081,8 @@ void ast_channels_init(void)
 	ast_data_register_multiple_core(channel_providers, ARRAY_LEN(channel_providers));
 
 	ast_plc_reload();
+
+	ast_register_atexit(channels_shutdown);
 }
 
 /*! \brief Print call group and pickup group ---*/
@@ -9493,7 +9552,7 @@ static void channel_cc_params_destroy(void *data)
 	ast_cc_config_params_destroy(cc_params);
 }
 
-static const struct ast_datastore_info cc_channel_datastore_info = {
+static const const struct ast_datastore_info cc_channel_datastore_info = {
 	.type = "Call Completion",
 	.duplicate = channel_cc_params_copy,
 	.destroy = channel_cc_params_destroy,

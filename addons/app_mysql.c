@@ -106,7 +106,7 @@ static int autoclear = 0;
 static void mysql_ds_destroy(void *data);
 static void mysql_ds_fixup(void *data, struct ast_channel *oldchan, struct ast_channel *newchan);
 
-static struct ast_datastore_info mysql_ds_info = {
+static const struct ast_datastore_info mysql_ds_info = {
 	.type = "APP_ADDON_SQL_MYSQL",
 	.destroy = mysql_ds_destroy,
 	.chan_fixup = mysql_ds_fixup,
@@ -295,7 +295,7 @@ static int aMYSQL_set(struct ast_channel *chan, char *data)
 	AST_NONSTANDARD_APP_ARGS(args, data, ' ');
 
 	if (args.argc == 3) {
-		var = alloca(6 + strlen(args.variable) + 1);
+		var = ast_alloca(6 + strlen(args.variable) + 1);
 		sprintf(var, "MYSQL_%s", args.variable);
 
 		/* Make the parameter case-insensitive */

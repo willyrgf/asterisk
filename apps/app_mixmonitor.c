@@ -105,6 +105,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Records the audio on the current channel to the specified file.</para>
 			<para>This application does not automatically answer and should be preceeded by
 			an application such as Answer or Progress().</para>
+			<note><para>MixMonitor runs as an audiohook. In order to keep it running through
+			a transfer, AUDIOHOOK_INHERIT must be set for the channel which ran mixmonitor.
+			For more information, including dialplan configuration set for using
+			AUDIOHOOK_INHERIT with MixMonitor, see the function documentation for
+			AUDIOHOOK_INHERIT.</para></note>
 			<variablelist>
 				<variable name="MIXMONITOR_FILENAME">
 					<para>Will contain the filename used to record.</para>
@@ -116,6 +121,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">StopMixMonitor</ref>
 			<ref type="application">PauseMonitor</ref>
 			<ref type="application">UnpauseMonitor</ref>
+			<ref type="function">AUDIOHOOK_INHERIT</ref>
 		</see-also>
 	</application>
 	<application name="StopMixMonitor" language="en_US">
@@ -232,7 +238,7 @@ static void mixmonitor_ds_destroy(void *data)
 	ast_mutex_unlock(&mixmonitor_ds->lock);
 }
 
-static struct ast_datastore_info mixmonitor_ds_info = {
+static const struct ast_datastore_info mixmonitor_ds_info = {
 	.type = "mixmonitor",
 	.destroy = mixmonitor_ds_destroy,
 };
@@ -542,7 +548,7 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 	if (args.filename[0] != '/') {
 		char *build;
 
-		build = alloca(strlen(ast_config_AST_MONITOR_DIR) + strlen(args.filename) + 3);
+		build = ast_alloca(strlen(ast_config_AST_MONITOR_DIR) + strlen(args.filename) + 3);
 		sprintf(build, "%s/%s", ast_config_AST_MONITOR_DIR, args.filename);
 		args.filename = build;
 	}

@@ -1328,7 +1328,7 @@ static void iax2_ami_channelupdate(struct chan_iax2_pvt *pvt)
 		pvt->callno, pvt->peercallno, pvt->peer ? pvt->peer : "");
 }
 
-static struct ast_datastore_info iax2_variable_datastore_info = {
+static const struct ast_datastore_info iax2_variable_datastore_info = {
 	.type = "IAX2_VARIABLE",
 	.duplicate = iax2_dup_variable_datastore,
 	.destroy = iax2_free_variable_datastore,
@@ -1539,19 +1539,19 @@ static int send_ping(const void *data)
 	return 0;
 }
 
-static void encmethods_to_str(int e, struct ast_str *buf)
+static void encmethods_to_str(int e, struct ast_str **buf)
 {
-	ast_str_set(&buf, 0, "(");
+	ast_str_set(buf, 0, "(");
 	if (e & IAX_ENCRYPT_AES128) {
-		ast_str_append(&buf, 0, "aes128");
+		ast_str_append(buf, 0, "aes128");
 	}
 	if (e & IAX_ENCRYPT_KEYROTATE) {
-		ast_str_append(&buf, 0, ",keyrotate");
+		ast_str_append(buf, 0, ",keyrotate");
 	}
-	if (ast_str_strlen(buf) > 1) {
-		ast_str_append(&buf, 0, ")");
+	if (ast_str_strlen(*buf) > 1) {
+		ast_str_append(buf, 0, ")");
 	} else {
-		ast_str_set(&buf, 0, "No");
+		ast_str_set(buf, 0, "No");
 	}
 }
 
@@ -3034,10 +3034,7 @@ static int try_firmware(char *s)
 	unsigned char sum[16], buf[1024];
 	char *s2, *last;
 
-	if (!(s2 = alloca(strlen(s) + 100))) {
-		ast_log(LOG_WARNING, "Alloca failed!\n");
-		return -1;
-	}
+	s2 = ast_alloca(strlen(s) + 100);
 
 	last = strrchr(s, '/');
 	if (last)
@@ -3349,12 +3346,10 @@ static int send_packet(struct iax_frame *f)
 		ast_debug(3, "Sending %d on %d/%d to %s:%d\n", f->ts, callno, iaxs[callno]->peercallno, ast_inet_ntoa(iaxs[callno]->addr.sin_addr), ntohs(iaxs[callno]->addr.sin_port));
 	
 	if (f->transfer) {
-		if (iaxdebug)
-			iax_showframe(f, NULL, 0, &iaxs[callno]->transfer, f->datalen - sizeof(struct ast_iax2_full_hdr));
+		iax_outputframe(f, NULL, 0, &iaxs[callno]->transfer, f->datalen - sizeof(struct ast_iax2_full_hdr));
 		res = sendto(iaxs[callno]->sockfd, f->data, f->datalen, 0,(struct sockaddr *)&iaxs[callno]->transfer, sizeof(iaxs[callno]->transfer));
 	} else {
-		if (iaxdebug)
-			iax_showframe(f, NULL, 0, &iaxs[callno]->addr, f->datalen - sizeof(struct ast_iax2_full_hdr));
+		iax_outputframe(f, NULL, 0, &iaxs[callno]->addr, f->datalen - sizeof(struct ast_iax2_full_hdr));
 		res = sendto(iaxs[callno]->sockfd, f->data, f->datalen, 0,(struct sockaddr *)&iaxs[callno]->addr, sizeof(iaxs[callno]->addr));
 	}
 	if (res < 0) {
@@ -3780,7 +3775,7 @@ static char *handle_cli_iax2_show_peer(struct ast_cli_entry *e, int cmd, struct 
 
 		ast_sockaddr_to_sin(&peer->addr, &peer_addr);
 
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		ast_cli(a->fd, "\n\n");
 		ast_cli(a->fd, "  * Name       : %s\n", peer->name);
 		ast_cli(a->fd, "  Secret       : %s\n", ast_strlen_zero(peer->secret) ? "<Not set>" : "<Set>");
@@ -4741,9 +4736,7 @@ static int send_apathetic_reply(unsigned short callno, unsigned short dcallno,
 	data.f.type = AST_FRAME_IAX;
 	data.f.csub = compress_subclass(command);
 
-	if (iaxdebug) {
-		iax_outputframe(NULL, &data.f, 0, sin, size - sizeof(struct ast_iax2_full_hdr));
-	}
+	iax_outputframe(NULL, &data.f, 0, sin, size - sizeof(struct ast_iax2_full_hdr));
 
 	return sendto(sockfd, &data, size, 0, (struct sockaddr *)sin, sizeof(*sin));
 }
@@ -6257,7 +6250,7 @@ static int decode_frame(ast_aes_decrypt_key *dcx, struct ast_iax2_full_hdr *fh, 
 	int padding;
 	unsigned char *workspace;
 
-	workspace = alloca(*datalen);
+	workspace = ast_alloca(*datalen);
 	memset(f, 0, sizeof(*f));
 	if (ntohs(fh->scallno) & IAX_FLAG_FULL) {
 		struct ast_iax2_full_enc_hdr *efh = (struct ast_iax2_full_enc_hdr *)fh;
@@ -6303,9 +6296,7 @@ static int encrypt_frame(ast_aes_encrypt_key *ecx, struct ast_iax2_full_hdr *fh,
 {
 	int padding;
 	unsigned char *workspace;
-	workspace = alloca(*datalen + 32);
-	if (!workspace)
-		return -1;
+	workspace = ast_alloca(*datalen + 32);
 	if (ntohs(fh->scallno) & IAX_FLAG_FULL) {
 		struct ast_iax2_full_enc_hdr *efh = (struct ast_iax2_full_enc_hdr *)fh;
 		if (iaxdebug)
@@ -6727,7 +6718,7 @@ static int __iax2_show_peers(int fd, int *total, struct mansession *s, const int
 		else
 			ast_copy_string(name, peer->name, sizeof(name));
 
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		retstatus = peer_status(peer, status, sizeof(status));
 		if (retstatus > 0)
 			online_peers++;
@@ -7032,7 +7023,7 @@ static int manager_iax2_show_peer_list(struct mansession *s, const struct messag
 
 	i = ao2_iterator_init(peers, 0);
 	for (; (peer = ao2_iterator_next(&i)); peer_unref(peer)) {
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		astman_append(s, "Event: PeerEntry\r\n%sChanneltype: IAX\r\n", idtext);
 		if (!ast_strlen_zero(peer->username)) {
 			astman_append(s, "ObjectName: %s\r\nObjectUsername: %s\r\n", peer->name, peer->username);
@@ -7618,10 +7609,10 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 	i = ao2_iterator_init(users, 0);
 	while ((user = ao2_iterator_next(&i))) {
 		if ((ast_strlen_zero(iaxs[callno]->username) ||				/* No username specified */
-			!strcmp(iaxs[callno]->username, user->name))	/* Or this username specified */
-			&& ast_apply_ha(user->ha, &addr) 	/* Access is permitted from this IP */
+			!strcmp(iaxs[callno]->username, user->name))			/* Or this username specified */
+			&& ast_apply_ha(user->ha, &addr) == AST_SENSE_ALLOW		/* Access is permitted from this IP */
 			&& (ast_strlen_zero(iaxs[callno]->context) ||			/* No context specified */
-			     apply_context(user->contexts, iaxs[callno]->context))) {			/* Context is permitted */
+				apply_context(user->contexts, iaxs[callno]->context))) {			/* Context is permitted */
 			if (!ast_strlen_zero(iaxs[callno]->username)) {
 				/* Exact match, stop right now. */
 				if (best)
@@ -7677,8 +7668,9 @@ static int check_access(int callno, struct sockaddr_in *sin, struct iax_ies *ies
 	user = best;
 	if (!user && !ast_strlen_zero(iaxs[callno]->username)) {
 		user = realtime_user(iaxs[callno]->username, sin);
-		if (user && !ast_strlen_zero(iaxs[callno]->context) &&			/* No context specified */
-		    !apply_context(user->contexts, iaxs[callno]->context)) {		/* Context is permitted */
+		if (user && (ast_apply_ha(user->ha, &addr) == AST_SENSE_DENY		/* Access is denied from this IP */
+			|| (!ast_strlen_zero(iaxs[callno]->context) &&					/* No context specified */
+				!apply_context(user->contexts, iaxs[callno]->context)))) {	/* Context is permitted */
 			user = user_unref(user);
 		}
 	}
@@ -9939,9 +9931,9 @@ static int socket_process(struct iax2_thread *thread)
 	char *using_prefs = "mine";
 
 	/* allocate an iax_frame with 4096 bytes of data buffer */
-	fr = alloca(sizeof(*fr) + 4096);
+	fr = ast_alloca(sizeof(*fr) + 4096);
 	memset(fr, 0, sizeof(*fr));
-	fr->afdatalen = 4096; /* From alloca() above */
+	fr->afdatalen = 4096; /* From ast_alloca() above */
 
 	/* Copy frequently used parameters to the stack */
 	res = thread->buf_len;
@@ -12307,9 +12299,7 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 	char *addr;
 	char *portstr;
 
-	if (!(tmp = ast_strdupa(srcaddr)))
-		return -1;
-
+	tmp = ast_strdupa(srcaddr);
 	addr = strsep(&tmp, ":");
 	portstr = tmp;
 
@@ -12769,7 +12759,7 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 				user->ha = ast_append_ha(v->name, v->value, user->ha, NULL);
 			} else if (!strcasecmp(v->name, "setvar")) {
 				varname = ast_strdupa(v->value);
-				if (varname && (varval = strchr(varname,'='))) {
+				if ((varval = strchr(varname, '='))) {
 					*varval = '\0';
 					varval++;
 					if((tmpvar = ast_variable_new(varname, varval, ""))) {
@@ -14601,7 +14591,7 @@ static int peers_data_provider_get(const struct ast_data_search *search,
 
 		ast_data_add_bool(data_peer, "dynamic", ast_test_flag64(peer, IAX_DYNAMIC));
 
-		encmethods_to_str(peer->encmethods, encmethods);
+		encmethods_to_str(peer->encmethods, &encmethods);
 		ast_data_add_str(data_peer, "encryption", peer->encmethods ? ast_str_buffer(encmethods) : "no");
 
 		peer_unref(peer);

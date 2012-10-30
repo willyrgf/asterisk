@@ -167,6 +167,16 @@ static inline const char *dbt_data2str_full(DBT *dbt, const char *def)
 	return S_OR(dbt_data2str(dbt), def);
 }
 
+/*!
+ * \internal
+ * \brief Invoke a callback function on all keys, using given data and filter.
+ *
+ * \param cb      Callback function to invoke (itself returns number of keys it affected).
+ * \param data    Value to pass to cb's data param.
+ * \param filter  Value to pass to cb's filter param.
+ * \param sync    If non-zero, call db_sync() when done.
+ * \return Number of keys affected by the callback, or -1 if database is unavailable.
+ */
 static int process_db_keys(process_keys_cb cb, void *data, const char *filter, int sync)
 {
 	DBT key = { 0, }, value = { 0, }, last_key = { 0, };
@@ -271,7 +281,21 @@ int ast_db_put(const char *family, const char *keys, const char *value)
 	return res;
 }
 
-int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
+/*!
+ * \internal
+ * \brief Get key value specified by family/key.
+ *
+ * Gets the value associated with the specified \a family and \a keys, and
+ * stores it, either into the fixed sized buffer specified by \a buffer
+ * and \a bufferlen, or as a heap allocated string if \a bufferlen is -1.
+ *
+ * \note If \a bufferlen is -1, \a buffer points to heap allocated memory
+ *       and must be freed by calling ast_free().
+ *
+ * \retval -1 An error occurred
+ * \retval 0 Success
+ */
+static int db_get_common(const char *family, const char *keys, char **buffer, int bufferlen)
 {
 	char fullkey[MAX_DB_FIELD] = "";
 	DBT key, data;
@@ -286,7 +310,6 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
-	memset(value, 0, valuelen);
 	key.data = fullkey;
 	key.size = fullkeylen + 1;
 
@@ -296,13 +319,16 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	if (res) {
 		ast_debug(1, "Unable to find key '%s' in family '%s'\n", keys, family);
 	} else {
-#if 0
-		printf("Got value of size %d\n", data.size);
-#endif
 		if (data.size) {
 			((char *)data.data)[data.size - 1] = '\0';
-			/* Make sure that we don't write too much to the dst pointer or we don't read too much from the source pointer */
-			ast_copy_string(value, data.data, (valuelen > data.size) ? data.size : valuelen);
+
+			if (bufferlen == -1) {
+				*buffer = ast_strdup(data.data);
+			} else {
+				/* Make sure that we don't write too much to the dst pointer or we don't
+				 * read too much from the source pointer */
+				ast_copy_string(*buffer, data.data, bufferlen > data.size ? data.size : bufferlen);
+			}
 		} else {
 			ast_log(LOG_NOTICE, "Strange, empty value for /%s/%s\n", family, keys);
 		}
@@ -313,6 +339,23 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	ast_mutex_unlock(&dblock);
 
 	return res;
+}
+
+int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
+{
+	ast_assert(value != NULL);
+
+	/* Make sure we initialize */
+	value[0] = 0;
+
+	return db_get_common(family, keys, &value, valuelen);
+}
+
+int ast_db_get_allocated(const char *family, const char *keys, char **out)
+{
+	*out = NULL;
+
+	return db_get_common(family, keys, out, -1);
 }
 
 int ast_db_del(const char *family, const char *keys)
@@ -427,7 +470,7 @@ static char *handle_cli_database_del(struct ast_cli_entry *e, int cmd, struct as
 
 static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int res;
+	int num_deleted;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -446,14 +489,16 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 	if ((a->argc < 3) || (a->argc > 4))
 		return CLI_SHOWUSAGE;
 	if (a->argc == 4) {
-		res = ast_db_deltree(a->argv[2], a->argv[3]);
+		num_deleted = ast_db_deltree(a->argv[2], a->argv[3]);
 	} else {
-		res = ast_db_deltree(a->argv[2], NULL);
+		num_deleted = ast_db_deltree(a->argv[2], NULL);
 	}
-	if (res < 0) {
+	if (num_deleted < 0) {
+		ast_cli(a->fd, "Database unavailable.\n");
+	} else if (num_deleted == 0) {
 		ast_cli(a->fd, "Database entries do not exist.\n");
 	} else {
-		ast_cli(a->fd, "%d database entries removed.\n",res);
+		ast_cli(a->fd, "%d database entries removed.\n",num_deleted);
 	}
 	return CLI_SUCCESS;
 }
@@ -718,23 +763,27 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 {
 	const char *family = astman_get_header(m, "Family");
 	const char *key = astman_get_header(m, "Key");
-	int res;
+	int num_deleted;
 
 	if (ast_strlen_zero(family)) {
 		astman_send_error(s, m, "No family specified.");
 		return 0;
 	}
 
-	if (!ast_strlen_zero(key))
-		res = ast_db_deltree(family, key);
-	else
-		res = ast_db_deltree(family, NULL);
+	if (!ast_strlen_zero(key)) {
+		num_deleted = ast_db_deltree(family, key);
+	} else {
+		num_deleted = ast_db_deltree(family, NULL);
+	}
 
-	if (res < 0)
+	if (num_deleted < 0) {
+		astman_send_error(s, m, "Database unavailable");
+	} else if (num_deleted == 0) {
 		astman_send_error(s, m, "Database entry not found");
-	else
+	} else {
 		astman_send_ack(s, m, "Key tree deleted successfully");
-	
+	}
+
 	return 0;
 }
 

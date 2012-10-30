@@ -3277,7 +3277,7 @@ static void exception_store_free(void *data)
 	ast_free(exception);
 }
 
-static struct ast_datastore_info exception_store_info = {
+static const struct ast_datastore_info exception_store_info = {
 	.type = "EXCEPTION",
 	.destroy = exception_store_free,
 };
@@ -4031,7 +4031,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			whereweare += (len + 3);
 
 			if (!var)
-				var = alloca(VAR_BUF_SIZE);
+				var = ast_alloca(VAR_BUF_SIZE);
 
 			/* Store variable name (and truncate) */
 			ast_copy_string(var, vars, len + 1);
@@ -4040,7 +4040,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			if (needsub) {
 				size_t used;
 				if (!ltmp)
-					ltmp = alloca(VAR_BUF_SIZE);
+					ltmp = ast_alloca(VAR_BUF_SIZE);
 
 				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
@@ -4049,7 +4049,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			}
 
 			if (!workspace)
-				workspace = alloca(VAR_BUF_SIZE);
+				workspace = ast_alloca(VAR_BUF_SIZE);
 
 			workspace[0] = '\0';
 
@@ -4120,7 +4120,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			whereweare += (len + 3);
 
 			if (!var)
-				var = alloca(VAR_BUF_SIZE);
+				var = ast_alloca(VAR_BUF_SIZE);
 
 			/* Store variable name (and truncate) */
 			ast_copy_string(var, vars, len + 1);
@@ -4129,7 +4129,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			if (needsub) {
 				size_t used;
 				if (!ltmp)
-					ltmp = alloca(VAR_BUF_SIZE);
+					ltmp = ast_alloca(VAR_BUF_SIZE);
 
 				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
@@ -4999,6 +4999,9 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 		int digit = 0;
 		int invalid = 0;
 		int timeout = 0;
+
+		/* No digits pressed yet */
+		dst_exten[pos] = '\0';
 
 		/* loop on priorities in this context/exten */
 		while (!(res = ast_spawn_extension(c, c->context, c->exten, c->priority,
@@ -6752,6 +6755,7 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 			continue;	/* not the name we want */
 
 		dpc->context_existence = 1;
+		dpc->total_context++;
 
 		ast_debug(3, "manager_show_dialplan: Found Context: %s \n", ast_get_context_name(c));
 
@@ -6775,8 +6779,6 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 
 			dpc->extension_existence = 1;
 
-			/* may we print context info? */
-			dpc->total_context++;
 			dpc->total_exten++;
 
 			p = NULL;		/* walk next extension peers */
@@ -10119,11 +10121,9 @@ int pbx_builtin_importvar(struct ast_channel *chan, const char *data)
 	if (channel && value && name) { /*! \todo XXX should do !ast_strlen_zero(..) of the args ? */
 		struct ast_channel *chan2 = ast_channel_get_by_name(channel);
 		if (chan2) {
-			char *s = alloca(strlen(value) + 4);
-			if (s) {
-				sprintf(s, "${%s}", value);
-				pbx_substitute_variables_helper(chan2, s, tmp, sizeof(tmp) - 1);
-			}
+			char *s = ast_alloca(strlen(value) + 4);
+			sprintf(s, "${%s}", value);
+			pbx_substitute_variables_helper(chan2, s, tmp, sizeof(tmp) - 1);
 			chan2 = ast_channel_unref(chan2);
 		}
 		pbx_builtin_setvar_helper(chan, name, tmp);
@@ -10304,6 +10304,26 @@ static const struct ast_data_entry pbx_data_providers[] = {
 	AST_DATA_ENTRY("asterisk/core/hints", &hints_data_provider),
 };
 
+/*! \internal \brief Clean up resources on Asterisk shutdown.
+ * \note Cleans up resources allocated in load_pbx */
+static void unload_pbx(void)
+{
+	int x;
+
+	if (device_state_sub) {
+		device_state_sub = ast_event_unsubscribe(device_state_sub);
+	}
+
+	/* Unregister builtin applications */
+	for (x = 0; x < ARRAY_LEN(builtins); x++) {
+		ast_unregister_application(builtins[x].name);
+	}
+	ast_manager_unregister("ShowDialPlan");
+	ast_custom_function_unregister(&exception_function);
+	ast_custom_function_unregister(&testtime_function);
+	ast_data_unregister(NULL);
+}
+
 int load_pbx(void)
 {
 	int x;
@@ -10337,6 +10357,7 @@ int load_pbx(void)
 		return -1;
 	}
 
+	ast_register_atexit(unload_pbx);
 	return 0;
 }
 

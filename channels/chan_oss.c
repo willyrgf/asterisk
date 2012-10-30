@@ -532,7 +532,7 @@ static int setformat(struct chan_oss_pvt *o, int mode)
 	res = ioctl(fd, SNDCTL_DSP_SPEED, &fmt);
 
 	if (res < 0) {
-		ast_log(LOG_WARNING, "Failed to set audio device to mono\n");
+		ast_log(LOG_WARNING, "Failed to set sample rate to %d\n", desired);
 		return -1;
 	}
 	if (fmt != desired) {
@@ -1391,9 +1391,7 @@ static struct chan_oss_pvt *store_config(struct ast_config *cfg, char *ctg)
 	if (o->mixer_cmd) {
 		char *cmd;
 
-		if (asprintf(&cmd, "mixer %s", o->mixer_cmd) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
-		} else {
+		if (ast_asprintf(&cmd, "mixer %s", o->mixer_cmd) >= 0) {
 			ast_log(LOG_WARNING, "running [%s]\n", cmd);
 			if (system(cmd) < 0) {
 				ast_log(LOG_WARNING, "system() failed: %s\n", strerror(errno));

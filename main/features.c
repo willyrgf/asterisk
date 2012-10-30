@@ -716,7 +716,7 @@ static void set_new_chan_name(struct ast_channel *chan)
 	ast_channel_lock(chan);
 	seq_num = ast_atomic_fetchadd_int(&seq_num_last, +1);
 	len = snprintf(dummy, sizeof(dummy), "%s<XFER_%x>", chan->name, seq_num) + 1;
-	chan_name = alloca(len);
+	chan_name = ast_alloca(len);
 	snprintf(chan_name, len, "%s<XFER_%x>", chan->name, seq_num);
 	ast_channel_unlock(chan);
 
@@ -945,6 +945,33 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller,
 	struct ast_channel *transferee, const char *type, format_t format, void *data,
 	int timeout, int *outstate, const char *language);
 
+static const struct ast_datastore_info channel_app_data_datastore = {
+	.type = "Channel appdata datastore",
+	.destroy = ast_free_ptr,
+};
+
+static int set_chan_app_data(struct ast_channel *chan, const char *src_app_data)
+{
+	struct ast_datastore *datastore;
+	char *dst_app_data;
+
+	datastore = ast_datastore_alloc(&channel_app_data_datastore, NULL);
+	if (!datastore) {
+		return -1;
+	}
+
+	dst_app_data = ast_malloc(strlen(src_app_data) + 1);
+	if (!dst_app_data) {
+		ast_datastore_free(datastore);
+		return -1;
+	}
+
+	chan->data = strcpy(dst_app_data, src_app_data);
+	datastore->data = dst_app_data;
+	ast_channel_datastore_add(chan, datastore);
+	return 0;
+}
+
 /*!
  * \brief bridge the call 
  * \param data thread bridge.
@@ -958,9 +985,13 @@ static void *bridge_call_thread(void *data)
 	struct ast_bridge_thread_obj *tobj = data;
 
 	tobj->chan->appl = !tobj->return_to_pbx ? "Transferred Call" : "ManagerBridge";
-	tobj->chan->data = tobj->peer->name;
+	if (set_chan_app_data(tobj->chan, tobj->peer->name)) {
+		tobj->chan->data = "(Empty)";
+	}
 	tobj->peer->appl = !tobj->return_to_pbx ? "Transferred Call" : "ManagerBridge";
-	tobj->peer->data = tobj->chan->name;
+	if (set_chan_app_data(tobj->peer, tobj->chan->name)) {
+		tobj->peer->data = "(Empty)";
+	}
 
 	ast_bridge_call(tobj->peer, tobj->chan, &tobj->bconfig);
 
@@ -1599,10 +1630,15 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 	}
 	if (peer == chan) { /* pu->notquiteyet = 1 */
 		/* Wake up parking thread if we're really done */
-		pu->hold_method = AST_CONTROL_HOLD;
-		ast_indicate_data(chan, AST_CONTROL_HOLD,
-			S_OR(pu->parkinglot->cfg.mohclass, NULL),
-			!ast_strlen_zero(pu->parkinglot->cfg.mohclass) ? strlen(pu->parkinglot->cfg.mohclass) + 1 : 0);
+		if (ast_test_flag(args, AST_PARK_OPT_RINGING)) {
+			pu->hold_method = AST_CONTROL_RINGING;
+			ast_indicate(chan, AST_CONTROL_RINGING);
+		} else {
+			pu->hold_method = AST_CONTROL_HOLD;
+			ast_indicate_data(chan, AST_CONTROL_HOLD,
+				S_OR(pu->parkinglot->cfg.mohclass, NULL),
+				!ast_strlen_zero(pu->parkinglot->cfg.mohclass) ? strlen(pu->parkinglot->cfg.mohclass) + 1 : 0);
+		}
 		pu->notquiteyet = 0;
 		pthread_kill(parking_thread, SIGURG);
 	}
@@ -2111,8 +2147,8 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 
 	if (touch_monitor) {
 		len = strlen(touch_monitor) + 50;
-		args = alloca(len);
-		touch_filename = alloca(len);
+		args = ast_alloca(len);
+		touch_filename = ast_alloca(len);
 		snprintf(touch_filename, len, "%s-%ld-%s", S_OR(touch_monitor_prefix, "auto"), (long)time(NULL), touch_monitor);
 		snprintf(args, len, "%s,%s,m", S_OR(touch_format, "wav"), touch_filename);
 	} else {
@@ -2121,8 +2157,8 @@ static int builtin_automonitor(struct ast_channel *chan, struct ast_channel *pee
 		callee_chan_id = ast_strdupa(S_COR(callee_chan->caller.id.number.valid,
 			callee_chan->caller.id.number.str, callee_chan->name));
 		len = strlen(caller_chan_id) + strlen(callee_chan_id) + 50;
-		args = alloca(len);
-		touch_filename = alloca(len);
+		args = ast_alloca(len);
+		touch_filename = ast_alloca(len);
 		snprintf(touch_filename, len, "%s-%ld-%s-%s", S_OR(touch_monitor_prefix, "auto"), (long)time(NULL), caller_chan_id, callee_chan_id);
 		snprintf(args, len, "%s,%s,m", S_OR(touch_format, "wav"), touch_filename);
 	}
@@ -2223,8 +2259,8 @@ static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *
 
 	if (touch_monitor) {
 		len = strlen(touch_monitor) + 50;
-		args = alloca(len);
-		touch_filename = alloca(len);
+		args = ast_alloca(len);
+		touch_filename = ast_alloca(len);
 		snprintf(touch_filename, len, "auto-%ld-%s", (long)time(NULL), touch_monitor);
 		snprintf(args, len, "%s.%s,b", touch_filename, (touch_format) ? touch_format : "wav");
 	} else {
@@ -2233,8 +2269,8 @@ static int builtin_automixmonitor(struct ast_channel *chan, struct ast_channel *
 		callee_chan_id = ast_strdupa(S_COR(callee_chan->caller.id.number.valid,
 			callee_chan->caller.id.number.str, callee_chan->name));
 		len = strlen(caller_chan_id) + strlen(callee_chan_id) + 50;
-		args = alloca(len);
-		touch_filename = alloca(len);
+		args = ast_alloca(len);
+		touch_filename = ast_alloca(len);
 		snprintf(touch_filename, len, "auto-%ld-%s-%s", (long)time(NULL), caller_chan_id, callee_chan_id);
 		snprintf(args, len, "%s.%s,b", touch_filename, S_OR(touch_format, "wav"));
 	}
@@ -3548,7 +3584,7 @@ static struct ast_channel *feature_request_and_dial(struct ast_channel *caller,
 
 		disconnect_code = builtin_features[x].exten;
 		len = strlen(disconnect_code) + 1;
-		dialed_code = alloca(len);
+		dialed_code = ast_alloca(len);
 		memset(dialed_code, 0, len);
 		break;
 	}
@@ -6613,7 +6649,6 @@ static int load_config(int reload)
 			return -1;
 		}
 		ast_debug(1, "Configuration of default default parking lot done.\n");
-		parkinglot_addref(default_parkinglot);
 	}
 
 	cfg = ast_config_load2("features.conf", "features", config_flags);
@@ -8190,6 +8225,22 @@ exit_features_test:
 }
 #endif	/* defined(TEST_FRAMEWORK) */
 
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void features_shutdown(void)
+{
+	ast_devstate_prov_del("Park");
+	ast_manager_unregister("Bridge");
+	ast_manager_unregister("Park");
+	ast_manager_unregister("Parkinglots");
+	ast_manager_unregister("ParkedCalls");
+	ast_unregister_application(parkcall);
+	ast_unregister_application(parkedcall);
+	ast_unregister_application(app_bridge);
+
+	pthread_cancel(parking_thread);
+	ao2_ref(parkinglots, -1);
+}
+
 int ast_features_init(void)
 {
 	int res;
@@ -8221,6 +8272,8 @@ int ast_features_init(void)
 #if defined(TEST_FRAMEWORK)
 	res |= AST_TEST_REGISTER(features_test);
 #endif	/* defined(TEST_FRAMEWORK) */
+
+	ast_register_atexit(features_shutdown);
 
 	return res;
 }

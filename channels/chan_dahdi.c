@@ -71,12 +71,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * be placed in sig_analog and the duplicated code could be removed.
  */
 
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI)
 #include "sig_pri.h"
+#ifndef PRI_RESTART
+#error "Upgrade your libpri"
 #endif
+#endif	/* defined(HAVE_PRI) */
 
 #if defined(HAVE_SS7)
 #include "sig_ss7.h"
+#if defined(LIBSS7_ABI_COMPATIBILITY)
+#error "Your installed libss7 is not compatible"
+#endif
 #endif	/* defined(HAVE_SS7) */
 
 #ifdef HAVE_OPENR2
@@ -1546,6 +1552,47 @@ static inline int dahdi_sig_pri_lib_handles(int signaling)
 	return handles;
 }
 
+static int analog_lib_handles(int signalling, int radio, int oprmode)
+{
+	switch (signalling) {
+	case SIG_FXOLS:
+	case SIG_FXOGS:
+	case SIG_FXOKS:
+	case SIG_FXSLS:
+	case SIG_FXSGS:
+	case SIG_FXSKS:
+	case SIG_EMWINK:
+	case SIG_EM:
+	case SIG_EM_E1:
+	case SIG_FEATD:
+	case SIG_FEATDMF:
+	case SIG_E911:
+	case SIG_FGC_CAMA:
+	case SIG_FGC_CAMAMF:
+	case SIG_FEATB:
+	case SIG_SFWINK:
+	case SIG_SF:
+	case SIG_SF_FEATD:
+	case SIG_SF_FEATDMF:
+	case SIG_FEATDMF_TA:
+	case SIG_SF_FEATB:
+		break;
+	default:
+		/* The rest of the function should cover the remainder of signalling types */
+		return 0;
+	}
+
+	if (radio) {
+		return 0;
+	}
+
+	if (oprmode) {
+		return 0;
+	}
+
+	return 1;
+}
+
 static enum analog_sigtype dahdisig_to_analogsig(int sig)
 {
 	switch (sig) {
@@ -2196,11 +2243,16 @@ static void my_get_and_handle_alarms(void *pvt)
 
 static void *my_get_sigpvt_bridged_channel(struct ast_channel *chan)
 {
-	struct dahdi_pvt *p = ast_bridged_channel(chan)->tech_pvt;
-	if (p)
-		return p->sig_pvt;
-	else
-		return NULL;
+	struct ast_channel *bridged = ast_bridged_channel(chan);
+
+	if (bridged && bridged->tech == &dahdi_tech) {
+		struct dahdi_pvt *p = bridged->tech_pvt;
+
+		if (analog_lib_handles(p->sig, p->radio, p->oprmode)) {
+			return p->sig_pvt;
+		}
+	}
+	return NULL;
 }
 
 static int my_get_sub_fd(void *pvt, enum analog_sub sub)
@@ -4653,45 +4705,6 @@ static char *dahdi_sig2str(int sig)
 }
 
 #define sig2str dahdi_sig2str
-
-static int analog_lib_handles(int signalling, int radio, int oprmode)
-{
-	switch (signalling) {
-	case SIG_FXOLS:
-	case SIG_FXOGS:
-	case SIG_FXOKS:
-	case SIG_FXSLS:
-	case SIG_FXSGS:
-	case SIG_FXSKS:
-	case SIG_EMWINK:
-	case SIG_EM:
-	case SIG_EM_E1:
-	case SIG_FEATD:
-	case SIG_FEATDMF:
-	case SIG_E911:
-	case SIG_FGC_CAMA:
-	case SIG_FGC_CAMAMF:
-	case SIG_FEATB:
-	case SIG_SFWINK:
-	case SIG_SF:
-	case SIG_SF_FEATD:
-	case SIG_SF_FEATDMF:
-	case SIG_FEATDMF_TA:
-	case SIG_SF_FEATB:
-		break;
-	default:
-		/* The rest of the function should cover the remainder of signalling types */
-		return 0;
-	}
-
-	if (radio)
-		return 0;
-
-	if (oprmode)
-		return 0;
-
-	return 1;
-}
 
 static int conf_add(struct dahdi_pvt *p, struct dahdi_subchannel *c, int idx, int slavechannel)
 {
@@ -8918,11 +8931,20 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 		CHANNEL_DEADLOCK_AVOIDANCE(ast);
 
 		/*
-		 * For PRI channels, we must refresh the private pointer because
-		 * the call could move to another B channel while the Asterisk
-		 * channel is unlocked.
+		 * Check to see if the channel is still associated with the same
+		 * private structure.  While the Asterisk channel was unlocked
+		 * the following events may have occured:
+		 *
+		 * 1) A masquerade may have associated the channel with another
+		 * technology or private structure.
+		 *
+		 * 2) For PRI calls, call signaling could change the channel
+		 * association to another B channel (private structure).
 		 */
-		p = ast->tech_pvt;
+		if (ast->tech_pvt != p) {
+			/* The channel is no longer associated.  Quit gracefully. */
+			return &ast_null_frame;
+		}
 	}
 
 	idx = dahdi_get_index(ast, p, 0);
@@ -11621,6 +11643,7 @@ static struct dahdi_pvt *handle_init_event(struct dahdi_pvt *i, int event)
 					ast_log(LOG_WARNING, "Cannot allocate new structure on channel %d\n", i->channel);
 				} else if (ast_pthread_create_detached(&threadid, NULL, analog_ss_thread, chan)) {
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
+					ast_hangup(chan);
 				}
 			}
 			break;
@@ -11888,6 +11911,7 @@ static void *do_monitor(void *data)
 											res = ast_pthread_create_detached(&threadid, NULL, analog_ss_thread, chan);
 											if (res) {
 												ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
+												ast_hangup(chan);
 											} else {
 												i->dtmfcid_holdoff_state = 1;
 											}
@@ -13106,7 +13130,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				analog_p->callwaitingcallerid = conf->chan.callwaitingcallerid;
 				analog_p->ringt = conf->chan.ringt;
 				analog_p->ringt_base = ringt_base;
-				analog_p->chan_tech = &dahdi_tech;
 				analog_p->onhooktime = time(NULL);
 				if (chan_sig & __DAHDI_SIG_FXO) {
 					memset(&p, 0, sizeof(p));
@@ -14049,9 +14072,6 @@ static void *mfcr2_monitor(void *data)
 #endif /* HAVE_OPENR2 */
 
 #if defined(HAVE_PRI)
-#ifndef PRI_RESTART
-#error "Upgrade your libpri"
-#endif
 static void dahdi_pri_message(struct pri *pri, char *s)
 {
 	int x;
@@ -14222,8 +14242,8 @@ static char *complete_span_helper(const char *line, const char *word, int pos, i
 
 	for (which = span = 0; span < NUM_SPANS; span++) {
 		if (pris[span].pri.pri && ++which > state) {
-			if (asprintf(&ret, "%d", span + 1) < 0) {	/* user indexes start from 1 */
-				ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+			if (ast_asprintf(&ret, "%d", span + 1) < 0) {	/* user indexes start from 1 */
+				ret = NULL;
 			}
 			break;
 		}

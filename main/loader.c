@@ -54,6 +54,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/udptl.h"
 #include "asterisk/heap.h"
 #include "asterisk/app.h"
+#include "asterisk/test.h"
 
 #include <dlfcn.h>
 
@@ -370,7 +371,9 @@ static void unload_dynamic_module(struct ast_module *mod)
 		while (!dlclose(lib));
 }
 
-static struct ast_module *load_dynamic_module(const char *resource_in, unsigned int global_symbols_only)
+static enum ast_module_load_result load_resource(const char *resource_name, unsigned int global_symbols_only, struct ast_heap *resource_heap, int required);
+
+static struct ast_module *load_dynamic_module(const char *resource_in, unsigned int global_symbols_only, struct ast_heap *resource_heap)
 {
 	char fn[PATH_MAX] = "";
 	void *lib = NULL;
@@ -439,11 +442,12 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 		/* Force any required dependencies to load */
 		char *each, *required_resource = ast_strdupa(mod->info->nonoptreq);
 		while ((each = strsep(&required_resource, ","))) {
+			struct ast_module *dependency;
 			each = ast_strip(each);
-
+			dependency = find_resource(each, 0);
 			/* Is it already loaded? */
-			if (!find_resource(each, 0)) {
-				load_dynamic_module(each, global_symbols_only);
+			if (!dependency) {
+				load_resource(each, global_symbols_only, resource_heap, 1);
 			}
 		}
 	}
@@ -567,8 +571,10 @@ int ast_unload_resource(const char *resource_name, enum ast_module_unload_mode f
 		mod->info->restore_globals();
 
 #ifdef LOADABLE_MODULES
-	if (!error)
+	if (!error) {
 		unload_dynamic_module(mod);
+		ast_test_suite_event_notify("MODULE_UNLOAD", "Message: %s", resource_name);
+	}
 #endif
 
 	if (!error)
@@ -710,7 +716,9 @@ int ast_module_reload(const char *name)
 	/* Call "predefined" reload here first */
 	for (i = 0; reload_classes[i].name; i++) {
 		if (!name || !strcasecmp(name, reload_classes[i].name)) {
-			reload_classes[i].reload_fn();	/* XXX should check error ? */
+			if (!reload_classes[i].reload_fn()) {
+				ast_test_suite_event_notify("MODULE_RELOAD", "Message: %s", name);
+			}
 			res = 2;	/* found and reloaded */
 		}
 	}
@@ -742,6 +750,8 @@ int ast_module_reload(const char *name)
 		}
 
 		if (!info->reload) {	/* cannot be reloaded */
+			/* Nothing to reload, so reload is successful */
+			ast_test_suite_event_notify("MODULE_RELOAD", "Message: %s", cur->resource);
 			if (res < 1)	/* store result if possible */
 				res = 1;	/* 1 = no reload() method */
 			continue;
@@ -749,7 +759,9 @@ int ast_module_reload(const char *name)
 
 		res = 2;
 		ast_verb(3, "Reloading module '%s' (%s)\n", cur->resource, info->description);
-		info->reload();
+		if (!info->reload()) {
+			ast_test_suite_event_notify("MODULE_RELOAD", "Message: %s", cur->resource);
+		}
 	}
 	AST_LIST_UNLOCK(&module_list);
 
@@ -792,6 +804,10 @@ static enum ast_module_load_result start_resource(struct ast_module *mod)
 {
 	char tmp[256];
 	enum ast_module_load_result res;
+
+	if (mod->flags.running) {
+		return AST_MODULE_LOAD_SUCCESS;
+	}
 
 	if (!mod->info->load) {
 		return AST_MODULE_LOAD_FAILURE;
@@ -848,7 +864,7 @@ static enum ast_module_load_result load_resource(const char *resource_name, unsi
 			return AST_MODULE_LOAD_SKIP;
 	} else {
 #ifdef LOADABLE_MODULES
-		if (!(mod = load_dynamic_module(resource_name, global_symbols_only))) {
+		if (!(mod = load_dynamic_module(resource_name, global_symbols_only, resource_heap))) {
 			/* don't generate a warning message during load_modules() */
 			if (!global_symbols_only) {
 				ast_log(LOG_WARNING, "Module '%s' could not be loaded.\n", resource_name);
@@ -893,6 +909,9 @@ int ast_load_resource(const char *resource_name)
 	int res;
 	AST_LIST_LOCK(&module_list);
 	res = load_resource(resource_name, 0, NULL, 0);
+	if (!res) {
+		ast_test_suite_event_notify("MODULE_LOAD", "Message: %s", resource_name);
+	}
 	AST_LIST_UNLOCK(&module_list);
 
 	return res;

@@ -147,12 +147,13 @@ struct ast_rtp {
 	int rtpkeepalive;		/*!< Send RTP comfort noice packets for keepalive */
 
 	/* DTMF Reception Variables */
-	char resp;
-	unsigned int lastevent;
-	unsigned int dtmf_duration;     /*!< Total duration in samples since the digit start event */
-	unsigned int dtmf_timeout;      /*!< When this timestamp is reached we consider END frame lost and forcibly abort digit */
+	char resp;                        /*!< The current digit being processed */
+	unsigned int last_seqno;          /*!< The last known sequence number for any DTMF packet */
+	unsigned int last_end_timestamp;  /*!< The last known timestamp received from an END packet */
+	unsigned int dtmf_duration;       /*!< Total duration in samples since the digit start event */
+	unsigned int dtmf_timeout;        /*!< When this timestamp is reached we consider END frame lost and forcibly abort digit */
 	unsigned int dtmfsamples;
-	enum ast_rtp_dtmf_mode dtmfmode;/*!< The current DTMF mode of the RTP stream */
+	enum ast_rtp_dtmf_mode dtmfmode;  /*!< The current DTMF mode of the RTP stream */
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
 	char sending_digit;	/*!< boolean - are we sending digits */
@@ -717,11 +718,10 @@ static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
 	}
 
 	/* Actually create the packet we will be sending */
-	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (rtp->send_payload << 16) | (rtp->seqno));
+	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastdigitts);
 	rtpheader[2] = htonl(rtp->ssrc);
 	rtpheader[3] = htonl((rtp->send_digit << 24) | (0xa << 16) | (rtp->send_duration));
-	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 
 	/* Boom, send it on out */
 	res = rtp_sendto(instance, (void *) rtpheader, hdrlen + 4, 0, &remote_address);
@@ -784,15 +784,16 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 	}
 
 	/* Construct the packet we are going to send */
-	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (rtp->send_payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastdigitts);
 	rtpheader[2] = htonl(rtp->ssrc);
 	rtpheader[3] = htonl((digit << 24) | (0xa << 16) | (rtp->send_duration));
 	rtpheader[3] |= htonl((1 << 23));
-	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 
 	/* Send it 3 times, that's the magical number */
 	for (i = 0; i < 3; i++) {
+
+		rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
+
 		res = rtp_sendto(instance, (void *) rtpheader, hdrlen + 4, 0, &remote_address);
 		if (res < 0) {
 			ast_log(LOG_ERROR, "RTP Transmission error to %s: %s\n",
@@ -804,6 +805,8 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 				    ast_sockaddr_stringify(&remote_address),
 				    rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 		}
+
+		rtp->seqno++;
 	}
 
 	/* Oh and we can't forget to turn off the stuff that says we are sending DTMF */
@@ -1494,8 +1497,10 @@ static struct ast_frame *create_dtmf_frame(struct ast_rtp_instance *instance, en
 		rtp->dtmfsamples = 0;
 		return &ast_null_frame;
 	}
-	ast_debug(1, "Sending dtmf: %d (%c), at %s\n", rtp->resp, rtp->resp,
-		  ast_sockaddr_stringify(&remote_address));
+	ast_debug(1, "Creating %s DTMF Frame: %d (%c), at %s\n",
+		type == AST_FRAME_DTMF_END ? "END" : "BEGIN",
+		rtp->resp, rtp->resp,
+		ast_sockaddr_stringify(&remote_address));
 	if (rtp->resp == 'X') {
 		rtp->f.frametype = AST_FRAME_CONTROL;
 		rtp->f.subclass.integer = AST_CONTROL_FLASH;
@@ -1559,12 +1564,12 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 	}
 
 	if (ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_DTMF_COMPENSATE)) {
-		if ((rtp->lastevent != timestamp) || (rtp->resp && rtp->resp != resp)) {
+		if ((rtp->last_end_timestamp != timestamp) || (rtp->resp && rtp->resp != resp)) {
 			rtp->resp = resp;
 			rtp->dtmf_timeout = 0;
 			f = ast_frdup(create_dtmf_frame(instance, AST_FRAME_DTMF_END, ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_DTMF_COMPENSATE)));
 			f->len = 0;
-			rtp->lastevent = timestamp;
+			rtp->last_end_timestamp = timestamp;
 			AST_LIST_INSERT_TAIL(frames, f, frame_list);
 		}
 	} else {
@@ -1581,30 +1586,39 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 		}
 		new_duration = (new_duration & ~0xFFFF) | samples;
 
-		/* The second portion of this check is to not mistakenly
-		 * stop accepting DTMF if the seqno rolls over beyond
-		 * 65535.
-		 */
-		if (rtp->lastevent > seqno && rtp->lastevent - seqno < 50) {
-			/* Out of order frame. Processing this can cause us to
-			 * improperly duplicate incoming DTMF, so just drop
-			 * this.
-			 */
-			return;
-		}
-
 		if (event_end & 0x80) {
-			/* End event */
-			if ((rtp->lastevent != seqno) && rtp->resp) {
+			if ((seqno != rtp->last_seqno) && (timestamp > rtp->last_end_timestamp)) {
+				rtp->last_end_timestamp = timestamp;
 				rtp->dtmf_duration = new_duration;
+				rtp->resp = resp;
 				f = ast_frdup(create_dtmf_frame(instance, AST_FRAME_DTMF_END, 0));
 				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass.codec)), ast_tv(0, 0));
 				rtp->resp = 0;
 				rtp->dtmf_duration = rtp->dtmf_timeout = 0;
 				AST_LIST_INSERT_TAIL(frames, f, frame_list);
+			} else if (rtpdebug) {
+				ast_debug(1, "Dropping re-transmitted, duplicate, or out of order DTMF END frame (seqno: %d, ts %d, digit %c)\n",
+					seqno, timestamp, resp);
 			}
 		} else {
 			/* Begin/continuation */
+
+			/* The second portion of the seqno check is to not mistakenly
+			 * stop accepting DTMF if the seqno rolls over beyond
+			 * 65535.
+			 */
+			if ((rtp->last_seqno > seqno && rtp->last_seqno - seqno < 50)
+				|| timestamp <= rtp->last_end_timestamp) {
+				/* Out of order frame. Processing this can cause us to
+				 * improperly duplicate incoming DTMF, so just drop
+				 * this.
+				 */
+				if (rtpdebug) {
+					ast_debug(1, "Dropping out of order DTMF frame (seqno %d, ts %d, digit %c)\n",
+						seqno, timestamp, resp);
+				}
+				return;
+			}
 
 			if (rtp->resp && rtp->resp != resp) {
 				/* Another digit already began. End it */
@@ -1629,7 +1643,7 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 			rtp->dtmf_timeout = timestamp + rtp->dtmf_duration + dtmftimeout;
 		}
 
-		rtp->lastevent = seqno;
+		rtp->last_seqno = seqno;
 	}
 
 	rtp->dtmfsamples = samples;
@@ -2143,6 +2157,33 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		return &ast_null_frame;
 	}
 
+	/* Get fields and verify this is an RTP packet */
+	seqno = ntohl(rtpheader[0]);
+
+	ast_rtp_instance_get_remote_address(instance, &remote_address);
+
+	if (!(version = (seqno & 0xC0000000) >> 30)) {
+		struct sockaddr_in addr_tmp;
+		struct ast_sockaddr addr_v4;
+		if (ast_sockaddr_is_ipv4(&addr)) {
+			ast_sockaddr_to_sin(&addr, &addr_tmp);
+		} else if (ast_sockaddr_ipv4_mapped(&addr, &addr_v4)) {
+			ast_debug(1, "Using IPv6 mapped address %s for STUN\n",
+				  ast_sockaddr_stringify(&addr));
+			ast_sockaddr_to_sin(&addr_v4, &addr_tmp);
+		} else {
+			ast_debug(1, "Cannot do STUN for non IPv4 address %s\n",
+				  ast_sockaddr_stringify(&addr));
+			return &ast_null_frame;
+		}
+		if ((ast_stun_handle_packet(rtp->s, &addr_tmp, rtp->rawdata + AST_FRIENDLY_OFFSET, res, NULL, NULL) == AST_STUN_ACCEPT) &&
+		    ast_sockaddr_isnull(&remote_address)) {
+			ast_sockaddr_from_sin(&addr, &addr_tmp);
+			ast_rtp_instance_set_remote_address(instance, &addr);
+		}
+		return &ast_null_frame;
+	}
+
 	/* If strict RTP protection is enabled see if we need to learn the remote address or if we need to drop the packet */
 	if (rtp->strict_rtp_state == STRICT_RTP_LEARN) {
 		ast_debug(1, "%p -- start learning mode pass with addr = %s\n", rtp, ast_sockaddr_stringify(&addr));
@@ -2174,33 +2215,6 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 				return &ast_null_frame;
 			}
 		}
-	}
-
-	/* Get fields and verify this is an RTP packet */
-	seqno = ntohl(rtpheader[0]);
-
-	ast_rtp_instance_get_remote_address(instance, &remote_address);
-
-	if (!(version = (seqno & 0xC0000000) >> 30)) {
-		struct sockaddr_in addr_tmp;
-		struct ast_sockaddr addr_v4;
-		if (ast_sockaddr_is_ipv4(&addr)) {
-			ast_sockaddr_to_sin(&addr, &addr_tmp);
-		} else if (ast_sockaddr_ipv4_mapped(&addr, &addr_v4)) {
-			ast_debug(1, "Using IPv6 mapped address %s for STUN\n",
-				  ast_sockaddr_stringify(&addr));
-			ast_sockaddr_to_sin(&addr_v4, &addr_tmp);
-		} else {
-			ast_debug(1, "Cannot do STUN for non IPv4 address %s\n",
-				  ast_sockaddr_stringify(&addr));
-			return &ast_null_frame;
-		}
-		if ((ast_stun_handle_packet(rtp->s, &addr_tmp, rtp->rawdata + AST_FRIENDLY_OFFSET, res, NULL, NULL) == AST_STUN_ACCEPT) &&
-		    ast_sockaddr_isnull(&remote_address)) {
-			ast_sockaddr_from_sin(&addr, &addr_tmp);
-			ast_rtp_instance_set_remote_address(instance, &addr);
-		}
-		return &ast_null_frame;
 	}
 
 	/* If symmetric RTP is enabled see if the remote side is not what we expected and change where we are sending audio */

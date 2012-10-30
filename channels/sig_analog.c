@@ -1701,7 +1701,7 @@ static void analog_get_and_handle_alarms(struct analog_pvt *p)
 static void *analog_get_bridged_channel(struct analog_pvt *p, struct ast_channel *chan)
 {
 	if (p->calls->get_sigpvt_bridged_channel) {
-		return p->calls->get_sigpvt_bridged_channel;
+		return p->calls->get_sigpvt_bridged_channel(chan);
 	}
 	return NULL;
 }
@@ -2305,18 +2305,16 @@ static void *__analog_ss_thread(void *data)
 				struct ast_channel *nbridge = p->subs[ANALOG_SUB_THREEWAY].owner;
 				struct analog_pvt *pbridge = NULL;
 				/* set up the private struct of the bridged one, if any */
-				if (nbridge && ast_bridged_channel(nbridge)) {
+				if (nbridge) {
 					pbridge = analog_get_bridged_channel(p, nbridge);
 				}
-				if (nbridge && pbridge &&
-				    (nbridge->tech == p->chan_tech) &&
-				    (ast_bridged_channel(nbridge)->tech == p->chan_tech) &&
-				    ISTRUNK(pbridge)) {
+				if (pbridge && ISTRUNK(pbridge)) {
 					/* Clear out the dial buffer */
 					p->dop.dialstr[0] = '\0';
 					/* flash hookswitch */
-					if ((analog_flash(p) == -1) && (errno != EINPROGRESS)) {
-						ast_log(LOG_WARNING, "Unable to flash external trunk on channel %s: %s\n",
+					if ((analog_flash(pbridge) == -1) && (errno != EINPROGRESS)) {
+						ast_log(LOG_WARNING,
+							"Unable to flash-hook bridged trunk from channel %s: %s\n",
 							nbridge->name, strerror(errno));
 					}
 					analog_swap_subs(p, ANALOG_SUB_REAL, ANALOG_SUB_THREEWAY);
@@ -3831,6 +3829,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 					ast_log(LOG_WARNING, "Cannot allocate new structure on channel %d\n", i->channel);
 				} else if (ast_pthread_create_detached(&threadid, NULL, __analog_ss_thread, i)) {
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
+					ast_hangup(chan);
 				}
 			}
 			break;
@@ -3855,6 +3854,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 					ast_log(LOG_WARNING, "Cannot allocate new structure on channel %d\n", i->channel);
 				} else if (ast_pthread_create_detached(&threadid, NULL, __analog_ss_thread, i)) {
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
+					ast_hangup(chan);
 				}
 			}
 			break;

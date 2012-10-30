@@ -212,7 +212,7 @@ static const char * const app_pop = "StackPop";
 
 static void gosub_free(void *data);
 
-static struct ast_datastore_info stack_info = {
+static const struct ast_datastore_info stack_info = {
 	.type = "GOSUB",
 	.destroy = gosub_free,
 };
@@ -792,13 +792,11 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, const char
 	 * call a Gosub for the CALLEE channel in Dial or Queue.
 	 */
 	if (argc == 5) {
-		if (asprintf(&gosub_args, "%s,%s,%d(%s)", argv[1], argv[2], priority + (chan->pbx ? 1 : 0), argv[4]) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		if (ast_asprintf(&gosub_args, "%s,%s,%d(%s)", argv[1], argv[2], priority + (chan->pbx ? 1 : 0), argv[4]) < 0) {
 			gosub_args = NULL;
 		}
 	} else {
-		if (asprintf(&gosub_args, "%s,%s,%d", argv[1], argv[2], priority + (chan->pbx ? 1 : 0)) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		if (ast_asprintf(&gosub_args, "%s,%s,%d", argv[1], argv[2], priority + (chan->pbx ? 1 : 0)) < 0) {
 			gosub_args = NULL;
 		}
 	}
