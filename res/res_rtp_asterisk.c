@@ -113,6 +113,7 @@ enum strict_rtp_state {
 #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
 #define FLAG_NEED_MARKER_BIT            (1 << 3)
 #define FLAG_DTMF_COMPENSATE            (1 << 4)
+#define FLAG_CN_ACTIVE			(1 << 5)
 
 /*! \brief RTP session description */
 struct ast_rtp {
@@ -1764,9 +1765,21 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 		rtp->f.datalen = 0;
 	}
 	rtp->f.frametype = AST_FRAME_CNG;
+		/* The noise level is expressed in -dBov with values 0 to 127, representing 0 to -127 dBov
+		   It's in bits 1-7 in the payload. Bit 0 is always 0.
+		*/
 	rtp->f.subclass.integer = data[0] & 0x7f;
 	rtp->f.samples = 0;
 	rtp->f.delivery.tv_usec = rtp->f.delivery.tv_sec = 0;
+
+	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		ast_set_flag(rtp, FLAG_CN_ACTIVE);
+		ast_debug(0, "###### ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
+		/* Start the generator on the other end. */
+	
+	} else {
+		/* Check if the level is the same. If not, reactivate. */
+	}
 
 	return &rtp->f;
 }
@@ -2346,10 +2359,14 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			 * by passing the pointer to the frame list to it so that the method
 			 * can append frames to the list as needed.
 			 */
+			if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+				ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+				ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+			}
 			process_dtmf_rfc2833(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark, &frames);
 		} else if (payload.code == AST_RTP_CISCO_DTMF) {
 			f = process_dtmf_cisco(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark);
-		} else if (payload.code == AST_FORMAT_CN) {
+		} else if (payload.code == AST_RTP_CN) {
 			f = process_cn_rfc3389(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark);
 		} else {
 			ast_log(LOG_NOTICE, "Unknown RTP codec %d received from '%s'\n",
@@ -2367,6 +2384,10 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			return AST_LIST_FIRST(&frames);
 		}
 		return &ast_null_frame;
+	}
+	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
 	}
 
 	rtp->lastrxformat = rtp->f.subclass.codec = payload.code;
@@ -2800,7 +2821,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 		return -1;
 	}
 
-	payload = ast_rtp_codecs_payload_lookup(ast_rtp_instance_get_codecs(instance), AST_FORMAT_CN);
+	payload = ast_rtp_codecs_payload_lookup(ast_rtp_instance_get_codecs(instance), AST_RTP_CN);
 
 	level = 127 - (level & 0x7f);
 	
@@ -2820,7 +2841,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 	} else if (rtp_debug_test_addr(&remote_address)) {
 		ast_verbose("Sent Comfort Noise RTP packet to %s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 				ast_sockaddr_stringify(&remote_address),
-				AST_FORMAT_CN, rtp->seqno, rtp->lastdigitts, res - hdrlen);
+				AST_RTP_CN, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
 
 	return res;
