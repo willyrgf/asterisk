@@ -3531,6 +3531,7 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 #endif
 	struct ast_party_connected_line connected_caller;
 	char *inchan_name;
+	struct timeval start_time_tv = ast_tvnow();
 
 	ast_party_connected_line_init(&connected_caller);
 
@@ -3545,8 +3546,8 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 			ast_poll_channel_add(in, epollo->chan);
 	}
 #endif
-	
-	while (*to && !peer) {
+
+	while ((*to = ast_remaining_ms(start_time_tv, orig)) && !peer) {
 
 		int numlines, retry, pos = 1;
 		struct ast_channel *watchers[AST_MAX_WATCHERS];
@@ -3807,10 +3808,11 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 							endtime -= starttime;
 							rna(endtime * 1000, qe, on, membername, 0);
 							if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
-								if (qe->parent->timeoutrestart)
-									*to = orig;
+								if (qe->parent->timeoutrestart) {
+									start_time_tv = ast_tvnow();
+								}
 								/* Have enough time for a queue member to answer? */
-								if (*to > 500) {
+								if (ast_remaining_ms(start_time_tv, orig) > 500) {
 									ring_one(qe, outgoing, &numbusies);
 									starttime = (long) time(NULL);
 								}
@@ -3826,9 +3828,10 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 							rna(endtime * 1000, qe, on, membername, 0);
 							do_hang(o);
 							if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
-								if (qe->parent->timeoutrestart)
-									*to = orig;
-								if (*to > 500) {
+								if (qe->parent->timeoutrestart) {
+									start_time_tv = ast_tvnow();
+								}
+								if (ast_remaining_ms(start_time_tv, orig) > 500) {
 									ring_one(qe, outgoing, &numbusies);
 									starttime = (long) time(NULL);
 								}
@@ -3915,9 +3918,10 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 					rna(endtime * 1000, qe, on, membername, 1);
 					do_hang(o);
 					if (qe->parent->strategy != QUEUE_STRATEGY_RINGALL) {
-						if (qe->parent->timeoutrestart)
-							*to = orig;
-						if (*to > 500) {
+						if (qe->parent->timeoutrestart) {
+							start_time_tv = ast_tvnow();
+						}
+						if (ast_remaining_ms(start_time_tv, orig) > 500) {
 							ring_one(qe, outgoing, &numbusies);
 							starttime = (long) time(NULL);
 						}
@@ -3988,9 +3992,11 @@ skip_frame:;
 
 			ast_frfree(f);
 		}
-		if (!*to) {
-			for (o = start; o; o = o->call_next)
-				rna(orig, qe, o->interface, o->member->membername, 1);
+	}
+
+	if (!*to) {
+		for (o = start; o; o = o->call_next) {
+			rna(orig, qe, o->interface, o->member->membername, 1);
 		}
 	}
 
