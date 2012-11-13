@@ -3,6 +3,7 @@ Olle E. Johansson
 
 
 Started: 2012-09-18
+Updated: 2012-11-13
 
 
 
@@ -33,20 +34,21 @@ Current state:
 
 * SIP Channel
 -------------
-- The SIP channel will *NOT* negotiate any CNG support if offered, nor 
-  offer CNG
+- The SIP channel will negotiate any CNG support if offered and
+  offer CNG if configured. SIP.conf setting:
+	;comfort-noise=yes              ; Enable Comfort Noise generation on RTP streams
+	;                               ; Available per device too
 
 * Core
 ------
 
 - If a generator is active and CNG is received, Asterisk moves to timer based
   generation of outbound packets
-- No comfort noise generator exists in core
+- Comfort noise generator added to core
 
 To add comfort noise support
 ----------------------------
 
-- Add SIP negotiation in SDP
 - For inbound streams, generate noise in calls
 - For outbound we can as step 1 just never send any CNG packets
   - As step 2, add silence detection to calls
@@ -58,6 +60,7 @@ To add comfort noise support
 Done:
   - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
     This includes a noise generator
+  - Add SIP negotiation in SDP - done
 
 References
 ----------
