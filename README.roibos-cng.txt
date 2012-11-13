@@ -23,6 +23,24 @@ Comfort Noise in SIP/RTP is
 A requirement for using this is that it is included as a codec with payload
 13 (or dynamic) in the SDP
 
+Asterisk Architecture
+=====================
+In a bridged call, where one end is SIP with CNG enabled, the RTP system
+will get an incoming CNG frame with a noise level. THis will be sent
+over the bridge to the bridged channel.
+
+If that channel is SIP with CNG enabled for the call, the RTP system
+will send out a CNG frame.
+
+It that channel is a type that doesn't support CNG or SIP with CNG
+disabled, then Asterisk needs to generate noise in the bridged
+channel - not the SIP channel that received the CNG frame. This is
+to enable forwarding a CNG across to another SIP device which now
+gets the responsibility to play out the noise.
+
+The architecture for this may be using Asterisk Framehooks, but is still
+under discussion.
+
 Current state:
 
 * RTP Channel
