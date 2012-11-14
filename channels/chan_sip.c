@@ -4707,8 +4707,7 @@ static int sip_queryoption(struct ast_channel *chan, int option, void *data, int
 		break;
 	case AST_OPTION_CNG_SUPPORT:
 		/* Check if the current dialog has agreed on Comfort Noise support */
-		*((unsigned int *) data) = (dialog->noncodeccapability & AST_RTP_CN);
-		res = 0;
+		res = (p->noncodeccapability & AST_RTP_CN);
 		break;
 	default:
 		break;

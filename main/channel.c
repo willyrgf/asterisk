@@ -4375,6 +4375,7 @@ static int attribute_const is_visible_indication(enum ast_control_frame_type con
 	case AST_CONTROL_AOC:
 	case AST_CONTROL_END_OF_Q:
 	case AST_CONTROL_UPDATE_RTP_PEER:
+	case AST_CONTROL_CNG_END:
 		break;
 
 	case AST_CONTROL_INCOMPLETE:
@@ -4544,6 +4545,7 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 	case AST_CONTROL_SRCUPDATE:
 	case AST_CONTROL_SRCCHANGE:
 	case AST_CONTROL_RADIO_KEY:
+	case AST_CONTROL_CNG_END:
 	case AST_CONTROL_RADIO_UNKEY:
 	case AST_CONTROL_OPTION:
 	case AST_CONTROL_WINK:
@@ -7251,6 +7253,12 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 					ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
 				}
 				break;
+			case AST_CONTROL_CNG_END:
+				/* If we are playing out CNG noise on the bridged channel, stop it now. 
+				   otherwise, ignore this frame. */
+				ast_debug(1, "*** Bridge got CNG END frame \n");
+				ast_moh_stop(other);
+				break;
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
 			case AST_CONTROL_VIDUPDATE:
@@ -7271,6 +7279,21 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			}
 			if (bridge_exit)
 				break;
+		}
+		if (f->frametype == AST_FRAME_CNG) {
+			/* We got a CNG frame 
+			  Check if the bridged channel has active CNG 
+			*/
+			int cngsupport = 0;
+			int len = sizeof(cngsupport);
+			ast_channel_queryoption(other, AST_OPTION_CNG_SUPPORT, &cngsupport, &len, 0);
+			if (cngsupport) {
+				ast_debug(1, "*** Bridge got CNG frame. Forwarding it \n");
+				ast_write(other, f);
+			} else {
+				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) \n");
+				ast_moh_start(other, NULL, NULL);
+			}
 		}
 		if ((f->frametype == AST_FRAME_VOICE) ||
 		    (f->frametype == AST_FRAME_DTMF_BEGIN) ||

@@ -4234,6 +4234,12 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 				}
 				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
 				break;
+			case AST_CONTROL_CNG_END:
+				/* If we are playing out CNG noise on the bridged channel, stop it now. 
+				   otherwise, ignore this frame. */
+				ast_debug(1, "*** Bridge got CNG END frame \n");
+				ast_moh_stop(other);
+				break;
 			case AST_CONTROL_AOC:
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
@@ -4353,6 +4359,21 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 					ast_debug(1, "Set feature timer to %ld ms\n", config->feature_timer);
 				}
 			}
+		} else if (f->frametype == AST_FRAME_CNG) {
+			/* We got a CNG frame 
+			  Check if the bridged channel has active CNG 
+			*/
+			int cngsupport = 0;
+			int len = sizeof(cngsupport);
+			ast_channel_queryoption(other, AST_OPTION_CNG_SUPPORT, &cngsupport, &len, 0);
+			if (cngsupport) {
+				ast_debug(1, "*** Bridge got CNG frame. Forwarding it \n");
+				ast_write(other, f);
+			} else {
+				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) \n");
+				ast_moh_start(other, NULL, NULL);
+			}
+			
 		}
 		if (f)
 			ast_frfree(f);

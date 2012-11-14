@@ -2354,15 +2354,20 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	/* If the payload is not actually an Asterisk one but a special one pass it off to the respective handler */
 	if (!payload.asterisk_format) {
 		struct ast_frame *f = NULL;
+		if (payload.code != AST_RTP_CN && ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+			/* Insert a control frame to indicate that we need to shut down Comfort Noise generators, if active */
+			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+			ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+			f = ast_frdup(&cngoff);
+			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+			f = NULL;
+		}
 		if (payload.code == AST_RTP_DTMF) {
 			/* process_dtmf_rfc2833 may need to return multiple frames. We do this
 			 * by passing the pointer to the frame list to it so that the method
 			 * can append frames to the list as needed.
 			 */
-			if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
-				ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
-				ast_clear_flag(rtp, FLAG_CN_ACTIVE);
-			}
 			process_dtmf_rfc2833(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark, &frames);
 		} else if (payload.code == AST_RTP_CISCO_DTMF) {
 			f = process_dtmf_cisco(instance, rtp->rawdata + AST_FRIENDLY_OFFSET + hdrlen, res - hdrlen, seqno, timestamp, &addr, payloadtype, mark);
@@ -2386,8 +2391,13 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		return &ast_null_frame;
 	}
 	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		struct ast_frame *f = NULL;
+		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
 		ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
 		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+		f = ast_frdup(&cngoff);
+		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+		f = NULL;
 	}
 
 	rtp->lastrxformat = rtp->f.subclass.codec = payload.code;

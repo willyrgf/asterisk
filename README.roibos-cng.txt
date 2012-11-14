@@ -69,6 +69,7 @@ To add comfort noise support
 
 - For inbound streams, generate noise in calls
 - For outbound we can as step 1 just never send any CNG packets
+  - Add CN support in SDP for outbound calls
   - As step 2, add silence detection to calls
   - Measure noise level
   - Start sending CNG
@@ -79,6 +80,7 @@ Done:
   - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
     This includes a noise generator
   - Add SIP negotiation in SDP - done
+  - Support CN codec on incoming INVITEs - done
 
 References
 ----------
@@ -129,3 +131,13 @@ The magnitude of the noise level is packed into the least significant
    u-law system, the reference would be a square wave with values +/-
    8031, and this square wave represents 0dBov.  This translates into
    6.18dBm0.
+
+Notes from chat with FILE (Joshua Colp) 2012-11-13:
+
+file:
+so yeah you'd have to add code to ast_bridge_call to check the CNG availability and add a frame hook to the appropriate channel
+[5:44pm] file:
+then once it returns to remove the frame hook
+[5:45pm] file:
+and by using a frame hook you can keep the associated code contained elsewhere and cause minimal changes to things as a whole
+
