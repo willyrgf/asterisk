@@ -1738,17 +1738,8 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 	/* Convert comfort noise into audio with various codecs.  Unfortunately this doesn't
 	   totally help us out becuase we don't have an engine to keep it going and we are not
 	   guaranteed to have it every 20ms or anything */
-	if (rtpdebug)
+	if (rtpdebug) {
 		ast_debug(0, "- RTP 3389 Comfort noise event: Level %" PRId64 " (len = %d)\n", rtp->lastrxformat, len);
-
-	if (ast_test_flag(rtp, FLAG_3389_WARNING)) {
-		struct ast_sockaddr remote_address = { {0,} };
-
-		ast_rtp_instance_get_remote_address(instance, &remote_address);
-
-		ast_log(LOG_NOTICE, "Comfort noise support incomplete in Asterisk (RFC 3389). Please turn off on client if possible. Client address: %s\n",
-			ast_sockaddr_stringify(&remote_address));
-		ast_set_flag(rtp, FLAG_3389_WARNING);
 	}
 
 	/* Must have at least one byte */

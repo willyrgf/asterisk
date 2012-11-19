@@ -7257,7 +7257,7 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				/* If we are playing out CNG noise on the bridged channel, stop it now. 
 				   otherwise, ignore this frame. */
 				ast_debug(1, "*** Bridge got CNG END frame \n");
-				ast_moh_stop(other);
+				ast_channel_stop_noise_generator(other, NULL);
 				break;
 			case AST_CONTROL_HOLD:
 			case AST_CONTROL_UNHOLD:
@@ -7291,8 +7291,8 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				ast_debug(1, "*** Bridge got CNG frame. Forwarding it \n");
 				ast_write(other, f);
 			} else {
-				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) \n");
-				ast_moh_start(other, NULL, NULL);
+				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) Level: - %d\n", f->subclass.integer );
+				ast_channel_start_noise_generator(other, (float)  -f->subclass.integer);
 			}
 		}
 		if ((f->frametype == AST_FRAME_VOICE) ||
@@ -8473,6 +8473,58 @@ static struct ast_generator noise_generator =
 	generate: noise_generate,
 } ;
 
+static void *cng_channel_params_copy(void *data)
+{
+	const struct ast_noise_generator *src = data;
+	struct ast_noise_generator *dest = ast_calloc(1, sizeof(struct ast_noise_generator));
+	if (!dest) {
+		return NULL;
+	}
+	dest->level = src->level;
+	dest->old_write_format = src->old_write_format;
+	return dest;
+}
+
+static void cng_channel_params_destroy(void *data)
+{
+	struct ast_noise_generator *ng = data;
+	ast_free(ng);
+}
+
+static const struct ast_datastore_info cng_channel_datastore_info = {
+	.type = "Comfort Noise Generator",
+	.duplicate = cng_channel_params_copy,
+	.destroy = cng_channel_params_destroy,
+};
+
+static int ast_channel_cng_params_init(struct ast_channel *chan, int level, int old_write_format)
+{
+	struct ast_noise_generator *new_cng;
+	struct ast_datastore *cng_datastore;
+
+	/* If we already have a datastore, reuse it */
+	if ((cng_datastore = ast_channel_datastore_find(chan, &cng_channel_datastore_info, NULL))) {
+		new_cng = cng_datastore->data;
+	} else {
+		/* Create new datastore */
+		new_cng = ast_calloc(1, sizeof(struct ast_noise_generator));
+		if (!new_cng) {
+			return -1;
+		}
+
+		if (!(cng_datastore = ast_datastore_alloc(&cng_channel_datastore_info, NULL))) {
+			cng_channel_params_destroy(new_cng);
+			return -1;
+		}
+		cng_datastore->data = new_cng;
+		ast_channel_datastore_add(chan, cng_datastore);
+	}
+	new_cng->level = level;
+	new_cng->old_write_format = old_write_format;
+
+	return 0;
+}
+
 struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel *chan, const float level)
 {
 	struct ast_noise_generator  *state;
@@ -8505,6 +8557,9 @@ struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel
 		return NULL;
 	}
 
+	/* Store noise generation data in a channel datastore */
+	ast_channel_cng_params_init(chan, level, chan->writeformat);
+
 	ast_activate_generator(chan, &noise_generator, state);
 
 	ast_debug(1, "Started noise generator on '%s'\n", chan->name);
@@ -8514,14 +8569,22 @@ struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel
 
 void ast_channel_stop_noise_generator(struct ast_channel *chan, struct ast_noise_generator *state)
 {
-	if (!state)
-		return;
+	struct ast_datastore *cng_datastore;
+	struct ast_noise_generator *cngstate = state;
 
+	if (!cngstate) {
+		if (!(cng_datastore = ast_channel_datastore_find(chan, &cng_channel_datastore_info, NULL))) {
+			return;
+		}
+		cngstate = cng_datastore->data;
+	}
+
+	/* We will leave the allocated channel datastore in memory for reuse */
 	ast_deactivate_generator(chan);
 
 	ast_debug(1, "Stopped silence generator on '%s'\n", chan->name);
 
-	if (ast_set_write_format(chan, state->old_write_format) < 0)
+	if (ast_set_write_format(chan, cngstate->old_write_format) < 0)
 		ast_log(LOG_ERROR, "Could not return write format to its original state\n");
 
 	ast_free(state);
