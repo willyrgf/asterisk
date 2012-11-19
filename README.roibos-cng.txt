@@ -3,7 +3,7 @@ Olle E. Johansson
 
 
 Started: 2012-09-18
-Updated: 2012-11-13
+Updated: 2012-11-19
 
 
 
@@ -26,22 +26,20 @@ A requirement for using this is that it is included as a codec with payload
 Asterisk Architecture
 =====================
 In a bridged call, where one end is SIP with CNG enabled, the RTP system
-will get an incoming CNG frame with a noise level. THis will be sent
+will get an incoming CNG frame with a noise level. This will be sent
 over the bridge to the bridged channel.
 
 If that channel is SIP with CNG enabled for the call, the RTP system
-will send out a CNG frame.
+will send out a CNG frame.  This is to enable forwarding a CNG frame 
+across to another SIP device which now gets the responsibility to play out 
+the noise.
 
 It that channel is a type that doesn't support CNG or SIP with CNG
 disabled, then Asterisk needs to generate noise in the bridged
-channel - not the SIP channel that received the CNG frame. This is
-to enable forwarding a CNG across to another SIP device which now
-gets the responsibility to play out the noise.
-
-The architecture for this may be using Asterisk Framehooks, but is still
-under discussion.
+channel - not the SIP channel that received the CNG frame. 
 
 Current state:
+==============
 
 * RTP Channel
 -------------
@@ -59,24 +57,35 @@ Current state:
 
 * Core
 ------
-
 - If a generator is active and CNG is received, Asterisk moves to timer based
   generation of outbound packets
 - Comfort noise generator added to core
+- Comfort noise generator will be used when CNG frame is received, until the RTP
+  channel signals that CNG will end.
 
-To add comfort noise support
-----------------------------
+Debugging
+=========
+Place a call between one phone that supports CN (I've used a SNOM 820) and a
+phone that lacks support for it (or has it disabled for testing). 
+- Turn on RTP debug and SIP debug.
+- Set core debug to 3.
+You will now see that Asterisk receives a CN RTP packet, and will activate
+the noise generator on the other channel. This happens many times during 
+the call.
 
-- For inbound streams, generate noise in calls
-- For outbound we can as step 1 just never send any CNG packets
+Todo :: comfort noise support
+-----------------------------
+  - Check how this affects RTP bridge and queue bridge
   - Add CN support in SDP for outbound calls
   - As step 2, add silence detection to calls
-  - Measure noise level
-  - Start sending CNG
-  - Listen for talk detection
-  - Stop sending CNG, send media
+  	- Measure noise level
+  	- Start sending CNG
+  	- Listen for talk detection
+  	- Stop sending CNG, send media
 
 Done:
+  - Support in core bridge
+  - For inbound streams, generate noise in calls (both inbound and outbound calls)
   - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
     This includes a noise generator
   - Add SIP negotiation in SDP - done
@@ -131,13 +140,4 @@ The magnitude of the noise level is packed into the least significant
    u-law system, the reference would be a square wave with values +/-
    8031, and this square wave represents 0dBov.  This translates into
    6.18dBm0.
-
-Notes from chat with FILE (Joshua Colp) 2012-11-13:
-
-file:
-so yeah you'd have to add code to ast_bridge_call to check the CNG availability and add a frame hook to the appropriate channel
-[5:44pm] file:
-then once it returns to remove the frame hook
-[5:45pm] file:
-and by using a frame hook you can keep the associated code contained elsewhere and cause minimal changes to things as a whole
 
