@@ -141,3 +141,17 @@ The magnitude of the noise level is packed into the least significant
    8031, and this square wave represents 0dBov.  This translates into
    6.18dBm0.
 
+-----------------
+Various notes:
+=============
+From file:
+
+The logic for determining if a native bridge can be performed or not lives in ast_channel_bridge in channel.c - there is an if statement with many conditions that have to be met before doing it. You can extend that and add another which is "if the CN support on channel A is the same as channel B then allow native bridge"
+
+Question: If I run RTP bridge (not the p2p or remote) can we still operate
+on timer? If not, I have to disable RTP bridging totally. If we rely on incoming
+packets (which will not happen) to send out, CN will not work.
+
+Yes, you can still operate on timer. The RTP bridge still has all the normal bridging logic in it. That's how music on hold and such works.
+
+
