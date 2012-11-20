@@ -1,10 +1,7 @@
-02-labarea				Unknown experiments
-04-labs					Unknown experiments
-08-labaera				Unknown experiments
-altest				1.4	Needs further investigation			CHECK
+applefrog-early-media-in-originate-1.4  Early media in manager originate
 astum				Trunk	Asterisk User Manager (Experimental code)
+					Cool stuff still after many years
 bp-res_conf_ldap-1.4		1.4	Backport of realtime LDAP
-branchfix			Trunk	Fixing SIP branch support (experimental)
 bufo-manager-chanvar-filter	1.4	Filtering channel-related events
 bufo-manager-contexts		1.4	Setting context for manager account
 bufo-manager-contexts-trunk	trunk	Setting context for manager account
@@ -12,12 +9,7 @@ bufo-manager-setvar		1.4	Setting channel variable per manager account for manage
 bufo-manager-setvar-trunk	trunk	Setting channel variable per manager account for manager-created channels
 bufo-manager-varfix		1.4	Bugfix for memory leak in manager.c
 bufo-manager-varfix-trunk	trunk	Bugfix for memory leak in manager.c
-calleridupdate				Deprecated Connected Line ID stuff			DELETE
-callpickup			Trunk	Invite/replaces support (Experimental)
-cancel_answer_elsewhere		Trunk	Code that's merged into trunk				DELETE
 cancel_elsewhere_1.4		1.4	Backport of cancel_elsewhere
-cdr_radius				No idea. Experimental or merged.			DELETE
-codename-pineapple			chan_sip3. Lots of cool stuff. never merged
 darjeeling-prack-1.8		1.8	Implementation of PRACK (started 2012-06)
 deluxepine-1.4			1.4	Named access control lists
 deluxepine-trunk		Trunk	Named access control lists. Candidate for 1.8
@@ -29,18 +21,13 @@ edv-appleraisin-trunk		trunk	Asterisk DB over realtime (in group directory)
 fixtoheader-1.4			1.4	Backport: Adds ability to set the SIP to: header in dialstring
 func-queue-exists-1.4		1.4	QUEUE_EXISTS function
 iaxtrunkfix-1.4			1.4	Backport of IAX trunk fix. Merged.
-invitestate				Propably merged. Investigate.
-invitestate-1.4			1.4	Backport
-lablablab				Unknown experiments
 manager-check-1.4		1.4	Check if manager is connected
 manager-check-trunk		Trunk	Check if manager account is connected. Candidate for 1.8
 					Need help
 manager-set-function-fail	Trunk	Fixes for manager SET function. Merged I think. 	CHECK
 managerbridge-1.4.diff		1.4	Manager Bridge command. Keeps crashing.
-managergames				Experimental stuff
 meetmefixes-1.4			1.4	Meetme realtime fixes					CHECK
 					Does this exist for trunk? Merged?
-mgcpstuff-12950				Bug tracker MGCP fixes. Merged.				DELETE
 midcom-0.5.3.2				Asterisk-netsec stuff
 midcomstuff				Asterisk-netsec stuff
 minivoicemail-1.4		1.4	Backport: Mini-Voicemail for Asterisk..
