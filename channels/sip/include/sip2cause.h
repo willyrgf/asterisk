@@ -28,7 +28,7 @@
 int hangup_sip2cause(int cause);
 
 /*! \brief Convert ISDN or Asterisk-specific cause code to SIP response code */
-const char *hangup_cause2sip(int cause);
+char *hangup_cause2sip(int cause);
 
 /*! \brief Initialized sip2cause tables */
 void sip2cause_init(void);

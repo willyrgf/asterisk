@@ -105,6 +105,25 @@ void sip2cause_init(void)
 	sip2causelookup.table = newsip2cause(604, /* Does not exist anywhere */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
 	sip2causelookup.table = newsip2cause(606, /* Not acceptable */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", sip2causelookup.table);
 
+	/* Add the reverse table */
+	cause2siplookup.table = newsip2cause(404, AST_CAUSE_UNALLOCATED, "404 Not Found", NULL);
+	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_DESTINATION, "404 Not Found", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_TRANSIT_NET, "404 Not Found", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CONGESTION, "503 Service Unavailable", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(503, AST_CAUSE_SWITCH_CONGESTION, "503 Service Unavailable", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(408, AST_CAUSE_NO_USER_RESPONSE, "408 Request Timeout", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NO_ANSWER, "480 Temporarily unavailable", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(480, AST_CAUSE_UNREGISTERED, "480 Temporarily unavailable", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(403, AST_CAUSE_CALL_REJECTED, "403 Forbidden", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(410, AST_CAUSE_NUMBER_CHANGED, "410 Gone", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NORMAL_UNSPECIFIED, "480 Temporarily unavailable", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(484, AST_CAUSE_INVALID_NUMBER_FORMAT, "484 Address Incomplete", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(486, AST_CAUSE_USER_BUSY, "486 Busy here", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(500, AST_CAUSE_FAILURE, "500 Server internal failure", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(501, AST_CAUSE_FACILITY_REJECTED, "501 Not implemented", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CHAN_NOT_IMPLEMENTED, "503 Service unavailable", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "502 Bad gateway", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(488, AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "488 Not Acceptable Here", cause2siplookup.table);
 
 }
 	
@@ -185,49 +204,15 @@ int hangup_sip2cause(int cause)
    31 normal unspecified                   480 Temporarily unavailable
 \endverbatim
 */
-const char *hangup_cause2sip(int cause)
+char *hangup_cause2sip(int cause)
 {
-	switch (cause) {
-		case AST_CAUSE_UNALLOCATED:		/* 1 */
-		case AST_CAUSE_NO_ROUTE_DESTINATION:	/* 3 IAX2: Can't find extension in context */
-		case AST_CAUSE_NO_ROUTE_TRANSIT_NET:	/* 2 */
-			return "404 Not Found";
-		case AST_CAUSE_CONGESTION:		/* 34 */
-		case AST_CAUSE_SWITCH_CONGESTION:	/* 42 */
-			return "503 Service Unavailable";
-		case AST_CAUSE_NO_USER_RESPONSE:	/* 18 */
-			return "408 Request Timeout";
-		case AST_CAUSE_NO_ANSWER:		/* 19 */
-		case AST_CAUSE_UNREGISTERED:        /* 20 */
-			return "480 Temporarily unavailable";
-		case AST_CAUSE_CALL_REJECTED:		/* 21 */
-			return "403 Forbidden";
-		case AST_CAUSE_NUMBER_CHANGED:		/* 22 */
-			return "410 Gone";
-		case AST_CAUSE_NORMAL_UNSPECIFIED:	/* 31 */
-			return "480 Temporarily unavailable";
-		case AST_CAUSE_INVALID_NUMBER_FORMAT:
-			return "484 Address incomplete";
-		case AST_CAUSE_USER_BUSY:
-			return "486 Busy here";
-		case AST_CAUSE_FAILURE:
-			return "500 Server internal failure";
-		case AST_CAUSE_FACILITY_REJECTED:	/* 29 */
-			return "501 Not Implemented";
-		case AST_CAUSE_CHAN_NOT_IMPLEMENTED:
-			return "503 Service Unavailable";
-		/* Used in chan_iax2 */
-		case AST_CAUSE_DESTINATION_OUT_OF_ORDER:
-			return "502 Bad Gateway";
-		case AST_CAUSE_BEARERCAPABILITY_NOTAVAIL:	/* Can't find codec to connect to host */
-			return "488 Not Acceptable Here";
-			
-		case AST_CAUSE_NOTDEFINED:
-		default:
-			ast_debug(1, "AST hangup cause %d (no match found in SIP)\n", cause);
-			return NULL;
+	struct sip2causestruct *s2c = cause2siplookup.table;
+	while (s2c) {
+		if (s2c->cause == cause) {
+			return s2c->reason;
+		}
+		s2c = s2c->next;
 	}
-
-	/* Never reached */
-	return 0;
+	ast_debug(1, "AST hangup cause %d (no match found in SIP)\n", cause);
+	return NULL;
 }
