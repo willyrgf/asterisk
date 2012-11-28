@@ -1,0 +1,20 @@
+Edvina AB
+Olle E. Johansson
+
+
+Project start: 2012-11-28
+
+
+
+Earl Grey  - configuring sip2cause tables
+==========================================
+
+Asterisk internally use ISDN cause codes. In the SIP channel, we do have two
+tables - one for translating from an ISDN cause code at hangup, to a SIP response
+code and one for translating the other way. In some edge cases, not very common,
+one wants to modify these tables.
+
+This branch will make the table a configurable option and add a new configuration
+file, sip2cause.conf, that is not needed in normal usage of Asterisk.
+
+
