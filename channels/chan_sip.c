@@ -31303,6 +31303,7 @@ static int load_module(void)
 	sip_reloadreason = CHANNEL_MODULE_LOAD;
 
 	can_parse_xml = sip_is_xml_parsable();
+	sip2cause_init();
 	if (reload_config(sip_reloadreason)) {	/* Load the configuration from sip.conf */
 		return AST_MODULE_LOAD_DECLINE;
 	}
@@ -31577,6 +31578,7 @@ static int unload_module(void)
 	ast_cc_agent_unregister(&sip_cc_agent_callbacks);
 
 	sip_reqresp_parser_exit();
+	sip2cause_free();
 	sip_unregister_tests();
 
 	return 0;

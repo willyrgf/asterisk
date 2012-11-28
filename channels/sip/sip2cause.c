@@ -29,100 +29,128 @@
 #include "asterisk/causes.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+#include "include/sip2cause.h"
 
-#include "include/sip.h"
-#include "include/config_parser.h"
-#include "include/sip_utils.h"
+/*! \brief structure for conversion between ISDN and SIP codes */
+struct sip2causestruct {
+	int	sip;			/*!< SIP code (200-699) - no provisional codes */
+	int	cause;			/*!< ISDN cause code */
+	char	*reason;		/*!< SIP reason text, like "Busy", "Inte min domän" or "Que?" */
+	struct sip2causestruct *next;	/*!< Pointer to next entry */
+};
+
+/*! \brief Main structure for tables, including default values */
+struct sip2causetable {
+	struct sip2causestruct *table;
+	int	defaultcode;
+	char	*defaultreason;
+};
+
+/*! \brief Actual table for sip => ISDN lookups */
+struct sip2causetable sip2causelookup;
+
+/*! \brief Actual table for ISDN => sip lookups */
+struct sip2causetable cause2siplookup;
+
+static struct sip2causestruct *newsip2cause(int sip, int cause, char *reason, struct sip2causestruct *next)
+{
+	struct sip2causestruct *s2c = ast_calloc(1, sizeof(struct sip2causestruct));
+
+	if (!s2c) {
+		return NULL;
+	}
+	s2c->sip = sip;
+	s2c->cause = cause;
+	s2c->reason = reason;
+	s2c->next = next;
+	return(s2c);
+ }
+
+/*! \brief Initialize structure with default values */
+void sip2cause_init(void)
+{
+	/* Initialize table for SIP => ISDN codes */
+	sip2causelookup.table = newsip2cause(401, /* Unauthorized */ AST_CAUSE_CALL_REJECTED, "", NULL);
+	sip2causelookup.table = newsip2cause(403, /* Not found */ AST_CAUSE_CALL_REJECTED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(404, /* Not found */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(405, /* Method not allowed */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(407, /* Proxy authentication required */ AST_CAUSE_CALL_REJECTED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(408, /* No reaction */ AST_CAUSE_NO_USER_RESPONSE, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(409, /* Conflict */ AST_CAUSE_NORMAL_TEMPORARY_FAILURE, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(410, /* Gone */ AST_CAUSE_NUMBER_CHANGED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(411, /* Length required */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(413, /* Request entity too large */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(414, /* Request URI too large */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(415, /* Unsupported media type */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(420, /* Bad extension */ AST_CAUSE_NO_ROUTE_DESTINATION, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(480, /* No answer */ AST_CAUSE_NO_ANSWER, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(481, /* No answer */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(482, /* Loop detected */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(483, /* Too many hops */ AST_CAUSE_NO_ANSWER, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(484, /* Address incomplete */ AST_CAUSE_INVALID_NUMBER_FORMAT, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(485, /* Ambiguous */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(486, /* Busy everywhere */ AST_CAUSE_BUSY, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(487, /* Request terminated */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(488, /* No codecs approved */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(491, /* Request pending */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(493, /* Undecipherable */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(500, /* Server internal failure */ AST_CAUSE_FAILURE, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(501, /* Call rejected */ AST_CAUSE_FACILITY_REJECTED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(503, /* Service unavailable */ AST_CAUSE_CONGESTION, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(504, /* Gateway timeout */ AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(505, /* SIP version not supported */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(600, /* Busy everywhere */ AST_CAUSE_USER_BUSY, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(603, /* Decline */ AST_CAUSE_CALL_REJECTED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(604, /* Does not exist anywhere */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(606, /* Not acceptable */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", sip2causelookup.table);
+
+
+}
+	
+
+/*! \brief Make sure we free the cause code list from memory */
+void sip2cause_free(void)
+{
+	struct sip2causestruct *s2c = sip2causelookup.table;
+	while (s2c) {
+		struct sip2causestruct *next = s2c->next;
+		ast_free(s2c);
+		s2c = next;
+	}
+	s2c = cause2siplookup.table;
+	while (s2c) {
+		struct sip2causestruct *next = s2c->next;
+		ast_free(s2c);
+		s2c = next;
+	}
+}
+
 
 /*! \brief Convert SIP hangup causes to Asterisk hangup causes */
 int hangup_sip2cause(int cause)
 {
+	struct sip2causestruct *s2c = sip2causelookup.table;
+	while (s2c) {
+		if (s2c->sip == cause) {
+			return s2c->cause;
+		}
+		s2c = s2c->next;
+	}
+
 	/* Possible values taken from causes.h */
 
-	switch(cause) {
-		case 401:	/* Unauthorized */
-			return AST_CAUSE_CALL_REJECTED;
-		case 403:	/* Not found */
-			return AST_CAUSE_CALL_REJECTED;
-		case 404:	/* Not found */
-			return AST_CAUSE_UNALLOCATED;
-		case 405:	/* Method not allowed */
-			return AST_CAUSE_INTERWORKING;
-		case 407:	/* Proxy authentication required */
-			return AST_CAUSE_CALL_REJECTED;
-		case 408:	/* No reaction */
-			return AST_CAUSE_NO_USER_RESPONSE;
-		case 409:	/* Conflict */
-			return AST_CAUSE_NORMAL_TEMPORARY_FAILURE;
-		case 410:	/* Gone */
-			return AST_CAUSE_NUMBER_CHANGED;
-		case 411:	/* Length required */
-			return AST_CAUSE_INTERWORKING;
-		case 413:	/* Request entity too large */
-			return AST_CAUSE_INTERWORKING;
-		case 414:	/* Request URI too large */
-			return AST_CAUSE_INTERWORKING;
-		case 415:	/* Unsupported media type */
-			return AST_CAUSE_INTERWORKING;
-		case 420:	/* Bad extension */
-			return AST_CAUSE_NO_ROUTE_DESTINATION;
-		case 480:	/* No answer */
-			return AST_CAUSE_NO_ANSWER;
-		case 481:	/* No answer */
-			return AST_CAUSE_INTERWORKING;
-		case 482:	/* Loop detected */
-			return AST_CAUSE_INTERWORKING;
-		case 483:	/* Too many hops */
-			return AST_CAUSE_NO_ANSWER;
-		case 484:	/* Address incomplete */
-			return AST_CAUSE_INVALID_NUMBER_FORMAT;
-		case 485:	/* Ambiguous */
-			return AST_CAUSE_UNALLOCATED;
-		case 486:	/* Busy everywhere */
-			return AST_CAUSE_BUSY;
-		case 487:	/* Request terminated */
-			return AST_CAUSE_INTERWORKING;
-		case 488:	/* No codecs approved */
-			return AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
-		case 491:	/* Request pending */
-			return AST_CAUSE_INTERWORKING;
-		case 493:	/* Undecipherable */
-			return AST_CAUSE_INTERWORKING;
-		case 500:	/* Server internal failure */
-			return AST_CAUSE_FAILURE;
-		case 501:	/* Call rejected */
-			return AST_CAUSE_FACILITY_REJECTED;
-		case 502:
-			return AST_CAUSE_DESTINATION_OUT_OF_ORDER;
-		case 503:	/* Service unavailable */
-			return AST_CAUSE_CONGESTION;
-		case 504:	/* Gateway timeout */
-			return AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE;
-		case 505:	/* SIP version not supported */
-			return AST_CAUSE_INTERWORKING;
-		case 600:	/* Busy everywhere */
-			return AST_CAUSE_USER_BUSY;
-		case 603:	/* Decline */
-			return AST_CAUSE_CALL_REJECTED;
-		case 604:	/* Does not exist anywhere */
-			return AST_CAUSE_UNALLOCATED;
-		case 606:	/* Not acceptable */
-			return AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
-		default:
-			if (cause < 500 && cause >= 400) {
-				/* 4xx class error that is unknown - someting wrong with our request */
-				return AST_CAUSE_INTERWORKING;
-			} else if (cause < 600 && cause >= 500) {
-				/* 5xx class error - problem in the remote end */
-				return AST_CAUSE_CONGESTION;
-			} else if (cause < 700 && cause >= 600) {
-				/* 6xx - global errors in the 4xx class */
-				return AST_CAUSE_INTERWORKING;
-			}
-			return AST_CAUSE_NORMAL;
+	if (cause < 500 && cause >= 400) {
+		/* 4xx class error that is unknown - someting wrong with our request */
+		return AST_CAUSE_INTERWORKING;
+	} else if (cause < 600 && cause >= 500) {
+		/* 5xx class error - problem in the remote end */
+		return AST_CAUSE_CONGESTION;
+	} else if (cause < 700 && cause >= 600) {
+		/* 6xx - global errors in the 4xx class */
+		return AST_CAUSE_INTERWORKING;
 	}
-	/* Never reached */
-	return 0;
+	return AST_CAUSE_NORMAL;
 }
 
 /*! \brief Convert Asterisk hangup causes to SIP codes
