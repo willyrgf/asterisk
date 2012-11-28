@@ -17,4 +17,16 @@ one wants to modify these tables.
 This branch will make the table a configurable option and add a new configuration
 file, sip2cause.conf, that is not needed in normal usage of Asterisk.
 
+When do you need this?
+======================
+If you operate a SIP2ISDN gateway and need to fine-tune conversion between ISDN
+cause codes and Asterisk SIP channel responses, you need a dynamic way to 
+handle the conversion. 
 
+If you operate a SIP server outside of Asterisk, you might want to add extra
+non-standard SIP response codes that is converted to a separate cause code
+that you handle in the dial plan.
+
+Please note the warning in sip2cause.conf.sample. Changing the conversion table
+can lead to all kinds of damage to your Asterisk installation. In most cases,
+no animals will be hurt.

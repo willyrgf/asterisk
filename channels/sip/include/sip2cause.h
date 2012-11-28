@@ -36,5 +36,7 @@ void sip2cause_init(void);
 /*! \brief Free sip2cause tables */
 void sip2cause_free(void);
 
+/*! \brief Load configuration */
+int sip2cause_load(struct ast_config *s2c_config);
 
 #endif /* defined(_SIP_CAUSE_H) */

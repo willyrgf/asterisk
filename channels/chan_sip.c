@@ -579,6 +579,8 @@ static struct ast_jb_conf global_jbconf;                /*!< Global jitterbuffer
 
 static const char config[] = "sip.conf";                /*!< Main configuration file */
 static const char notify_config[] = "sip_notify.conf";  /*!< Configuration file for sending Notify with CLI commands to reconfigure or reboot phones */
+static const char sip2cause_config[] = "sip2cause.conf";  /*!< Configuration file for configuration of sip2cause conversions */
+static struct ast_config *sip2cause = NULL;    /*!< Configuration file for sip2cause conversions */
 
 /*! \brief Readable descriptions of device states.
  *  \note Should be aligned to above table as index */
@@ -685,6 +687,7 @@ static int default_fromdomainport;                 /*!< Default domain port on o
 static char default_notifymime[AST_MAX_EXTENSION]; /*!< Default MIME media type for MWI notify messages */
 static char default_vmexten[AST_MAX_EXTENSION];    /*!< Default From Username on MWI updates */
 static int default_qualify;                        /*!< Default Qualify= setting */
+static int private_sip2cause;			   /*!< Indication of private sip2cause conversion tables */
 static char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
 static char default_mohsuggest[MAX_MUSICCLASS];    /*!< Global setting for moh class to suggest when putting
                                                     *   a bridged channel on hold */
@@ -18525,6 +18528,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  MWI NOTIFY mime type:   %s\n", default_notifymime);
 	ast_cli(a->fd, "  DNS SRV lookup:         %s\n", AST_CLI_YESNO(sip_cfg.srvlookup));
 	ast_cli(a->fd, "  Pedantic SIP support:   %s\n", AST_CLI_YESNO(sip_cfg.pedanticsipchecking));
+	ast_cli(a->fd, "  Private SIP2cause:      %s\n", AST_CLI_YESNO(private_sip2cause));
 	ast_cli(a->fd, "  Reg. min duration       %d secs\n", min_expiry);
 	ast_cli(a->fd, "  Reg. max duration:      %d secs\n", max_expiry);
 	ast_cli(a->fd, "  Reg. default duration:  %d secs\n", default_expiry);
@@ -29381,6 +29385,17 @@ static int reload_config(enum channelreloadreason reason)
 	if ((notify_types = ast_config_load(notify_config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Contents of %s are invalid and cannot be parsed.\n", notify_config);
 		notify_types = NULL;
+	}
+	private_sip2cause = 0;
+	if ((sip2cause = ast_config_load(sip2cause_config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_ERROR, "Contents of %s are invalid and cannot be parsed.\n", sip2cause_config);
+		sip2cause = NULL;
+	} else {
+		if(sip2cause != NULL) {
+			private_sip2cause = sip2cause_load(sip2cause);
+		}
+		/* Now clean up */
+		ast_config_destroy(sip2cause);
 	}
 
 	/* Done, tell the manager */

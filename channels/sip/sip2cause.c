@@ -35,7 +35,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 struct sip2causestruct {
 	int	sip;			/*!< SIP code (200-699) - no provisional codes */
 	int	cause;			/*!< ISDN cause code */
-	char	*reason;		/*!< SIP reason text, like "Busy", "Inte min domän" or "Que?" */
+	char	*reason;		/*!< SIP reason text, like "486 Busy", "404 Inte min domän" or "500 Que?" */
+	int	private;		/*!< If 1 = private extension */
 	struct sip2causestruct *next;	/*!< Pointer to next entry */
 };
 
@@ -52,7 +53,8 @@ struct sip2causetable sip2causelookup;
 /*! \brief Actual table for ISDN => sip lookups */
 struct sip2causetable cause2siplookup;
 
-static struct sip2causestruct *newsip2cause(int sip, int cause, char *reason, struct sip2causestruct *next)
+/*! \brief Add conversion entry to table */
+static struct sip2causestruct *newsip2cause(int sip, int cause, char *reason, int private, struct sip2causestruct *next)
 {
 	struct sip2causestruct *s2c = ast_calloc(1, sizeof(struct sip2causestruct));
 
@@ -70,60 +72,60 @@ static struct sip2causestruct *newsip2cause(int sip, int cause, char *reason, st
 void sip2cause_init(void)
 {
 	/* Initialize table for SIP => ISDN codes */
-	sip2causelookup.table = newsip2cause(401, /* Unauthorized */ AST_CAUSE_CALL_REJECTED, "", NULL);
-	sip2causelookup.table = newsip2cause(403, /* Not found */ AST_CAUSE_CALL_REJECTED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(404, /* Not found */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(405, /* Method not allowed */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(407, /* Proxy authentication required */ AST_CAUSE_CALL_REJECTED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(408, /* No reaction */ AST_CAUSE_NO_USER_RESPONSE, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(409, /* Conflict */ AST_CAUSE_NORMAL_TEMPORARY_FAILURE, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(410, /* Gone */ AST_CAUSE_NUMBER_CHANGED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(411, /* Length required */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(413, /* Request entity too large */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(414, /* Request URI too large */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(415, /* Unsupported media type */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(420, /* Bad extension */ AST_CAUSE_NO_ROUTE_DESTINATION, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(480, /* No answer */ AST_CAUSE_NO_ANSWER, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(481, /* No answer */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(482, /* Loop detected */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(483, /* Too many hops */ AST_CAUSE_NO_ANSWER, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(484, /* Address incomplete */ AST_CAUSE_INVALID_NUMBER_FORMAT, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(485, /* Ambiguous */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(486, /* Busy everywhere */ AST_CAUSE_BUSY, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(487, /* Request terminated */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(488, /* No codecs approved */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(491, /* Request pending */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(493, /* Undecipherable */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(500, /* Server internal failure */ AST_CAUSE_FAILURE, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(501, /* Call rejected */ AST_CAUSE_FACILITY_REJECTED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(503, /* Service unavailable */ AST_CAUSE_CONGESTION, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(504, /* Gateway timeout */ AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(505, /* SIP version not supported */ AST_CAUSE_INTERWORKING, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(600, /* Busy everywhere */ AST_CAUSE_USER_BUSY, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(603, /* Decline */ AST_CAUSE_CALL_REJECTED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(604, /* Does not exist anywhere */ AST_CAUSE_UNALLOCATED, "", sip2causelookup.table);
-	sip2causelookup.table = newsip2cause(606, /* Not acceptable */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(401, /* Unauthorized */ AST_CAUSE_CALL_REJECTED, "", 0, NULL);
+	sip2causelookup.table = newsip2cause(403, /* Not found */ AST_CAUSE_CALL_REJECTED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(404, /* Not found */ AST_CAUSE_UNALLOCATED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(405, /* Method not allowed */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(407, /* Proxy authentication required */ AST_CAUSE_CALL_REJECTED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(408, /* No reaction */ AST_CAUSE_NO_USER_RESPONSE, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(409, /* Conflict */ AST_CAUSE_NORMAL_TEMPORARY_FAILURE, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(410, /* Gone */ AST_CAUSE_NUMBER_CHANGED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(411, /* Length required */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(413, /* Request entity too large */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(414, /* Request URI too large */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(415, /* Unsupported media type */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(420, /* Bad extension */ AST_CAUSE_NO_ROUTE_DESTINATION, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(480, /* No answer */ AST_CAUSE_NO_ANSWER, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(481, /* No answer */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(482, /* Loop detected */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(483, /* Too many hops */ AST_CAUSE_NO_ANSWER, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(484, /* Address incomplete */ AST_CAUSE_INVALID_NUMBER_FORMAT, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(485, /* Ambiguous */ AST_CAUSE_UNALLOCATED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(486, /* Busy everywhere */ AST_CAUSE_BUSY, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(487, /* Request terminated */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(488, /* No codecs approved */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(491, /* Request pending */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(493, /* Undecipherable */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(500, /* Server internal failure */ AST_CAUSE_FAILURE, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(501, /* Call rejected */ AST_CAUSE_FACILITY_REJECTED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(503, /* Service unavailable */ AST_CAUSE_CONGESTION, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(504, /* Gateway timeout */ AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(505, /* SIP version not supported */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(600, /* Busy everywhere */ AST_CAUSE_USER_BUSY, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(603, /* Decline */ AST_CAUSE_CALL_REJECTED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(604, /* Does not exist anywhere */ AST_CAUSE_UNALLOCATED, "", 0, sip2causelookup.table);
+	sip2causelookup.table = newsip2cause(606, /* Not acceptable */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", 0, sip2causelookup.table);
 
 	/* Add the reverse table */
-	cause2siplookup.table = newsip2cause(404, AST_CAUSE_UNALLOCATED, "404 Not Found", NULL);
-	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_DESTINATION, "404 Not Found", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_TRANSIT_NET, "404 Not Found", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CONGESTION, "503 Service Unavailable", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(503, AST_CAUSE_SWITCH_CONGESTION, "503 Service Unavailable", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(408, AST_CAUSE_NO_USER_RESPONSE, "408 Request Timeout", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NO_ANSWER, "480 Temporarily unavailable", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(480, AST_CAUSE_UNREGISTERED, "480 Temporarily unavailable", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(403, AST_CAUSE_CALL_REJECTED, "403 Forbidden", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(410, AST_CAUSE_NUMBER_CHANGED, "410 Gone", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NORMAL_UNSPECIFIED, "480 Temporarily unavailable", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(484, AST_CAUSE_INVALID_NUMBER_FORMAT, "484 Address Incomplete", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(486, AST_CAUSE_USER_BUSY, "486 Busy here", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(500, AST_CAUSE_FAILURE, "500 Server internal failure", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(501, AST_CAUSE_FACILITY_REJECTED, "501 Not implemented", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CHAN_NOT_IMPLEMENTED, "503 Service unavailable", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "502 Bad gateway", cause2siplookup.table);
-	cause2siplookup.table = newsip2cause(488, AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "488 Not Acceptable Here", cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(404, AST_CAUSE_UNALLOCATED, "404 Not Found", 0, NULL);
+	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_DESTINATION, "404 Not Found", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_TRANSIT_NET, "404 Not Found", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CONGESTION, "503 Service Unavailable", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(503, AST_CAUSE_SWITCH_CONGESTION, "503 Service Unavailable", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(408, AST_CAUSE_NO_USER_RESPONSE, "408 Request Timeout", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NO_ANSWER, "480 Temporarily unavailable", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(480, AST_CAUSE_UNREGISTERED, "480 Temporarily unavailable", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(403, AST_CAUSE_CALL_REJECTED, "403 Forbidden", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(410, AST_CAUSE_NUMBER_CHANGED, "410 Gone", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NORMAL_UNSPECIFIED, "480 Temporarily unavailable", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(484, AST_CAUSE_INVALID_NUMBER_FORMAT, "484 Address Incomplete", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(486, AST_CAUSE_USER_BUSY, "486 Busy here", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(500, AST_CAUSE_FAILURE, "500 Server internal failure", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(501, AST_CAUSE_FACILITY_REJECTED, "501 Not implemented", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CHAN_NOT_IMPLEMENTED, "503 Service unavailable", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "502 Bad gateway", 0, cause2siplookup.table);
+	cause2siplookup.table = newsip2cause(488, AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "488 Not Acceptable Here", 0, cause2siplookup.table);
 
 }
 	
@@ -215,4 +217,18 @@ char *hangup_cause2sip(int cause)
 	}
 	ast_debug(1, "AST hangup cause %d (no match found in SIP)\n", cause);
 	return NULL;
+}
+
+int sip2cause_load(struct ast_config *s2c_config)
+{
+	struct ast_variable *v;
+
+	ast_debug(2, "AST sip2cause configuration parser");
+	for (v = ast_variable_browse(s2c_config, "sip2cause"); v; v = v->next) {
+		ast_debug(1, "====> SIP2cause ::: Name %s Value %s \n", v->name, v->value);
+	}
+	for (v = ast_variable_browse(s2c_config, "cause2sip"); v; v = v->next) {
+		ast_debug(1, "====> CAUSE2SIP ::: Name %s Value %s \n", v->name, v->value);
+	}
+	return 1;
 }
