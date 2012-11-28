@@ -15,6 +15,7 @@ deluxepine-1.4			1.4	Named access control lists
 deluxepine-trunk		Trunk	Named access control lists. Candidate for 1.8
 dialplan-ami-amievents		?	Needs investigation
 dns-srv-1.4.diff		1.4	Backport of SRV record support. Buggy.
+earl-grey-sip2cause-configurable-1.8	Add support for configuration SIP response code to ISDN cause code translation
 earlyrtpfix			1.4	Early media fixes. Merged.
 edv-appleraisin-1.4		1.4	Asterisk DB over realtime (in group directory)
 edv-appleraisin-trunk		trunk	Asterisk DB over realtime (in group directory)
