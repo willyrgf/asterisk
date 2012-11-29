@@ -27,6 +27,7 @@
 
 #include "asterisk.h"
 #include "asterisk/causes.h"
+#include "asterisk/strings.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "include/sip2cause.h"
@@ -35,7 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 struct sip2causestruct {
 	int	sip;			/*!< SIP code (200-699) - no provisional codes */
 	int	cause;			/*!< ISDN cause code */
-	char	*reason;		/*!< SIP reason text, like "486 Busy", "404 Inte min domän" or "500 Que?" */
+	char	reason[64];		/*!< SIP reason text, like "486 Busy", "404 Inte min domän" or "500 Que?" */
 	int	private;		/*!< If 1 = private extension */
 	struct sip2causestruct *next;	/*!< Pointer to next entry */
 };
@@ -54,7 +55,7 @@ struct sip2causetable sip2causelookup;
 struct sip2causetable cause2siplookup;
 
 /*! \brief Add conversion entry to table */
-static struct sip2causestruct *newsip2cause(int sip, int cause, char *reason, int private, struct sip2causestruct *next)
+static struct sip2causestruct *newsip2cause(int sip, int cause, const char *reason, int private, struct sip2causestruct *next)
 {
 	struct sip2causestruct *s2c = ast_calloc(1, sizeof(struct sip2causestruct));
 
@@ -63,8 +64,9 @@ static struct sip2causestruct *newsip2cause(int sip, int cause, char *reason, in
 	}
 	s2c->sip = sip;
 	s2c->cause = cause;
-	s2c->reason = reason;
+	ast_copy_string(s2c->reason, reason, sizeof(s2c->reason));
 	s2c->next = next;
+	ast_debug(4, "SIP2CAUSE adding %d %s <=> %d (%s) \n", sip, reason, cause, ast_cause2str(cause));
 	return(s2c);
  }
 
@@ -149,11 +151,12 @@ void sip2cause_free(void)
 
 
 /*! \brief Convert SIP hangup causes to Asterisk hangup causes */
-int hangup_sip2cause(int cause)
+int hangup_sip2cause(int sipcode)
 {
 	struct sip2causestruct *s2c = sip2causelookup.table;
 	while (s2c) {
-		if (s2c->sip == cause) {
+		if (s2c->sip == sipcode) {
+			ast_debug(4, "SIP2CAUSE returning %d (%s) based on SIP code %d\n", s2c->cause, ast_cause2str(s2c->cause), sipcode);
 			return s2c->cause;
 		}
 		s2c = s2c->next;
@@ -161,16 +164,20 @@ int hangup_sip2cause(int cause)
 
 	/* Possible values taken from causes.h */
 
-	if (cause < 500 && cause >= 400) {
+	if (sipcode < 500 && sipcode >= 400) {
 		/* 4xx class error that is unknown - someting wrong with our request */
+		ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_INTERWORKING, ast_cause2str(AST_CAUSE_INTERWORKING), sipcode);
 		return AST_CAUSE_INTERWORKING;
-	} else if (cause < 600 && cause >= 500) {
+	} else if (sipcode < 600 && sipcode >= 500) {
+		ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_CONGESTION, ast_cause2str(AST_CAUSE_CONGESTION), sipcode);
 		/* 5xx class error - problem in the remote end */
 		return AST_CAUSE_CONGESTION;
-	} else if (cause < 700 && cause >= 600) {
+	} else if (sipcode < 700 && sipcode >= 600) {
+		ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_INTERWORKING, ast_cause2str(AST_CAUSE_INTERWORKING), sipcode);
 		/* 6xx - global errors in the 4xx class */
 		return AST_CAUSE_INTERWORKING;
 	}
+	ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", s2c->cause, ast_cause2str(s2c->cause), sipcode);
 	return AST_CAUSE_NORMAL;
 }
 
@@ -211,6 +218,7 @@ char *hangup_cause2sip(int cause)
 	struct sip2causestruct *s2c = cause2siplookup.table;
 	while (s2c) {
 		if (s2c->cause == cause) {
+			ast_debug(4, "SIP2CAUSE returning %s based on ISDN cause %d - %s\n", s2c->reason, cause, ast_cause2str(cause));
 			return s2c->reason;
 		}
 		s2c = s2c->next;
@@ -219,16 +227,54 @@ char *hangup_cause2sip(int cause)
 	return NULL;
 }
 
+/*! \brief Load configuration
+
+- Check if SIP code is valid
+- Check if we can parse the cause code using functions in channel.c
+
+*/
 int sip2cause_load(struct ast_config *s2c_config)
 {
 	struct ast_variable *v;
+	int respcode;
+	int cause;
+	int number=0;
 
 	ast_debug(2, "AST sip2cause configuration parser");
 	for (v = ast_variable_browse(s2c_config, "sip2cause"); v; v = v->next) {
 		ast_debug(1, "====> SIP2cause ::: Name %s Value %s \n", v->name, v->value);
+		respcode = 42;
+		cause = 0;
+		number = sscanf(v->name, "%d", &respcode);
+		if (number != 1) {
+			ast_log(LOG_ERROR, "Unknown SIP response code format %s in sip2cause.conf section [sip2cause] Respcode %d Number %d\n", v->name, respcode, number);
+			continue;
+		}
+		if (respcode < 200 || respcode > 699) {
+			ast_log(LOG_ERROR, "Bad SIP response code:  Asterisk cause code \'%s=>%s\' in sip2cause.conf section [sip2cause] \n", v->name, v->value);
+			continue;
+		}
+		if ((cause = ast_str2cause(v->value)) == -1) {
+			ast_log(LOG_ERROR, "Unknown Asterisk cause code %s in sip2cause.conf section [sip2cause] Cause %d\n", v->value, cause);
+			continue;
+		} 
+		sip2causelookup.table = newsip2cause(respcode, cause, "", 1, sip2causelookup.table);
 	}
 	for (v = ast_variable_browse(s2c_config, "cause2sip"); v; v = v->next) {
 		ast_debug(1, "====> CAUSE2SIP ::: Name %s Value %s \n", v->name, v->value);
+		if ((cause = ast_str2cause(v->name)) == -1) {
+			ast_log(LOG_ERROR, "Unknown Asterisk cause code %s in sip2cause.conf section [cause2sip] \n", v->name);
+			continue;
+		} 
+		if (sscanf(v->value, "%d ", &respcode) != 1) {
+			ast_log(LOG_ERROR, "Bad syntax:  Asterisk cause code \'%s=>%s\' in sip2cause.conf section [cause2sip] \n", v->name, v->value);
+			continue;
+		}
+		if (respcode < 200 || respcode > 699) {
+			ast_log(LOG_ERROR, "Bad SIP response code:  \'%s=>%s\' in sip2cause.conf section [cause2sip] \n", v->name, v->value);
+			continue;
+		}
+		cause2siplookup.table = newsip2cause(respcode, cause, v->value, 1, cause2siplookup.table);
 	}
 	return 1;
 }
