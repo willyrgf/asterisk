@@ -156,7 +156,7 @@ int hangup_sip2cause(int sipcode)
 	struct sip2causestruct *s2c = sip2causelookup.table;
 	while (s2c) {
 		if (s2c->sip == sipcode) {
-			ast_debug(4, "SIP2CAUSE returning %d (%s) based on SIP code %d\n", s2c->cause, ast_cause2str(s2c->cause), sipcode);
+			ast_debug(1, "SIP2CAUSE returning %d (%s) based on SIP code %d        [%s]\n", s2c->cause, ast_cause2str(s2c->cause), sipcode, s2c->private ? "config" : "default");
 			return s2c->cause;
 		}
 		s2c = s2c->next;
@@ -218,7 +218,7 @@ char *hangup_cause2sip(int cause)
 	struct sip2causestruct *s2c = cause2siplookup.table;
 	while (s2c) {
 		if (s2c->cause == cause) {
-			ast_debug(4, "SIP2CAUSE returning %s based on ISDN cause %d - %s\n", s2c->reason, cause, ast_cause2str(cause));
+			ast_debug(4, "cause2sip returning %s based on ISDN cause %d - %s           [%s]\n", s2c->reason, cause, ast_cause2str(cause), s2c->private ? "config" : "default");
 			return s2c->reason;
 		}
 		s2c = s2c->next;
