@@ -4237,8 +4237,8 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 			case AST_CONTROL_CNG_END:
 				/* If we are playing out CNG noise on the bridged channel, stop it now. 
 				   otherwise, ignore this frame. */
-				ast_debug(1, "*** Bridge got CNG END frame \n");
-				ast_moh_stop(other);
+				ast_debug(2, "*** Bridge got CNG END frame \n");
+				ast_channel_stop_noise_generator(other, NULL);
 				break;
 			case AST_CONTROL_AOC:
 			case AST_CONTROL_HOLD:
