@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2012, Digium, inc and Edvina AB
+ * Copyright (C) 2012, Digium, inc
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -24,6 +24,11 @@
 /*** MODULEINFO
 	<support_level>core</support_level>
  ***/
+
+/*
+The sip2causestruct could potentially be used to provide translations of SIP reason codes in the future
+
+*/
 
 #include "asterisk.h"
 #include "asterisk/causes.h"
@@ -66,6 +71,7 @@ static struct sip2causestruct *newsip2cause(int sip, int cause, const char *reas
 	s2c->cause = cause;
 	ast_copy_string(s2c->reason, reason, sizeof(s2c->reason));
 	s2c->next = next;
+	s2c->private = private;
 	ast_debug(4, "SIP2CAUSE adding %d %s <=> %d (%s) \n", sip, reason, cause, ast_cause2str(cause));
 	return(s2c);
  }
