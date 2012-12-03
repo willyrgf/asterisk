@@ -42,44 +42,6 @@ unsigned int port_str2int(const char *pt, unsigned int standard);
  */
 const char *find_closing_quote(const char *start, const char *lim);
 
-
-/*! \brief Convert SIP hangup causes to Asterisk hangup causes */
-int hangup_sip2cause(int cause);
-
-/*! \brief Convert Asterisk hangup causes to SIP codes
-\verbatim
- Possible values from causes.h
-        AST_CAUSE_NOTDEFINED    AST_CAUSE_NORMAL        AST_CAUSE_BUSY
-        AST_CAUSE_FAILURE       AST_CAUSE_CONGESTION    AST_CAUSE_UNALLOCATED
-
-	In addition to these, a lot of PRI codes is defined in causes.h
-	...should we take care of them too ?
-
-	Quote RFC 3398
-
-   ISUP Cause value                        SIP response
-   ----------------                        ------------
-   1  unallocated number                   404 Not Found
-   2  no route to network                  404 Not found
-   3  no route to destination              404 Not found
-   16 normal call clearing                 --- (*)
-   17 user busy                            486 Busy here
-   18 no user responding                   408 Request Timeout
-   19 no answer from the user              480 Temporarily unavailable
-   20 subscriber absent                    480 Temporarily unavailable
-   21 call rejected                        403 Forbidden (+)
-   22 number changed (w/o diagnostic)      410 Gone
-   22 number changed (w/ diagnostic)       301 Moved Permanently
-   23 redirection to new destination       410 Gone
-   26 non-selected user clearing           404 Not Found (=)
-   27 destination out of order             502 Bad Gateway
-   28 address incomplete                   484 Address incomplete
-   29 facility rejected                    501 Not implemented
-   31 normal unspecified                   480 Temporarily unavailable
-\endverbatim
-*/
-const char *hangup_cause2sip(int cause);
-
 /*! \brief Return a string describing the force_rport value for the given flags */
 const char *force_rport_string(struct ast_flags *flags);
 

@@ -1,0 +1,24 @@
+;
+; Conversion table additions for the translation between SIP hangup codes and ISDN cause codes
+; ============================================================================================
+; This table is used to convert a negative SIP response to an ISDN cause code, that is sent
+; over the PBX call bridge to the calling party, or to convert a received ISDN hangup cause
+; from the called party to a SIP response. Changes will not affect how Asterisk treats a SIP
+; response, but how the other party reacts to it.
+;
+; For reference, check Asterisk source code include/asterisk/causes.h
+; and channels/sip/sip2cause.c
+;
+; Note also that this translation is not used in all cases in the SIP implementation in Asterisk.
+; Fixes are always welcome.
+;
+; !!!!!!!!!!!!!!!!!!!! READ THIS SERIOUSLY !
+; Note: By changing the default translation, you can seriously jeopardize your Asterisk server functionality.
+;       Make sure you understand what you are doing, and that you are testing carefully.
+;       In 99.99% of Asterisk installations, you will not need to add ANYTHING to this file.
+;
+[sip2cause]
+; 404 => USER_BUSY
+
+[cause2sip]
+; USER_BUSY => 403 Forbidden
