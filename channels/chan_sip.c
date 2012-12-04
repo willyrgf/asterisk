@@ -11906,7 +11906,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		/* Now add Comfort Noise and DTMF RFC2833 telephony-event as a codec */
 		for (x = 1LL; x <= AST_RTP_MAX; x <<= 1) {
 			if (!(p->jointnoncodeccapability & x)) {
-				ast_debug(1, "NOT Adding non-codec 0x%x (%s) to SDP\n", x, ast_rtp_lookup_mime_subtype2(0, x, 0));
+				ast_debug(1, "NOT Adding non-codec 0x%lx (%s) to SDP\n", (int64_t)x, ast_rtp_lookup_mime_subtype2(0, x, 0));
 				continue;
 			}
 
