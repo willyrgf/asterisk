@@ -247,6 +247,9 @@ int sip2cause_load(struct ast_config *s2c_config)
 	int number=0;
 
 	ast_debug(2, "AST sip2cause configuration parser");
+	if (!s2c_config) {
+		return 0;
+	}
 	for (v = ast_variable_browse(s2c_config, "sip2cause"); v; v = v->next) {
 		ast_debug(1, "====> SIP2cause ::: Name %s Value %s \n", v->name, v->value);
 		respcode = 42;
