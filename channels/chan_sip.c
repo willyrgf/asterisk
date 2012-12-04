@@ -32056,10 +32056,11 @@ static int reload_config(enum channelreloadreason reason)
 	if ((sip2cause = ast_config_load(sip2cause_config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Contents of %s are invalid and cannot be parsed.\n", sip2cause_config);
 		sip2cause = NULL;
+		sip2cause_init();	/* Initialize standard settings */
 	} else {
-		if(sip2cause != NULL) {
-			private_sip2cause = sip2cause_load(sip2cause);
-		}
+		sip2cause_free();	/* If it's a reload, free existing settings */
+		sip2cause_init();	/* Initialize standard settings */
+		private_sip2cause = sip2cause_load(sip2cause);
 		/* Now clean up */
 		ast_config_destroy(sip2cause);
 	}
@@ -34036,7 +34037,6 @@ static int load_module(void)
 	sip_reloadreason = CHANNEL_MODULE_LOAD;
 
 	can_parse_xml = sip_is_xml_parsable();
-	sip2cause_init();
 	if (reload_config(sip_reloadreason)) {	/* Load the configuration from sip.conf */
 		return AST_MODULE_LOAD_DECLINE;
 	}
