@@ -16099,8 +16099,10 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	/* We might not immediately be able to reconnect via TCP, but try caching it anyhow */
 	if (!peer->rt_fromcontact || !sip_cfg.peer_rtupdate) {
 		char path[SIPBUFSIZE*2];
-		make_route_list(peer->path, path, sizeof(path));
-		ast_db_put("SIP/RegistryPath", peer->name, path);
+		if (peer->path) {
+			make_route_list(peer->path, path, sizeof(path));
+			ast_db_put("SIP/RegistryPath", peer->name, path);
+		}
 		ast_db_put("SIP/Registry", peer->name, data);
 	}
 	manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: SIP\r\nPeer: SIP/%s\r\nPeerStatus: Registered\r\nAddress: %s\r\n", peer->name,  ast_sockaddr_stringify(&peer->addr));
@@ -16287,9 +16289,9 @@ static void copy_route(struct sip_route **d, struct sip_route *s)
 	}
 	*d = head;
 }
-/*! \brief Build route list from Path header 
+/*! \brief Build route list from Path header
  *  RFC 3327 requires that the Path header contains SIP URIs with lr paramter.
- *  Thus, we do not care about strict routers 
+ *  Thus, we do not care about strict routing SIP routers
  */
 static void build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_request *req, char *pathbuf)
 {
