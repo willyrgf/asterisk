@@ -10,6 +10,9 @@ SIP PATH header support for Asterisk
 This branch is based on Klaus Darillions work in
 https://reviewboard.asterisk.org/r/991/
 
+Issue in the bug tracker:
+https://issues.asterisk.org/jira/browse/ASTERISK-16884
+
 I've added
 - Realtime support (not tested)
 - Global flag support
