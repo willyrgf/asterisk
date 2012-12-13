@@ -510,6 +510,10 @@ else
 fi
 AC_SUBST(EDITLINE_LIB)
 
+if test "x$UUID_LIB" == "x"; then
+  AC_MSG_ERROR([*** uuid support not found (this typically means the uuid development package is missing)])
+fi
+
 # Another mandatory item (unless it's explicitly disabled)
 AC_ARG_ENABLE([xmldoc],
 	[AS_HELP_STRING([--disable-xmldoc],
@@ -718,11 +722,6 @@ AC_MSG_RESULT(yes)
 AC_DEFINE([HAVE_SYS_ENDIAN_BSWAP16], 1, [Define to 1 if your sys/endian.h header file provides the bswap16 macro.]),
 AC_MSG_RESULT(no)
 )
-
-if test "${cross_compiling}" = "no";
-then
-  AC_CHECK_FILE(/dev/urandom, AC_DEFINE([HAVE_DEV_URANDOM], 1, [Define to 1 if your system has /dev/urandom.]))
-fi
 
 AC_MSG_CHECKING(for locale_t in locale.h)
 AC_LINK_IFELSE(
