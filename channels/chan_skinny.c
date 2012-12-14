@@ -175,6 +175,7 @@ static struct ast_codec_pref default_prefs;
 enum skinny_codecs {
 	SKINNY_CODEC_ALAW = 2,
 	SKINNY_CODEC_ULAW = 4,
+	SKINNY_CODEC_G722 = 6,
 	SKINNY_CODEC_G723_1 = 9,
 	SKINNY_CODEC_G729A = 12,
 	SKINNY_CODEC_G726_32 = 82, /* XXX Which packing order does this translate to? */
@@ -201,7 +202,7 @@ static int keep_alive = 120;
 static int auth_timeout = DEFAULT_AUTH_TIMEOUT;
 static int auth_limit = DEFAULT_AUTH_LIMIT;
 static int unauth_sessions = 0;
-static char global_vmexten[AST_MAX_EXTENSION];      /* Voicemail pilot number */
+static char vmexten[AST_MAX_EXTENSION];      /* Voicemail pilot number */
 static char used_context[AST_MAX_EXTENSION]; /* placeholder to check if context are already used in regcontext */
 static char regcontext[AST_MAX_CONTEXT];     /* Context for auto-extension */
 static char date_format[6] = "D-M-Y";
@@ -671,7 +672,6 @@ struct close_receive_channel_message {
 };
 
 #define SOFT_KEY_TEMPLATE_RES_MESSAGE 0x0108
-
 struct soft_key_template_definition {
 	char softKeyLabel[16];
 	uint32_t softKeyEvent;
@@ -1940,6 +1940,8 @@ static struct ast_format *codec_skinny2ast(enum skinny_codecs skinnycodec, struc
 		return ast_format_set(result, AST_FORMAT_ALAW, 0);
 	case SKINNY_CODEC_ULAW:
 		return ast_format_set(result, AST_FORMAT_ULAW, 0);
+	case SKINNY_CODEC_G722:
+		return ast_format_set(result, AST_FORMAT_G722, 0);
 	case SKINNY_CODEC_G723_1:
 		return ast_format_set(result, AST_FORMAT_G723_1, 0);
 	case SKINNY_CODEC_G729A:
@@ -1963,6 +1965,8 @@ static int codec_ast2skinny(const struct ast_format *astcodec)
 		return SKINNY_CODEC_ALAW;
 	case AST_FORMAT_ULAW:
 		return SKINNY_CODEC_ULAW;
+	case AST_FORMAT_G722:
+		return SKINNY_CODEC_G722;
 	case AST_FORMAT_G723_1:
 		return SKINNY_CODEC_G723_1;
 	case AST_FORMAT_G729A:
@@ -2190,7 +2194,7 @@ static char *callstate2str(int ind)
 	char *tmp;
 
 	switch (ind) {
-	case SUBSTATE_OFFHOOK:
+	case SKINNY_OFFHOOK:
 		return "SKINNY_OFFHOOK";
 	case SKINNY_ONHOOK:
 		return "SKINNY_ONHOOK";
@@ -3318,9 +3322,9 @@ static char *handle_skinny_set_debug(struct ast_cli_entry *e, int cmd, struct as
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "skinny debug [show|{off|all|packet|sub|audio|template|lock}]";
+		e->command = "skinny debug {audio|hint|lock|off|packet|show|sub|template|thread}";
 		e->usage =
-			"Usage: skinny debug [show|{off|on|packet|sub|audio|template|lock}]\n"
+			"Usage: skinny debug {audio|hint|lock|off|packet|show|sub|template|thread}\n"
 			"       Enables/Disables various Skinny debugging messages\n";
 		return NULL;
 	case CLI_GENERATE:
@@ -3362,13 +3366,13 @@ static char *handle_skinny_set_debug(struct ast_cli_entry *e, int cmd, struct as
 			bitmask = DEBUG_PACKET;
 		} else if (!strncasecmp(arg, "audio", 5)) {
 			bitmask = DEBUG_AUDIO;
-		} else if (!strncasecmp(arg, "lock", 6)) {
+		} else if (!strncasecmp(arg, "lock", 4)) {
 			bitmask = DEBUG_LOCK;
 		} else if (!strncasecmp(arg, "template", 8)) {
 			bitmask = DEBUG_TEMPLATE;
 		} else if (!strncasecmp(arg, "thread", 6)) {
 			bitmask = DEBUG_THREAD;
-		} else if (!strncasecmp(arg, "hint", 6)) {
+		} else if (!strncasecmp(arg, "hint", 4)) {
 			bitmask = DEBUG_HINT;
 		} else {
 			ast_cli(a->fd, "Skinny Debugging - option '%s' unknown\n", a->argv[i]);
@@ -4166,7 +4170,7 @@ static char *handle_skinny_show_settings(struct ast_cli_entry *e, int cmd, struc
 	ast_cli(a->fd, "  Bindaddress:            %s\n", ast_inet_ntoa(bindaddr.sin_addr));
 	ast_cli(a->fd, "  KeepAlive:              %d\n", keep_alive);
 	ast_cli(a->fd, "  Date Format:            %s\n", date_format);
-	ast_cli(a->fd, "  Voice Mail Extension:   %s\n", S_OR(global_vmexten, "(not set)"));
+	ast_cli(a->fd, "  Voice Mail Extension:   %s\n", S_OR(vmexten, "(not set)"));
 	ast_cli(a->fd, "  Reg. context:           %s\n", S_OR(regcontext, "(not set)"));
 	ast_cli(a->fd, "  Jitterbuffer enabled:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_jbconf, AST_JB_ENABLED)));
 	 if (ast_test_flag(&global_jbconf, AST_JB_ENABLED)) {
@@ -7208,6 +7212,9 @@ static struct ast_channel *skinny_request(const char *type, struct ast_format_ca
  				}
  				ast_copy_string(regcontext, v->value, sizeof(regcontext));
  				continue;
+ 			} else if (!strcasecmp(v->name, "vmexten")) {
+ 				ast_copy_string(vmexten, v->value, sizeof(vmexten));
+ 				continue;
  			} else if (!strcasecmp(v->name, "dateformat")) {
  				memcpy(date_format, v->value, sizeof(date_format));
  				continue;
@@ -7649,6 +7656,10 @@ static struct ast_channel *skinny_request(const char *type, struct ast_format_ca
  			AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
  			AST_EVENT_IE_END);
  	}
+
+	if (!ast_strlen_zero(vmexten) && ast_strlen_zero(l->vmexten)) {
+		ast_copy_string(l->vmexten, vmexten, sizeof(l->vmexten));
+	}
  
  	ast_mutex_unlock(&l->lock);
 	

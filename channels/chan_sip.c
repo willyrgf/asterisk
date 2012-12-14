@@ -13213,10 +13213,11 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		   - Then other codecs in capabilities, including video
 		*/
 
-		/* Prefer the audio codec we were requested to use, first, no matter what
-		   Note that p->prefcodec can include video codecs, so mask them out
-		*/
-		if (ast_format_cap_has_joint(tmpcap, p->prefcaps)) {
+
+		/* Unless otherwise configured, the prefcaps is added before the peer's
+		 * configured codecs.
+		 */
+		if (!ast_test_flag(&p->flags[2], SIP_PAGE3_IGNORE_PREFCAPS) && ast_format_cap_has_joint(tmpcap, p->prefcaps)) {
 			ast_format_cap_iter_start(p->prefcaps);
 			while (!(ast_format_cap_iter_next(p->prefcaps, &tmp_fmt))) {
 				if (AST_FORMAT_GET_TYPE(tmp_fmt.id) != AST_FORMAT_TYPE_AUDIO) {
@@ -14098,7 +14099,9 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 	}
 
 	/* Add Session-Timers related headers */
-	if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE) {
+	if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE
+		|| (st_get_mode(p, 0) == SESSION_TIMER_MODE_ACCEPT
+			&& st_get_se(p, FALSE) != DEFAULT_MIN_SE)) {
 		char i2astr[10];
 
 		if (!p->stimer->st_interval) {
@@ -14106,9 +14109,11 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 		}
 
 		p->stimer->st_active = TRUE;
-		
-		snprintf(i2astr, sizeof(i2astr), "%d", p->stimer->st_interval);
-		add_header(&req, "Session-Expires", i2astr);
+		if (st_get_mode(p, 0) == SESSION_TIMER_MODE_ORIGINATE) {	
+			snprintf(i2astr, sizeof(i2astr), "%d", p->stimer->st_interval);
+			add_header(&req, "Session-Expires", i2astr);
+		}
+
 		snprintf(i2astr, sizeof(i2astr), "%d", st_get_se(p, FALSE));
 		add_header(&req, "Min-SE", i2astr);
 	}
@@ -26507,6 +26512,24 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, uint
 		if (!ast_strlen_zero(referred_by)) {
 			pbx_builtin_setvar_helper(current.chan2, "_SIPTRANSFER_REFERER", referred_by);
 		}
+
+		/* When a call is transferred to voicemail from a Digium phone, there may be
+		 * a Diversion header present in the REFER with an appropriate reason parameter
+		 * set. We need to update the redirecting information appropriately.
+		 */
+		ast_channel_lock(p->owner);
+		sip_pvt_lock(p);
+		ast_party_redirecting_init(&redirecting);
+		memset(&update_redirecting, 0, sizeof(update_redirecting));
+		change_redirecting_information(p, req, &redirecting, &update_redirecting, FALSE);
+
+		/* Do not hold the pvt lock during a call that causes an indicate or an async_goto.
+		 * Those functions lock channels which will invalidate locking order if the pvt lock
+		 * is held.*/
+		sip_pvt_unlock(p);
+		ast_channel_unlock(p->owner);
+		ast_channel_update_redirecting(current.chan2, &redirecting, &update_redirecting);
+		ast_party_redirecting_free(&redirecting);
 	}
 
 	sip_pvt_lock(p);
@@ -26554,20 +26577,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, uint
 	}
 	ast_set_flag(&p->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Delay hangup */
 
-	/* When a call is transferred to voicemail from a Digium phone, there may be
-	 * a Diversion header present in the REFER with an appropriate reason parameter
-	 * set. We need to update the redirecting information appropriately.
-	 */
-	ast_party_redirecting_init(&redirecting);
-	memset(&update_redirecting, 0, sizeof(update_redirecting));
-	change_redirecting_information(p, req, &redirecting, &update_redirecting, FALSE);
-
-	/* Do not hold the pvt lock during a call that causes an indicate or an async_goto.
-	 * Those functions lock channels which will invalidate locking order if the pvt lock
-	 * is held.*/
 	sip_pvt_unlock(p);
-	ast_channel_update_redirecting(current.chan2, &redirecting, &update_redirecting);
-	ast_party_redirecting_free(&redirecting);
 
 	/* For blind transfers, move the call to the new extensions. For attended transfers on multiple
 	 * servers - generate an INVITE with Replaces. Either way, let the dial plan decided
@@ -29318,7 +29328,10 @@ static void proc_422_rsp(struct sip_pvt *p, struct sip_request *rsp)
 		ast_log(LOG_WARNING, "Parsing of Min-SE header failed %s\n", p_hdrval);
 		return;
 	}
-	p->stimer->st_interval = minse;
+	p->stimer->st_cached_min_se = minse;
+	if (p->stimer->st_interval < minse) {
+		p->stimer->st_interval = minse;
+	}
 	transmit_invite(p, SIP_INVITE, 1, 2, NULL);
 }
 
@@ -30905,8 +30918,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_WARNING, "Invalid session-minse '%s' at line %d of %s\n", v->value, v->lineno, config);
 					peer->stimer.st_min_se = global_min_se;
 				}
-				if (peer->stimer.st_min_se < 90) {
-					ast_log(LOG_WARNING, "session-minse '%s' at line %d of %s is not allowed to be < 90 secs\n", v->value, v->lineno, config);
+				if (peer->stimer.st_min_se < DEFAULT_MIN_SE) {
+					ast_log(LOG_WARNING, "session-minse '%s' at line %d of %s is not allowed to be < %d secs\n", v->value, v->lineno, config, DEFAULT_MIN_SE);
 					peer->stimer.st_min_se = global_min_se;
 				}
 			} else if (!strcasecmp(v->name, "session-refresher")) {
@@ -30934,6 +30947,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				ast_set2_flag(&peer->flags[2], ast_true(v->value), SIP_PAGE3_USE_AVPF);
 			} else if (!strcasecmp(v->name, "icesupport")) {
 				ast_set2_flag(&peer->flags[2], ast_true(v->value), SIP_PAGE3_ICE_SUPPORT);
+			} else if (!strcasecmp(v->name, "ignore_requested_pref")) {
+				ast_set2_flag(&peer->flags[2], ast_true(v->value), SIP_PAGE3_IGNORE_PREFCAPS);
 			} else {
 				ast_rtp_dtls_cfg_parse(&peer->dtls_cfg, v->name, v->value);
 			}
@@ -32003,8 +32018,8 @@ static int reload_config(enum channelreloadreason reason)
 				ast_log(LOG_WARNING, "Invalid session-minse '%s' at line %d of %s\n", v->value, v->lineno, config);
 				global_min_se = DEFAULT_MIN_SE;
 			}
-			if (global_min_se < 90) {
-				ast_log(LOG_WARNING, "session-minse '%s' at line %d of %s is not allowed to be < 90 secs\n", v->value, v->lineno, config);
+			if (global_min_se < DEFAULT_MIN_SE) {
+				ast_log(LOG_WARNING, "session-minse '%s' at line %d of %s is not allowed to be < %d secs\n", v->value, v->lineno, config, DEFAULT_MIN_SE);
 				global_min_se = DEFAULT_MIN_SE;
 			}
 		} else if (!strcasecmp(v->name, "session-refresher")) {
