@@ -830,7 +830,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;        externtlsport = 12600  ; The externally mapped tls port, when Asterisk is behind a static NAT or PAT.
 ;                               ; externtlsport port will default to the RFC designated port of 5061.	
 
-; 	The externaddr configuration is also valid for specific peers and is only
+;	The externaddr configuration is also valid for specific peers and is only
 ;	used for IPv4 connections. The device configuration overrides the one in the
 ;	[general] section of sip.conf
 ;

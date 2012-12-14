@@ -31711,7 +31711,7 @@ static int reload_config(enum channelreloadreason reason)
 			if (ast_parse_arg(v->value, PARSE_ADDR, &media_address))
 				ast_log(LOG_WARNING, "Invalid address for media_address keyword: %s\n", v->value);
 		} else if (!strcasecmp(v->name, "externaddr") || !strcasecmp(v->name, "externip")) {
-			if (!ast_strlen_zero(v->value) && ast_parse_arg(v->value, PARSE_ADDR, &externaddr)) {
+			if (ast_parse_arg(v->value, PARSE_ADDR, &externaddr)) {
 				ast_log(LOG_WARNING,
 					"Invalid address for externaddr keyword: %s\n",
 					v->value);
