@@ -329,6 +329,7 @@ chan_sip
    name field if CID number exists without a CID name. This change improves
    compatibility with certain device features such as Avaya IP500's directory
    lookup service.
+ * Externaddr is now a valid setting for SIP devices in sip.conf
 
  * A new setting for autocreatepeer (autocreatepeer=persistent) allows peers
    created using that setting to not be removed during SIP reload.

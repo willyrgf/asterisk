@@ -3948,6 +3948,11 @@ static void build_via(struct sip_pvt *p)
 static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us, struct sip_pvt *p)
 {
 	struct ast_sockaddr theirs;
+	struct ast_sockaddr *myexternaddr;
+
+	/* Pick which externaddr to use. If the dialog has one configured, use it.
+	   Otherwise, use the default one. */
+	myexternaddr = !ast_sockaddr_isnull(&p->externaddr) ? &p->externaddr : &externaddr;
 
 	/* Set want_remap to non-zero if we want to remap 'us' to an externally
 	 * reachable IP address and port. This is done if:
@@ -3969,14 +3974,14 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 	ast_sockaddr_copy(&theirs, them);
 
 	if (ast_sockaddr_is_ipv6(&theirs)) {
-		if (localaddr && !ast_sockaddr_isnull(&externaddr) && !ast_sockaddr_is_any(&bindaddr)) {
+		if (localaddr && !ast_sockaddr_isnull(myexternaddr) && !ast_sockaddr_is_any(&bindaddr)) {
 			ast_log(LOG_WARNING, "Address remapping activated in sip.conf "
 				"but we're using IPv6, which doesn't need it. Please "
 				"remove \"localnet\" and/or \"externaddr\" settings.\n");
 		}
 	} else {
 		want_remap = localaddr &&
-			!ast_sockaddr_isnull(&externaddr) &&
+			!ast_sockaddr_isnull(myexternaddr) &&
 			ast_apply_ha(localaddr, &theirs) == AST_SENSE_ALLOW ;
 	}
 
@@ -3989,13 +3994,13 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 			}
 			externexpire = time(NULL) + externrefresh;
 		}
-		if (!ast_sockaddr_isnull(&externaddr)) {
-			ast_sockaddr_copy(us, &externaddr);
+		if (!ast_sockaddr_isnull(myexternaddr)) {
+			ast_sockaddr_copy(us, myexternaddr);
 			switch (p->socket.type) {
 			case SIP_TRANSPORT_TCP:
-				if (!externtcpport && ast_sockaddr_port(&externaddr)) {
+				if (!externtcpport && ast_sockaddr_port(myexternaddr)) {
 					/* for consistency, default to the externaddr port */
-					externtcpport = ast_sockaddr_port(&externaddr);
+					externtcpport = ast_sockaddr_port(myexternaddr);
 				}
 				ast_sockaddr_set_port(us, externtcpport);
 				break;
@@ -4003,7 +4008,7 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 				ast_sockaddr_set_port(us, externtlsport);
 				break;
 			case SIP_TRANSPORT_UDP:
-				if (!ast_sockaddr_port(&externaddr)) {
+				if (!ast_sockaddr_port(myexternaddr)) {
 					ast_sockaddr_set_port(us, ast_sockaddr_port(&bindaddr));
 				}
 				break;
@@ -4011,8 +4016,8 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 				break;
 			}
 		}
-		ast_debug(1, "Target address %s is not local, substituting externaddr\n",
-			  ast_sockaddr_stringify(them));
+		ast_debug(1, "Target address %s is not local, substituting to externaddr %s\n",
+			  ast_sockaddr_stringify(them), ast_sockaddr_stringify(myexternaddr));
 	} else {
 		/* no remapping, but we bind to a specific address, so use it. */
 		switch (p->socket.type) {
@@ -6125,6 +6130,12 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	}
 	if (!dialog->portinuri) {
 		dialog->portinuri = peer->portinuri;
+	}
+	if (!ast_sockaddr_isnull(&peer->externaddr)) {
+		/* Use the peer externaddr first */
+		ast_sockaddr_copy(&dialog->externaddr, &peer->externaddr);
+	} else {
+		ast_sockaddr_copy(&dialog->externaddr, &externaddr);
 	}
 	dialog->chanvars = copy_vars(peer->chanvars);
 	if (peer->fromdomainport) {
@@ -18084,6 +18095,12 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 			ao2_t_ref(peer, 1, "copy pointer into (*authpeer)");
 			(*authpeer) = peer;	/* Add a ref to the object here, to keep it in memory a bit longer if it is realtime */
 		}
+		/* Check if we have externip setting for this peer. If so, reset our address */
+		if (!ast_sockaddr_isnull(&peer->externaddr)) {
+			ast_sockaddr_copy(&p->externaddr, &peer->externaddr);
+			/* Recalculate our side, and recalculate Call ID */
+			ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
+		} 
 
 		if (!ast_strlen_zero(peer->username)) {
 			ast_string_field_set(p, username, peer->username);
@@ -29390,6 +29407,12 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 		ast_string_field_set(p, tohost, ast_sockaddr_stringify_host_remote(&peer->addr));
 	}
 
+	if (!ast_sockaddr_isnull(&peer->externaddr)) {
+		ast_sockaddr_copy(&p->externaddr, &peer->externaddr);
+	} else {
+		ast_sockaddr_copy(&p->externaddr, &externaddr);
+	}
+
 	/* Recalculate our side, and recalculate Call ID */
 	ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
 	build_via(p);
@@ -30453,6 +30476,14 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 					if (!peer->default_outbound_transport) { /*!< The first transport listed should be default outbound */
 						peer->default_outbound_transport = peer->transports;
+					}
+				}
+			} else if (!strcasecmp(v->name, "externaddr")) {
+				if (localaddr == NULL) {
+					ast_log(LOG_ERROR, "Externaddr for peer %s not enabled, since we have no local networks configured in [general]\n", peer->name);
+				} else {
+					if (!ast_strlen_zero(v->value) && ast_parse_arg(v->value, PARSE_ADDR, &peer->externaddr)) {
+						ast_log(LOG_WARNING, "Invalid address for externaddr keyword: %s for peer %s\n", v->value, peer->name);
 					}
 				}
 			} else if (realtime && !strcasecmp(v->name, "regseconds")) {
@@ -31679,7 +31710,7 @@ static int reload_config(enum channelreloadreason reason)
 			if (ast_parse_arg(v->value, PARSE_ADDR, &media_address))
 				ast_log(LOG_WARNING, "Invalid address for media_address keyword: %s\n", v->value);
 		} else if (!strcasecmp(v->name, "externaddr") || !strcasecmp(v->name, "externip")) {
-			if (ast_parse_arg(v->value, PARSE_ADDR, &externaddr)) {
+			if (!ast_strlen_zero(v->value) && ast_parse_arg(v->value, PARSE_ADDR, &externaddr)) {
 				ast_log(LOG_WARNING,
 					"Invalid address for externaddr keyword: %s\n",
 					v->value);

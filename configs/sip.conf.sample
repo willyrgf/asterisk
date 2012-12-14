@@ -829,11 +829,16 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;                               ; externtcpport will default to the externaddr or externhost port if either one is set. 
 ;        externtlsport = 12600  ; The externally mapped tls port, when Asterisk is behind a static NAT or PAT.
 ;                               ; externtlsport port will default to the RFC designated port of 5061.	
+
+; 	The externaddr configuration is also valid for specific peers and is only
+;	used for IPv4 connections. The device configuration overrides the one in the
+;	[general] section of sip.conf
 ;
 ;   b. "externhost = hostname[:port]" is similar to "externaddr" except
 ;      that the hostname is looked up every "externrefresh" seconds
 ;      (default 10s). This can be useful when your NAT device lets you choose
 ;      the port mapping, but the IP address is dynamic.
+;      "externhost" ONLY works in the [general] section of sip.conf.
 ;      Beware, you might suffer from service disruption when the name server
 ;      resolution fails. Examples:
 ;
@@ -1227,6 +1232,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; keepalive
 ; defaultip
 ; defaultuser
+; externaddr
 ; rtptimeout
 ; rtpholdtimeout
 ; sendrpid
