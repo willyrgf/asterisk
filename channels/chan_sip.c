@@ -4017,7 +4017,7 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 			}
 		}
 		ast_debug(1, "Target address %s is not local, substituting to externaddr %s\n",
-			  ast_sockaddr_stringify(them), ast_sockaddr_stringify(myexternaddr));
+			  ast_strdupa(ast_sockaddr_stringify(them)), ast_sockaddr_stringify(myexternaddr));
 	} else {
 		/* no remapping, but we bind to a specific address, so use it. */
 		switch (p->socket.type) {
@@ -30211,6 +30211,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	ast_string_field_set(peer, engine, default_engine);
 	ast_sockaddr_setnull(&peer->addr);
 	ast_sockaddr_setnull(&peer->defaddr);
+	ast_sockaddr_setnull(&peer->externip);
 	ast_format_cap_copy(peer->caps, sip_cfg.caps);
 	peer->maxcallbitrate = default_maxcallbitrate;
 	peer->rtptimeout = global_rtptimeout;
@@ -30482,7 +30483,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				if (localaddr == NULL) {
 					ast_log(LOG_ERROR, "Externaddr for peer %s not enabled, since we have no local networks configured in [general]\n", peer->name);
 				} else {
-					if (!ast_strlen_zero(v->value) && ast_parse_arg(v->value, PARSE_ADDR, &peer->externaddr)) {
+					if (ast_parse_arg(v->value, PARSE_ADDR, &peer->externaddr)) {
 						ast_log(LOG_WARNING, "Invalid address for externaddr keyword: %s for peer %s\n", v->value, peer->name);
 					}
 				}
