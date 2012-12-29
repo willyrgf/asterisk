@@ -23,6 +23,10 @@
  * \author Matthew Fredrickson <creslin@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 #include <errno.h>
@@ -535,23 +539,19 @@ static void analog_all_subchannels_hungup(struct analog_pvt *p)
 	}
 }
 
-#if 0
 static void analog_unlock_private(struct analog_pvt *p)
 {
 	if (p->calls->unlock_private) {
 		p->calls->unlock_private(p->chan_pvt);
 	}
 }
-#endif
 
-#if 0
 static void analog_lock_private(struct analog_pvt *p)
 {
 	if (p->calls->lock_private) {
 		p->calls->lock_private(p->chan_pvt);
 	}
 }
-#endif
 
 /*!
  * \internal
@@ -1701,7 +1701,7 @@ static void analog_get_and_handle_alarms(struct analog_pvt *p)
 static void *analog_get_bridged_channel(struct analog_pvt *p, struct ast_channel *chan)
 {
 	if (p->calls->get_sigpvt_bridged_channel) {
-		return p->calls->get_sigpvt_bridged_channel;
+		return p->calls->get_sigpvt_bridged_channel(chan);
 	}
 	return NULL;
 }
@@ -2305,18 +2305,16 @@ static void *__analog_ss_thread(void *data)
 				struct ast_channel *nbridge = p->subs[ANALOG_SUB_THREEWAY].owner;
 				struct analog_pvt *pbridge = NULL;
 				/* set up the private struct of the bridged one, if any */
-				if (nbridge && ast_bridged_channel(nbridge)) {
+				if (nbridge) {
 					pbridge = analog_get_bridged_channel(p, nbridge);
 				}
-				if (nbridge && pbridge &&
-				    (nbridge->tech == p->chan_tech) &&
-				    (ast_bridged_channel(nbridge)->tech == p->chan_tech) &&
-				    ISTRUNK(pbridge)) {
+				if (pbridge && ISTRUNK(pbridge)) {
 					/* Clear out the dial buffer */
 					p->dop.dialstr[0] = '\0';
 					/* flash hookswitch */
-					if ((analog_flash(p) == -1) && (errno != EINPROGRESS)) {
-						ast_log(LOG_WARNING, "Unable to flash external trunk on channel %s: %s\n",
+					if ((analog_flash(pbridge) == -1) && (errno != EINPROGRESS)) {
+						ast_log(LOG_WARNING,
+							"Unable to flash-hook bridged trunk from channel %s: %s\n",
 							nbridge->name, strerror(errno));
 					}
 					analog_swap_subs(p, ANALOG_SUB_REAL, ANALOG_SUB_THREEWAY);
@@ -2741,7 +2739,10 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				analog_train_echocanceller(p);
 				ast_copy_string(p->dop.dialstr, p->echorest, sizeof(p->dop.dialstr));
 				p->dop.op = ANALOG_DIAL_OP_REPLACE;
-				analog_dial_digits(p, ANALOG_SUB_REAL, &p->dop);
+				if (analog_dial_digits(p, ANALOG_SUB_REAL, &p->dop)) {
+					int dial_err = errno;
+					ast_log(LOG_WARNING, "Dialing failed on channel %d: %s\n", p->channel, strerror(dial_err));
+				}
 				p->echobreak = 0;
 			} else {
 				analog_set_dialing(p, 0);
@@ -2787,6 +2788,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 	case ANALOG_EVENT_ALARM:
 		analog_set_alarm(p, 1);
 		analog_get_and_handle_alarms(p);
+		/* Intentionally fall through to analog_set_echocanceller() call */
 	case ANALOG_EVENT_ONHOOK:
 		switch (p->sig) {
 		case ANALOG_SIG_FXOLS:
@@ -3199,8 +3201,18 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 						ast_log(LOG_WARNING, "Unable to allocate three-way subchannel\n");
 						goto winkflashdone;
 					}
-					/* Make new channel */
+
+					/*
+					 * Make new channel
+					 *
+					 * We cannot hold the p or ast locks while creating a new
+					 * channel.
+					 */
+					analog_unlock_private(p);
+					ast_channel_unlock(ast);
 					chan = analog_new_ast_channel(p, AST_STATE_RESERVED, 0, ANALOG_SUB_THREEWAY, NULL);
+					ast_channel_lock(ast);
+					analog_lock_private(p);
 					if (!chan) {
 						ast_log(LOG_WARNING,
 							"Cannot allocate new call structure on channel %d\n",
@@ -3607,7 +3619,18 @@ struct ast_frame *analog_exception(struct analog_pvt *p, struct ast_channel *ast
 		f = &p->subs[idx].f;
 		return f;
 	}
+
 	f = __analog_handle_event(p, ast);
+	if (!f) {
+		const char *name = ast_strdupa(ast->name);
+
+		/* Tell the CDR this DAHDI device hung up */
+		analog_unlock_private(p);
+		ast_channel_unlock(ast);
+		ast_set_hangupsource(ast, name, 0);
+		ast_channel_lock(ast);
+		analog_lock_private(p);
+	}
 	return f;
 }
 
@@ -3806,6 +3829,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 					ast_log(LOG_WARNING, "Cannot allocate new structure on channel %d\n", i->channel);
 				} else if (ast_pthread_create_detached(&threadid, NULL, __analog_ss_thread, i)) {
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
+					ast_hangup(chan);
 				}
 			}
 			break;
@@ -3830,6 +3854,7 @@ void *analog_handle_init_event(struct analog_pvt *i, int event)
 					ast_log(LOG_WARNING, "Cannot allocate new structure on channel %d\n", i->channel);
 				} else if (ast_pthread_create_detached(&threadid, NULL, __analog_ss_thread, i)) {
 					ast_log(LOG_WARNING, "Unable to start simple switch thread on channel %d\n", i->channel);
+					ast_hangup(chan);
 				}
 			}
 			break;

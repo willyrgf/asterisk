@@ -232,7 +232,7 @@ static void mixmonitor_ds_destroy(void *data)
 	ast_mutex_unlock(&mixmonitor_ds->lock);
 }
 
-static struct ast_datastore_info mixmonitor_ds_info = {
+static const struct ast_datastore_info mixmonitor_ds_info = {
 	.type = "mixmonitor",
 	.destroy = mixmonitor_ds_destroy,
 };
@@ -542,7 +542,7 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 	if (args.filename[0] != '/') {
 		char *build;
 
-		build = alloca(strlen(ast_config_AST_MONITOR_DIR) + strlen(args.filename) + 3);
+		build = ast_alloca(strlen(ast_config_AST_MONITOR_DIR) + strlen(args.filename) + 3);
 		sprintf(build, "%s/%s", ast_config_AST_MONITOR_DIR, args.filename);
 		args.filename = build;
 	}

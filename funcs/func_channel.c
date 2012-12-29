@@ -250,6 +250,26 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>R/O PRI Nonzero if the channel has no B channel.
 						The channel is either on hold or a call waiting call.</para>
 					</enum>
+					<enum name="buffers">
+						<para>W/O Change the channel's buffer policy (for the current call only)</para>
+						<para>This option takes two arguments:</para>
+						<para>	Number of buffers,</para>
+						<para>	Buffer policy being one of:</para>
+						<para>	    <literal>full</literal></para>
+						<para>	    <literal>immediate</literal></para>
+						<para>	    <literal>half</literal></para>
+					</enum>
+					<enum name="echocan_mode">
+						<para>W/O Change the configuration of the active echo
+						canceller on the channel (if any), for the current call
+						only.</para>
+						<para>Possible values are:</para>
+						<para>	<literal>on</literal>	Normal mode (the echo canceller is actually reinitalized)</para>
+						<para>	<literal>off</literal>	Disabled</para>
+						<para>	<literal>fax</literal>	FAX/data mode (NLP disabled if possible, otherwise
+							completely disabled)</para>
+						<para>	<literal>voice</literal>	Voice mode (returns from FAX mode, reverting the changes that were made)</para>
+					</enum>
 				</enumlist>
 			</parameter>
 		</syntax>
@@ -601,7 +621,7 @@ static int func_mchan_read(struct ast_channel *chan, const char *function,
 			     char *data, struct ast_str **buf, ssize_t len)
 {
 	struct ast_channel *mchan = ast_channel_get_by_name(chan->linkedid);
-	char *template = alloca(4 + strlen(data));
+	char *template = ast_alloca(4 + strlen(data));
 	sprintf(template, "${%s}", data); /* SAFE */
 	ast_str_substitute_variables(buf, len, mchan ? mchan : chan, template);
 	if (mchan) {

@@ -1328,7 +1328,7 @@ static void iax2_ami_channelupdate(struct chan_iax2_pvt *pvt)
 		pvt->callno, pvt->peercallno, pvt->peer ? pvt->peer : "");
 }
 
-static struct ast_datastore_info iax2_variable_datastore_info = {
+static const struct ast_datastore_info iax2_variable_datastore_info = {
 	.type = "IAX2_VARIABLE",
 	.duplicate = iax2_dup_variable_datastore,
 	.destroy = iax2_free_variable_datastore,
@@ -1842,24 +1842,25 @@ static void send_signaling(struct chan_iax2_pvt *pvt)
  *  we have received a destination call number. */
 static int queue_signalling(struct chan_iax2_pvt *pvt, struct ast_frame *f)
 {
-	struct signaling_queue_entry *new;
+	struct signaling_queue_entry *qe;
 
 	if (f->frametype == AST_FRAME_IAX || !pvt->hold_signaling) {
 		return 1; /* do not queue this frame */
-	} else if (!(new = ast_calloc(1, sizeof(struct signaling_queue_entry)))) {
+	} else if (!(qe = ast_calloc(1, sizeof(struct signaling_queue_entry)))) {
 		return -1;  /* out of memory */
 	}
 
-	memcpy(&new->f, f, sizeof(new->f)); /* copy ast_frame into our queue entry */
-
-	if (new->f.datalen) { /* if there is data in this frame copy it over as well */
-		if (!(new->f.data.ptr = ast_calloc(1, new->f.datalen))) {
-			free_signaling_queue_entry(new);
+	/* copy ast_frame into our queue entry */
+	qe->f = *f;
+	if (qe->f.datalen) {
+		/* if there is data in this frame copy it over as well */
+		if (!(qe->f.data.ptr = ast_malloc(qe->f.datalen))) {
+			free_signaling_queue_entry(qe);
 			return -1;
 		}
-		memcpy(new->f.data.ptr, f->data.ptr, sizeof(*new->f.data.ptr));
+		memcpy(qe->f.data.ptr, f->data.ptr, qe->f.datalen);
 	}
-	AST_LIST_INSERT_TAIL(&pvt->signaling_queue, new, next);
+	AST_LIST_INSERT_TAIL(&pvt->signaling_queue, qe, next);
 
 	return 0;
 }
@@ -2403,19 +2404,20 @@ static void peercnt_remove(struct peercnt *peercnt)
 		.sin_addr.s_addr = peercnt->addr,
 	};
 
-	if (peercnt) {
-		/* Container locked here since peercnt may be unlinked from list.  If left unlocked,
-		 * peercnt_add could try and grab this entry from the table and modify it at the
-		 * "same time" this thread attemps to unlink it.*/
-		ao2_lock(peercnts);
-		peercnt->cur--;
-		ast_debug(1, "ip callno count decremented to %d for %s\n", peercnt->cur, ast_inet_ntoa(sin.sin_addr));
-		/* if this was the last connection from the peer remove it from table */
-		if (peercnt->cur == 0) {
-			ao2_unlink(peercnts, peercnt);/* decrements ref from table, last ref is left to scheduler */
-		}
-		ao2_unlock(peercnts);
+	/*
+	 * Container locked here since peercnt may be unlinked from
+	 * list.  If left unlocked, peercnt_add could try and grab this
+	 * entry from the table and modify it at the "same time" this
+	 * thread attemps to unlink it.
+	 */
+	ao2_lock(peercnts);
+	peercnt->cur--;
+	ast_debug(1, "ip callno count decremented to %d for %s\n", peercnt->cur, ast_inet_ntoa(sin.sin_addr));
+	/* if this was the last connection from the peer remove it from table */
+	if (peercnt->cur == 0) {
+		ao2_unlink(peercnts, peercnt);/* decrements ref from table, last ref is left to scheduler */
 	}
+	ao2_unlock(peercnts);
 }
 
 /*! 
@@ -3032,10 +3034,7 @@ static int try_firmware(char *s)
 	unsigned char sum[16], buf[1024];
 	char *s2, *last;
 
-	if (!(s2 = alloca(strlen(s) + 100))) {
-		ast_log(LOG_WARNING, "Alloca failed!\n");
-		return -1;
-	}
+	s2 = ast_alloca(strlen(s) + 100);
 
 	last = strrchr(s, '/');
 	if (last)
@@ -4160,7 +4159,16 @@ static int schedule_delivery(struct iax_frame *fr, int updatehistory, int fromtr
 	int needfree = 0;
 	struct ast_channel *owner = NULL;
 	struct ast_channel *bridge = NULL;
-	
+
+	/*
+	 * Clear fr->af.data if there is no data in the buffer.  Things
+	 * like AST_CONTROL_HOLD without a suggested music class must
+	 * have a NULL pointer.
+	 */
+	if (!fr->af.datalen) {
+		memset(&fr->af.data, 0, sizeof(fr->af.data));
+	}
+
 	/* Attempt to recover wrapped timestamps */
 	unwrap_timestamp(fr);
 
@@ -4390,11 +4398,13 @@ static struct iax2_peer *realtime_peer(const char *peername, struct sockaddr_in 
 				/* Whoops, we weren't supposed to exist! */
 				peer = peer_unref(peer);
 				break;
-			} 
+			}
 		} else if (!strcasecmp(tmp->name, "regseconds")) {
 			ast_get_time_t(tmp->value, &regseconds, 0, NULL);
 		} else if (!strcasecmp(tmp->name, "ipaddr")) {
-			ast_sockaddr_parse(&peer->addr, tmp->value, PARSE_PORT_IGNORE);
+			if (!ast_sockaddr_parse(&peer->addr, tmp->value, PARSE_PORT_IGNORE)) {
+				ast_log(LOG_WARNING, "Failed to parse sockaddr '%s' for ipaddr of realtime peer '%s'\n", tmp->value, tmp->name);
+			}
 		} else if (!strcasecmp(tmp->name, "port")) {
 			ast_sockaddr_set_port(&peer->addr, atoi(tmp->value));
 		} else if (!strcasecmp(tmp->name, "host")) {
@@ -5277,7 +5287,7 @@ static int wait_for_peercallno(struct chan_iax2_pvt *pvt)
 			DEADLOCK_AVOIDANCE(&iaxsl[callno]);
 			pvt = iaxs[callno];
 		}
-		if (!pvt->peercallno) {
+		if (!pvt || !pvt->peercallno) {
 			return -1;
 		}
 	}
@@ -5902,16 +5912,15 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 	   The "genuine" distinction is needed because genuine frames must get a clock-based timestamp,
 	   the others need a timestamp slaved to the voice frames so that they go in sequence
 	*/
-	if (f) {
-		if (f->frametype == AST_FRAME_VOICE) {
-			voice = 1;
-			delivery = &f->delivery;
-		} else if (f->frametype == AST_FRAME_IAX) {
-			genuine = 1;
-		} else if (f->frametype == AST_FRAME_CNG) {
-			p->notsilenttx = 0;	
-		}
+	if (f->frametype == AST_FRAME_VOICE) {
+		voice = 1;
+		delivery = &f->delivery;
+	} else if (f->frametype == AST_FRAME_IAX) {
+		genuine = 1;
+	} else if (f->frametype == AST_FRAME_CNG) {
+		p->notsilenttx = 0;	
 	}
+
 	if (ast_tvzero(p->offset)) {
 		p->offset = ast_tvnow();
 		/* Round to nearest 20ms for nice looking traces */
@@ -6245,7 +6254,7 @@ static int decode_frame(ast_aes_decrypt_key *dcx, struct ast_iax2_full_hdr *fh, 
 	int padding;
 	unsigned char *workspace;
 
-	workspace = alloca(*datalen);
+	workspace = ast_alloca(*datalen);
 	memset(f, 0, sizeof(*f));
 	if (ntohs(fh->scallno) & IAX_FLAG_FULL) {
 		struct ast_iax2_full_enc_hdr *efh = (struct ast_iax2_full_enc_hdr *)fh;
@@ -6291,9 +6300,7 @@ static int encrypt_frame(ast_aes_encrypt_key *ecx, struct ast_iax2_full_hdr *fh,
 {
 	int padding;
 	unsigned char *workspace;
-	workspace = alloca(*datalen + 32);
-	if (!workspace)
-		return -1;
+	workspace = ast_alloca(*datalen + 32);
 	if (ntohs(fh->scallno) & IAX_FLAG_FULL) {
 		struct ast_iax2_full_enc_hdr *efh = (struct ast_iax2_full_enc_hdr *)fh;
 		if (iaxdebug)
@@ -6881,6 +6888,7 @@ static char *handle_cli_iax2_unregister(struct ast_cli_entry *e, int cmd, struct
 		} else {
 			ast_cli(a->fd, "Peer %s not registered\n", a->argv[2]);
 		}
+		peer_unref(p);
 	} else {
 		ast_cli(a->fd, "Peer unknown: %s. Not unregistered\n", a->argv[2]);
 	}
@@ -8661,6 +8669,7 @@ static void reg_source_db(struct iax2_peer *p)
 	expiry = strrchr(data, ':');
 	if (!expiry) {
 		ast_log(LOG_NOTICE, "IAX/Registry astdb entry missing expiry: '%s'\n", data);
+		return;
 	}
 	*expiry++ = '\0';
 
@@ -9836,6 +9845,7 @@ static int acf_iaxvar_write(struct ast_channel *chan, const char *cmd, char *dat
 		}
 		varlist = ast_calloc(1, sizeof(*varlist));
 		if (!varlist) {
+			ast_datastore_free(variablestore);
 			ast_log(LOG_ERROR, "Unable to assign new variable '%s'\n", data);
 			return -1;
 		}
@@ -9875,11 +9885,20 @@ static void set_hangup_source_and_cause(int callno, unsigned char causecode)
 {
 	iax2_lock_owner(callno);
 	if (iaxs[callno] && iaxs[callno]->owner) {
+		struct ast_channel *owner;
+		const char *name;
+
+		owner = iaxs[callno]->owner;
 		if (causecode) {
-			iaxs[callno]->owner->hangupcause = causecode;
+			owner->hangupcause = causecode;
 		}
-		ast_set_hangupsource(iaxs[callno]->owner, iaxs[callno]->owner->name, 0);
-		ast_channel_unlock(iaxs[callno]->owner);
+		name = ast_strdupa(owner->name);
+		ast_channel_ref(owner);
+		ast_channel_unlock(owner);
+		ast_mutex_unlock(&iaxsl[callno]);
+		ast_set_hangupsource(owner, name, 0);
+		ast_channel_unref(owner);
+		ast_mutex_lock(&iaxsl[callno]);
 	}
 }
 
@@ -9915,9 +9934,9 @@ static int socket_process(struct iax2_thread *thread)
 	char *using_prefs = "mine";
 
 	/* allocate an iax_frame with 4096 bytes of data buffer */
-	fr = alloca(sizeof(*fr) + 4096);
+	fr = ast_alloca(sizeof(*fr) + 4096);
 	memset(fr, 0, sizeof(*fr));
-	fr->afdatalen = 4096; /* From alloca() above */
+	fr->afdatalen = 4096; /* From ast_alloca() above */
 
 	/* Copy frequently used parameters to the stack */
 	res = thread->buf_len;
@@ -11634,6 +11653,7 @@ static void iax2_process_thread_cleanup(void *data)
 	ast_mutex_destroy(&thread->init_lock);
 	ast_cond_destroy(&thread->init_cond);
 	ast_free(thread);
+	/* Ignore check_return warning from Coverity for ast_atomic_dec_and_test below */
 	ast_atomic_dec_and_test(&iaxactivethreadcount);
 }
 
@@ -12212,7 +12232,10 @@ static int start_network_thread(void)
 			AST_LIST_UNLOCK(&idle_list);
 		}
 	}
-	ast_pthread_create_background(&netthreadid, NULL, network_thread, NULL);
+	if (ast_pthread_create_background(&netthreadid, NULL, network_thread, NULL)) {
+		ast_log(LOG_ERROR, "Failed to create new thread!\n");
+		return -1;
+	}
 	ast_verb(2, "%d helper threads started\n", threadcount);
 	return 0;
 }
@@ -12279,9 +12302,7 @@ static int peer_set_srcaddr(struct iax2_peer *peer, const char *srcaddr)
 	char *addr;
 	char *portstr;
 
-	if (!(tmp = ast_strdupa(srcaddr)))
-		return -1;
-
+	tmp = ast_strdupa(srcaddr);
 	addr = strsep(&tmp, ":");
 	portstr = tmp;
 
@@ -12741,7 +12762,7 @@ static struct iax2_user *build_user(const char *name, struct ast_variable *v, st
 				user->ha = ast_append_ha(v->name, v->value, user->ha, NULL);
 			} else if (!strcasecmp(v->name, "setvar")) {
 				varname = ast_strdupa(v->value);
-				if (varname && (varval = strchr(varname,'='))) {
+				if ((varval = strchr(varname, '='))) {
 					*varval = '\0';
 					varval++;
 					if((tmpvar = ast_variable_new(varname, varval, ""))) {
@@ -13045,6 +13066,11 @@ static int set_config(const char *config_file, int reload)
 			ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config_file);
 			ast_config_destroy(ucfg);
 			return 0;
+		}
+		if (!cfg) {
+			/* should have been able to load the config here */
+			ast_log(LOG_ERROR, "Unable to load config %s again\n", config_file);
+			return -1;
 		}
 	} else if (cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Config file %s is in an invalid format.  Aborting.\n", config_file);
@@ -13923,8 +13949,9 @@ static int function_iaxpeer(struct ast_channel *chan, const char *cmd, char *dat
 	} else  if (!strncasecmp(colname, "codec[", 6)) {
 		char *codecnum, *ptr;
 		int codec = 0;
-		
-		codecnum = strchr(colname, '[');
+
+		/* skip over "codec" to the '[' */
+		codecnum = colname + 5;
 		*codecnum = '\0';
 		codecnum++;
 		if ((ptr = strchr(codecnum, ']'))) {
