@@ -4378,6 +4378,11 @@ before_you_go:
 		silgen = NULL;
 	}
 
+	/* Wait for any dual redirect to complete. */
+	while (ast_test_flag(chan, AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT)) {
+		sched_yield();
+	}
+
 	if (ast_test_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT)) {
 		ast_clear_flag(chan,AST_FLAG_BRIDGE_HANGUP_DONT); /* its job is done */
 		if (bridge_cdr) {
