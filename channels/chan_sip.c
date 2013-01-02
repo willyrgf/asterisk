@@ -2526,19 +2526,20 @@ static int sip_tls_read(struct sip_request *req, struct sip_request *reqcpy, str
 			int authenticated, time_t start, struct sip_threadinfo *me)
 {
 	int res, content_length, after_poll = 1, need_poll = 1;
+	size_t datalen = ast_str_strlen(req->data);
 	char buf[1024] = "";
 	int timeout = -1;
-
-	/* Read in headers one line at a time */
-	while (ast_str_strlen(req->data) < 4 || strncmp(REQ_OFFSET_TO_STR(req, data->used - 4), "\r\n\r\n", 4)) {
-		if (!tcptls_session->client && !authenticated) {
-			if ((timeout = sip_check_authtimeout(start)) < 0) {
-				ast_debug(2, "SIP SSL server failed to determine authentication timeout\n");
+ 
+ 	/* Read in headers one line at a time */
+	while (datalen < 4 || strncmp(REQ_OFFSET_TO_STR(req, data->used - 4), "\r\n\r\n", 4)) {
+ 		if (!tcptls_session->client && !authenticated) {
+ 			if ((timeout = sip_check_authtimeout(start)) < 0) {
+				ast_debug(2, "SIP TLS server failed to determine authentication timeout\n");
 				return -1;
 			}
 
 			if (timeout == 0) {
-				ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "SSL": "TCP");
+				ast_debug(2, "SIP TLS server timed out\n");
 				return -1;
 			}
 		} else {
@@ -2553,11 +2554,11 @@ static int sip_tls_read(struct sip_request *req, struct sip_request *reqcpy, str
 			after_poll = 1;
 			res = ast_wait_for_input(tcptls_session->fd, timeout);
 			if (res < 0) {
-				ast_debug(2, "SIP TCP server :: ast_wait_for_input returned %d\n", res);
+				ast_debug(2, "SIP TLS server :: ast_wait_for_input returned %d\n", res);
 				return -1;
 			} else if (res == 0) {
 				/* timeout */
-				ast_debug(2, "SIP TCP server timed out\n");
+				ast_debug(2, "SIP TLS server timed out\n");
 				return -1;
 			}
 		}
@@ -2578,6 +2579,13 @@ static int sip_tls_read(struct sip_request *req, struct sip_request *reqcpy, str
 			return -1;
 		}
 		ast_str_append(&req->data, 0, "%s", buf);
+
+		datalen = ast_str_strlen(req->data);
+		if (datalen > SIP_MAX_PACKET_SIZE) {
+			ast_log(LOG_WARNING, "Rejecting TLS packet from '%s' because way too large: %zu\n",
+				ast_sockaddr_stringify(&tcptls_session->remote_address), datalen);
+			return -1;
+		}
 	}
 	copy_request(reqcpy, req);
 	parse_request(reqcpy);
@@ -2591,7 +2599,7 @@ static int sip_tls_read(struct sip_request *req, struct sip_request *reqcpy, str
 				}
 
 				if (timeout == 0) {
-					ast_debug(2, "SIP SSL server timed out\n");
+					ast_debug(2, "SIP TLS server timed out\n");
 					return -1;
 				}
 			} else {
@@ -2603,11 +2611,11 @@ static int sip_tls_read(struct sip_request *req, struct sip_request *reqcpy, str
 				after_poll = 1;
 				res = ast_wait_for_input(tcptls_session->fd, timeout);
 				if (res < 0) {
-					ast_debug(2, "SIP TCP server :: ast_wait_for_input returned %d\n", res);
+					ast_debug(2, "SIP TLS server :: ast_wait_for_input returned %d\n", res);
 					return -1;
 				} else if (res == 0) {
 					/* timeout */
-					ast_debug(2, "SIP TCP server timed out\n");
+					ast_debug(2, "SIP TLS server timed out\n");
 					return -1;
 				}
 			}
@@ -2630,6 +2638,13 @@ static int sip_tls_read(struct sip_request *req, struct sip_request *reqcpy, str
 			}
 			content_length -= strlen(buf);
 			ast_str_append(&req->data, 0, "%s", buf);
+		
+			datalen = ast_str_strlen(req->data);
+			if (datalen > SIP_MAX_PACKET_SIZE) {
+				ast_log(LOG_WARNING, "Rejecting TLS packet from '%s' because way too large: %zu\n",
+					ast_sockaddr_stringify(&tcptls_session->remote_address), datalen);
+				return -1;
+			}
 		}
 	}
 	/*! \todo XXX If there's no Content-Length or if the content-length and what
@@ -2803,6 +2818,8 @@ static int sip_tcp_read(struct sip_request *req, struct ast_tcptls_session_insta
 	enum message_integrity message_integrity = MESSAGE_FRAGMENT;
 
 	while (message_integrity == MESSAGE_FRAGMENT) {
+		size_t datalen;
+
 		if (ast_str_strlen(tcptls_session->overflow_buf) == 0) {
 			char readbuf[4097];
 			int timeout;
@@ -2841,6 +2858,13 @@ static int sip_tcp_read(struct sip_request *req, struct ast_tcptls_session_insta
 		} else {
 			ast_str_append(&req->data, 0, "%s", ast_str_buffer(tcptls_session->overflow_buf));
 			ast_str_reset(tcptls_session->overflow_buf);
+		}
+		
+		datalen = ast_str_strlen(req->data);
+		if (datalen > SIP_MAX_PACKET_SIZE) {
+			ast_log(LOG_WARNING, "Rejecting TCP packet from '%s' because way too large: %zu\n",
+				ast_sockaddr_stringify(&tcptls_session->remote_address), datalen);
+			return -1;
 		}
 
 		message_integrity = check_message_integrity(&req->data, &tcptls_session->overflow_buf);
@@ -2913,7 +2937,7 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 	}
 
 	me->threadid = pthread_self();
-	ast_debug(2, "Starting thread for %s server\n", tcptls_session->ssl ? "SSL" : "TCP");
+	ast_debug(2, "Starting thread for %s server\n", tcptls_session->ssl ? "TLS" : "TCP");
 
 	/* set up pollfd to watch for reads on both the socket and the alert_pipe */
 	fds[0].fd = tcptls_session->fd;
@@ -2947,7 +2971,7 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 			}
 
 			if (timeout == 0) {
-				ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "SSL": "TCP");
+				ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "TLS": "TCP");
 				goto cleanup;
 			}
 		} else {
@@ -2957,11 +2981,11 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 		if (ast_str_strlen(tcptls_session->overflow_buf) == 0) {
 			res = ast_poll(fds, 2, timeout); /* polls for both socket and alert_pipe */
 			if (res < 0) {
-				ast_debug(2, "SIP %s server :: ast_wait_for_input returned %d\n", tcptls_session->ssl ? "SSL": "TCP", res);
+				ast_debug(2, "SIP %s server :: ast_wait_for_input returned %d\n", tcptls_session->ssl ? "TLS": "TCP", res);
 				goto cleanup;
 			} else if (res == 0) {
 				/* timeout */
-				ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "SSL": "TCP");
+				ast_debug(2, "SIP %s server timed out\n", tcptls_session->ssl ? "TLS": "TCP");
 				goto cleanup;
 			}
 		}
@@ -3043,7 +3067,7 @@ static void *_sip_tcp_helper_thread(struct ast_tcptls_session_instance *tcptls_s
 		}
 	}
 
-	ast_debug(2, "Shutting down thread for %s server\n", tcptls_session->ssl ? "SSL" : "TCP");
+	ast_debug(2, "Shutting down thread for %s server\n", tcptls_session->ssl ? "TLS" : "TCP");
 
 cleanup:
 	if (tcptls_session && !tcptls_session->client && !authenticated) {
