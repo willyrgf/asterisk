@@ -6199,9 +6199,11 @@ static int play_file(struct ast_channel *chan, const char *filename, int ringing
 	}
 
 	/* If the filename doesn't exist, do not queue it up */
-	if (!ast_fileexists(filename, NULL, chan->language)) {
-		ast_log(LOG_ERROR, "Filename %s does not exist, not queued for playing out on chan %s\n", filename, chan->name);
-		return 0;
+	if (!ast_strlen_zero(filename)) {
+		if (!ast_fileexists(filename, NULL, chan->language)) {
+			ast_log(LOG_ERROR, "Filename %s does not exist, not queued for playing out on chan %s\n", filename, chan->name);
+			return 0;
+		}
 	}
 
 	AST_LIST_LOCK(&aqsi->flist);
