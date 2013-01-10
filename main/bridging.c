@@ -254,6 +254,7 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge *bridge, struct as
 /*! \brief Internal function used to determine whether a control frame should be dropped or not */
 static int bridge_drop_control_frame(int subclass)
 {
+/* BUGBUG I think this code should be removed. Let the bridging tech determine what to do with control frames. */
 	switch (subclass) {
 	case AST_CONTROL_ANSWER:
 	case -1:
@@ -302,6 +303,13 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 				bridge->technology->write(bridge, bridge_channel, frame);
 			}
 		} else {
+/* BUGBUG looks like the place to handle the control frame exchange between 1-1 bridge participants is the bridge tech write callback. */
+/* BUGBUG make a 1-1 bridge write handler for control frames. */
+/* BUGBUG make bridge_channel thread run the CONNECTED_LINE and REDIRECTING interception macros. */
+/* BUGBUG should we assume that all parties need to be already answered when bridged? */
+/* BUGBUG should make AST_CONTROL_ANSWER do an ast_indicate(-1) to the bridge peer if it is not UP as well as a connected line update. */
+/* BUGBUG bridge join or impart needs to do CONNECTED_LINE updates if the channels are being swapped and it is a 1-1 bridge. */
+/* BUGBUG could make a queue of things the bridge_channel thread needs to handle in case it gets behind on processing because of the interception macros. */
 			/* Simply write the frame out to the bridge technology if it still exists */
 			bridge->technology->write(bridge, bridge_channel, frame);
 		}
@@ -461,6 +469,7 @@ struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags)
 	if (flags & AST_BRIDGE_FLAG_SMART) {
 		struct ast_bridge *other_bridge;
 
+/* BUGBUG why cannot find_best_technology() do this? */
 		if (!(other_bridge = ast_bridge_new((capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX) ? AST_BRIDGE_CAPABILITY_MULTIMIX : AST_BRIDGE_CAPABILITY_1TO1MIX, 0))) {
 			return NULL;
 		}
@@ -526,6 +535,7 @@ int ast_bridge_destroy(struct ast_bridge *bridge)
 	ao2_lock(bridge);
 
 	if (bridge->callid) {
+/* BUGBUG the bridge callid needs to be verified. */
 		bridge->callid = ast_callid_unref(bridge->callid);
 	}
 

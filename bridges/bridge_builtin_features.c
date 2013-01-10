@@ -204,6 +204,8 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 
 	/* Before we join setup a features structure with the hangup option, just in case they want to use DTMF */
 	ast_bridge_features_init(&caller_features);
+/* BUGBUG bridging API features does not support features.conf featuremap */
+/* BUGBUG bridging API features does not support the features.conf atxfer bounce between C & B channels */
 	ast_bridge_features_enable(&caller_features, AST_BRIDGE_BUILTIN_HANGUP,
 				   (attended_transfer && !ast_strlen_zero(attended_transfer->complete) ? attended_transfer->complete : "*1"), NULL);
 	ast_bridge_features_hook(&caller_features, (attended_transfer && !ast_strlen_zero(attended_transfer->threeway) ? attended_transfer->threeway : "*2"),
