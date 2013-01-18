@@ -647,30 +647,34 @@ static void pbx_destroy(struct ast_pbx *p)
  *	   we could encode the special cases as 0xffXX where XX
  *	   is 1, 2, 3, 4 as used above.
  */
-static int ext_cmp1(const char **p)
+static int ext_cmp1(const char **p, unsigned char *bitwise)
 {
-	uint32_t chars[8];
 	int c, cmin = 0xff, count = 0;
 	const char *end;
 
-	/* load, sign extend and advance pointer until we find
-	 * a valid character.
-	 */
+	/* load value and advance pointer */
 	while ( (c = *(*p)++) && (c == ' ' || c == '-') )
 		;	/* ignore some characters */
 
 	/* always return unless we have a set of chars */
 	switch (c) {
 	default:	/* ordinary character */
-		return 0x0000 | (c & 0xff);
+		bitwise[c / 8] = 1 << (c % 8);
+		return 0x0100 | (c & 0xff);
 
 	case 'N':	/* 2..9 */
-		return 0x0800 | '2' ;
+		bitwise[6] = 0xfc;
+		bitwise[7] = 0x03;
+		return 0x0800 | '2';
 
 	case 'X':	/* 0..9 */
+		bitwise[6] = 0xff;
+		bitwise[7] = 0x03;
 		return 0x0A00 | '0';
 
 	case 'Z':	/* 1..9 */
+		bitwise[6] = 0xfe;
+		bitwise[7] = 0x03;
 		return 0x0900 | '1';
 
 	case '.':	/* wildcard */
@@ -694,22 +698,27 @@ static int ext_cmp1(const char **p)
 		return 0x40000;	/* XXX make this entry go last... */
 	}
 
-	bzero(chars, sizeof(chars));	/* clear all chars in the set */
 	for (; *p < end  ; (*p)++) {
 		unsigned char c1, c2;	/* first-last char in range */
 		c1 = (unsigned char)((*p)[0]);
 		if (*p + 2 < end && (*p)[1] == '-') { /* this is a range */
 			c2 = (unsigned char)((*p)[2]);
-			*p += 2;	/* skip a total of 3 chars */
-		} else			/* individual character */
+			*p += 2;    /* skip a total of 3 chars */
+		} else {        /* individual character */
 			c2 = c1;
-		if (c1 < cmin)
+		}
+		if (c1 < cmin) {
 			cmin = c1;
+		}
 		for (; c1 <= c2; c1++) {
-			uint32_t mask = 1 << (c1 % 32);
-			if ( (chars[ c1 / 32 ] & mask) == 0)
+			unsigned char mask = 1 << (c1 % 8);
+			/*!\note If two patterns score the same, the one with the lowest
+			 * ascii values will compare as coming first. */
+			/* Flag the character as included (used) and count it. */
+			if (!(bitwise[ c1 / 8 ] & mask)) {
+				bitwise[ c1 / 8 ] |= mask;
 				count += 0x100;
-			chars[ c1 / 32 ] |= mask;
+			}
 		}
 	}
 	(*p)++;
@@ -723,7 +732,7 @@ static int ext_cmp(const char *a, const char *b)
 {
 	/* make sure non-patterns come first.
 	 * If a is not a pattern, it either comes first or
-	 * we use strcmp to compare the strings.
+	 * we do a more complex pattern comparison.
 	 */
 	int ret = 0;
 
@@ -733,16 +742,23 @@ static int ext_cmp(const char *a, const char *b)
 	/* Now we know a is a pattern; if b is not, a comes first */
 	if (b[0] != '_')
 		return 1;
-#if 0	/* old mode for ext matching */
-	return strcmp(a, b);
-#endif
-	/* ok we need full pattern sorting routine */
-	while (!ret && a && b)
-		ret = ext_cmp1(&a) - ext_cmp1(&b);
-	if (ret == 0)
+
+	/* ok we need full pattern sorting routine.
+	 * skip past the underscores */
+	++a; ++b;
+	do {
+		unsigned char bitwise[2][32] = { { 0, } };
+		ret = ext_cmp1(&a, bitwise[0]) - ext_cmp1(&b, bitwise[1]);
+		if (ret == 0) {
+			/* Are the classes different, even though they score the same? */
+			ret = memcmp(bitwise[0], bitwise[1], 32);
+		}
+	} while (!ret && a && b);
+	if (ret == 0) {
 		return 0;
-	else
+	} else {
 		return (ret > 0) ? 1 : -1;
+	}
 }
 
 /*!
@@ -1875,22 +1891,23 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 		}
 	} else {	/* not found anywhere, see what happened */
 		ast_unlock_contexts();
+		/* Using S_OR here because Solaris doesn't like NULL being passed to ast_log */
 		switch (q.status) {
 		case STATUS_NO_CONTEXT:
 			if (!matching_action)
-				ast_log(LOG_NOTICE, "Cannot find extension context '%s'\n", context);
+				ast_log(LOG_NOTICE, "Cannot find extension context '%s'\n", S_OR(context, ""));
 			break;
 		case STATUS_NO_EXTENSION:
 			if (!matching_action)
-				ast_log(LOG_NOTICE, "Cannot find extension '%s' in context '%s'\n", exten, context);
+				ast_log(LOG_NOTICE, "Cannot find extension '%s' in context '%s'\n", exten, S_OR(context, ""));
 			break;
 		case STATUS_NO_PRIORITY:
 			if (!matching_action)
-				ast_log(LOG_NOTICE, "No such priority %d in extension '%s' in context '%s'\n", priority, exten, context);
+				ast_log(LOG_NOTICE, "No such priority %d in extension '%s' in context '%s'\n", priority, exten, S_OR(context, ""));
 			break;
 		case STATUS_NO_LABEL:
 			if (context)
-				ast_log(LOG_NOTICE, "No such label '%s' in extension '%s' in context '%s'\n", label, exten, context);
+				ast_log(LOG_NOTICE, "No such label '%s' in extension '%s' in context '%s'\n", label, exten, S_OR(context, ""));
 			break;
 		default:
 			if (option_debug)
@@ -2363,6 +2380,10 @@ static int __ast_pbx_run(struct ast_channel *c)
 			ast_copy_string(c->context, "default", sizeof(c->context));
 		}
 	}
+	if (c->cdr) {
+		/* allow CDR variables that have been collected after channel was created to be visible during call */
+		ast_cdr_update(c);
+	}
 	for (;;) {
 		char dst_exten[256];	/* buffer to accumulate digits */
 		int pos = 0;		/* XXX should check bounds */
@@ -2505,8 +2526,9 @@ static int __ast_pbx_run(struct ast_channel *c)
 	}
 	if (!found && !error)
 		ast_log(LOG_WARNING, "Don't know what to do with '%s'\n", c->name);
-	if (res != AST_PBX_KEEPALIVE)
-		ast_softhangup(c, c->hangupcause ? c->hangupcause : AST_CAUSE_NORMAL_CLEARING);
+	if (res != AST_PBX_KEEPALIVE) {
+		ast_softhangup(c, AST_SOFTHANGUP_APPUNLOAD);
+	}
 	ast_channel_lock(c);
 	if ((emc = pbx_builtin_getvar_helper(c, "EXIT_MACRO_CONTEXT"))) {
 		emc = ast_strdupa(emc);
@@ -4854,7 +4876,7 @@ int ast_add_extension2(struct ast_context *con,
 			else if (e->matchcid && !tmp->matchcid)
 				res = -1;
 			else
-				res = strcasecmp(e->cidmatch, tmp->cidmatch);
+				res = ext_cmp(e->cidmatch, tmp->cidmatch);
 		}
 		if (res >= 0)
 			break;
@@ -5631,7 +5653,7 @@ static int pbx_builtin_waitexten(struct ast_channel *chan, void *data)
 	if (ast_test_flag(&flags, WAITEXTEN_MOH) && !opts[0] ) {
 		ast_log(LOG_WARNING, "The 'm' option has been specified for WaitExten without a class.\n"); 
 	} else if (ast_test_flag(&flags, WAITEXTEN_MOH))
-		ast_indicate_data(chan, AST_CONTROL_HOLD, opts[0], strlen(opts[0]));
+		ast_indicate_data(chan, AST_CONTROL_HOLD, S_OR(opts[0], NULL), strlen(opts[0]));
 
 	/* Wait for "n" seconds */
 	if (args.timeout && (sec = atof(args.timeout)) > 0.0)
@@ -5692,8 +5714,16 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 	if (ast_strlen_zero(args.lang))
 		args.lang = (char *)chan->language;	/* XXX this is const */
 
-	if (ast_strlen_zero(args.context))
-		args.context = chan->context;
+	if (ast_strlen_zero(args.context)) {
+		const char *context;
+		ast_channel_lock(chan);
+		if ((context = pbx_builtin_getvar_helper(chan, "MACRO_CONTEXT"))) {
+			args.context = ast_strdupa(context);
+		} else {
+			args.context = chan->context;
+		}
+		ast_channel_unlock(chan);
+	}
 
 	if (args.options) {
 		if (!strcasecmp(args.options, "skip"))
@@ -5748,8 +5778,15 @@ static int pbx_builtin_background(struct ast_channel *chan, void *data)
 	 * (but a longer extension COULD have matched), it would have previously
 	 * gone immediately to the "i" extension, but will now need to wait for a
 	 * timeout.
+	 *
+	 * Later, we had to add a flag to disable this workaround, because AGI
+	 * users can EXEC Background and reasonably expect that the DTMF code will
+	 * be returned (see #16434).
 	 */
-	if ((exten[0] = res) && !ast_matchmore_extension(chan, args.context, exten, 1, chan->cid.cid_num)) {
+	if (!ast_test_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS) &&
+			(exten[0] = res) &&
+			ast_canmatch_extension(chan, args.context, exten, 1, chan->cid.cid_num) &&
+			!ast_matchmore_extension(chan, args.context, exten, 1, chan->cid.cid_num)) {
 		snprintf(chan->exten, sizeof(chan->exten), "%c", res);
 		ast_copy_string(chan->context, args.context, sizeof(chan->context));
 		chan->priority = 0;

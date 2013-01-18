@@ -62,6 +62,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; Disabling DNS SRV lookups disables the 
                                 ; ability to place SIP calls based on domain 
                                 ; names to some other SIP users on the Internet
+                                ; Specifying a port in a SIP peer definition or
+                                ; when dialing outbound calls will supress SRV
+                                ; lookups for that peer or call.
                                 
 ;pedantic=yes                   ; Enable checking of tags in headers, 
                                 ; international character conversions in URIs
@@ -115,6 +118,12 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                  ; use 'never' to never use in-band signalling, even in cases
                                  ; where some buggy devices might not render it
                                  ; Valid values: yes, no, never Default: never
+;prematuremedia=no		 ; Some ISDN links send empty media frames before 
+				 ; the call is in ringing or progress state. The SIP 
+				 ; channel will then send 183 indicating early media
+				 ; which will be empty - thus users get no ring signal.
+				 ; Setting this to "no" will stop any media before we have
+				 ; call progress. Default is "yes".
 ;useragent=Asterisk PBX          ; Allows you to change the user agent string
 ;promiscredir = no               ; If yes, allows 302 or REDIR to non-local SIP address
                                  ; Note that promiscredir when redirects are made to the
@@ -180,6 +189,16 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;
 ;regcontext=sipregistrations
 ;
+
+; The shrinkcallerid function removes '(', ' ', ')', non-trailing '.', and '-' not
+; in square brackets.  For example, the caller id value 555.5555 becomes 5555555
+; when this option is enabled.  Disabling this option results in no modification
+; of the caller id value, which is necessary when the caller id represents something
+; that must be preserved.  This option can only be used in the [general] section.
+; By default this option is on.
+;
+;shrinkcallerid=yes     ; on by default
+
 ;--------------------------- RTP timers ----------------------------------------------------
 ; These timers are currently used for both audio and video streams. The RTP timeouts
 ; are only applied to the audio channel.
@@ -342,6 +361,13 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; call directly between the endpoints instead of sending
                                 ; a re-INVITE).
 
+                                ; Additionally this option does not disable all reINVITE operations.
+                                ; It only controls Asterisk generating reINVITEs for the specific
+                                ; purpose of setting up a direct media path. If a reINVITE is
+                                ; needed to switch a media stream to inactive (when placed on
+                                ; hold) or to T.38, it will still be done, regardless of this
+                                ; setting.
+
 ;directrtpsetup=yes             ; Enable the new experimental direct RTP setup. This sets up
                                 ; the call directly with media peer-2-peer without re-invites.
                                 ; Will not work for video and cases where the callee sends 
@@ -358,6 +384,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;canreinvite=update             ; Yet a third option... use UPDATE for media path redirection,
                                 ; instead of INVITE. This can be combined with 'nonat', as
                                 ; 'canreinvite=update,nonat'. It implies 'yes'.
+
+;constantssrc=yes               ; Don't change the RTP SSRC when our media stream changes
 
 ;----------------------------------------- REALTIME SUPPORT ------------------------
 ; For additional information on ARA, the Asterisk Realtime Architecture,
@@ -518,7 +546,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; maxcallbitrate              maxcallbitrate
 ; rfc2833compensate           mailbox
 ; t38pt_usertpsource          username
-;                             template
+; constantssrc                template
 ;                             fromdomain
 ;                             regexten
 ;                             fromuser
@@ -531,6 +559,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;                             sendrpid
 ;                             outboundproxy
 ;                             rfc2833compensate
+;                             constantssrc
 ;                             t38pt_usertpsource
 ;			      matchrule
 ;                             contactpermit         ; Limit what a host may register as (a neat trick
@@ -677,6 +706,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;defaultip=192.168.0.60         ; IP address to use if peer has not registered
 ;deny=0.0.0.0/0.0.0.0           ; ACL: Control access to this account based on IP address
 ;permit=192.168.0.60/255.255.255.0
+;permit=192.168.0.60/24          ; we can also use CIDR notation for subnet masks
 
 ;[cisco1]
 ;type=friend

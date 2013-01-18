@@ -269,7 +269,7 @@ int ast_base64decode(unsigned char *dst, const char *src, int max)
 	unsigned int byte = 0;
 	unsigned int bits = 0;
 	int incnt = 0;
-	while(*src && (cnt < max)) {
+	while(*src && *src != '=' && (cnt < max)) {
 		/* Shift in 6 bits of input */
 		byte <<= 6;
 		byte |= (b2a[(int)(*src)]) & 0x3f;
@@ -394,7 +394,7 @@ char *ast_uri_encode(const char *string, char *outbuf, int buflen, int doreserve
 
 	/* If there's no characters to convert, just go through and don't do anything */
 	while (*ptr) {
-		if (((unsigned char) *ptr) > 127 || (doreserved && strchr(reserved, *ptr)) ) {
+		if ((*ptr < 32) || (doreserved && strchr(reserved, *ptr))) {
 			/* Oops, we need to start working here */
 			if (!buf) {
 				buf = outbuf;
@@ -726,7 +726,7 @@ static int handle_show_locks(int fd, int argc, char *argv[])
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
 		if (lock_info->num_locks) {
-			ast_dynamic_str_append(&str, 0, "=== Thread ID: %u (%s)\n", (int) lock_info->thread_id,
+			ast_dynamic_str_append(&str, 0, "=== Thread ID: %ld (%s)\n", (long) lock_info->thread_id,
 				lock_info->thread_name);
 			pthread_mutex_lock(&lock_info->lock);
 			for (i = 0; str && i < lock_info->num_locks; i++) {
@@ -935,7 +935,9 @@ int ast_carefulwrite(int fd, char *s, int len, int timeoutms)
 		while ((res = ast_poll(&pfd, 1, timeoutms - elapsed)) <= 0) {
 			if (res == 0) {
 				/* timed out. */
-				ast_log(LOG_NOTICE, "Timed out trying to write\n");
+				if (option_debug) {
+					ast_log(LOG_DEBUG, "Timed out trying to write\n");
+				}
 				return -1;
 			} else if (res == -1) {
 				/* poll() returned an error, check to see if it was fatal */

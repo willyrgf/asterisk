@@ -1125,7 +1125,7 @@ static int handle_hangup(struct ast_channel *chan, AGI *agi, int argc, char **ar
 
 static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv)
 {
-	int res;
+	int res, workaround;
 	struct ast_app *app;
 
 	if (argc < 2)
@@ -1140,7 +1140,13 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, char **argv
 		if(!strcasecmp(argv[1], PARK_APP_NAME)) {
 			ast_masq_park_call(chan, NULL, 0, NULL);
 		}
-		res = pbx_exec(chan, app, argv[2]);
+		if (!(workaround = ast_test_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS))) {
+			ast_set_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS);
+		}
+		res = pbx_exec(chan, app, argc == 2 ? "" : argv[2]);
+		if (!workaround) {
+			ast_clear_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS);
+		}
 	} else {
 		ast_log(LOG_WARNING, "Could not find application (%s)\n", argv[1]);
 		res = -2;
@@ -1399,6 +1405,9 @@ static int handle_noop(struct ast_channel *chan, AGI *agi, int arg, char *argv[]
 
 static int handle_setmusic(struct ast_channel *chan, AGI *agi, int argc, char *argv[])
 {
+	if (argc < 3) {
+		return RESULT_SHOWUSAGE;
+	}
 	if (!strncasecmp(argv[2], "on", 2))
 		ast_moh_start(chan, argc > 3 ? argv[3] : NULL, NULL);
 	else if (!strncasecmp(argv[2], "off", 3))

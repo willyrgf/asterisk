@@ -171,9 +171,12 @@ static char *descrip =
 "           You cannot use any additional action post answer options in conjunction\n"
 "           with this option. Also, pbx services are not run on the peer (called) channel,\n"
 "           so you will not be able to set timeouts via the TIMEOUT() function in this macro.\n"
-"    n    - This option is a modifier for the screen/privacy mode. It specifies\n"
-"           that no introductions are to be saved in the priv-callerintros\n"
-"           directory.\n"
+"    n([x]) - This option is a modifier for the screen/privacy mode. It specifies\n"
+"             that no introductions are to be saved in the priv-callerintros\n"
+"             directory.\n"
+"             Specified without an arg, or with 0, the introduction is saved after\n"
+"             an unanswered call originating from the same CallerID. With\n"
+"             a 1 specified, the introduction is always deleted and rerequested.\n"
 "    N    - This option is a modifier for the screen/privacy mode. It specifies\n"
 "           that if callerID is present, do not screen the call.\n"
 "    o    - Specify that the CallerID that was present on the *calling* channel\n"
@@ -271,6 +274,7 @@ enum {
 	OPT_ARG_PRIVACY,
 	OPT_ARG_DURATION_STOP,
 	OPT_ARG_OPERMODE,
+	OPT_ARG_SCREEN_NOINTRO,
 	/* note: this entry _MUST_ be the last one in the enum */
 	OPT_ARG_ARRAY_SIZE,
 } dial_exec_option_args;
@@ -292,7 +296,7 @@ AST_APP_OPTIONS(dial_exec_options, {
 	AST_APP_OPTION_ARG('L', OPT_DURATION_LIMIT, OPT_ARG_DURATION_LIMIT),
 	AST_APP_OPTION_ARG('m', OPT_MUSICBACK, OPT_ARG_MUSICBACK),
 	AST_APP_OPTION_ARG('M', OPT_CALLEE_MACRO, OPT_ARG_CALLEE_MACRO),
-	AST_APP_OPTION('n', OPT_SCREEN_NOINTRO),
+	AST_APP_OPTION_ARG('n', OPT_SCREEN_NOINTRO, OPT_ARG_SCREEN_NOINTRO),
 	AST_APP_OPTION('N', OPT_SCREEN_NOCLID),
 	AST_APP_OPTION('o', OPT_ORIGINAL_CLID),
 	AST_APP_OPTION_ARG('O', OPT_OPERMODE,OPT_ARG_OPERMODE),
@@ -308,7 +312,8 @@ AST_APP_OPTIONS(dial_exec_options, {
 
 #define CAN_EARLY_BRIDGE(flags,chan,peer) (!ast_test_flag(flags, OPT_CALLEE_HANGUP | \
 	OPT_CALLER_HANGUP | OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER | \
-	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK | OPT_CALLER_PARK) && \
+	OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR | OPT_CALLEE_PARK |  \
+	OPT_CALLER_PARK | OPT_ANNOUNCE | OPT_CALLEE_MACRO) && \
 	!chan->audiohooks && !peer->audiohooks)
 
 /* We define a custom "local user" structure because we
@@ -533,7 +538,9 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					ast_clear_flag(o, DIAL_STILLGOING);	
 					HANDLE_CAUSE(cause, in);
 				} else {
-					ast_rtp_make_compatible(c, in, single);
+					if (CAN_EARLY_BRIDGE(peerflags, c, in)) {
+						ast_rtp_make_compatible(c, in, single);
+					}
 					if (c->cid.cid_num)
 						free(c->cid.cid_num);
 					c->cid.cid_num = NULL;
@@ -654,8 +661,13 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in, struct dial_l
 					/* Setup early media if appropriate */
 					if (single && CAN_EARLY_BRIDGE(peerflags, in, c))
 						ast_rtp_early_bridge(in, c);
-					if (!ast_test_flag(outgoing, OPT_RINGBACK))
-						ast_indicate(in, AST_CONTROL_PROGRESS);
+					if (!ast_test_flag(outgoing, OPT_RINGBACK)) {
+							if (single || (!single && !(*sentringing))) {
+							/* want progress to go through if it's a single legged call or it's a
+							 * branched call and ringing has not been sent */
+								ast_indicate(in, AST_CONTROL_PROGRESS);
+							}
+					}
 					break;
 				case AST_CONTROL_VIDUPDATE:
 					if (option_verbose > 2)
@@ -906,6 +918,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	char privcid[256];
 	char *parse;
 	int opermode = 0;
+	int delprivintro = 0;
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(peers);
 			     AST_APP_ARG(timeout);
@@ -946,6 +959,17 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/number)\n");
 		pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);
 		goto done;
+	}
+
+	if (ast_test_flag(&opts, OPT_SCREEN_NOINTRO)) {
+		if (!ast_strlen_zero(opt_args[OPT_ARG_SCREEN_NOINTRO])) {
+			int mode = atoi(opt_args[OPT_ARG_SCREEN_NOINTRO]);
+			if (mode < 0 || mode > 1) {
+				ast_log(LOG_WARNING, "Unknown argument %d specified to n option, ignoring\n", mode);
+			} else {
+				delprivintro = mode;
+			}
+		}
 	}
 
 	if (ast_test_flag(&opts, OPT_OPERMODE)) {
@@ -1020,10 +1044,10 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		warning_sound = S_OR(var, "timeleft");
 		
 		var = pbx_builtin_getvar_helper(chan,"LIMIT_TIMEOUT_FILE");
-		end_sound = S_OR(var, NULL);	/* XXX not much of a point in doing this! */
+		end_sound = S_OR(var, "");
 		
 		var = pbx_builtin_getvar_helper(chan,"LIMIT_CONNECT_FILE");
-		start_sound = S_OR(var, NULL);	/* XXX not much of a point in doing this! */
+		start_sound = S_OR(var, "");
 
 		/* undo effect of S(x) in case they are both used */
 		calldurationlimit = -1;
@@ -1152,11 +1176,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 										   conflicts by naming the privintro file */
 				if (res == -1) {
 					/* Delete the file regardless since they hung up during recording */
-                                        ast_filedelete(privintro, NULL);
-                                        if( ast_fileexists(privintro,NULL,NULL ) > 0 )
-                                                ast_log(LOG_NOTICE,"privacy: ast_filedelete didn't do its job on %s\n", privintro);
-                                        else if (option_verbose > 2)
-                                                ast_verbose( VERBOSE_PREFIX_3 "Successfully deleted %s intro file\n", privintro);
+					delprivintro = 1;
 					goto out;
 				}
                                 if( !ast_streamfile(chan, "vm-dialout", chan->language) )
@@ -1176,7 +1196,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 		outbound_group = pbx_builtin_getvar_helper(chan, "OUTBOUND_GROUP");
 	}
 	    
-	ast_copy_flags(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING);
+	ast_copy_flags(peerflags, &opts, OPT_DTMF_EXIT | OPT_GO_ON | OPT_ORIGINAL_CLID | OPT_CALLER_HANGUP | OPT_IGNORE_FORWARDING | OPT_ANNOUNCE | OPT_CALLEE_MACRO);
 
 	/* loop through the list of dial destinations */
 	rest = args.peers;
@@ -1224,6 +1244,7 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			datastore->inheritance = DATASTORE_INHERIT_FOREVER;
 
 			if (!(dialed_interfaces = ast_calloc(1, sizeof(*dialed_interfaces)))) {
+				ast_channel_datastore_free(datastore);
 				free(tmp);
 				goto out;
 			}
@@ -1280,11 +1301,13 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			continue;
 		}
 
-				pbx_builtin_setvar_helper(tmp->chan, "DIALEDPEERNUMBER", numsubst);
+		pbx_builtin_setvar_helper(tmp->chan, "DIALEDPEERNUMBER", numsubst);
 
 		/* Setup outgoing SDP to match incoming one */
-		ast_rtp_make_compatible(tmp->chan, chan, !outgoing && !rest);
-		
+		if (CAN_EARLY_BRIDGE(peerflags, chan, tmp->chan)) {
+			ast_rtp_make_compatible(tmp->chan, chan, !outgoing && !rest);
+		}
+
 		/* Inherit specially named variables from parent channel */
 		ast_channel_inherit_variables(chan, tmp->chan);
 		ast_channel_datastore_inherit(chan, tmp->chan);
@@ -1608,32 +1631,77 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 			/* if the intro is NOCALLERID, then there's no reason to leave it on disk, it'll 
 			   just clog things up, and it's not useful information, not being tied to a CID */
 			if( strncmp(privcid,"NOCALLERID",10) == 0 || ast_test_flag(&opts, OPT_SCREEN_NOINTRO) ) {
-				ast_filedelete(privintro, NULL);
-				if( ast_fileexists(privintro, NULL, NULL ) > 0 )
-					ast_log(LOG_NOTICE, "privacy: ast_filedelete didn't do its job on %s\n", privintro);
-				else if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "Successfully deleted %s intro file\n", privintro);
+				delprivintro = 1;
 			}
 		}
 		if (!ast_test_flag(&opts, OPT_ANNOUNCE) || ast_strlen_zero(opt_args[OPT_ARG_ANNOUNCE])) {
 			res = 0;
 		} else {
 			int digit = 0;
-			/* Start autoservice on the other chan */
-			res = ast_autoservice_start(chan);
-			/* Now Stream the File */
-			if (!res)
-				res = ast_streamfile(peer, opt_args[OPT_ARG_ANNOUNCE], peer->language);
-			if (!res) {
-				digit = ast_waitstream(peer, AST_DIGIT_ANY); 
-			}
-			/* Ok, done. stop autoservice */
-			res = ast_autoservice_stop(chan);
-			if (digit > 0 && !res)
-				res = ast_senddigit(chan, digit); 
-			else
-				res = digit;
+			struct ast_channel *chans[2];
+			struct ast_channel *active_chan;
 
+			chans[0] = chan;
+			chans[1] = peer;
+
+			/* we need to stream the announcment while monitoring the caller for a hangup */
+
+			/* stream the file */
+			res = ast_streamfile(peer, opt_args[OPT_ARG_ANNOUNCE], peer->language);
+			if (res) {
+				res = 0;
+				ast_log(LOG_ERROR, "error streaming file '%s' to callee\n", opt_args[OPT_ARG_ANNOUNCE]);
+			}
+
+			ast_set_flag(peer, AST_FLAG_END_DTMF_ONLY);
+			while (peer->stream) {
+				int ms;
+
+				ms = ast_sched_wait(peer->sched);
+
+				if (ms < 0 && !peer->timingfunc) {
+					ast_stopstream(peer);
+					break;
+				}
+				if (ms < 0)
+					ms = 1000;
+
+				active_chan = ast_waitfor_n(chans, 2, &ms);
+				if (active_chan) {
+					struct ast_frame *fr = ast_read(active_chan);
+					if (!fr) {
+						ast_hangup(peer);
+						res = -1;
+						goto done;
+					}
+					switch(fr->frametype) {
+						case AST_FRAME_DTMF_END:
+							digit = fr->subclass;
+							if (active_chan == peer && strchr(AST_DIGIT_ANY, res)) {
+								ast_stopstream(peer);
+								res = ast_senddigit(chan, digit);
+							}
+							break;
+						case AST_FRAME_CONTROL:
+							switch (fr->subclass) {
+								case AST_CONTROL_HANGUP:
+									ast_frfree(fr);
+									ast_hangup(peer);
+									res = -1;
+									goto done;
+								default:
+									break;
+							}
+							break;
+						default:
+							/* Ignore all others */
+							break;
+					}
+					ast_frfree(fr);
+				}
+				ast_sched_runq(peer->sched);
+			}
+			ast_clear_flag(peer, AST_FLAG_END_DTMF_ONLY);
 		}
 
 		if (chan && peer && ast_test_flag(&opts, OPT_GOTO) && !ast_strlen_zero(opt_args[OPT_ARG_GOTO])) {
@@ -1817,6 +1885,15 @@ out:
 		sentringing = 0;
 		ast_indicate(chan, -1);
 	}
+	if (delprivintro) {
+		ast_filedelete(privintro, NULL);
+		if(ast_fileexists(privintro, NULL, NULL) > 0) {
+			ast_log(LOG_NOTICE,"privacy: ast_filedelete didn't do its job on %s\n", privintro);
+		} else if (option_verbose > 2) {
+			ast_verbose(VERBOSE_PREFIX_3 "Successfully deleted %s intro file\n", privintro);
+		}
+	}
+
 	ast_rtp_early_bridge(chan, NULL);
 	hanguptree(outgoing, NULL);
 	pbx_builtin_setvar_helper(chan, "DIALSTATUS", status);

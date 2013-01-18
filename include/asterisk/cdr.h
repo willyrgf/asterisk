@@ -40,10 +40,10 @@
 #define AST_CDR_FLAG_ORIGINATED		(1 << 11)
 
 /*! Disposition */
-#define AST_CDR_NULL                0
-#define AST_CDR_FAILED				(1 << 0)
-#define AST_CDR_BUSY				(1 << 1)
-#define AST_CDR_NOANSWER			(1 << 2)
+#define AST_CDR_NOANSWER			0
+#define AST_CDR_NULL                (1 << 0)
+#define AST_CDR_FAILED				(1 << 1)
+#define AST_CDR_BUSY				(1 << 2)
 #define AST_CDR_ANSWERED			(1 << 3)
 
 /*! AMA Flags */
@@ -112,6 +112,11 @@ int ast_cdr_serialize_variables(struct ast_cdr *cdr, char *buf, size_t size, cha
 void ast_cdr_free_vars(struct ast_cdr *cdr, int recur);
 int ast_cdr_copy_vars(struct ast_cdr *to_cdr, struct ast_cdr *from_cdr);
 
+/*!\brief CDR backend callback
+ * \warning CDR backends should NOT attempt to access the channel associated
+ * with a CDR record.  This channel is not guaranteed to exist when the CDR
+ * backend is invoked.
+ */
 typedef int (*ast_cdrbe)(struct ast_cdr *cdr);
 
 /*! \brief Allocate a CDR record 

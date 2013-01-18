@@ -183,6 +183,8 @@ struct ast_config {
 	int max_include_level;
 };
 
+static void ast_destroy_comment(struct ast_comment **comment);
+
 struct ast_variable *ast_variable_new(const char *name, const char *value) 
 {
 	struct ast_variable *variable;
@@ -218,6 +220,8 @@ void ast_variables_destroy(struct ast_variable *v)
 	while(v) {
 		vn = v;
 		v = v->next;
+		ast_destroy_comment(&vn->precomments);
+		ast_destroy_comment(&vn->sameline);
 		free(vn);
 	}
 }
@@ -344,19 +348,22 @@ void ast_category_append(struct ast_config *config, struct ast_category *categor
 	config->current = category;
 }
 
-static void ast_destroy_comments(struct ast_category *cat)
+static void ast_destroy_comment(struct ast_comment **comment)
 {
 	struct ast_comment *n, *p;
-	for (p=cat->precomments; p; p=n) {
+
+	for (p = *comment; p; p = n) {
 		n = p->next;
 		free(p);
 	}
-	for (p=cat->sameline; p; p=n) {
-		n = p->next;
-		free(p);
-	}
-	cat->precomments = NULL;
-	cat->sameline = NULL;
+
+	*comment = NULL;
+}
+
+static void ast_destroy_comments(struct ast_category *cat)
+{
+	ast_destroy_comment(&cat->precomments);
+	ast_destroy_comment(&cat->sameline);
 }
 
 static void ast_destroy_template_list(struct ast_category *cat)
@@ -717,16 +724,25 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat, 
 		}
 		if (do_include || do_exec) {
 			if (c) {
-				/* Strip off leading and trailing "'s and <>'s */
-				while((*c == '<') || (*c == '>') || (*c == '\"')) c++;
-				/* Get rid of leading mess */
 				cur = c;
-				while (!ast_strlen_zero(cur)) {
-					c = cur + strlen(cur) - 1;
-					if ((*c == '>') || (*c == '<') || (*c == '\"'))
-						*c = '\0';
-					else
-						break;
+				/* Strip off leading and trailing "'s and <>'s */
+				if (*c == '"') {
+					/* Dequote */
+					while (*c) {
+						if (*c == '"') {
+							strcpy(c, c + 1); /* SAFE */
+							c--;
+						} else if (*c == '\\') {
+							strcpy(c, c + 1); /* SAFE */
+						}
+						c++;
+					}
+				} else if (*c == '<') {
+					/* C-style include */
+					if (*(c + strlen(c) - 1) == '>') {
+						cur++;
+						*(c + strlen(c) - 1) = '\0';
+					}
 				}
 				/* #exec </path/to/executable>
 				   We create a tmp file, then we #include it, then we delete it. */

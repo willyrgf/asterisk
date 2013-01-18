@@ -72,14 +72,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/srv.h"
 
-struct ast_ha {
-	/* Host access rule */
-	struct in_addr netaddr;
-	struct in_addr netmask;
-	int sense;
-	struct ast_ha *next;
-};
-
 /* Default IP - if not otherwise set, don't breathe garbage */
 static struct in_addr __ourip = { .s_addr = 0x00000000, };
 
@@ -261,7 +253,7 @@ void ast_free_ha(struct ast_ha *ha)
 }
 
 /* Copy HA structure */
-static void ast_copy_ha(struct ast_ha *from, struct ast_ha *to)
+void ast_copy_ha(const struct ast_ha *from, struct ast_ha *to)
 {
 	memcpy(&to->netaddr, &from->netaddr, sizeof(from->netaddr));
 	memcpy(&to->netmask, &from->netmask, sizeof(from->netmask));
@@ -303,7 +295,7 @@ struct ast_ha *ast_duplicate_ha_list(struct ast_ha *original)
 	return ret;    			/* Return start of list */
 }
 
-struct ast_ha *ast_append_ha(char *sense, char *stuff, struct ast_ha *path)
+struct ast_ha *ast_append_ha(char *sense, const char *stuff, struct ast_ha *path)
 {
 	struct ast_ha *ha;
 	char *nm = "255.255.255.255";
@@ -542,7 +534,7 @@ int ast_ouraddrfor(struct in_addr *them, struct in_addr *us)
 		return -1;
 	}
 	sin.sin_family = AF_INET;
-	sin.sin_port = 5060;
+	sin.sin_port = htons(5060);
 	sin.sin_addr = *them;
 	if (connect(s, (struct sockaddr *)&sin, sizeof(sin))) {
 		ast_log(LOG_WARNING, "Cannot connect\n");

@@ -77,7 +77,7 @@ static const char *desc_chan =
 "  Options:\n"
 "    b             - Only spy on channels involved in a bridged call.\n"
 "    g(grp)        - Match only channels where their ${SPYGROUP} variable is set to\n"
-"                    contain 'grp' in an optional : delimited list.\n"
+"                    contain 'grp'.\n"
 "    q             - Don't play a beep when beginning to spy on a channel, or speak the\n"
 "                    selected channel name.\n"
 "    r[(basename)] - Record the session to the monitor spool directory. An\n"
@@ -105,7 +105,7 @@ static const char *desc_ext =
 "  Options:\n"
 "    b             - Only spy on channels involved in a bridged call.\n"
 "    g(grp)        - Match only channels where their ${SPYGROUP} variable is set to\n"
-"                    contain 'grp' in an optional : delimited list.\n"
+"                    contain 'grp'.\n"
 "    q             - Don't play a beep when beginning to spy on a channel, or speak the\n"
 "                    selected channel name.\n"
 "    r[(basename)] - Record the session to the monitor spool directory. An\n"
@@ -250,9 +250,10 @@ static int channel_spy(struct ast_channel *chan, struct chanspy_ds *spyee_chansp
 	ast_channel_unlock(chan);
 
 	ast_mutex_lock(&spyee_chanspy_ds->lock);
-	if (spyee_chanspy_ds->chan) {
-		spyee = spyee_chanspy_ds->chan;
-		ast_channel_lock(spyee);
+	while ((spyee = spyee_chanspy_ds->chan) && ast_channel_trylock(spyee)) {
+		/* avoid a deadlock here, just in case spyee is masqueraded and
+		 * chanspy_ds_chan_fixup() is called with the channel locked */
+		DEADLOCK_AVOIDANCE(&spyee_chanspy_ds->lock);
 	}
 	ast_mutex_unlock(&spyee_chanspy_ds->lock);
 

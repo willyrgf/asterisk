@@ -129,7 +129,7 @@ static struct permalias {
 	{ EVENT_FLAG_AGENT, "agent" },
 	{ EVENT_FLAG_USER, "user" },
 	{ EVENT_FLAG_CONFIG, "config" },
-	{ -1, "all" },
+	{ INT_MAX, "all" },
 	{ 0, "none" },
 };
 
@@ -1490,6 +1490,7 @@ static int action_setvar(struct mansession *s, const struct message *m)
 	const char *name = astman_get_header(m, "Channel");
 	const char *varname = astman_get_header(m, "Variable");
 	const char *varval = astman_get_header(m, "Value");
+	int res = 0;
 	
 	if (ast_strlen_zero(varname)) {
 		astman_send_error(s, m, "No variable specified");
@@ -1503,13 +1504,22 @@ static int action_setvar(struct mansession *s, const struct message *m)
 			return 0;
 		}
 	}
-	
-	pbx_builtin_setvar_helper(c, varname, S_OR(varval, ""));
+	if (varname[strlen(varname)-1] == ')') {
+		char *function = ast_strdupa(varname);
+		res = ast_func_write(c, function, varval);
+	} else {
+		pbx_builtin_setvar_helper(c, varname, S_OR(varval, ""));
+	}
 	  
-	if (c)
+	if (c) {
 		ast_channel_unlock(c);
+	}
 
-	astman_send_ack(s, m, "Variable Set");	
+	if (res == 0) {
+		astman_send_ack(s, m, "Variable Set");	
+	} else {
+		astman_send_error(s, m, "Variable not set");
+	}
 
 	return 0;
 }
@@ -2215,6 +2225,7 @@ static int action_userevent(struct mansession *s, const struct message *m)
 		}
 	}
 
+	astman_send_ack(s, m, "Event Sent");	
 	manager_event(EVENT_FLAG_USER, "UserEvent", "UserEvent: %s\r\n%s", event, body);
 	return 0;
 }
@@ -2882,8 +2893,12 @@ static char *generic_http_callback(int format, struct sockaddr_in *requestor, co
 		ast_mutex_lock(&s->__lock);
 		if (ss.fd > -1) {
 			char *buf;
-			size_t l = lseek(ss.fd, 0, SEEK_END);
-			if (l) {
+			size_t l;
+
+			/* Ensure buffer is NULL-terminated */
+			fprintf(ss.f, "%c", 0);
+
+			if ((l = lseek(ss.fd, 0, SEEK_END)) > 0) {
 				if (MAP_FAILED == (buf = mmap(NULL, l, PROT_READ | PROT_WRITE, MAP_PRIVATE, ss.fd, 0))) {
 					ast_log(LOG_WARNING, "mmap failed.  Manager request output was not processed\n");
 				} else {

@@ -80,6 +80,9 @@ case "${host_os}" in
      solaris*)
      OSARCH=SunOS
      ;;
+     linux-gnueabi)
+     OSARCH=linux-gnu
+     ;;
      *)
      OSARCH=${HOST_OS}
      ;;
@@ -139,6 +142,8 @@ fi
 AC_SUBST(GNU_LD)
 
 AC_PATH_PROG([AWK], [awk], :)
+AC_PATH_PROG([BISON], [bison], :)
+AC_PATH_PROG([FLEX], [flex], :)
 AC_PATH_PROG([GREP], [grep], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
@@ -156,6 +161,49 @@ else
   DOWNLOAD=${FETCH}
 fi
 AC_SUBST(DOWNLOAD)
+
+AC_CACHE_CHECK([for bison that supports parse-param], [ac_cv_path_BISON2], [
+	if test "x$BISON" != "x:" ; then
+		# Create a temporary directory $tmp in $TMPDIR (default /tmp).
+		# Use mktemp if possible; otherwise fall back on mkdir,
+		# with $RANDOM to make collisions less likely.
+		: ${TMPDIR=/tmp}
+		{
+		  tmp=`
+		    (umask 077 && mktemp -d "$TMPDIR/fooXXXXXX") 2>/dev/null
+		  ` &&
+		  test -n "$tmp" && test -d "$tmp"
+		} || {
+		  tmp=$TMPDIR/foo$$-$RANDOM
+		  (umask 077 && mkdir "$tmp")
+		} || exit $?
+		cat >$tmp/test.y <<__EOL__
+%parse-param {struct parse_io *parseio}
+%%
+file : { \$\$ = parseio->pval = 1; }
+	;
+%%
+__EOL__
+		${BISON} -o ${tmp}/test.tab.c ${tmp}/test.y >/dev/null 2>&1
+		if test -e "${tmp}/test.tab.c"; then
+			ac_cv_path_BISON2=${BISON}
+		fi
+		rm -rf ${tmp}
+	fi
+	])
+if test "x${ac_cv_path_BISON2}" = "x" ; then
+	BISON=:
+	PBX_BISON=0
+else
+	PBX_BISON=1
+fi
+AC_SUBST(PBX_BISON)
+if test "x${FLEX}" = "x:" ; then
+	PBX_FLEX=0
+else
+	PBX_FLEX=1
+fi
+AC_SUBST(PBX_FLEX)
 
 AC_CHECK_TOOL([SOXMIX], [soxmix], [:])
 if test "${SOXMIX}" != ":" ; then
@@ -349,6 +397,27 @@ if test "${ac_cv_pthread_rwlock_timedwrlock}" = "yes"; then
   AC_DEFINE([HAVE_PTHREAD_RWLOCK_TIMEDWRLOCK], 1, [Define if your system has pthread_rwlock_timedwrlock()])
 fi
 
+AC_MSG_CHECKING(if PTHREAD_ONCE_INIT needs braces)
+saved_CFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} -Werror -Wmissing-braces"
+AC_COMPILE_IFELSE(
+  [AC_LANG_PROGRAM(
+    [#include <pthread.h>
+     void empty(){}],
+	[pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, empty);])
+  ],[
+    AC_MSG_RESULT(no)
+    ac_cv_pthread_once_needsbraces="no"
+  ],[
+    AC_MSG_RESULT(yes)
+    ac_cv_pthread_once_needsbraces="yes"
+  ]
+)
+CFLAGS="${saved_CFLAGS}"
+if test "${ac_cv_pthread_once_needsbraces}" = "yes"; then
+  AC_DEFINE([PTHREAD_ONCE_INIT_NEEDS_BRACES], 1, [Define if your system needs braces around PTHREAD_ONCE_INIT])
+fi
+
 AC_MSG_CHECKING(for compiler atomic operations)
 AC_LINK_IFELSE(
 AC_LANG_PROGRAM([], [int foo1; int foo2 = __sync_fetch_and_add(&foo1, 1);]),
@@ -494,7 +563,7 @@ AST_EXT_LIB_CHECK([ALSA], [asound], [snd_spcm_init], [alsa/asoundlib.h], [-lm -l
 
 AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
 
-if test "x${host_os}" = "xlinux-gnu" ; then
+if test "x${OSARCH}" = "xlinux-gnu" ; then
   AST_EXT_LIB_CHECK([CAP], [cap], [cap_from_text], [sys/capability.h])
 fi
 
@@ -1603,7 +1672,7 @@ elif test "x$CURSES_LIB" != "x" ; then
 elif test "x$NCURSES_LIB" != "x" ; then
   EDITLINE_LIB="$NCURSES_LIB"
 else
-  AC_MSG_ERROR(*** termcap support not found)
+  AC_MSG_ERROR([*** termcap support not found (on modern systems, this typically means the ncurses development package is missing)])
 fi
 AC_SUBST(EDITLINE_LIB)
 

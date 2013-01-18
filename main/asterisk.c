@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2008, Digium, Inc.
+ * Copyright (C) 1999 - 2009, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -139,7 +139,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 
 /*! \brief Welcome message when starting a CLI interface */
 #define WELCOME_MESSAGE \
-	ast_verbose("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2008 Digium, Inc. and others.\n"); \
+	ast_verbose("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2009 Digium, Inc. and others.\n"); \
 	ast_verbose("Created by Mark Spencer <markster@digium.com>\n"); \
 	ast_verbose("Asterisk comes with ABSOLUTELY NO WARRANTY; type 'core show warranty' for details.\n"); \
 	ast_verbose("This is free software, with components licensed under the GNU General Public\n"); \
@@ -963,7 +963,7 @@ static void *netconsole(void *vconsole)
 			continue;
 		}
 		if (fds[0].revents) {
-			res = read(con->fd, tmp, sizeof(tmp));
+			res = read(con->fd, tmp, sizeof(tmp) - 1);
 			if (res < 1) {
 				break;
 			}
@@ -2144,7 +2144,7 @@ static char *cli_complete(EditLine *el, int ch)
 	if (ast_opt_remote) {
 		snprintf(buf, sizeof(buf),"_COMMAND NUMMATCHES \"%s\" \"%s\"", lf->buffer, ptr); 
 		fdsend(ast_consock, buf);
-		res = read(ast_consock, buf, sizeof(buf));
+		res = read(ast_consock, buf, sizeof(buf) - 1);
 		buf[res] = '\0';
 		nummatches = atoi(buf);
 
@@ -2463,7 +2463,7 @@ static int show_version(void)
 }
 
 static int show_cli_help(void) {
-	printf("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2008, Digium, Inc. and others.\n");
+	printf("Asterisk " ASTERISK_VERSION ", Copyright (C) 1999 - 2009, Digium, Inc. and others.\n");
 	printf("Usage: asterisk [OPTIONS]\n");
 	printf("Valid Options:\n");
 	printf("   -V              Display version number and exit\n");

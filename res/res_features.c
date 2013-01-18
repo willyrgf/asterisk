@@ -581,6 +581,11 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 	/* Setup the extensions and such */
 	set_c_e_p(chan, rchan->context, rchan->exten, rchan->priority);
 
+	/* Setup the macro extension and such */
+	ast_copy_string(chan->macrocontext,rchan->macrocontext,sizeof(chan->macrocontext));
+	ast_copy_string(chan->macroexten,rchan->macroexten,sizeof(chan->macroexten));
+	chan->macropriority = rchan->macropriority;
+
 	/* Make the masq execute */
 	if ((f = ast_read(chan))) {
 		ast_frfree(f);
@@ -590,8 +595,9 @@ static int masq_park_call(struct ast_channel *rchan, struct ast_channel *peer, i
 		peer = chan;
 	}
 
-	if (!play_announcement || !orig_chan_name) {
-		orig_chan_name = ast_strdupa(chan->name);
+	if (peer && (!play_announcement || !orig_chan_name)) {
+		/* chan is the channel being parked, peer is the effective park-er */
+		orig_chan_name = ast_strdupa(peer->name);
 	}
 
 	park_status = park_call_full(chan, peer, timeout, extout, orig_chan_name, pu);
@@ -1480,10 +1486,12 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 							f = NULL;
 							ready=1;
 							break;
-						} else if (f->subclass != -1) {
+						} else if (f->subclass != -1 && f->subclass != AST_CONTROL_PROGRESS) {
 							ast_log(LOG_NOTICE, "Don't know what to do about control frame: %d\n", f->subclass);
 						}
 						/* else who cares */
+					} else if (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO) {
+						ast_write(caller, f);
 					}
 
 				} else if (caller && (active_channel == caller)) {
@@ -1515,6 +1523,8 @@ static struct ast_channel *ast_feature_request_and_dial(struct ast_channel *call
 							f = NULL;
 							break;
 						}
+					} else if (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO) {
+						ast_write(chan, f);
 					}
 				}
 				if (f)
@@ -1740,6 +1750,9 @@ int ast_bridge_call(struct ast_channel *chan,struct ast_channel *peer,struct ast
 			chan_cdr->next = NULL;
 			ast_copy_string(bridge_cdr->lastapp, S_OR(chan->appl, ""), sizeof(bridge_cdr->lastapp));
 			ast_copy_string(bridge_cdr->lastdata, S_OR(chan->data, ""), sizeof(bridge_cdr->lastdata));
+			if (peer_cdr && !ast_strlen_zero(peer_cdr->userfield)) {
+				ast_copy_string(bridge_cdr->userfield, peer_cdr->userfield, sizeof(bridge_cdr->userfield));
+			}
 		} else {
 			/* better yet, in a xfer situation, find out why the chan cdr got zapped (pun unintentional) */
 			bridge_cdr = ast_cdr_alloc(); /* this should be really, really rare/impossible? */

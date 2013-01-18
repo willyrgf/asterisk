@@ -319,6 +319,9 @@ static const char *slatrunk_desc =
 #define MAX_CONFNUM 80
 #define MAX_PIN     80
 
+/* Enough space for "<conference #>,<pin>,<admin pin>" followed by a 0 byte. */
+#define MAX_SETTINGS (MAX_CONFNUM + MAX_PIN + MAX_PIN + 3)
+
 enum announcetypes {
 	CONF_HASJOIN,
 	CONF_HASLEFT
@@ -1489,6 +1492,35 @@ static int can_write(struct ast_channel *chan, int confflags)
 	return (chan->_state == AST_STATE_UP);
 }
 
+static void send_talking_event(struct ast_channel *chan, struct ast_conference *conf, struct ast_conf_user *user, int talking)
+{
+	manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
+	      "Channel: %s\r\n"
+	      "Uniqueid: %s\r\n"
+	      "Meetme: %s\r\n"
+	      "Usernum: %d\r\n"
+	      "Status: %s\r\n",
+	      chan->name, chan->uniqueid, conf->confno, user->user_no, talking ? "on" : "off");
+}
+
+static void set_user_talking(struct ast_channel *chan, struct ast_conference *conf, struct ast_conf_user *user, int talking, int monitor)
+{
+	int last_talking = user->talking;
+	if (last_talking == talking)
+		return;
+
+	user->talking = talking;
+
+	if (monitor) {
+		/* Check if talking state changed. Take care of -1 which means unmonitored */
+		int was_talking = (last_talking > 0);
+		int now_talking = (talking > 0);
+		if (was_talking != now_talking) {
+			send_talking_event(chan, conf, user, now_talking);
+		}
+	}
+}
+
 static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int confflags, char *optargs[])
 {
 	struct ast_conf_user *user = NULL;
@@ -1504,7 +1536,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	int res;
 	int retryzap;
 	int origfd;
-	int musiconhold = 0;
+	int musiconhold = 0, mohtempstopped = 0;
 	int firstpass = 0;
 	int lastmarked = 0;
 	int currentmarked = 0;
@@ -1530,6 +1562,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 	char __buf[CONF_SIZE + AST_FRIENDLY_OFFSET];
 	char *buf = __buf + AST_FRIENDLY_OFFSET;
 	int setusercount = 0;
+	int confsilence = 0, totalsilence = 0;
 
 	if (!(user = ast_calloc(1, sizeof(*user))))
 		return ret;
@@ -1835,6 +1868,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 
 	conf_flush(fd, chan);
 
+	if (!(dsp = ast_dsp_new())) {
+		ast_log(LOG_WARNING, "Unable to allocate DSP!\n");
+		res = -1;
+	}
+
 	if (confflags & CONFFLAG_AGI) {
 		/* Get name of AGI file to run from $(MEETME_AGI_BACKGROUND)
 		   or use default filename of conf-background.agi */
@@ -1868,10 +1906,6 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 			x = 1;
 			ast_channel_setoption(chan, AST_OPTION_TONE_VERIFY, &x, sizeof(char), 0);
 		}	
-		if (confflags & (CONFFLAG_MONITORTALKER | CONFFLAG_OPTIMIZETALKER) && !(dsp = ast_dsp_new())) {
-			ast_log(LOG_WARNING, "Unable to allocate DSP!\n");
-			res = -1;
-		}
 		for(;;) {
 			int menu_was_active = 0;
 
@@ -1991,6 +2025,11 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 					break;
 				}
 
+				/* Indicate user is not talking anymore - change him to unmonitored state */
+				if ((confflags & (CONFFLAG_MONITORTALKER | CONFFLAG_OPTIMIZETALKER))) {
+					set_user_talking(chan, conf, user, -1, confflags & CONFFLAG_MONITORTALKER);
+				}
+
 				manager_event(EVENT_FLAG_CALL, "MeetmeMute", 
 						"Channel: %s\r\n"
 						"Uniqueid: %s\r\n"
@@ -2065,33 +2104,15 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						ast_frame_adjust_volume(f, user->talk.actual);
 
 					if (confflags & (CONFFLAG_MONITORTALKER | CONFFLAG_OPTIMIZETALKER)) {
-						int totalsilence;
-
 						if (user->talking == -1)
 							user->talking = 0;
 
 						res = ast_dsp_silence(dsp, f, &totalsilence);
-						if (!user->talking && totalsilence < MEETME_DELAYDETECTTALK) {
-							user->talking = 1;
-							if (confflags & CONFFLAG_MONITORTALKER)
-								manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
-								      "Channel: %s\r\n"
-								      "Uniqueid: %s\r\n"
-								      "Meetme: %s\r\n"
-								      "Usernum: %d\r\n"
-								      "Status: on\r\n",
-								      chan->name, chan->uniqueid, conf->confno, user->user_no);
+						if (totalsilence < MEETME_DELAYDETECTTALK) {
+							set_user_talking(chan, conf, user, 1, confflags & CONFFLAG_MONITORTALKER);
 						}
-						if (user->talking && totalsilence > MEETME_DELAYDETECTENDTALK) {
-							user->talking = 0;
-							if (confflags & CONFFLAG_MONITORTALKER)
-								manager_event(EVENT_FLAG_CALL, "MeetmeTalking",
-								      "Channel: %s\r\n"
-								      "Uniqueid: %s\r\n"
-								      "Meetme: %s\r\n"
-								      "Usernum: %d\r\n"
-								      "Status: off\r\n",
-								      chan->name, chan->uniqueid, conf->confno, user->user_no);
+						if (totalsilence > MEETME_DELAYDETECTENDTALK) {
+							set_user_talking(chan, conf, user, 0, confflags & CONFFLAG_MONITORTALKER);
 						}
 					}
 					if (using_pseudo) {
@@ -2262,8 +2283,9 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 							}
 						}
 					}
-					if (musiconhold)
+					if (musiconhold) {
 			   			ast_moh_start(chan, NULL, NULL);
+					}
 
 					if (ioctl(fd, DAHDI_SETCONF, &ztc)) {
 						ast_log(LOG_WARNING, "Error setting conference\n");
@@ -2338,10 +2360,14 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 							}
 						}
 						if (conf->transframe[index]) {
- 							if ((conf->transframe[index]->frametype != AST_FRAME_NULL) &&
+							if ((conf->transframe[index]->frametype != AST_FRAME_NULL) &&
 							    can_write(chan, confflags)) {
 								struct ast_frame *cur;
-								
+								if (musiconhold && !ast_dsp_silence(dsp, conf->transframe[index], &confsilence) && confsilence < MEETME_DELAYDETECTTALK) {
+									ast_moh_stop(chan);
+									mohtempstopped = 1;
+								}
+
 								/* the translator may have returned a list of frames, so
 								   write each one onto the channel
 								*/
@@ -2351,6 +2377,10 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 										break;
 									}
 								}
+								if (musiconhold && mohtempstopped && confsilence > MEETME_DELAYDETECTENDTALK) {
+									mohtempstopped = 0;
+									ast_moh_start(chan, NULL, NULL);
+								}
 							}
 						} else {
 							ast_mutex_unlock(&conf->listenlock);
@@ -2358,11 +2388,19 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, int c
 						}
 						ast_mutex_unlock(&conf->listenlock);
 					} else {
-bailoutandtrynormal:					
+bailoutandtrynormal:
+						if (musiconhold && !ast_dsp_silence(dsp, &fr, &confsilence) && confsilence < MEETME_DELAYDETECTTALK) {
+							ast_moh_stop(chan);
+							mohtempstopped = 1;
+						}
 						if (user->listen.actual)
 							ast_frame_adjust_volume(&fr, user->listen.actual);
 						if (can_write(chan, confflags) && ast_write(chan, &fr) < 0) {
 							ast_log(LOG_WARNING, "Unable to write frame to channel %s\n", chan->name);
+						}
+						if (musiconhold && mohtempstopped && confsilence > MEETME_DELAYDETECTENDTALK) {
+							mohtempstopped = 0;
+							ast_moh_start(chan, NULL, NULL);
 						}
 					}
 				} else 
@@ -2372,8 +2410,9 @@ bailoutandtrynormal:
 		}
 	}
 
-	if (musiconhold)
+	if (musiconhold) {
 		ast_moh_stop(chan);
+	}
 	
 	if (using_pseudo)
 		close(fd);
@@ -2527,7 +2566,6 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	struct ast_conference *cnf;
-	char *parse;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(confno);
 		AST_APP_ARG(pin);
@@ -2566,13 +2604,15 @@ static struct ast_conference *find_conf(struct ast_channel *chan, char *confno, 
 				ast_log(LOG_WARNING, "No %s file :(\n", CONFIG_FILE_NAME);
 				return NULL;
 			}
+
 			for (var = ast_variable_browse(cfg, "rooms"); var; var = var->next) {
+				char parse[MAX_SETTINGS];
+
 				if (strcasecmp(var->name, "conf"))
 					continue;
-				
-				if (!(parse = ast_strdupa(var->value)))
-					return NULL;
-				
+
+				ast_copy_string(parse, var->value, sizeof(parse));
+
 				AST_NONSTANDARD_APP_ARGS(args, parse, ',');
 				if (!strcasecmp(args.confno, confno)) {
 					/* Bingo it's a valid conference */
@@ -2738,33 +2778,32 @@ static int conf_exec(struct ast_channel *chan, void *data)
 				if (cfg) {
 					var = ast_variable_browse(cfg, "rooms");
 					while (var) {
+						char parse[MAX_SETTINGS], *stringp = parse, *confno_tmp;
 						if (!strcasecmp(var->name, "conf")) {
-							char *stringp = ast_strdupa(var->value);
-							if (stringp) {
-								char *confno_tmp = strsep(&stringp, "|,");
-								int found = 0;
-								if (!dynamic) {
-									/* For static:  run through the list and see if this conference is empty */
-									AST_LIST_LOCK(&confs);
-									AST_LIST_TRAVERSE(&confs, cnf, list) {
-										if (!strcmp(confno_tmp, cnf->confno)) {
-											/* The conference exists, therefore it's not empty */
-											found = 1;
-											break;
-										}
+							int found = 0;
+							ast_copy_string(parse, var->value, sizeof(parse));
+							confno_tmp = strsep(&stringp, "|,");
+							if (!dynamic) {
+								/* For static:  run through the list and see if this conference is empty */
+								AST_LIST_LOCK(&confs);
+								AST_LIST_TRAVERSE(&confs, cnf, list) {
+									if (!strcmp(confno_tmp, cnf->confno)) {
+										/* The conference exists, therefore it's not empty */
+										found = 1;
+										break;
 									}
-									AST_LIST_UNLOCK(&confs);
-									if (!found) {
-										/* At this point, we have a confno_tmp (static conference) that is empty */
-										if ((empty_no_pin && ast_strlen_zero(stringp)) || (!empty_no_pin)) {
-											/* Case 1:  empty_no_pin and pin is nonexistent (NULL)
-											 * Case 2:  empty_no_pin and pin is blank (but not NULL)
-											 * Case 3:  not empty_no_pin
-											 */
-											ast_copy_string(confno, confno_tmp, sizeof(confno));
-											break;
-											/* XXX the map is not complete (but we do have a confno) */
-										}
+								}
+								AST_LIST_UNLOCK(&confs);
+								if (!found) {
+									/* At this point, we have a confno_tmp (static conference) that is empty */
+									if ((empty_no_pin && ast_strlen_zero(stringp)) || (!empty_no_pin)) {
+										/* Case 1:  empty_no_pin and pin is nonexistent (NULL)
+										 * Case 2:  empty_no_pin and pin is blank (but not NULL)
+										 * Case 3:  not empty_no_pin
+										 */
+										ast_copy_string(confno, confno_tmp, sizeof(confno));
+										break;
+										/* XXX the map is not complete (but we do have a confno) */
 									}
 								}
 							}
@@ -3901,7 +3940,7 @@ static void sla_handle_hold_event(struct sla_event *event)
 		ast_indicate(event->trunk_ref->trunk->chan, AST_CONTROL_HOLD);
 	}
 
-	ast_softhangup(event->trunk_ref->chan, AST_CAUSE_NORMAL);
+	ast_softhangup(event->trunk_ref->chan, AST_SOFTHANGUP_DEV);
 	event->trunk_ref->chan = NULL;
 }
 

@@ -71,7 +71,7 @@
 /* Define to 1 if your system has a working `chown' function. */
 #undef HAVE_CHOWN
 
-/* Define if your system has the curl libraries. */
+/* Define to 1 if you have a functional curl library. */
 #undef HAVE_CURL
 
 /* Define to 1 if you have the curses library. */
@@ -655,6 +655,9 @@
 /* Define to necessary symbol if this constant uses a non-standard name on
    your system. */
 #undef PTHREAD_CREATE_JOINABLE
+
+/* Define if your system needs braces around PTHREAD_ONCE_INIT */
+#undef PTHREAD_ONCE_INIT_NEEDS_BRACES
 
 /* Define as the return type of signal handlers (`int' or `void'). */
 #undef RETSIGTYPE

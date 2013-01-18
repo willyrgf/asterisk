@@ -2152,7 +2152,11 @@ static int dahdi_call(struct ast_channel *ast, char *rdest, int timeout)
 		ast_log(LOG_WARNING, "Unable to flush input on channel %d: %s\n", p->channel, strerror(errno));
 	p->outgoing = 1;
 
-	set_actual_gain(p->subs[SUB_REAL].dfd, 0, p->rxgain, p->txgain, p->law);
+	if (IS_DIGITAL(ast->transfercapability)) {
+		set_actual_gain(p->subs[SUB_REAL].dfd, 0, 0, 0, p->law);
+	} else {
+		set_actual_gain(p->subs[SUB_REAL].dfd, 0, p->rxgain, p->txgain, p->law);
+	}
 
 	mysig = p->sig;
 	if (p->outsigmod > -1)
@@ -2822,6 +2826,8 @@ static int dahdi_hangup(struct ast_channel *ast)
 	if (p->sig == SIG_PRI) {
 		x = 1;
 		ast_channel_setoption(ast,AST_OPTION_AUDIO_MODE,&x,sizeof(char),0);
+		p->cid_num[0] = '\0';
+		p->cid_name[0] = '\0';
 	}
 
 	x = 0;
@@ -4252,7 +4258,7 @@ static struct ast_frame *dahdi_handle_event(struct ast_channel *ast)
 			p->inalarm = 1;
 			res = get_alarms(p);
 			handle_alarms(p, res);
-#ifdef HAVE_LIBPRI
+#ifdef HAVE_PRI
 			if (!p->pri || !p->pri->pri || pri_get_timer(p->pri->pri, PRI_TIMER_T309) < 0) {
 				/* fall through intentionally */
 			} else {
@@ -5081,7 +5087,10 @@ static struct ast_frame  *dahdi_read(struct ast_channel *ast)
 		return NULL;
 	}
 	
-	if ((p->radio || (p->oprmode < 0)) && p->inalarm) return NULL;
+	if ((p->radio || (p->oprmode < 0)) && p->inalarm) {
+		ast_mutex_unlock(&p->lock);
+		return NULL;
+	}
 
 	p->subs[index].f.frametype = AST_FRAME_NULL;
 	p->subs[index].f.datalen = 0;
@@ -7029,22 +7038,25 @@ static int dahdi_destroy_channel_bynum(int channel)
 	struct dahdi_pvt *tmp = NULL;
 	struct dahdi_pvt *prev = NULL;
 
+	ast_mutex_lock(&iflock);
 	tmp = iflist;
 	while (tmp) {
 		if (tmp->channel == channel) {
 			int x = DAHDI_FLASH;
 			ioctl(tmp->subs[SUB_REAL].dfd, DAHDI_HOOK, &x); /* important to create an event for dahdi_wait_event to register so that all ss_threads terminate */
 			destroy_channel(prev, tmp, 1);
+			ast_mutex_unlock(&iflock);
 			ast_module_unref(ast_module_info->self);
 			return RESULT_SUCCESS;
 		}
 		prev = tmp;
 		tmp = tmp->next;
 	}
+	ast_mutex_unlock(&iflock);
 	return RESULT_FAILURE;
 }
 
-static int handle_init_event(struct dahdi_pvt *i, int event)
+static struct dahdi_pvt *handle_init_event(struct dahdi_pvt *i, int event)
 {
 	int res;
 	pthread_t threadid;
@@ -7143,7 +7155,8 @@ static int handle_init_event(struct dahdi_pvt *i, int event)
 			res = tone_zone_play_tone(i->subs[SUB_REAL].dfd, DAHDI_TONE_CONGESTION);
 			if (res < 0)
 					ast_log(LOG_WARNING, "Unable to play congestion tone on channel %d\n", i->channel);
-			return -1;
+			pthread_attr_destroy(&attr);
+			return NULL;
 		}
 		break;
 	case DAHDI_EVENT_NOALARM:
@@ -7209,7 +7222,8 @@ static int handle_init_event(struct dahdi_pvt *i, int event)
 		default:
 			ast_log(LOG_WARNING, "Don't know how to handle on hook with signalling %s on channel %d\n", sig2str(i->sig), i->channel);
 			res = tone_zone_play_tone(i->subs[SUB_REAL].dfd, -1);
-			return -1;
+			pthread_attr_destroy(&attr);
+			return NULL;
 		}
 		break;
 	case DAHDI_EVENT_POLARITY:
@@ -7241,15 +7255,15 @@ static int handle_init_event(struct dahdi_pvt *i, int event)
 				"interface %d\n", i->channel);
 		}
 		break;
-	case DAHDI_EVENT_REMOVED: /* destroy channel */
+	case DAHDI_EVENT_REMOVED: /* destroy channel, will actually do so in do_monitor */
 		ast_log(LOG_NOTICE, 
 				"Got DAHDI_EVENT_REMOVED. Destroying channel %d\n", 
 				i->channel);
-		dahdi_destroy_channel_bynum(i->channel);
-		break;
+		pthread_attr_destroy(&attr);
+		return i;
 	}
 	pthread_attr_destroy(&attr);
-	return 0;
+	return NULL;
 }
 
 static void *do_monitor(void *data)
@@ -7257,6 +7271,7 @@ static void *do_monitor(void *data)
 	int count, res, res2, spoint, pollres=0;
 	struct dahdi_pvt *i;
 	struct dahdi_pvt *last = NULL;
+	struct dahdi_pvt *doomed;
 	time_t thispass = 0, lastpass = 0;
 	int found;
 	char buf[1024];
@@ -7332,8 +7347,19 @@ static void *do_monitor(void *data)
 		spoint = 0;
 		lastpass = thispass;
 		thispass = time(NULL);
-		i = iflist;
-		while (i) {
+		doomed = NULL;
+		for (i = iflist;; i = i->next) {
+			if (doomed) {
+				int res;
+				res = dahdi_destroy_channel_bynum(doomed->channel);
+				if (!res) {
+					ast_log(LOG_WARNING, "Couldn't find channel to destroy, hopefully another destroy operation just happened.\n");
+				}
+				doomed = NULL;
+			}
+			if (!i) {
+				break;
+			}
 			if (thispass != lastpass) {
 				if (!found && ((i == last) || ((i == iflist) && !last))) {
 					last = i;
@@ -7374,10 +7400,9 @@ static void *do_monitor(void *data)
 							ast_log(LOG_DEBUG, "Monitor doohicky got event %s on radio channel %d\n", event2str(res), i->channel);
 						/* Don't hold iflock while handling init events */
 						ast_mutex_unlock(&iflock);
-						handle_init_event(i, res);
+						doomed = handle_init_event(i, res);
 						ast_mutex_lock(&iflock);	
 					}
-					i = i->next;
 					continue;
 				}					
 				pollres = ast_fdisset(pfds, i->subs[SUB_REAL].dfd, count, &spoint);
@@ -7387,12 +7412,10 @@ static void *do_monitor(void *data)
 						if (!i->pri)
 #endif						
 							ast_log(LOG_WARNING, "Whoa....  I'm owned but found (%d) in read...\n", i->subs[SUB_REAL].dfd);
-						i = i->next;
 						continue;
 					}
 					if (!i->cidspill) {
 						ast_log(LOG_WARNING, "Whoa....  I'm reading but have no cidspill (%d)...\n", i->subs[SUB_REAL].dfd);
-						i = i->next;
 						continue;
 					}
 					res = read(i->subs[SUB_REAL].dfd, buf, sizeof(buf));
@@ -7423,7 +7446,6 @@ static void *do_monitor(void *data)
 						if (!i->pri)
 #endif						
 							ast_log(LOG_WARNING, "Whoa....  I'm owned but found (%d)...\n", i->subs[SUB_REAL].dfd);
-						i = i->next;
 						continue;
 					}
 					res = dahdi_get_event(i->subs[SUB_REAL].dfd);
@@ -7431,11 +7453,10 @@ static void *do_monitor(void *data)
 						ast_log(LOG_DEBUG, "Monitor doohicky got event %s on channel %d\n", event2str(res), i->channel);
 					/* Don't hold iflock while handling init events */
 					ast_mutex_unlock(&iflock);
-					handle_init_event(i, res);
+					doomed = handle_init_event(i, res);
 					ast_mutex_lock(&iflock);	
 				}
 			}
-			i=i->next;
 		}
 		ast_mutex_unlock(&iflock);
 	}
@@ -7989,9 +8010,14 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		ast_copy_string(tmp->mohinterpret, conf->chan.mohinterpret, sizeof(tmp->mohinterpret));
 		ast_copy_string(tmp->mohsuggest, conf->chan.mohsuggest, sizeof(tmp->mohsuggest));
 		ast_copy_string(tmp->context, conf->chan.context, sizeof(tmp->context));
-		ast_copy_string(tmp->cid_num, conf->chan.cid_num, sizeof(tmp->cid_num));
 		tmp->cid_ton = 0;
-		ast_copy_string(tmp->cid_name, conf->chan.cid_name, sizeof(tmp->cid_name));
+		if (chan_sig != SIG_PRI) {
+			ast_copy_string(tmp->cid_num, conf->chan.cid_num, sizeof(tmp->cid_num));
+			ast_copy_string(tmp->cid_name, conf->chan.cid_name, sizeof(tmp->cid_name));
+		} else {
+			tmp->cid_num[0] = '\0';
+			tmp->cid_name[0] = '\0';
+		}
 		ast_copy_string(tmp->mailbox, conf->chan.mailbox, sizeof(tmp->mailbox));
 		tmp->msgstate = -1;
 		tmp->group = conf->chan.group;
@@ -8438,6 +8464,9 @@ static struct ast_channel *dahdi_request(const char *type, int format, void *dat
 			}
 			p->outgoing = 1;
 			tmp = dahdi_new(p, AST_STATE_RESERVED, 0, p->owner ? SUB_CALLWAIT : SUB_REAL, 0, 0);
+			if (!tmp) {
+				p->outgoing = 0;
+			}
 #ifdef HAVE_PRI
 			if (p->bearer) {
 				/* Log owner to bearer channel, too */
@@ -9168,8 +9197,8 @@ static void *pri_dchannel(void *vpri)
 								pri_destroycall(pri->pri, pri->pvts[x]->call);
 								pri->pvts[x]->call = NULL;
 							}
-							if (pri->pvts[chanpos]->realcall) 
-								pri_hangup_all(pri->pvts[chanpos]->realcall, pri);
+							if (pri->pvts[x]->realcall) 
+								pri_hangup_all(pri->pvts[x]->realcall, pri);
  							else if (pri->pvts[x]->owner)
 								pri->pvts[x]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 							ast_mutex_unlock(&pri->pvts[x]->lock);
@@ -9728,9 +9757,12 @@ static void *pri_dchannel(void *vpri)
 							else if (pri->pvts[chanpos]->owner) {
 								/* Queue a BUSY instead of a hangup if our cause is appropriate */
 								pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-								if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
+								switch (pri->pvts[chanpos]->owner->_state) {
+								case AST_STATE_BUSY:
+								case AST_STATE_UP:
 									pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
-								else {
+									break;
+								default:
 									switch (e->hangup.cause) {
 										case PRI_CAUSE_USER_BUSY:
 											pri->pvts[chanpos]->subs[SUB_REAL].needbusy =1;
@@ -9746,6 +9778,7 @@ static void *pri_dchannel(void *vpri)
 										default:
 											pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 									}
+									break;
 								}
 							}
 							if (option_verbose > 2) 
@@ -9799,9 +9832,12 @@ static void *pri_dchannel(void *vpri)
 							pri_hangup_all(pri->pvts[chanpos]->realcall, pri);
 						else if (pri->pvts[chanpos]->owner) {
 							pri->pvts[chanpos]->owner->hangupcause = e->hangup.cause;
-							if (pri->pvts[chanpos]->owner->_state == AST_STATE_UP)
+							switch (pri->pvts[chanpos]->owner->_state) {
+							case AST_STATE_BUSY:
+							case AST_STATE_UP:
 								pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
-							else {
+								break;
+							default:
 								switch (e->hangup.cause) {
 									case PRI_CAUSE_USER_BUSY:
 										pri->pvts[chanpos]->subs[SUB_REAL].needbusy =1;
@@ -9817,6 +9853,7 @@ static void *pri_dchannel(void *vpri)
 									default:
 										pri->pvts[chanpos]->owner->_softhangup |= AST_SOFTHANGUP_DEV;
 								}
+								break;
 							}
 							if (option_verbose > 2) 
 								ast_verbose(VERBOSE_PREFIX_3 "Channel %d/%d, span %d got hangup request, cause %d\n", PRI_SPAN(e->hangup.channel), PRI_CHANNEL(e->hangup.channel), pri->span, e->hangup.cause);

@@ -11,7 +11,7 @@
 # the GNU General Public License
 #
 
--include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps $(ASTTOPDIR)/makeopts.embed_rules
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps $(ASTTOPDIR)/makeopts.embed_rules $(ASTTOPDIR)/makeopts
 
 all: asterisk
 
@@ -95,13 +95,23 @@ editline/libedit.a:
 db1-ast/libdb1.a:
 	_ASTCFLAGS="$(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS) -Wno-strict-aliasing" $(MAKE) -C db1-ast libdb1.a
 
+ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
+ast_expr2.c ast_expr2.h: ast_expr2.y
+else
 ast_expr2.c ast_expr2.h:
-	bison -o $@ -d --name-prefix=ast_yy ast_expr2.y
+endif
+	$(ECHO_PREFIX) echo "   [BISON] $< -> $@"
+	$(CMD_PREFIX) $(BISON) -o $@ -d --name-prefix=ast_yy ast_expr2.y
 
+ifneq ($(findstring REBUILD_PARSERS,$(MENUSELECT_CFLAGS)),)
+ast_expr2f.c: ast_expr2.fl
+else
 ast_expr2f.c:
-	flex -o $@ ast_expr2.fl # moved the correction of yyfree into the flex input file itself.
-	sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ast_expr2f.c > zz
-	mv zz ast_expr2f.c
+endif
+	$(ECHO_PREFIX) echo "   [FLEX] $< -> $@"
+	$(CMD_PREFIX) $(FLEX) -o $@ ast_expr2.fl # moved the correction of yyfree into the flex input file itself.
+	$(CMD_PREFIX) sed 's@#if __STDC_VERSION__ >= 199901L@#if !defined __STDC_VERSION__ || __STDC_VERSION__ >= 199901L@' ast_expr2f.c > zz
+	$(CMD_PREFIX) mv zz ast_expr2f.c
 
 ast_expr2f.o: _ASTCFLAGS+=-Wno-unused
 

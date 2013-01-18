@@ -322,8 +322,9 @@ makeopts: configure
 	@echo "****"
 	@exit 1
 
-menuselect.makeopts: menuselect/menuselect menuselect-tree
-	menuselect/menuselect --check-deps menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
+menuselect.makeopts: menuselect/menuselect menuselect-tree makeopts build_tools/menuselect-deps $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
+	menuselect/menuselect --check-deps $@
+	menuselect/menuselect --check-deps $@ $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS)
 
 $(MOD_SUBDIRS_EMBED_LDSCRIPT):
 	+@echo "EMBED_LDSCRIPTS+="`$(SUBMAKE) -C $(@:-embed-ldscript=) SUBDIR=$(@:-embed-ldscript=) __embed_ldscript` >> makeopts.embed_rules
@@ -335,8 +336,8 @@ $(MOD_SUBDIRS_EMBED_LIBS):
 	+@echo "EMBED_LIBS+="`$(SUBMAKE) -C $(@:-embed-libs=) SUBDIR=$(@:-embed-libs=) __embed_libs` >> makeopts.embed_rules
 
 $(MOD_SUBDIRS_MENUSELECT_TREE):
-	@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) moduleinfo
-	@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) makeopts
+	+@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) moduleinfo
+	+@$(SUBMAKE) -C $(@:-menuselect-tree=) SUBDIR=$(@:-menuselect-tree=) makeopts
 
 makeopts.embed_rules: menuselect.makeopts
 	@echo "Generating embedded module rules ..."
@@ -354,10 +355,10 @@ $(SUBDIRS): include/asterisk/version.h include/asterisk/buildopts.h defaults.h m
 main: $(filter-out main,$(MOD_SUBDIRS))
 
 $(MOD_SUBDIRS):
-	@_ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(_ASTCFLAGS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
+	+@_ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(_ASTCFLAGS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 $(OTHER_SUBDIRS):
-	@_ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(_ASTCFLAGS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
+	+@_ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(_ASTCFLAGS)" $(MAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
 defaults.h: makeopts
 	@build_tools/make_defaults_h > $@.tmp
@@ -410,7 +411,9 @@ distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	rm -f build_tools/menuselect-deps
 
 datafiles: _all
-	if [ x`$(ID) -un` = xroot ]; then CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" bash build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; fi
+	if [ `$(ID) -u` = 0 ]; then \
+		CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" build_tools/mkpkgconfig $(DESTDIR)/usr/lib/pkgconfig; \
+	fi
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
 # improved a lot.  I'll put it here for now.
@@ -613,9 +616,13 @@ samples: adsi
 		echo ";maxcalls = 10 ; Maximum amount of calls allowed" ; \
 		echo ";maxload = 0.9 ; Asterisk stops accepting new calls if the load average exceed this limit" ; \
 		echo ";cache_record_files = yes ; Cache recorded sound files to another directory during recording" ; \
-		echo ";record_cache_dir = /tmp ; Specify cache directory (used in cnjunction with cache_record_files)" ; \
+		echo ";record_cache_dir = /tmp ; Specify cache directory (used in conjunction with cache_record_files)" ; \
 		echo ";transmit_silence_during_record = yes ; Transmit SLINEAR silence while a channel is being recorded" ; \
-		echo ";transmit_silence = yes ; Transmit SLINEAR silence while a channel is being recorded or DTMF is being generated" ; \
+		echo ";transmit_silence = yes ; Transmit silence while a channel is in a waiting state, a recording only state, or when DTMF is" ; \
+		echo "                        ; being generated.  Note that the silence internally is generated in raw signed linear format." ; \
+		echo "                        ; This means that it must be transcoded into the native format of the channel before it can be sent" ; \
+		echo "                        ; to the device.  It is for this reason that this is optional, as it may result in requiring a" ; \
+		echo "                        ; temporary codec translation path for a channel that may not otherwise require one." ; \
 		echo ";transcode_via_sln = yes ; Build transcode paths via SLINEAR, instead of directly" ; \
 		echo ";runuser = asterisk ; The user to run as" ; \
 		echo ";rungroup = asterisk ; The group to run as" ; \
@@ -746,11 +753,11 @@ menuconfig: menuselect
 
 gmenuconfig: gmenuselect
 
-menuselect: menuselect/menuselect menuselect-tree
-	-@menuselect/menuselect menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+menuselect: menuselect/menuselect menuselect-tree menuselect.makeopts
+	-@menuselect/menuselect menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
-gmenuselect: menuselect/gmenuselect menuselect-tree
-	-@menuselect/gmenuselect menuselect.makeopts $(GLOBAL_MAKEOPTS) $(USER_MAKEOPTS) && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
+gmenuselect: menuselect/gmenuselect menuselect-tree menuselect.makeopts
+	-@menuselect/gmenuselect menuselect.makeopts && (echo "menuselect changes saved!"; rm -f channels/h323/Makefile.ast main/asterisk) || echo "menuselect changes NOT saved!"
 
 menuselect/menuselect: makeopts menuselect/menuselect.c menuselect/menuselect_curses.c menuselect/menuselect_stub.c menuselect/menuselect.h menuselect/linkedlists.h makeopts
 	@CC="$(HOST_CC)" LD="" AR="" RANLIB="" CFLAGS="" $(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
@@ -773,6 +780,29 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@cat sounds/sounds.xml >> $@
 	@echo "</menu>" >> $@
 
-.PHONY: menuselect main sounds clean dist-clean distclean all prereqs cleantest uninstall _uninstall uninstall-all dont-optimize $(SUBDIRS_INSTALL) $(SUBDIRS_DIST_CLEAN) $(SUBDIRS_CLEAN) $(SUBDIRS_UNINSTALL) $(SUBDIRS) $(MOD_SUBDIRS_EMBED_LDSCRIPT) $(MOD_SUBDIRS_EMBED_LDFLAGS) $(MOD_SUBDIRS_EMBED_LIBS) badshell menuselect.makeopts installdirs _clean
+.PHONY: menuselect
+.PHONY: main
+.PHONY: sounds
+.PHONY: clean
+.PHONY: dist-clean
+.PHONY: distclean
+.PHONY: all
+.PHONY: prereqs
+.PHONY: cleantest
+.PHONY: uninstall
+.PHONY: _uninstall
+.PHONY: uninstall-all
+.PHONY: dont-optimize
+.PHONY: badshell
+.PHONY: installdirs
+.PHONY: _clean
+.PHONY: $(SUBDIRS_INSTALL)
+.PHONY: $(SUBDIRS_DIST_CLEAN)
+.PHONY: $(SUBDIRS_CLEAN)
+.PHONY: $(SUBDIRS_UNINSTALL)
+.PHONY: $(SUBDIRS)
+.PHONY: $(MOD_SUBDIRS_EMBED_LDSCRIPT)
+.PHONY: $(MOD_SUBDIRS_EMBED_LDFLAGS)
+.PHONY: $(MOD_SUBDIRS_EMBED_LIBS)
 
 FORCE:
