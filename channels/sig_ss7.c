@@ -27,6 +27,9 @@
  * \arg \ref AstCREDITS
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
@@ -41,6 +44,9 @@
 #include "asterisk/transcap.h"
 
 #include "sig_ss7.h"
+#if defined(LIBSS7_ABI_COMPATIBILITY)
+#error "Your installed libss7 is not compatible"
+#endif
 
 /* ------------------------------------------------------------------- */
 
@@ -69,22 +75,22 @@ static const char *sig_ss7_call_level2str(enum sig_ss7_call_level level)
 
 static void sig_ss7_unlock_private(struct sig_ss7_chan *p)
 {
-	if (p->calls->unlock_private) {
-		p->calls->unlock_private(p->chan_pvt);
+	if (sig_ss7_callbacks.unlock_private) {
+		sig_ss7_callbacks.unlock_private(p->chan_pvt);
 	}
 }
 
 static void sig_ss7_lock_private(struct sig_ss7_chan *p)
 {
-	if (p->calls->lock_private) {
-		p->calls->lock_private(p->chan_pvt);
+	if (sig_ss7_callbacks.lock_private) {
+		sig_ss7_callbacks.lock_private(p->chan_pvt);
 	}
 }
 
 static void sig_ss7_deadlock_avoidance_private(struct sig_ss7_chan *p)
 {
-	if (p->calls->deadlock_avoidance_private) {
-		p->calls->deadlock_avoidance_private(p->chan_pvt);
+	if (sig_ss7_callbacks.deadlock_avoidance_private) {
+		sig_ss7_callbacks.deadlock_avoidance_private(p->chan_pvt);
 	} else {
 		/* Fallback to the old way if callback not present. */
 		sig_ss7_unlock_private(p);
@@ -96,53 +102,53 @@ static void sig_ss7_deadlock_avoidance_private(struct sig_ss7_chan *p)
 void sig_ss7_set_alarm(struct sig_ss7_chan *p, int in_alarm)
 {
 	p->inalarm = in_alarm;
-	if (p->calls->set_alarm) {
-		p->calls->set_alarm(p->chan_pvt, in_alarm);
+	if (sig_ss7_callbacks.set_alarm) {
+		sig_ss7_callbacks.set_alarm(p->chan_pvt, in_alarm);
 	}
 }
 
 static void sig_ss7_set_dialing(struct sig_ss7_chan *p, int is_dialing)
 {
-	if (p->calls->set_dialing) {
-		p->calls->set_dialing(p->chan_pvt, is_dialing);
+	if (sig_ss7_callbacks.set_dialing) {
+		sig_ss7_callbacks.set_dialing(p->chan_pvt, is_dialing);
 	}
 }
 
 static void sig_ss7_set_digital(struct sig_ss7_chan *p, int is_digital)
 {
-	if (p->calls->set_digital) {
-		p->calls->set_digital(p->chan_pvt, is_digital);
+	if (sig_ss7_callbacks.set_digital) {
+		sig_ss7_callbacks.set_digital(p->chan_pvt, is_digital);
 	}
 }
 
 static void sig_ss7_set_outgoing(struct sig_ss7_chan *p, int is_outgoing)
 {
 	p->outgoing = is_outgoing;
-	if (p->calls->set_outgoing) {
-		p->calls->set_outgoing(p->chan_pvt, is_outgoing);
+	if (sig_ss7_callbacks.set_outgoing) {
+		sig_ss7_callbacks.set_outgoing(p->chan_pvt, is_outgoing);
 	}
 }
 
 static void sig_ss7_set_inservice(struct sig_ss7_chan *p, int is_inservice)
 {
-	if (p->calls->set_inservice) {
-		p->calls->set_inservice(p->chan_pvt, is_inservice);
+	if (sig_ss7_callbacks.set_inservice) {
+		sig_ss7_callbacks.set_inservice(p->chan_pvt, is_inservice);
 	}
 }
 
 static void sig_ss7_set_locallyblocked(struct sig_ss7_chan *p, int is_blocked)
 {
 	p->locallyblocked = is_blocked;
-	if (p->calls->set_locallyblocked) {
-		p->calls->set_locallyblocked(p->chan_pvt, is_blocked);
+	if (sig_ss7_callbacks.set_locallyblocked) {
+		sig_ss7_callbacks.set_locallyblocked(p->chan_pvt, is_blocked);
 	}
 }
 
 static void sig_ss7_set_remotelyblocked(struct sig_ss7_chan *p, int is_blocked)
 {
 	p->remotelyblocked = is_blocked;
-	if (p->calls->set_remotelyblocked) {
-		p->calls->set_remotelyblocked(p->chan_pvt, is_blocked);
+	if (sig_ss7_callbacks.set_remotelyblocked) {
+		sig_ss7_callbacks.set_remotelyblocked(p->chan_pvt, is_blocked);
 	}
 }
 
@@ -157,8 +163,8 @@ static void sig_ss7_set_remotelyblocked(struct sig_ss7_chan *p, int is_blocked)
  */
 static void sig_ss7_open_media(struct sig_ss7_chan *p)
 {
-	if (p->calls->open_media) {
-		p->calls->open_media(p->chan_pvt);
+	if (sig_ss7_callbacks.open_media) {
+		sig_ss7_callbacks.open_media(p->chan_pvt);
 	}
 }
 
@@ -175,7 +181,7 @@ static void sig_ss7_set_caller_id(struct sig_ss7_chan *p)
 {
 	struct ast_party_caller caller;
 
-	if (p->calls->set_callerid) {
+	if (sig_ss7_callbacks.set_callerid) {
 		ast_party_caller_init(&caller);
 
 		caller.id.name.str = p->cid_name;
@@ -200,7 +206,7 @@ static void sig_ss7_set_caller_id(struct sig_ss7_chan *p)
 		caller.ani.number.valid = 1;
 
 		caller.ani2 = p->cid_ani2;
-		p->calls->set_callerid(p->chan_pvt, &caller);
+		sig_ss7_callbacks.set_callerid(p->chan_pvt, &caller);
 	}
 }
 
@@ -216,8 +222,8 @@ static void sig_ss7_set_caller_id(struct sig_ss7_chan *p)
  */
 static void sig_ss7_set_dnid(struct sig_ss7_chan *p, const char *dnid)
 {
-	if (p->calls->set_dnid) {
-		p->calls->set_dnid(p->chan_pvt, dnid);
+	if (sig_ss7_callbacks.set_dnid) {
+		sig_ss7_callbacks.set_dnid(p->chan_pvt, dnid);
 	}
 }
 
@@ -225,8 +231,8 @@ static int sig_ss7_play_tone(struct sig_ss7_chan *p, enum sig_ss7_tone tone)
 {
 	int res;
 
-	if (p->calls->play_tone) {
-		res = p->calls->play_tone(p->chan_pvt, tone);
+	if (sig_ss7_callbacks.play_tone) {
+		res = sig_ss7_callbacks.play_tone(p->chan_pvt, tone);
 	} else {
 		res = -1;
 	}
@@ -235,8 +241,8 @@ static int sig_ss7_play_tone(struct sig_ss7_chan *p, enum sig_ss7_tone tone)
 
 static int sig_ss7_set_echocanceller(struct sig_ss7_chan *p, int enable)
 {
-	if (p->calls->set_echocanceller) {
-		return p->calls->set_echocanceller(p->chan_pvt, enable);
+	if (sig_ss7_callbacks.set_echocanceller) {
+		return sig_ss7_callbacks.set_echocanceller(p->chan_pvt, enable);
 	}
 	return -1;
 }
@@ -245,8 +251,8 @@ static void sig_ss7_loopback(struct sig_ss7_chan *p, int enable)
 {
 	if (p->loopedback != enable) {
 		p->loopedback = enable;
-		if (p->calls->set_loopback) {
-			p->calls->set_loopback(p->chan_pvt, enable);
+		if (sig_ss7_callbacks.set_loopback) {
+			sig_ss7_callbacks.set_loopback(p->chan_pvt, enable);
 		}
 	}
 }
@@ -255,8 +261,8 @@ static struct ast_channel *sig_ss7_new_ast_channel(struct sig_ss7_chan *p, int s
 {
 	struct ast_channel *ast;
 
-	if (p->calls->new_ast_channel) {
-		ast = p->calls->new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
+	if (sig_ss7_callbacks.new_ast_channel) {
+		ast = sig_ss7_callbacks.new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
 	} else {
 		return NULL;
 	}
@@ -280,9 +286,27 @@ static struct ast_channel *sig_ss7_new_ast_channel(struct sig_ss7_chan *p, int s
 
 static void sig_ss7_handle_link_exception(struct sig_ss7_linkset *linkset, int which)
 {
-	if (linkset->calls->handle_link_exception) {
-		linkset->calls->handle_link_exception(linkset, which);
+	if (sig_ss7_callbacks.handle_link_exception) {
+		sig_ss7_callbacks.handle_link_exception(linkset, which);
 	}
+}
+
+/*!
+ * \internal
+ * \brief Determine if a private channel structure is available.
+ *
+ * \param pvt Channel to determine if available.
+ *
+ * \return TRUE if the channel is available.
+ */
+static int sig_ss7_is_chan_available(struct sig_ss7_chan *pvt)
+{
+	if (!pvt->inalarm && !pvt->owner && !pvt->ss7call
+		&& pvt->call_level == SIG_SS7_CALL_LEVEL_IDLE
+		&& !pvt->locallyblocked && !pvt->remotelyblocked) {
+		return 1;
+	}
+	return 0;
 }
 
 /*!
@@ -359,13 +383,41 @@ static void sig_ss7_queue_control(struct sig_ss7_linkset *ss7, int chanpos, int 
 	struct ast_frame f = {AST_FRAME_CONTROL, };
 	struct sig_ss7_chan *p = ss7->pvts[chanpos];
 
-	if (p->calls->queue_control) {
-		p->calls->queue_control(p->chan_pvt, subclass);
+	if (sig_ss7_callbacks.queue_control) {
+		sig_ss7_callbacks.queue_control(p->chan_pvt, subclass);
 	}
 
 	f.subclass.integer = subclass;
 	sig_ss7_queue_frame(ss7, chanpos, &f);
 }
+
+/*!
+ * \internal
+ * \brief Queue a PVT_CAUSE_CODE frame onto the owner channel.
+ * \since 11
+ *
+ * \param owner Owner channel of the pvt.
+ * \param cause String describing the cause to be placed into the frame.
+ *
+ * \note Assumes the linkset->lock is already obtained.
+ * \note Assumes the sig_ss7_lock_private(linkset->pvts[chanpos]) is already obtained.
+ * \note Assumes linkset->pvts[chanpos]->owner is non-NULL and its lock is already obtained.
+ *
+ * \return Nothing
+ */
+static void ss7_queue_pvt_cause_data(struct ast_channel *owner, const char *cause, int ast_cause)
+{
+	struct ast_control_pvt_cause_code *cause_code;
+	int datalen = sizeof(*cause_code) + strlen(cause);
+
+	cause_code = ast_alloca(datalen);
+	cause_code->ast_cause = ast_cause;
+	ast_copy_string(cause_code->chan_name, ast_channel_name(owner), AST_CHANNEL_NAME);
+	ast_copy_string(cause_code->code, cause, datalen + 1 - sizeof(*cause_code));
+	ast_queue_control_data(owner, AST_CONTROL_PVT_CAUSE_CODE, cause_code, datalen);
+	ast_channel_hangupcause_hash_set(owner, cause_code, datalen);
+}
+
 
 /*!
  * \internal
@@ -526,6 +578,8 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	int law;
 	struct ast_channel *c;
 	char tmp[256];
+	struct ast_callid *callid = NULL;
+	int callid_created = ast_callid_threadstorage_auto(&callid);
 
 	if (!(linkset->flags & LINKSET_FLAG_EXPLICITACM)) {
 		p->call_level = SIG_SS7_CALL_LEVEL_PROCEEDING;
@@ -534,6 +588,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		p->call_level = SIG_SS7_CALL_LEVEL_SETUP;
 	}
 
+	/* Companding law is determined by SS7 signaling type. */
 	if (linkset->type == SS7_ITU) {
 		law = SIG_SS7_ALAW;
 	} else {
@@ -552,9 +607,10 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		ast_log(LOG_WARNING, "Unable to start PBX on CIC %d\n", p->cic);
 		ast_mutex_lock(&linkset->lock);
 		sig_ss7_lock_private(p);
-		isup_rel(linkset->ss7, p->ss7call, -1);
+		isup_rel(linkset->ss7, p->ss7call, AST_CAUSE_SWITCH_CONGESTION);
 		p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
 		p->alreadyhungup = 1;
+		ast_callid_threadstorage_auto_clean(callid, callid_created);
 		return;
 	}
 
@@ -656,6 +712,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	/* Must return with linkset and private lock. */
 	ast_mutex_lock(&linkset->lock);
 	sig_ss7_lock_private(p);
+	ast_callid_threadstorage_auto_clean(callid, callid_created);
 }
 
 static void ss7_apply_plan_to_number(char *buf, size_t size, const struct sig_ss7_linkset *ss7, const char *number, const unsigned nai)
@@ -690,6 +747,36 @@ static int ss7_pres_scr2cid_pres(char presentation_ind, char screening_ind)
 	return ((presentation_ind & 0x3) << 5) | (screening_ind & 0x3);
 }
 
+/*!
+ * \internal
+ * \brief Set callid threadstorage for the ss7_linkset thread to that of an existing channel
+ *
+ * \param linkset ss7 span control structure.
+ * \param chanpos channel position in the span
+ *
+ * \note Assumes the ss7->lock is already obtained.
+ * \note Assumes the sig_ss7_lock_private(ss7->pvts[chanpos]) is already obtained.
+ *
+ * \return a reference to the callid bound to the channel which has also
+ *         been bound to threadstorage if it exists. If this returns non-NULL,
+ *         the callid must be unreffed and the threadstorage should be unbound
+ *         before the while loop wraps in ss7_linkset.
+ */
+static struct ast_callid *func_ss7_linkset_callid(struct sig_ss7_linkset *linkset, int chanpos)
+{
+	struct ast_callid *callid = NULL;
+	sig_ss7_lock_owner(linkset, chanpos);
+	if (linkset->pvts[chanpos]->owner) {
+		callid = ast_channel_callid(linkset->pvts[chanpos]->owner);
+		ast_channel_unlock(linkset->pvts[chanpos]->owner);
+		if (callid) {
+			ast_callid_threadassoc_add(callid);
+		}
+	}
+
+	return callid;
+}
+
 /* This is a thread per linkset that handles all received events from libss7. */
 void *ss7_linkset(void *data)
 {
@@ -699,7 +786,6 @@ void *ss7_linkset(void *data)
 	struct ss7 *ss7 = linkset->ss7;
 	ss7_event *e = NULL;
 	struct sig_ss7_chan *p;
-	int chanpos;
 	struct pollfd pollers[SIG_SS7_NUM_DCHANS];
 	int nextms = 0;
 
@@ -767,6 +853,10 @@ void *ss7_linkset(void *data)
 		}
 
 		while ((e = ss7_check_event(ss7))) {
+			struct ast_callid *callid = NULL;
+			int chanpos = -1;
+			char cause_str[30];
+
 			if (linkset->debug) {
 				ast_verbose("Linkset %d: Processing event: %s\n",
 					linkset->span, ss7_event2str(e->e));
@@ -803,6 +893,8 @@ void *ss7_linkset(void *data)
 				}
 				p = linkset->pvts[chanpos];
 				sig_ss7_lock_private(p);
+				callid = func_ss7_linkset_callid(linkset, chanpos);
+
 				switch (e->cpg.event) {
 				case CPG_EVENT_ALERTING:
 					if (p->call_level < SIG_SS7_CALL_LEVEL_ALERTING) {
@@ -840,12 +932,14 @@ void *ss7_linkset(void *data)
 				}
 				p = linkset->pvts[chanpos];
 				sig_ss7_lock_private(p);
+				callid = func_ss7_linkset_callid(linkset, chanpos);
 				sig_ss7_set_inservice(p, 1);
 				sig_ss7_set_remotelyblocked(p, 0);
 				isup_set_call_dpc(e->rsc.call, p->dpc);
 				sig_ss7_lock_owner(linkset, chanpos);
 				p->ss7call = NULL;
 				if (p->owner) {
+					ss7_queue_pvt_cause_data(p->owner, "SS7 ISUP_EVENT_RSC", AST_CAUSE_INTERWORKING);
 					ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 					ast_channel_unlock(p->owner);
 				}
@@ -899,11 +993,12 @@ void *ss7_linkset(void *data)
 						 * We have not sent our IAM yet and we never will at this point.
 						 */
 						p->alreadyhungup = 1;
-						isup_rel(ss7, e->iam.call, -1);
+						isup_rel(ss7, e->iam.call, AST_CAUSE_NORMAL_CIRCUIT_CONGESTION);
 					}
 					p->call_level = SIG_SS7_CALL_LEVEL_GLARE;
 					if (p->owner) {
-						ast_channel_hangupcause_set(p->owner, AST_CAUSE_NORMAL_CLEARING);
+						ss7_queue_pvt_cause_data(p->owner, "SS7 ISUP_EVENT_IAM (glare)", AST_CAUSE_NORMAL_CIRCUIT_CONGESTION);
+						ast_channel_hangupcause_set(p->owner, AST_CAUSE_NORMAL_CIRCUIT_CONGESTION);
 						ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 						ast_channel_unlock(p->owner);
 					}
@@ -915,6 +1010,13 @@ void *ss7_linkset(void *data)
 				 * are in the process of creating an owner for it.
 				 */
 				ast_assert(!p->owner);
+
+				if (!sig_ss7_is_chan_available(p)) {
+					/* Circuit is likely blocked or in alarm. */
+					isup_rel(ss7, e->iam.call, AST_CAUSE_NORMAL_CIRCUIT_CONGESTION);
+					sig_ss7_unlock_private(p);
+					break;
+				}
 
 				/* Mark channel as in use so no outgoing call will steal it. */
 				p->call_level = SIG_SS7_CALL_LEVEL_ALLOCATED;
@@ -1044,8 +1146,12 @@ void *ss7_linkset(void *data)
 				}
 				p = linkset->pvts[chanpos];
 				sig_ss7_lock_private(p);
+				callid = func_ss7_linkset_callid(linkset, chanpos);
 				sig_ss7_lock_owner(linkset, chanpos);
 				if (p->owner) {
+					snprintf(cause_str, sizeof(cause_str), "SS7 ISUP_EVENT_REL (%d)", e->rel.cause);
+					ss7_queue_pvt_cause_data(p->owner, cause_str, e->rel.cause);
+
 					ast_channel_hangupcause_set(p->owner, e->rel.cause);
 					ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
 					ast_channel_unlock(p->owner);
@@ -1075,6 +1181,7 @@ void *ss7_linkset(void *data)
 					}
 
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					sig_ss7_queue_control(linkset, chanpos, AST_CONTROL_PROCEEDING);
 					if (p->call_level < SIG_SS7_CALL_LEVEL_PROCEEDING) {
 						p->call_level = SIG_SS7_CALL_LEVEL_PROCEEDING;
@@ -1190,6 +1297,7 @@ void *ss7_linkset(void *data)
 				{
 					p = linkset->pvts[chanpos];
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					if (p->call_level < SIG_SS7_CALL_LEVEL_CONNECT) {
 						p->call_level = SIG_SS7_CALL_LEVEL_CONNECT;
 					}
@@ -1209,6 +1317,7 @@ void *ss7_linkset(void *data)
 				{
 					p = linkset->pvts[chanpos];
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					if (p->alreadyhungup) {
 						if (!p->owner) {
 							p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
@@ -1233,6 +1342,7 @@ void *ss7_linkset(void *data)
 					p = linkset->pvts[chanpos];
 					ast_debug(1, "FAA received on CIC %d\n", e->faa.cic);
 					sig_ss7_lock_private(p);
+					callid = func_ss7_linkset_callid(linkset, chanpos);
 					if (p->alreadyhungup){
 						if (!p->owner) {
 							p->call_level = SIG_SS7_CALL_LEVEL_IDLE;
@@ -1247,6 +1357,12 @@ void *ss7_linkset(void *data)
 			default:
 				ast_debug(1, "Unknown event %s\n", ss7_event2str(e->e));
 				break;
+			}
+
+			/* Call ID stuff needs to be cleaned up here */
+			if (callid) {
+				callid = ast_callid_unref(callid);
+				ast_callid_threadassoc_remove();
 			}
 		}
 		ast_mutex_unlock(&linkset->lock);
@@ -1349,24 +1465,6 @@ int sig_ss7_add_sigchan(struct sig_ss7_linkset *linkset, int which, int ss7type,
 
 	ss7_set_adjpc(linkset->ss7, linkset->fds[which], adjpointcode);
 
-	return 0;
-}
-
-/*!
- * \internal
- * \brief Determine if a private channel structure is available.
- *
- * \param pvt Channel to determine if available.
- *
- * \return TRUE if the channel is available.
- */
-static int sig_ss7_is_chan_available(struct sig_ss7_chan *pvt)
-{
-	if (!pvt->inalarm && !pvt->owner && !pvt->ss7call
-		&& pvt->call_level == SIG_SS7_CALL_LEVEL_IDLE
-		&& !pvt->locallyblocked && !pvt->remotelyblocked) {
-		return 1;
-	}
 	return 0;
 }
 
@@ -1782,6 +1880,13 @@ struct ast_channel *sig_ss7_request(struct sig_ss7_chan *p, enum sig_ss7_law law
 {
 	struct ast_channel *ast;
 
+	/* Companding law is determined by SS7 signaling type. */
+	if (p->ss7->type == SS7_ITU) {
+		law = SIG_SS7_ALAW;
+	} else {
+		law = SIG_SS7_ULAW;
+	}
+
 	sig_ss7_set_outgoing(p, 1);
 	ast = sig_ss7_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);
 	if (!ast) {
@@ -1858,13 +1963,12 @@ void sig_ss7_cli_show_channels(int fd, struct sig_ss7_linkset *linkset)
  * \since 1.8
  *
  * \param pvt_data Upper layer private data structure.
- * \param callback Callbacks to the upper layer.
  * \param ss7 Controlling linkset for the channel.
  *
  * \retval sig_ss7_chan on success.
  * \retval NULL on error.
  */
-struct sig_ss7_chan *sig_ss7_chan_new(void *pvt_data, struct sig_ss7_callback *callback, struct sig_ss7_linkset *ss7)
+struct sig_ss7_chan *sig_ss7_chan_new(void *pvt_data, struct sig_ss7_linkset *ss7)
 {
 	struct sig_ss7_chan *pvt;
 
@@ -1873,7 +1977,6 @@ struct sig_ss7_chan *sig_ss7_chan_new(void *pvt_data, struct sig_ss7_callback *c
 		return pvt;
 	}
 
-	pvt->calls = callback;
 	pvt->chan_pvt = pvt_data;
 	pvt->ss7 = ss7;
 

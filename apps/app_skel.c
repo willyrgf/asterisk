@@ -29,6 +29,15 @@
  * \ingroup applications
  */
 
+/*! \li \ref app_skel.c uses configuration file \ref app_skel.conf
+ * \addtogroup configuration_file Configuration Files
+ */
+
+/*! 
+ * \page app_skel.conf app_skel.conf
+ * \verbinclude app_skel.conf.sample
+ */
+
 /*** MODULEINFO
 	<defaultenabled>no</defaultenabled>
 	<support_level>core</support_level>
@@ -178,7 +187,7 @@ static void *skel_level_alloc(const char *cat);
  * internally by the Config Options code to check if an level has already been added to the
  * container that will be swapped for the live container on a successul reload.
  *
- * \param container A non-active container to search for a level
+ * \param tmp_container A non-active container to search for a level
  * \param category The category associated with the level to check for
  * \retval non-NULL The level from the container
  * \retval NULL The level does not exist in the container
@@ -633,7 +642,7 @@ static struct ast_cli_entry skel_cli[] = {
 
 static int reload_module(void)
 {
-	if (aco_process_config(&cfg_info, 1)) {
+	if (aco_process_config(&cfg_info, 1) == ACO_PROCESS_ERROR) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
@@ -648,6 +657,16 @@ static int unload_module(void)
 	return ast_unregister_application(app);
 }
 
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	if (aco_info_init(&cfg_info)) {
@@ -673,7 +692,7 @@ static int load_module(void)
 	aco_option_register(&cfg_info, "max_number", ACO_EXACT, level_options, NULL, OPT_UINT_T, 0, FLDSET(struct skel_level, max_num));
 	aco_option_register(&cfg_info, "max_guesses", ACO_EXACT, level_options, NULL, OPT_UINT_T, 1, FLDSET(struct skel_level, max_guesses));
 
-	if (aco_process_config(&cfg_info, 0)) {
+	if (aco_process_config(&cfg_info, 0) == ACO_PROCESS_ERROR) {
 		goto error;
 	}
 

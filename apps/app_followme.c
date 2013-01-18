@@ -1,5 +1,5 @@
 /*
- * Asterisk -- A telephony toolkit for Linux.
+ * Asterisk -- An open source telephony toolkit.
  *
  * A full-featured Find-Me/Follow-Me Application
  * 
@@ -23,9 +23,16 @@
  *
  * \author BJ Weschke <bweschke@btwtech.com>
  *
- * \arg See \ref Config_followme
- *
  * \ingroup applications
+ */
+
+/*! \li \ref app_followme.c uses the configuration file \ref followme.conf
+ * \addtogroup configuration_file Configuration Files
+ */
+
+/*! 
+ * \page followme.conf followme.conf
+ * \verbinclude followme.conf.sample
  */
 
 /*** MODULEINFO
@@ -385,7 +392,7 @@ static int reload_followme(int reload)
 	char *cat = NULL, *tmp;
 	struct ast_variable *var;
 	struct number *cur, *nm;
-	char numberstr[90];
+	char *numberstr;
 	int timeout;
 	int numorder;
 	const char *takecallstr;
@@ -501,7 +508,7 @@ static int reload_followme(int reload)
 				int idx = 0;
 
 				/* Add a new number */
-				ast_copy_string(numberstr, var->value, sizeof(numberstr));
+				numberstr = ast_strdupa(var->value);
 				if ((tmp = strchr(numberstr, ','))) {
 					*tmp++ = '\0';
 					timeout = atoi(tmp);
@@ -1386,14 +1393,15 @@ static int app_exec(struct ast_channel *chan, const char *data)
 	if (ast_test_flag(&targs->followmeflags, FOLLOWMEFLAG_PREDIAL_CALLEE)
 		&& !ast_strlen_zero(opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLEE])) {
 		ast_replace_subargument_delimiter(opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLEE]);
-		targs->predial_callee = opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLEE];
+		targs->predial_callee =
+			ast_app_expand_sub_args(chan, opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLEE]);
 	}
 
 	/* PREDIAL: Run gosub on the caller's channel */
 	if (ast_test_flag(&targs->followmeflags, FOLLOWMEFLAG_PREDIAL_CALLER)
 		&& !ast_strlen_zero(opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLER])) {
 		ast_replace_subargument_delimiter(opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLER]);
-		ast_app_exec_sub(NULL, chan, opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLER]);
+		ast_app_exec_sub(NULL, chan, opt_args[FOLLOWMEFLAG_ARG_PREDIAL_CALLER], 0);
 	}
 
 	/* Forget the 'N' option if the call is already up. */
@@ -1489,7 +1497,7 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		res = ast_channel_make_compatible(caller, outbound);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Had to drop call because I couldn't make %s compatible with %s\n", ast_channel_name(caller), ast_channel_name(outbound));
-			ast_hangup(outbound);
+			ast_autoservice_chan_hangup_peer(caller, outbound);
 			goto outrun;
 		}
 
@@ -1512,7 +1520,7 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		}
 
 		res = ast_bridge_call(caller, outbound, &config);
-		ast_hangup(outbound);
+		ast_autoservice_chan_hangup_peer(caller, outbound);
 	}
 
 outrun:
@@ -1522,6 +1530,7 @@ outrun:
 	if (!ast_strlen_zero(targs->namerecloc)) {
 		unlink(targs->namerecloc);
 	}
+	ast_free((char *) targs->predial_callee);
 	ast_party_connected_line_free(&targs->connected_in);
 	ast_party_connected_line_free(&targs->connected_out);
 	ast_free(targs);
@@ -1553,6 +1562,16 @@ static int unload_module(void)
 	return 0;
 }
 
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	if(!reload_followme(0))

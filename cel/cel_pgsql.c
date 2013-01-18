@@ -29,11 +29,11 @@
  * \brief PostgreSQL CEL logger 
  * 
  * \author Steve Murphy <murf@digium.com>
- * \extref PostgreSQL http://www.postgresql.org/
+ * PostgreSQL http://www.postgresql.org/
  *
  * See also
  * \arg \ref Config_cel
- * \extref PostgreSQL http://www.postgresql.org/
+ * PostgreSQL http://www.postgresql.org/
  * \ingroup cel_drivers
  */
 
@@ -332,6 +332,7 @@ static void pgsql_log(const struct ast_event *event, void *userdata)
 			PQclear(result);
 			goto ast_log_cleanup;
 		}
+		PQclear(result);
 
 ast_log_cleanup:
 		ast_free(sql);

@@ -27,6 +27,15 @@
  * \ingroup applications
  */
 
+/*! \li \ref app_festival.c uses the configuration file \ref festival.conf
+ * \addtogroup configuration_file Configuration Files
+ */
+
+/*! 
+ * \page festival.conf festival.conf
+ * \verbinclude festival.conf.sample
+ */
+
 /*** MODULEINFO
 	<support_level>extended</support_level>
  ***/
@@ -344,12 +353,12 @@ static int festival_exec(struct ast_channel *chan, const char *vdata)
 		const char *endcmd = "\" 'file)(quit)\n";
 
 		strln = strlen(startcmd) + strlen(args.text) + strlen(endcmd) + 1;
-		newfestivalcommand = alloca(strln);
+		newfestivalcommand = ast_alloca(strln);
 		snprintf(newfestivalcommand, strln, "%s%s%s", startcmd, args.text, endcmd);
 		festivalcommand = newfestivalcommand;
 	} else { /* This else parses the festivalcommand that we're sent from the config file for \n's, etc */
 		int x, j;
-		newfestivalcommand = alloca(strlen(festivalcommand) + strlen(args.text) + 1);
+		newfestivalcommand = ast_alloca(strlen(festivalcommand) + strlen(args.text) + 1);
 
 		for (x = 0, j = 0; x < strlen(festivalcommand); x++) {
 			if (festivalcommand[x] == '\\' && festivalcommand[x + 1] == 'n') {
@@ -537,6 +546,16 @@ static int unload_module(void)
 	return ast_unregister_application(app);
 }
 
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct ast_flags config_flags = { 0 };

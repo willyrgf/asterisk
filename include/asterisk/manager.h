@@ -54,7 +54,7 @@
 - \ref manager.c Main manager code file
  */
 
-#define AMI_VERSION                     "1.3"
+#define AMI_VERSION                     "1.4"
 #define DEFAULT_MANAGER_PORT 5038	/* Default port for Asterisk management via TCP */
 #define DEFAULT_MANAGER_TLS_PORT 5039	/* Default port for Asterisk management via TCP */
 
@@ -86,6 +86,8 @@
 #define EVENT_FLAG_CC			(1 << 15) /* Call Completion events */
 #define EVENT_FLAG_AOC			(1 << 16) /* Advice Of Charge events */
 #define EVENT_FLAG_TEST			(1 << 17) /* Test event used to signal the Asterisk Test Suite */
+/*XXX Why shifted by 30? XXX */
+#define EVENT_FLAG_MESSAGE		(1 << 30) /* MESSAGE events. */
 /*@} */
 
 /*! \brief Export manager structures */
@@ -245,7 +247,9 @@ int astman_verify_session_writepermissions(uint32_t ident, int perm);
  * \param event Event name
  * \param chancount Number of channels in chans parameter
  * \param chans A pointer to an array of channels involved in the event
+ * \param file, line, func
  * \param contents Format string describing event
+ * \param ...
  * \since 1.8
 */
 int __ast_manager_event_multichan(int category, const char *event, int chancount,

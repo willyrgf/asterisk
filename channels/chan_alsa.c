@@ -21,10 +21,15 @@
  *
  * \author Matthew Fredrickson <creslin@digium.com>
  *
- * \par See also
- * \arg Config_alsa
- *
  * \ingroup channel_drivers
+ */
+
+/*! \li \ref chan_alsa.c uses the configuration file \ref alsa.conf
+ * \addtogroup configuration_file
+ */
+
+/*! \page alsa.conf alsa.conf
+ * \verbinclude alsa.conf.sample
  */
 
 /*** MODULEINFO
@@ -182,7 +187,7 @@ static snd_pcm_t *alsa_card_init(char *dev, snd_pcm_stream_t stream)
 		ast_debug(1, "Opening device %s in %s mode\n", dev, (stream == SND_PCM_STREAM_CAPTURE) ? "read" : "write");
 	}
 
-	hwparams = alloca(snd_pcm_hw_params_sizeof());
+	hwparams = ast_alloca(snd_pcm_hw_params_sizeof());
 	memset(hwparams, 0, snd_pcm_hw_params_sizeof());
 	snd_pcm_hw_params_any(handle, hwparams);
 
@@ -223,7 +228,7 @@ static snd_pcm_t *alsa_card_init(char *dev, snd_pcm_stream_t stream)
 	if (err < 0)
 		ast_log(LOG_ERROR, "Couldn't set the new hw params: %s\n", snd_strerror(err));
 
-	swparams = alloca(snd_pcm_sw_params_sizeof());
+	swparams = ast_alloca(snd_pcm_sw_params_sizeof());
 	memset(swparams, 0, snd_pcm_sw_params_sizeof());
 	snd_pcm_sw_params_current(handle, swparams);
 
@@ -925,6 +930,16 @@ static struct ast_cli_entry cli_alsa[] = {
 	AST_CLI_DEFINE(console_mute, "Disable/Enable mic input"),
 };
 
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct ast_config *cfg;

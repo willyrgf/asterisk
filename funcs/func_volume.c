@@ -65,7 +65,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Set(VOLUME(TX)=3)</para>
 			<para>Set(VOLUME(RX)=2)</para>
 			<para>Set(VOLUME(TX,p)=3)</para>
-			<para>Set(VOLUME(RX,p)=3></para>
+			<para>Set(VOLUME(RX,p)=3)</para>
 		</description>
 	</function>
  ***/
@@ -90,6 +90,9 @@ static void destroy_callback(void *data)
 	struct volume_information *vi = data;
 
 	/* Destroy the audiohook, and destroy ourselves */
+	ast_audiohook_lock(&vi->audiohook);
+	ast_audiohook_detach(&vi->audiohook);
+	ast_audiohook_unlock(&vi->audiohook);
 	ast_audiohook_destroy(&vi->audiohook);
 	ast_free(vi);
 

@@ -23,6 +23,15 @@
  * \ingroup applications
  */
 
+/*! \li \ref app_mysql.c uses the configuration file \ref app_mysql.conf
+ * \addtogroup configuration_file Configuration Files
+ */
+
+/*! 
+ * \page app_mysql.conf app_mysql.conf
+ * \verbinclude app_mysql.conf.sample
+ */
+
 /*** MODULEINFO
 	<depend>mysqlclient</depend>
 	<defaultenabled>no</defaultenabled>
@@ -59,7 +68,7 @@ static const char descrip[] =
 "Syntax:\n"
 "  MYSQL(Set timeout <num>)\n"
 "    Set the connection timeout, in seconds.\n"
-"  MYSQL(Connect connid dhhost dbuser dbpass dbname [dbcharset])\n"
+"  MYSQL(Connect connid dhhost[:dbport] dbuser dbpass dbname [dbcharset])\n"
 "    Connects to a database.  Arguments contain standard MySQL parameters\n"
 "    passed to function mysql_real_connect.  Optional parameter dbcharset\n"
 "    defaults to 'latin1'.  Connection identifer returned in ${connid}\n"
@@ -106,7 +115,7 @@ static int autoclear = 0;
 static void mysql_ds_destroy(void *data);
 static void mysql_ds_fixup(void *data, struct ast_channel *oldchan, struct ast_channel *newchan);
 
-static struct ast_datastore_info mysql_ds_info = {
+static const struct ast_datastore_info mysql_ds_info = {
 	.type = "APP_ADDON_SQL_MYSQL",
 	.destroy = mysql_ds_destroy,
 	.chan_fixup = mysql_ds_fixup,
@@ -283,19 +292,20 @@ static int safe_scan_int(char **data, char *delim, int def)
 	return res;
 }
 
-static int aMYSQL_set(struct ast_channel *chan, char *data)
+static int aMYSQL_set(struct ast_channel *chan, const char *data)
 {
-	char *var, *tmp;
+	char *var, *tmp, *parse;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(set);
 		AST_APP_ARG(variable);
 		AST_APP_ARG(value);
 	);
 
-	AST_NONSTANDARD_APP_ARGS(args, data, ' ');
+	parse = ast_strdupa(data);
+	AST_NONSTANDARD_APP_ARGS(args, parse, ' ');
 
 	if (args.argc == 3) {
-		var = alloca(6 + strlen(args.variable) + 1);
+		var = ast_alloca(6 + strlen(args.variable) + 1);
 		sprintf(var, "MYSQL_%s", args.variable);
 
 		/* Make the parameter case-insensitive */
@@ -308,7 +318,7 @@ static int aMYSQL_set(struct ast_channel *chan, char *data)
 }
 
 /* MYSQL operations */
-static int aMYSQL_connect(struct ast_channel *chan, char *data)
+static int aMYSQL_connect(struct ast_channel *chan, const char *data)
 {
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(connect);
@@ -322,8 +332,11 @@ static int aMYSQL_connect(struct ast_channel *chan, char *data)
 	MYSQL *mysql;
 	int timeout;
 	const char *ctimeout;
-
-	AST_NONSTANDARD_APP_ARGS(args, data, ' ');
+	unsigned int port = 0;
+	char *port_str;
+	char *parse = ast_strdupa(data);
+ 
+	AST_NONSTANDARD_APP_ARGS(args, parse, ' ');
 
 	if (args.argc < 6) {
 		ast_log(LOG_WARNING, "MYSQL_connect is missing some arguments\n");
@@ -348,7 +361,15 @@ static int aMYSQL_connect(struct ast_channel *chan, char *data)
 		mysql_options(mysql, MYSQL_SET_CHARSET_NAME, args.dbcharset);
 	}
 
-	if (! mysql_real_connect(mysql, args.dbhost, args.dbuser, args.dbpass, args.dbname, 0, NULL,
+	if ((port_str = strchr(args.dbhost, ':'))) {
+		*port_str++ = '\0';
+		if (sscanf(port_str, "%u", &port) != 1) {
+			ast_log(LOG_WARNING, "Invalid port: '%s'\n", port_str);
+			port = 0;
+		}
+	}
+
+	if (!mysql_real_connect(mysql, args.dbhost, args.dbuser, args.dbpass, args.dbname, port, NULL,
 #ifdef CLIENT_MULTI_STATEMENTS
 			CLIENT_MULTI_STATEMENTS | CLIENT_MULTI_RESULTS
 #elif defined(CLIENT_MULTI_QUERIES)
@@ -366,7 +387,7 @@ static int aMYSQL_connect(struct ast_channel *chan, char *data)
 	return 0;
 }
 
-static int aMYSQL_query(struct ast_channel *chan, char *data)
+static int aMYSQL_query(struct ast_channel *chan, const char *data)
 {
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(query);
@@ -378,8 +399,9 @@ static int aMYSQL_query(struct ast_channel *chan, char *data)
 	MYSQL_RES   *mysqlres;
 	int connid;
 	int mysql_query_res;
+	char *parse = ast_strdupa(data);
 
-	AST_NONSTANDARD_APP_ARGS(args, data, ' ');
+	AST_NONSTANDARD_APP_ARGS(args, parse, ' ');
 
 	if (args.argc != 4 || (connid = atoi(args.connid)) == 0) {
 		ast_log(LOG_WARNING, "missing some arguments\n");
@@ -407,7 +429,7 @@ static int aMYSQL_query(struct ast_channel *chan, char *data)
 	return -1;
 }
 
-static int aMYSQL_nextresult(struct ast_channel *chan, char *data)
+static int aMYSQL_nextresult(struct ast_channel *chan, const char *data)
 {
 	MYSQL       *mysql;
 	MYSQL_RES   *mysqlres;
@@ -417,8 +439,9 @@ static int aMYSQL_nextresult(struct ast_channel *chan, char *data)
 		AST_APP_ARG(connid);
 	);
 	int connid = -1;
+	char *parse = ast_strdupa(data);
 
-	AST_NONSTANDARD_APP_ARGS(args, data, ' ');
+	AST_NONSTANDARD_APP_ARGS(args, parse, ' ');
 	sscanf(args.connid, "%30d", &connid);
 
 	if (args.argc != 3 || connid <= 0) {
@@ -447,7 +470,7 @@ static int aMYSQL_nextresult(struct ast_channel *chan, char *data)
 }
 
 
-static int aMYSQL_fetch(struct ast_channel *chan, char *data)
+static int aMYSQL_fetch(struct ast_channel *chan, const char *data)
 {
 	MYSQL_RES *mysqlres;
 	MYSQL_ROW mysqlrow;
@@ -499,13 +522,14 @@ static int aMYSQL_fetch(struct ast_channel *chan, char *data)
 	return -1;
 }
 
-static int aMYSQL_clear(struct ast_channel *chan, char *data)
+static int aMYSQL_clear(struct ast_channel *chan, const char *data)
 {
 	MYSQL_RES *mysqlres;
 
 	int id;
-	strsep(&data, " "); /* eat the first token, we already know it :P */
-	id = safe_scan_int(&data, " \n", -1);
+	char *parse = ast_strdupa(data);
+	strsep(&parse, " "); /* eat the first token, we already know it :P */
+	id = safe_scan_int(&parse, " \n", -1);
 	if ((mysqlres = find_identifier(id, AST_MYSQL_ID_RESID)) == NULL) {
 		ast_log(LOG_WARNING, "Invalid result identifier %d passed in aMYSQL_clear\n", id);
 	} else {
@@ -516,13 +540,14 @@ static int aMYSQL_clear(struct ast_channel *chan, char *data)
 	return 0;
 }
 
-static int aMYSQL_disconnect(struct ast_channel *chan, char *data)
+static int aMYSQL_disconnect(struct ast_channel *chan, const char *data)
 {
 	MYSQL *mysql;
 	int id;
-	strsep(&data, " "); /* eat the first token, we already know it :P */
+	char *parse = ast_strdupa(data);
+	strsep(&parse, " "); /* eat the first token, we already know it :P */
 
-	id = safe_scan_int(&data, " \n", -1);
+	id = safe_scan_int(&parse, " \n", -1);
 	if ((mysql = find_identifier(id, AST_MYSQL_ID_CONNID)) == NULL) {
 		ast_log(LOG_WARNING, "Invalid connection identifier %d passed in aMYSQL_disconnect\n", id);
 	} else {
@@ -565,19 +590,19 @@ static int MYSQL_exec(struct ast_channel *chan, const char *data)
 	ast_mutex_lock(&_mysql_mutex);
 
 	if (strncasecmp("connect", data, strlen("connect")) == 0) {
-		result = aMYSQL_connect(chan, ast_strdupa(data));
+		result = aMYSQL_connect(chan, data);
 	} else if (strncasecmp("query", data, strlen("query")) == 0) {
-		result = aMYSQL_query(chan, ast_strdupa(data));
+		result = aMYSQL_query(chan, data);
 	} else if (strncasecmp("nextresult", data, strlen("nextresult")) == 0) {
-		result = aMYSQL_nextresult(chan, ast_strdupa(data));
+		result = aMYSQL_nextresult(chan, data);
 	} else if (strncasecmp("fetch", data, strlen("fetch")) == 0) {
-		result = aMYSQL_fetch(chan, ast_strdupa(data));
+		result = aMYSQL_fetch(chan, data);
 	} else if (strncasecmp("clear", data, strlen("clear")) == 0) {
-		result = aMYSQL_clear(chan, ast_strdupa(data));
+		result = aMYSQL_clear(chan, data);
 	} else if (strncasecmp("disconnect", data, strlen("disconnect")) == 0) {
-		result = aMYSQL_disconnect(chan, ast_strdupa(data));
+		result = aMYSQL_disconnect(chan, data);
 	} else if (strncasecmp("set", data, 3) == 0) {
-		result = aMYSQL_set(chan, ast_strdupa(data));
+		result = aMYSQL_set(chan, data);
 	} else {
 		ast_log(LOG_WARNING, "Unknown argument to MYSQL application : %s\n", data);
 		result = -1;
@@ -595,6 +620,16 @@ static int unload_module(void)
 	return ast_unregister_application(app);
 }
 
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct MYSQLidshead *headp = &_mysql_ids_head;

@@ -27,10 +27,15 @@
  * \author Mark Spencer <markster@digium.com>
  * \author Luigi Rizzo
  *
- * \par See also
- * \arg \ref Config_oss
- *
  * \ingroup channel_drivers
+ */
+
+/*! \li \ref chan_oss.c uses the configuration file \ref oss.conf
+ * \addtogroup configuration_file
+ */
+
+/*! \page oss.conf oss.conf
+ * \verbinclude oss.conf.sample
  */
 
 /*** MODULEINFO
@@ -531,7 +536,7 @@ static int setformat(struct chan_oss_pvt *o, int mode)
 	res = ioctl(fd, SNDCTL_DSP_SPEED, &fmt);
 
 	if (res < 0) {
-		ast_log(LOG_WARNING, "Failed to set audio device to mono\n");
+		ast_log(LOG_WARNING, "Failed to set sample rate to %d\n", desired);
 		return -1;
 	}
 	if (fmt != desired) {
@@ -1394,9 +1399,7 @@ static struct chan_oss_pvt *store_config(struct ast_config *cfg, char *ctg)
 	if (o->mixer_cmd) {
 		char *cmd;
 
-		if (asprintf(&cmd, "mixer %s", o->mixer_cmd) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
-		} else {
+		if (ast_asprintf(&cmd, "mixer %s", o->mixer_cmd) >= 0) {
 			ast_log(LOG_WARNING, "running [%s]\n", cmd);
 			if (system(cmd) < 0) {
 				ast_log(LOG_WARNING, "system() failed: %s\n", strerror(errno));
@@ -1438,6 +1441,16 @@ error:
 #endif
 }
 
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct ast_config *cfg = NULL;

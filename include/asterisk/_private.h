@@ -19,7 +19,7 @@ int load_modules(unsigned int);		/*!< Provided by loader.c */
 int load_pbx(void);			/*!< Provided by pbx.c */
 int init_logger(void);			/*!< Provided by logger.c */
 void close_logger(void);		/*!< Provided by logger.c */
-int init_framer(void);			/*!< Provided by frame.c */
+void clean_time_zones(void);			/*!< Provided by localtime.c */
 int ast_term_init(void);		/*!< Provided by term.c */
 int astdb_init(void);			/*!< Provided by db.c */
 void ast_channels_init(void);		/*!< Provided by channel.c */
@@ -48,6 +48,7 @@ int ast_cel_engine_reload(void);	/*!< Provided by cel.c */
 int ast_ssl_init(void);                 /*!< Provided by ssl.c */
 int ast_test_init(void);            /*!< Provided by test.c */
 int ast_msg_init(void);             /*!< Provided by message.c */
+void ast_msg_shutdown(void);        /*!< Provided by message.c */
 
 /*!
  * \brief Reload asterisk modules.

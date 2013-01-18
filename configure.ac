@@ -247,12 +247,14 @@ AC_PATH_PROG([BISON], [bison], :)
 AC_PATH_PROG([CMP], [cmp], :)
 AC_PATH_PROG([FLEX], [flex], :)
 AC_PATH_PROG([GREP], [grep], :)
+AC_PATH_PROG([PYTHON], [python], :)
 AC_PATH_PROG([FIND], [find], :)
 AC_PATH_PROG([COMPRESS], [compress], :)
 AC_PATH_PROG([BASENAME], [basename], :)
 AC_PATH_PROG([DIRNAME], [dirname], :)
 AC_PATH_PROG([SHELL], [sh], :)
 AC_PATH_PROG([LN], [ln], :)
+AC_PATH_PROG([DOXYGEN], [doxygen], :)
 AC_PATH_PROG([DOT], [dot], :)
 AC_PATH_PROG([WGET], [wget], :)
 AC_PATH_PROG([CURL], [curl], :)
@@ -261,6 +263,7 @@ AC_PATH_PROG([CATDVI], [catdvi], :)
 AC_PATH_PROG([KPATHSEA], [kpsewhich], :)
 AC_PATH_PROG([XMLLINT], [xmllint], :)
 AC_PATH_PROG([XMLSTARLET], [xmlstarlet], :)
+AC_PATH_PROG([GIT], [git], :)
 if test "${WGET}" != ":" ; then
   DOWNLOAD=${WGET}
 else if test "${CURL}" != ":" ; then
@@ -386,9 +389,11 @@ AST_EXT_LIB_SETUP([COROSYNC], [Corosync], [cpg])
 AST_EXT_LIB_SETUP_OPTIONAL([COROSYNC_CFG_STATE_TRACK], [A callback only in corosync 1.x], [COROSYNC], [cfg])
 AST_EXT_LIB_SETUP([CURSES], [curses], [curses])
 AST_EXT_LIB_SETUP([CRYPTO], [OpenSSL Cryptography], [crypto])
+AST_EXT_LIB_SETUP_OPTIONAL([OPENSSL_SRTP], [OpenSSL SRTP Extension Support], [CRYPTO], [crypto])
 AST_EXT_LIB_SETUP([DAHDI], [DAHDI], [dahdi])
 AST_EXT_LIB_SETUP([FFMPEG], [Ffmpeg and avcodec], [avcodec])
 AST_EXT_LIB_SETUP([GSM], [External GSM], [gsm], [, use 'internal' GSM otherwise])
+AST_EXT_LIB_SETUP([ILBC], [System iLBC], [ilbc], [, use 'internal' iLBC otherwise])
 AST_EXT_LIB_SETUP([GTK2], [gtk2], [gtk2])
 AST_EXT_LIB_SETUP([GMIME], [GMime], [gmime])
 AST_EXT_LIB_SETUP([OPENH323], [OpenH323], [h323])
@@ -401,9 +406,11 @@ AST_EXT_LIB_SETUP([INOTIFY], [inotify support], [inotify])
 AST_EXT_LIB_SETUP([IODBC], [iODBC], [iodbc])
 AST_EXT_LIB_SETUP([ISDNNET], [ISDN4Linux], [isdnnet])
 AST_EXT_LIB_SETUP([JACK], [Jack Audio Connection Kit], [jack])
+AST_EXT_LIB_SETUP([JANSSON], [Jansson JSON library], [jansson])
 AST_EXT_LIB_SETUP([KQUEUE], [kqueue support], [kqueue])
 AST_EXT_LIB_SETUP([LDAP], [OpenLDAP], [ldap])
 AST_LIBCURL_CHECK_CONFIG([], [7.10.1])
+AST_EXT_LIB_SETUP([LIBEDIT], [NetBSD Editline library], [libedit], [, use 'internal' Editline otherwise])
 AST_EXT_LIB_SETUP([LIBXML2], [LibXML2], [libxml2])
 AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
 AST_EXT_LIB_SETUP([LUA], [Lua], [lua])
@@ -483,11 +490,12 @@ AC_HEADER_STDC
 AC_HEADER_SYS_WAIT
 AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/event.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
 
-# Any one of these 4 packages support a mandatory requirement, so we want to check on them as early as possible.
+# Any one of these 5 packages support a mandatory requirement, so we want to check on them as early as possible.
 AST_EXT_LIB_CHECK([TERMCAP], [termcap], [tgetent], [])
 AST_EXT_LIB_CHECK([TINFO], [tinfo], [tgetent], [])
 AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
 AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
+AST_EXT_LIB_CHECK([UUID], [uuid], [uuid_generate_random], [uuid/uuid.h], [-luuid])
 
 EDITLINE_LIB=""
 if test "x$TERMCAP_LIB" != "x" ; then
@@ -502,6 +510,10 @@ else
   AC_MSG_ERROR([*** termcap support not found (on modern systems, this typically means the ncurses development package is missing)])
 fi
 AC_SUBST(EDITLINE_LIB)
+
+if test "x$UUID_LIB" == "x"; then
+  AC_MSG_ERROR([*** uuid support not found (this typically means the uuid development package is missing)])
+fi
 
 # Another mandatory item (unless it's explicitly disabled)
 AC_ARG_ENABLE([xmldoc],
@@ -711,11 +723,6 @@ AC_MSG_RESULT(yes)
 AC_DEFINE([HAVE_SYS_ENDIAN_BSWAP16], 1, [Define to 1 if your sys/endian.h header file provides the bswap16 macro.]),
 AC_MSG_RESULT(no)
 )
-
-if test "${cross_compiling}" = "no";
-then
-  AC_CHECK_FILE(/dev/urandom, AC_DEFINE([HAVE_DEV_URANDOM], 1, [Define to 1 if your system has /dev/urandom.]))
-fi
 
 AC_MSG_CHECKING(for locale_t in locale.h)
 AC_LINK_IFELSE(
@@ -1035,6 +1042,18 @@ else
 fi
 AC_SUBST(AST_NATIVE_ARCH)
 
+dnl Nested functions required for RAII implementation
+AC_MSG_CHECKING(for -fnested-functions)
+AC_COMPILE_IFELSE(
+	dnl Prototype needed due to http://gcc.gnu.org/bugzilla/show_bug.cgi?id=36774
+	[AC_LANG_PROGRAM([], [auto void foo(void); void foo(void) {}])],
+	AC_MSG_RESULT(no)
+	[AST_NESTED_FUNCTIONS=],
+	AC_MSG_RESULT(required)
+	[AST_NESTED_FUNCTIONS=-fnested-functions]
+)
+AC_SUBST(AST_NESTED_FUNCTIONS)
+
 AC_MSG_CHECKING(for sysinfo)
 AC_LINK_IFELSE(
         [AC_LANG_PROGRAM([#include <sys/sysinfo.h>],
@@ -1246,6 +1265,46 @@ if test "${USE_GSM}" != "no"; then
    if test "${GSM_INTERNAL}" = "yes"; then
       PBX_GSM=1
       AC_DEFINE_UNQUOTED([HAVE_GSM_HEADER], 1, [Define to indicate that gsm.h has no prefix for its location])
+   fi
+fi
+
+ILBC_INTERNAL="yes"
+AC_SUBST(ILBC_INTERNAL)
+ILBC_SYSTEM="yes"
+if test "${USE_ILBC}" != "no"; then
+   if test "${ILBC_DIR}" = "internal"; then
+      ILBC_SYSTEM="no"
+   elif test "${ILBC_DIR}" != ""; then
+      ILBC_INTERNAL="no"
+   fi
+   if test "${ILBC_SYSTEM}" = "yes"; then
+      AST_PKG_CONFIG_CHECK(ILBC, libilbc)
+      if test "$PBX_ILBC" = "1"; then
+	 ILBC_INTERNAL="no"
+      fi
+   fi
+   if test "${ILBC_INTERNAL}" = "yes"; then
+      PBX_ILBC=1
+   fi
+fi
+
+LIBEDIT_INTERNAL="yes"
+AC_SUBST(LIBEDIT_INTERNAL)
+LIBEDIT_SYSTEM="yes"
+if test "${USE_LIBEDIT}" != "no"; then
+   if test "${LIBEDIT_DIR}" = "internal"; then
+      LIBEDIT_SYSTEM="no"
+   elif test "${LIBEDIT_DIR}" != ""; then
+      LIBEDIT_INTERNAL="no"
+   fi
+   if test "${LIBEDIT_SYSTEM}" = "yes"; then
+      AST_PKG_CONFIG_CHECK(LIBEDIT, libedit)
+      if test "$PBX_LIBEDIT" = "1"; then
+	 LIBEDIT_INTERNAL="no"
+      fi
+   fi
+   if test "${LIBEDIT_INTERNAL}" = "yes"; then
+      PBX_LIBEDIT=1
    fi
 fi
 
@@ -1788,6 +1847,8 @@ AST_EXT_LIB_CHECK([INOTIFY], [c], [inotify_init], [sys/inotify.h])
 
 AST_EXT_LIB_CHECK([JACK], [jack], [jack_activate], [jack/jack.h])
 
+AST_EXT_LIB_CHECK([JANSSON], [jansson], [json_dumps], [jansson.h])
+
 # BSD (and OS X) equivalent of inotify
 AST_EXT_LIB_CHECK([KQUEUE], [c], [kqueue], [sys/event.h])
 
@@ -1956,7 +2017,8 @@ if test "x${PBX_SPANDSP}" = "x1" ; then
 	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [t38_terminal_init], [spandsp.h], [-ltiff])
 fi
 
-AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])
+# Check for libss7 v1.0 branch compatible version.
+AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_set_adjpc], [libss7.h])
 
 AST_EXT_LIB_CHECK([OPENR2], [openr2], [openr2_chan_new], [openr2.h])
 
@@ -2047,7 +2109,8 @@ fi
 
 if test "$PBX_OPENSSL" = "1";
 then
-    AST_CHECK_OSPTK([4], [0], [0])
+        AST_CHECK_OSPTK([4], [0], [0])
+        AST_EXT_LIB_CHECK([OPENSSL_SRTP], [ssl], [SSL_CTX_set_tlsext_use_srtp], [openssl/ssl.h], [-lcrypto])
 fi
 
 AST_EXT_LIB_CHECK([SRTP], [srtp], [srtp_init], [srtp/srtp.h])

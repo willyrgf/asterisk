@@ -17,14 +17,88 @@
 === UPGRADE-1.6.txt -- Upgrade info for 1.4 to 1.6
 === UPGRADE-1.8.txt -- Upgrade info for 1.6 to 1.8
 === UPGRADE-10.txt -- Upgrade info for 1.8 to 10
+=== UPGRADE-11.txt -- Upgrade info for 10 to 11
 ===
 ===========================================================
 
+From 11 to 12:
+
+AMI:
+ - The SIP SIPqualifypeer action now sends a response indicating it will qualify
+   a peer once a peer has been found to qualify.  Once the qualify has been
+   completed it will now issue a SIPqualifypeerdone event.
+ - Version 1.4 - The details of what happens to a channel when a masquerade
+   happens (transfers, parking, etc) have changed.
+   - The Masquerade event now includes the Uniqueid's of the clone and original
+     channels.
+   - Channels no longer swap Uniqueid's as a result of the masquerade.
+   - Instead of a shell game of renames, there's now a single rename, appending
+     <ZOMBIE> to the name of the original channel.
+
+CEL:
+ - The Uniqueid field for a channel is now a stable identifier, and will not
+   change due to transfers, parking, etc.
+
+Queues:
+ - Queue logging for PAUSEALL/UNPAUSEALL now only occurs if the interface this is
+   performed on is a member of at least one queue.
+ - Queue strategy rrmemory now has a predictable order similar to strategy
+   rrordered. Members will be called in the order that they are added to the
+   queue.
+ - CDR behavior in app_queue has been modified slightly.  The CDR record will
+   now only record a disposition of BUSY if all Queue members were actually
+   busy on a call or some Queue members were busy or paused.  Previously, any
+   Queue member being paused would result in a disposition of BUSY.
+ - Removed the queues.conf check_state_unknown option.  It is no longer
+   necessary.
+
+Dial:
+ - Now recognizes 'W' to pause sending DTMF for one second in addition to
+   the previously existing 'w' that paused sending DTMF for half a second.
+
+ExternalIVR:
+ - Now recognizes 'W' to pause sending DTMF for one second in addition to
+   the previously existing 'w' that paused sending DTMF for half a second.
+
+SendDTMF:
+ - Now recognizes 'W' to pause sending DTMF for one second in addition to
+   the previously existing 'w' that paused sending DTMF for half a second.
+
+chan_dahdi:
+ - Analog port dialing and deferred DTMF dialing for PRI now distinguishes
+   between 'w' and 'W'.  The 'w' pauses dialing for half a second.  The 'W'
+   pauses dialing for one second.
+
+Dialplan:
+ - All channel and global variable names are evaluated in a case-sensitive manner.
+   In previous versions of Asterisk, variables created and evaluated in the
+   dialplan were evaluated case-insensitively, but built-in variables and variable
+   evaluation done internally within Asterisk was done case-sensitively.
+ - Asterisk has always had code to ignore dash '-' characters that are not
+   part of a character set in the dialplan extensions.  The code now
+   consistently ignores these characters when matching dialplan extensions.
+ - BRIDGE_FEATURES channel variable is now casesensitive for feature letter codes.
+   Uppercase variants apply them to the calling party while lowercase variants
+   apply them to the called party.
+
 From 10 to 11:
+
+Voicemail:
+ - All voicemails now have a "msg_id" which uniquely identifies a message. For
+   users of filesystem and IMAP storage of voicemail, this should be transparent.
+   For users of ODBC, you will need to add a "msg_id" column to your voice mail
+   messages table. This should be a string capable of holding at least 32 characters.
+   All messages created in old Asterisk installations will have a msg_id added to
+   them when required. This operation should be transparent as well.
 
 Parking:
  - The comebacktoorigin setting must now be set per parking lot. The setting in
    the general section will not be applied automatically to each parking lot.
+ - The BLINDTRANSFER channel variable is deleted from a channel when it is
+   bridged to prevent subtle bugs in the parking feature.  The channel
+   variable is used by Asterisk internally for the Park application to work
+   properly.  If you were using it for your own purposes, copy it to your
+   own channel variable before the channel is bridged.
 
 res_ais:
  - Users of res_ais in versions of Asterisk prior to Asterisk 11 must change
@@ -41,6 +115,10 @@ Dialplan Functions:
    CONNECTED_LINE_SEND_SUB, CONNECTED_LINE_SEND_SUB_ARGS.
  - The REDIRECTING function now supports the redirecting original party id
    and reason.
+ - The HANGUPCAUSE and HANGUPCAUSE_KEYS functions have been introduced to
+   provide a replacement for the SIP_CAUSE hash. The HangupCauseClear
+   application has also been introduced to remove this data from the channel
+   when necessary.
 
 
 func_enum:
@@ -84,6 +162,14 @@ app_followme:
    You now have until the last step times out to decide if you want to accept
    the call or not before being disconnected.
 
+chan_gtalk:
+ - chan_gtalk has been deprecated in favor of the chan_motif channel driver. It is recommended
+   that users switch to using it as it is a core supported module.
+
+chan_jingle:
+ - chan_jingle has been deprecated in favor of the chan_motif channel driver. It is recommended
+   that users switch to using it as it is a core supported module.
+
 SIP
 ===
  - A new option "tonezone" for setting default tonezone for the channel driver
@@ -92,10 +178,18 @@ SIP
    a call is terminated due to RTP stream inactivity or SIP session timer
    expiration.
  - SIP_CAUSE is now deprecated.  It has been modified to use the same
-   mechanism as HANGUPCAUSE.  Behavior should not change, but performance
-   should be vastly improved.  The HANGUPCAUSE hash should now be used instead
-   of SIP_CAUSE. Because of this, the storesipcause option in sip.conf is also
-   deprecated.
+   mechanism as the HANGUPCAUSE function.  Behavior should not change, but
+   performance should be vastly improved.  The HANGUPCAUSE function should now
+   be used instead of SIP_CAUSE. Because of this, the storesipcause option in
+   sip.conf is also deprecated.
+ - The sip paramater for Originating Line Information (oli, isup-oli, and
+   ss7-oli) is now parsed out of the From header and copied into the channel's
+   ANI2 information field.  This is readable from the CALLERID(ani2) dialplan
+   function.
+ - ICE support has been added and is enabled by default. Some endpoints may have
+   problems with the ICE candidates within the SDP. If this is the case ICE support
+   can be disabled globally or on a per-endpoint basis using the icesupport
+   configuration option. Symptoms of this include one way media or no media flow.
 
 chan_unistim
  - Due to massive update in chan_unistim phone keys functions and on-screen 
@@ -106,6 +200,12 @@ users.conf:
    as documented in extensions.conf.sample since v1.6.0 instead of a Macro as
    documented in v1.4.  Set the asterisk.conf stdexten=macro parameter to
    invoke the stdexten the old way.
+
+res_jabber
+ - This module has been deprecated in favor of the res_xmpp module. The res_xmpp
+   module is backwards compatible with the res_jabber configuration file, dialplan
+   functions, and AMI actions. The old CLI commands can also be made available using
+   the res_clialiases template for Asterisk 11.
 
 From 1.8 to 10:
 
@@ -177,6 +277,15 @@ chan_sip:
  - Setting of HASH(SIP_CAUSE,<slave-channel-name>) on channels is now disabled
    by default. It can be enabled using the 'storesipcause' option. This feature
    has a significant performance penalty.
+ - In order to improve compliance with RFC 3261, SIP usernames are now properly
+   escaped when encoding reserved characters. Prior to this change, the use of
+   these characters in certain SIP settings affecting usernames could cause
+   injections of these characters in their raw form into SIP headers which could
+   in turn cause all sorts of nasty behaviors. All characters that are not
+   alphanumeric or are not contained in the the following lists specified by
+   RFC 3261 section 25.1 will be escaped as %XX when encoding a SIP username:
+    * mark: "-" / "_" / "." / "!" / "~" / "*" / "'" / "(" / ")"
+    * user-unreserved: "&" / "=" / "+" / "$" / "," / ";" / "?" / "/"
 
 UDPTL:
  - The default UDPTL port range in udptl.conf.sample differed from the defaults

@@ -31,11 +31,21 @@
  * \todo Fix native bridging.
  */
 
+/*! \li \ref chan_gtalk.c uses the configuration file \ref gtalk.conf
+ * \addtogroup configuration_file
+ */
+
+/*! \page gtalk.conf gtalk.conf
+ * \verbinclude gtalk.conf.sample
+ */
+
 /*** MODULEINFO
+        <defaultenabled>no</defaultenabled>
 	<depend>iksemel</depend>
 	<depend>res_jabber</depend>
 	<use type="external">openssl</use>
-	<support_level>extended</support_level>
+	<support_level>deprecated</support_level>
+	<replacement>chan_motif</replacement>
  ***/
 
 #include "asterisk.h"
@@ -1907,15 +1917,17 @@ static struct ast_channel *gtalk_request(const char *type, struct ast_format_cap
 
 	if (data) {
 		s = ast_strdupa(data);
-		if (s) {
-			sender = strsep(&s, "/");
-			if (sender && (sender[0] != '\0')) {
-				to = strsep(&s, "/");
-			}
-			if (!to) {
-				ast_log(LOG_ERROR, "Bad arguments in Gtalk Dialstring: %s\n", data);
-				return NULL;
-			}
+		sender = strsep(&s, "/");
+		if (sender && (sender[0] != '\0')) {
+			to = strsep(&s, "/");
+		}
+		if (!to) {
+			ast_log(LOG_ERROR, "Bad arguments in Gtalk Dialstring: %s\n", data);
+			return NULL;
+		}
+		if (!to) {
+			ast_log(LOG_ERROR, "Bad arguments in Gtalk Dialstring: %s\n", (char*) data);
+			return NULL;
 		}
 	}
 
@@ -2293,7 +2305,16 @@ static int gtalk_load_config(void)
 	return 1;
 }
 
-/*! \brief Load module into PBX, register channel */
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct ast_sockaddr bindaddr_tmp;

@@ -158,7 +158,7 @@ static struct ast_channel *my_ast_get_channel_by_name_locked(const char *channam
 		 * debugging.
 		 */
 		pickup_args.len = strlen(channame) + 1;
-		chkchan = alloca(pickup_args.len + 1);
+		chkchan = ast_alloca(pickup_args.len + 1);
 		strcpy(chkchan, channame);
 		strcat(chkchan, "-");
 		pickup_args.name = chkchan;
@@ -252,29 +252,13 @@ static int pickup_by_mark(struct ast_channel *chan, const char *mark)
 	return res;
 }
 
-static int find_channel_by_group(void *obj, void *arg, void *data, int flags)
-{
-	struct ast_channel *target = obj;/*!< Potential pickup target */
-	struct ast_channel *chan = data;/*!< Channel wanting to pickup call */
-
-	ast_channel_lock(target);
-	if (chan != target && (ast_channel_pickupgroup(chan) & ast_channel_callgroup(target))
-		&& ast_can_pickup(target)) {
-		/* Return with the channel still locked on purpose */
-		return CMP_MATCH | CMP_STOP;
-	}
-	ast_channel_unlock(target);
-
-	return 0;
-}
-
 static int pickup_by_group(struct ast_channel *chan)
 {
 	struct ast_channel *target;/*!< Potential pickup target */
 	int res = -1;
 
 	/* The found channel is already locked. */
-	target = ast_channel_callback(find_channel_by_group, NULL, chan, 0);
+	target = ast_pickup_find_by_group(chan);
 	if (target) {
 		ast_log(LOG_NOTICE, "pickup %s attempt by %s\n", ast_channel_name(target), ast_channel_name(chan));
 		res = ast_do_pickup(chan, target);
