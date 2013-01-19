@@ -268,6 +268,7 @@ static const struct ie_map {
 	[AST_EVENT_IE_CHALLENGE]           = { AST_EVENT_IE_PLTYPE_STR,  "Challenge" },
 	[AST_EVENT_IE_RESPONSE]            = { AST_EVENT_IE_PLTYPE_STR,  "Response" },
 	[AST_EVENT_IE_EXPECTED_RESPONSE]   = { AST_EVENT_IE_PLTYPE_STR,  "ExpectedResponse" },
+	[AST_EVENT_IE_CACHABLE]            = { AST_EVENT_IE_PLTYPE_UINT,  "Cachable" },
 };
 
 const char *ast_event_get_type_name(const struct ast_event *event)
@@ -469,7 +470,7 @@ enum ast_event_subscriber_res ast_event_check_subscriber(enum ast_event_type typ
 		ie_type != AST_EVENT_IE_END;
 		ie_type = va_arg(ap, enum ast_event_ie_type))
 	{
-		struct ast_event_ie_val *ie_value = alloca(sizeof(*ie_value));
+		struct ast_event_ie_val *ie_value = ast_alloca(sizeof(*ie_value));
 		int insert = 0;
 
 		memset(ie_value, 0, sizeof(*ie_value));
@@ -493,7 +494,7 @@ enum ast_event_subscriber_res ast_event_check_subscriber(enum ast_event_type typ
 			void *data = va_arg(ap, void *);
 			size_t datalen = va_arg(ap, size_t);
 
-			ie_value->payload.raw = alloca(datalen);
+			ie_value->payload.raw = ast_alloca(datalen);
 			memcpy(ie_value->payload.raw, data, datalen);
 			ie_value->raw_datalen = datalen;
 			insert = 1;
@@ -1142,7 +1143,7 @@ int ast_event_append_ie_str(struct ast_event **event, enum ast_event_ie_type ie_
 	size_t payload_len;
 
 	payload_len = sizeof(*str_payload) + strlen(str);
-	str_payload = alloca(payload_len);
+	str_payload = ast_alloca(payload_len);
 
 	strcpy(str_payload->str, str);
 	if (ie_type == AST_EVENT_IE_DEVICE) {
@@ -1215,7 +1216,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 		ie_type != AST_EVENT_IE_END;
 		ie_type = va_arg(ap, enum ast_event_ie_type))
 	{
-		struct ast_event_ie_val *ie_value = alloca(sizeof(*ie_value));
+		struct ast_event_ie_val *ie_value = ast_alloca(sizeof(*ie_value));
 		int insert = 0;
 
 		memset(ie_value, 0, sizeof(*ie_value));
@@ -1238,7 +1239,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 		{
 			void *data = va_arg(ap, void *);
 			size_t datalen = va_arg(ap, size_t);
-			ie_value->payload.raw = alloca(datalen);
+			ie_value->payload.raw = ast_alloca(datalen);
 			memcpy(ie_value->payload.raw, data, datalen);
 			ie_value->raw_datalen = datalen;
 			insert = 1;
@@ -1777,6 +1778,40 @@ static struct ast_cli_entry event_cli[] = {
 	AST_CLI_DEFINE(event_dump_cache, "Dump the internal event cache (for debugging)"),
 };
 
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void event_shutdown(void)
+{
+	struct ast_event_sub *sub;
+	int i;
+
+	ast_cli_unregister_multiple(event_cli, ARRAY_LEN(event_cli));
+
+	if (event_dispatcher) {
+		event_dispatcher = ast_taskprocessor_unreference(event_dispatcher);
+	}
+
+	/* Remove any remaining subscriptions.  Note that we can't just call
+	 * unsubscribe, as it will attempt to lock the subscription list
+	 * as well */
+	for (i = 0; i < AST_EVENT_TOTAL; i++) {
+		AST_RWDLLIST_WRLOCK(&ast_event_subs[i]);
+		while ((sub = AST_RWDLLIST_REMOVE_HEAD(&ast_event_subs[i], entry))) {
+			ast_event_sub_destroy(sub);
+		}
+		AST_RWDLLIST_UNLOCK(&ast_event_subs[i]);
+		AST_RWDLLIST_HEAD_DESTROY(&ast_event_subs[i]);
+	}
+
+	for (i = 0; i < AST_EVENT_TOTAL; i++) {
+		if (!ast_event_cache[i].hash_fn) {
+			continue;
+		}
+		if (ast_event_cache[i].container) {
+			ao2_ref(ast_event_cache[i].container, -1);
+		}
+	}
+}
+
 int ast_event_init(void)
 {
 	int i;
@@ -1793,17 +1828,23 @@ int ast_event_init(void)
 
 		if (!(ast_event_cache[i].container = ao2_container_alloc(NUM_CACHE_BUCKETS,
 				ast_event_hash, ast_event_cmp))) {
-			return -1;
+			goto event_init_cleanup;
 		}
 	}
 
 	if (!(event_dispatcher = ast_taskprocessor_get("core_event_dispatcher", 0))) {
-		return -1;
+		goto event_init_cleanup;
 	}
 
 	ast_cli_register_multiple(event_cli, ARRAY_LEN(event_cli));
 
+	ast_register_atexit(event_shutdown);
+
 	return 0;
+
+event_init_cleanup:
+	event_shutdown();
+	return -1;
 }
 
 size_t ast_event_minimum_length(void)

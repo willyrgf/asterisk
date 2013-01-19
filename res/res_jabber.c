@@ -312,7 +312,6 @@ static char *aji_do_set_debug(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 static char *aji_do_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *aji_show_clients(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *aji_show_buddies(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
-static char *aji_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static int aji_create_client(char *label, struct ast_variable *var, int debug);
 static int aji_create_buddy(char *label, struct aji_client *client);
 static int aji_reload(int reload);
@@ -350,7 +349,7 @@ static char *aji_cli_create_leafnode(struct ast_cli_entry *e, int cmd,
 static void aji_create_affiliations(struct aji_client *client, const char *node);
 static iks* aji_pubsub_iq_create(struct aji_client *client, const char *type);
 static void aji_publish_device_state(struct aji_client *client, const char * device,
-	const char *device_state);
+				     const char *device_state, unsigned int cachable);
 static int aji_handle_pubsub_error(void *data, ikspak *pak);
 static int aji_handle_pubsub_event(void *data, ikspak *pak);
 static void aji_pubsub_subscribe(struct aji_client *client, const char *node);
@@ -364,7 +363,7 @@ static void aji_publish_mwi(struct aji_client *client, const char *mailbox,
 static void aji_devstate_cb(const struct ast_event *ast_event, void *data);
 static void aji_mwi_cb(const struct ast_event *ast_event, void *data);
 static iks* aji_build_publish_skeleton(struct aji_client *client, const char *node,
-	const char *event_type);
+				       const char *event_type, unsigned int cachable);
 /* No transports in this version */
 /*
 static int aji_create_transport(char *label, struct aji_client *client);
@@ -377,7 +376,6 @@ static struct ast_cli_entry aji_cli[] = {
 	AST_CLI_DEFINE(aji_do_reload, "Reload Jabber configuration"),
 	AST_CLI_DEFINE(aji_show_clients, "Show state of clients and components"),
 	AST_CLI_DEFINE(aji_show_buddies, "Show buddy lists of our clients"),
-	AST_CLI_DEFINE(aji_test, "Shows roster, but is generally used for mog's debugging."),
 	AST_CLI_DEFINE(aji_cli_create_collection, "Creates a PubSub node collection."),
 	AST_CLI_DEFINE(aji_cli_list_pubsub_nodes, "Lists PubSub nodes"),
 	AST_CLI_DEFINE(aji_cli_create_leafnode, "Creates a PubSub leaf node"),
@@ -768,7 +766,7 @@ static struct ast_custom_function jabberstatus_function = {
  */
 static int acf_jabberreceive_read(struct ast_channel *chan, const char *name, char *data, char *buf, size_t buflen)
 {
-	char *aux = NULL, *parse = NULL;
+	char *parse = NULL;
 	int timeout;
 	int jidlen, resourcelen;
 	struct timeval start;
@@ -885,7 +883,7 @@ static int acf_jabberreceive_read(struct ast_channel *chan, const char *name, ch
 				continue;
 			}
 			found = 1;
-			aux = ast_strdupa(tmp->message);
+			ast_copy_string(buf, tmp->message, buflen);
 			AST_LIST_REMOVE_CURRENT(list);
 			aji_message_destroy(tmp);
 			break;
@@ -910,7 +908,6 @@ static int acf_jabberreceive_read(struct ast_channel *chan, const char *name, ch
 		ast_log(LOG_NOTICE, "Timed out : no message received from %s\n", args.jid);
 		return -1;
 	}
-	ast_copy_string(buf, aux, buflen);
 
 	return 0;
 }
@@ -1544,8 +1541,8 @@ static int aji_start_sasl(struct aji_client *client, enum ikssasltype type, char
 
 	iks_insert_attrib(x, "xmlns", IKS_NS_XMPP_SASL);
 	len = strlen(username) + strlen(pass) + 3;
-	s = alloca(len);
-	base64 = alloca((len + 2) * 4 / 3);
+	s = ast_alloca(len);
+	base64 = ast_alloca((len + 2) * 4 / 3);
 	iks_insert_attrib(x, "mechanism", "PLAIN");
 	snprintf(s, len, "%c%s%c%s", 0, username, 0, pass);
 
@@ -1719,11 +1716,9 @@ static int aji_act_hook(void *data, int type, iks *node)
 
 				sprintf(secret, "%s%s", pak->id, client->password);
 				ast_sha1_hash(shasum, secret);
-				handshake = NULL;
-				if (asprintf(&handshake, "<handshake>%s</handshake>", shasum) >= 0) {
+				if (ast_asprintf(&handshake, "<handshake>%s</handshake>", shasum) >= 0) {
 					aji_send_raw(client, handshake);
 					ast_free(handshake);
-					handshake = NULL;
 				}
 				client->state = AJI_CONNECTING;
 				if (aji_recv(client, 1) == 2) /*XXX proper result for iksemel library on iks_recv of <handshake/> XXX*/
@@ -2008,6 +2003,12 @@ static int aji_client_info_handler(void *data, ikspak *pak)
 	struct aji_resource *resource = NULL;
 	struct aji_buddy *buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
 
+	if (!buddy) {
+		ast_log(LOG_NOTICE, "JABBER: Received client info from unknown buddy: %s.\n", pak->from->full);
+		ASTOBJ_UNREF(client, ast_aji_client_destroy);
+		return IKS_FILTER_EAT;
+	}
+
 	resource = aji_find_resource(buddy, pak->from->resource);
 	if (pak->subtype == IKS_TYPE_RESULT) {
 		if (!resource) {
@@ -2074,6 +2075,12 @@ static int aji_dinfo_handler(void *data, ikspak *pak)
 	char *node = NULL;
 	struct aji_resource *resource = NULL;
 	struct aji_buddy *buddy = ASTOBJ_CONTAINER_FIND(&client->buddies, pak->from->partial);
+
+	if (!buddy) {
+		ast_log(LOG_NOTICE, "JABBER: Received client info from unknown buddy: %s.\n", pak->from->full);
+		ASTOBJ_UNREF(client, ast_aji_client_destroy);
+		return IKS_FILTER_EAT;
+	}
 
 	if (pak->subtype == IKS_TYPE_ERROR) {
 		ast_log(LOG_WARNING, "Received error from a client, turn on jabber debug!\n");
@@ -3200,6 +3207,7 @@ static void aji_devstate_cb(const struct ast_event *ast_event, void *data)
 {
 	const char *device;
 	const char *device_state;
+	unsigned int cachable;
 	struct aji_client *client;
 	if (ast_eid_cmp(&ast_eid_default, ast_event_get_ie_raw(ast_event, AST_EVENT_IE_EID)))
 	{
@@ -3211,7 +3219,8 @@ static void aji_devstate_cb(const struct ast_event *ast_event, void *data)
 	client = ASTOBJ_REF((struct aji_client *) data);
 	device = ast_event_get_ie_str(ast_event, AST_EVENT_IE_DEVICE);
 	device_state = ast_devstate_str(ast_event_get_ie_uint(ast_event, AST_EVENT_IE_STATE));
-	aji_publish_device_state(client, device, device_state);
+	cachable = ast_event_get_ie_uint(ast_event, AST_EVENT_IE_CACHABLE);
+	aji_publish_device_state(client, device, device_state, cachable);
 	ASTOBJ_UNREF(client, ast_aji_client_destroy);
 }
 
@@ -3251,11 +3260,13 @@ static void aji_init_event_distribution(struct aji_client *client)
  */
 static int aji_handle_pubsub_event(void *data, ikspak *pak)
 {
-	char *item_id, *device_state, *context;
+	char *item_id, *device_state, *context, *cachable_str;
 	int oldmsgs, newmsgs;
 	iks *item, *item_content;
 	struct ast_eid pubsub_eid;
 	struct ast_event *event;
+	unsigned int cachable = AST_DEVSTATE_CACHABLE;
+
 	item = iks_find(iks_find(iks_find(pak->x, "event"), "items"), "item");
 	if (!item) {
 		ast_log(LOG_ERROR, "Could not parse incoming PubSub event\n");
@@ -3270,11 +3281,14 @@ static int aji_handle_pubsub_event(void *data, ikspak *pak)
 	}
 	if (!strcasecmp(iks_name(item_content), "state")) {
 		device_state = iks_find_cdata(item, "state");
+		if ((cachable_str = iks_find_cdata(item, "cachable"))) {
+			sscanf(cachable_str, "%30d", &cachable);
+		}
 		if (!(event = ast_event_new(AST_EVENT_DEVICE_STATE_CHANGE,
-			AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, item_id, AST_EVENT_IE_STATE,
-			AST_EVENT_IE_PLTYPE_UINT, ast_devstate_val(device_state), AST_EVENT_IE_EID,
-			AST_EVENT_IE_PLTYPE_RAW, &pubsub_eid, sizeof(pubsub_eid),
-			AST_EVENT_IE_END))) {
+					    AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, item_id, AST_EVENT_IE_STATE,
+					    AST_EVENT_IE_PLTYPE_UINT, ast_devstate_val(device_state), AST_EVENT_IE_EID,
+					    AST_EVENT_IE_PLTYPE_RAW, &pubsub_eid, sizeof(pubsub_eid),
+					    AST_EVENT_IE_END))) {
 			return IKS_FILTER_EAT;
 		}
 	} else if (!strcasecmp(iks_name(item_content), "mailbox")) {
@@ -3294,7 +3308,13 @@ static int aji_handle_pubsub_event(void *data, ikspak *pak)
 			iks_name(item_content));
 		return IKS_FILTER_EAT;
 	}
-	ast_event_queue_and_cache(event);
+
+	if (cachable == AST_DEVSTATE_CACHABLE) {
+		ast_event_queue_and_cache(event);
+	} else {
+		ast_event_queue(event);
+	}
+
 	return IKS_FILTER_EAT;
 }
 
@@ -3369,7 +3389,7 @@ static void aji_pubsub_subscribe(struct aji_client *client, const char *node)
  * \return iks *
  */
 static iks* aji_build_publish_skeleton(struct aji_client *client, const char *node,
-	const char *event_type)
+				       const char *event_type, unsigned int cachable)
 {
 	iks *request = aji_pubsub_iq_create(client, "set");
 	iks *pubsub, *publish, *item;
@@ -3383,8 +3403,24 @@ static iks* aji_build_publish_skeleton(struct aji_client *client, const char *no
 	}
 	item = iks_insert(publish, "item");
 	iks_insert_attrib(item, "id", node);
-	return item;
 
+	if (cachable == AST_DEVSTATE_NOT_CACHABLE) {
+		iks *options, *x, *field_form_type, *field_persist;
+
+		options = iks_insert(pubsub, "publish-options");
+		x = iks_insert(options, "x");
+		iks_insert_attrib(x, "xmlns", "jabber:x:data");
+		iks_insert_attrib(x, "type", "submit");
+		field_form_type = iks_insert(x, "field");
+		iks_insert_attrib(field_form_type, "var", "FORM_TYPE");
+		iks_insert_attrib(field_form_type, "type", "hidden");
+		iks_insert_cdata(iks_insert(field_form_type, "value"), "http://jabber.org/protocol/pubsub#publish-options", 0);
+		field_persist = iks_insert(x, "field");
+		iks_insert_attrib(field_persist, "var", "pubsub#persist_items");
+		iks_insert_cdata(iks_insert(field_persist, "value"), "0", 1);
+	}
+
+	return item;
 }
 
 /*!
@@ -3395,11 +3431,11 @@ static iks* aji_build_publish_skeleton(struct aji_client *client, const char *no
  * \return void
  */
 static void aji_publish_device_state(struct aji_client *client, const char *device,
-	const char *device_state)
+				     const char *device_state, unsigned int cachable)
 {
-	iks *request = aji_build_publish_skeleton(client, device, "device_state");
+	iks *request = aji_build_publish_skeleton(client, device, "device_state", cachable);
 	iks *state;
-	char eid_str[20];
+	char eid_str[20], cachable_str[2];
 	if (ast_test_flag(&pubsubflags, AJI_PUBSUB_AUTOCREATE)) {
 		if (ast_test_flag(&pubsubflags, AJI_XEP0248)) {
 			aji_create_pubsub_node(client, "leaf", device, "device_state");
@@ -3411,6 +3447,8 @@ static void aji_publish_device_state(struct aji_client *client, const char *devi
 	state = iks_insert(request, "state");
 	iks_insert_attrib(state, "xmlns", "http://asterisk.org");
 	iks_insert_attrib(state, "eid", eid_str);
+	snprintf(cachable_str, sizeof(cachable_str), "%u", cachable);
+	iks_insert_attrib(state, "cachable", cachable_str);
 	iks_insert_cdata(state, device_state, strlen(device_state));
 	ast_aji_send(client, iks_root(request));
 	iks_delete(request);
@@ -3430,7 +3468,7 @@ static void aji_publish_mwi(struct aji_client *client, const char *mailbox,
 	char eid_str[20];
 	iks *mailbox_node, *request;
 	snprintf(full_mailbox, sizeof(full_mailbox), "%s@%s", mailbox, context);
-	request = aji_build_publish_skeleton(client, full_mailbox, "message_waiting");
+	request = aji_build_publish_skeleton(client, full_mailbox, "message_waiting", 1);
 	ast_eid_to_str(eid_str, sizeof(eid_str), &ast_eid_default);
 	mailbox_node = iks_insert(request, "mailbox");
 	iks_insert_attrib(mailbox_node, "xmlns", "http://asterisk.org");
@@ -4184,69 +4222,6 @@ static char *aji_show_buddies(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 /*!
  * \internal
- * \brief Send test message for debugging.
- * \return CLI_SUCCESS,CLI_FAILURE.
- */
-static char *aji_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
-{
-	struct aji_client *client;
-	struct aji_resource *resource;
-	const char *name;
-	struct aji_message *tmp;
-
-	switch (cmd) {
-	case CLI_INIT:
-		e->command = "jabber test";
-		e->usage =
-			"Usage: jabber test <connection>\n"
-			"       Sends test message for debugging purposes.  A specific client\n"
-			"       as configured in jabber.conf must be specified.\n";
-		return NULL;
-	case CLI_GENERATE:
-		return NULL;
-	}
-
-	if (a->argc != 3) {
-		return CLI_SHOWUSAGE;
-	}
-	name = a->argv[2];
-
-	if (!(client = ASTOBJ_CONTAINER_FIND(&clients, name))) {
-		ast_cli(a->fd, "Unable to find client '%s'!\n", name);
-		return CLI_FAILURE;
-	}
-
-	/* XXX Does Matt really want everyone to use his personal address for tests? */ /* XXX yes he does */
-	ast_aji_send_chat(client, "mogorman@astjab.org", "blahblah");
-	ASTOBJ_CONTAINER_TRAVERSE(&client->buddies, 1, {
-		ASTOBJ_RDLOCK(iterator);
-		ast_verbose("User: %s\n", iterator->name);
-		for (resource = iterator->resources; resource; resource = resource->next) {
-			ast_verbose("Resource: %s\n", resource->resource);
-			if (resource->cap) {
-				ast_verbose("   client: %s\n", resource->cap->parent->node);
-				ast_verbose("   version: %s\n", resource->cap->version);
-				ast_verbose("   Jingle Capable: %d\n", resource->cap->jingle);
-			}
-			ast_verbose("	Priority: %d\n", resource->priority);
-			ast_verbose("	Status: %d\n", resource->status);
-			ast_verbose("	Message: %s\n", S_OR(resource->description, ""));
-		}
-		ASTOBJ_UNLOCK(iterator);
-	});
-	ast_verbose("\nOooh a working message stack!\n");
-	AST_LIST_LOCK(&client->messages);
-	AST_LIST_TRAVERSE(&client->messages, tmp, list) {
-		//ast_verbose("	Message from: %s with id %s @ %s	%s\n",tmp->from, S_OR(tmp->id,""), ctime(&tmp->arrived), S_OR(tmp->message, ""));
-	}
-	AST_LIST_UNLOCK(&client->messages);
-	ASTOBJ_UNREF(client, ast_aji_client_destroy);
-
-	return CLI_SUCCESS;
-}
-
-/*!
- * \internal
  * \brief creates aji_client structure.
  * \param label
  * \param var ast_variable
@@ -4415,8 +4390,7 @@ static int aji_create_client(char *label, struct ast_variable *var, int debug)
 		return 0;
 	}
 	if (!strchr(client->user, '/') && !client->component) { /*client */
-		resource = NULL;
-		if (asprintf(&resource, "%s/asterisk", client->user) >= 0) {
+		if (ast_asprintf(&resource, "%s/asterisk", client->user) >= 0) {
 			client->jid = iks_id_new(client->stack, resource);
 			ast_free(resource);
 		}

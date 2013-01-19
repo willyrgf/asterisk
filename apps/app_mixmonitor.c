@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel.h"
 #include "asterisk/autochan.h"
 #include "asterisk/manager.h"
+#include "asterisk/test.h"
 
 /*** DOCUMENTATION
 	<application name="MixMonitor" language="en_US">
@@ -105,6 +106,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Records the audio on the current channel to the specified file.</para>
 			<para>This application does not automatically answer and should be preceeded by
 			an application such as Answer or Progress().</para>
+			<note><para>MixMonitor runs as an audiohook. In order to keep it running through
+			a transfer, AUDIOHOOK_INHERIT must be set for the channel which ran mixmonitor.
+			For more information, including dialplan configuration set for using
+			AUDIOHOOK_INHERIT with MixMonitor, see the function documentation for
+			AUDIOHOOK_INHERIT.</para></note>
 			<variablelist>
 				<variable name="MIXMONITOR_FILENAME">
 					<para>Will contain the filename used to record.</para>
@@ -116,6 +122,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">StopMixMonitor</ref>
 			<ref type="application">PauseMonitor</ref>
 			<ref type="application">UnpauseMonitor</ref>
+			<ref type="function">AUDIOHOOK_INHERIT</ref>
 		</see-also>
 	</application>
 	<application name="StopMixMonitor" language="en_US">
@@ -345,6 +352,13 @@ static void *mixmonitor_thread(void *obj)
 
 		ast_audiohook_lock(&mixmonitor->audiohook);
 	}
+
+	/* Test Event */
+	ast_test_suite_event_notify("MIXMONITOR_END", "Channel: %s\r\n"
+									"File: %s\r\n",
+									mixmonitor->autochan->chan->name,
+									mixmonitor->filename);
+
 	ast_audiohook_unlock(&mixmonitor->audiohook);
 
 	ast_autochan_destroy(mixmonitor->autochan);
@@ -542,7 +556,7 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 	if (args.filename[0] != '/') {
 		char *build;
 
-		build = alloca(strlen(ast_config_AST_MONITOR_DIR) + strlen(args.filename) + 3);
+		build = ast_alloca(strlen(ast_config_AST_MONITOR_DIR) + strlen(args.filename) + 3);
 		sprintf(build, "%s/%s", ast_config_AST_MONITOR_DIR, args.filename);
 		args.filename = build;
 	}

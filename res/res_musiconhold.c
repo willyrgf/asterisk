@@ -653,7 +653,10 @@ static void *monmp3thread(void *data)
 #endif
 			/* Pause some amount of time */
 			if (ast_poll(&pfd, 1, -1) > 0) {
-				ast_timer_ack(class->timer, 1);
+				if (ast_timer_ack(class->timer, 1) < 0) {
+					ast_log(LOG_ERROR, "Failed to acknowledge timer for mp3player\n");
+					return NULL;
+				}
 				res = 320;
 			} else {
 				ast_log(LOG_WARNING, "poll() failed: %s\n", strerror(errno));
@@ -1776,7 +1779,11 @@ static int load_moh_classes(int reload)
 static void ast_moh_destroy(void)
 {
 	ast_verb(2, "Destroying musiconhold processes\n");
-	ao2_t_callback(mohclasses, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "Destroy callback");
+	if (mohclasses) {
+		ao2_t_callback(mohclasses, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "Destroy callback");
+		ao2_ref(mohclasses, -1);
+		mohclasses = NULL;
+	}
 }
 
 static char *handle_cli_moh_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)

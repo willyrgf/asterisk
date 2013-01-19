@@ -870,6 +870,8 @@ struct ast_channel {
 	char macrocontext[AST_MAX_CONTEXT];		/*!< Macro: Current non-macro context. See app_macro.c */
 	char macroexten[AST_MAX_EXTENSION];		/*!< Macro: Current non-macro extension. See app_macro.c */
 	char emulate_dtmf_digit;			/*!< Digit being emulated */
+	char sending_dtmf_digit;			/*!< Digit this channel is currently sending out. (zero if not sending) */
+	struct timeval sending_dtmf_tv;		/*!< The time this channel started sending the current digit. (Invalid if sending_dtmf_digit is zero.) */
 };
 
 /*! \brief ast_channel_tech Properties */
@@ -936,6 +938,19 @@ enum {
 	 *  some non-traditional dialplans (like AGI) to continue to function.
 	 */
 	AST_FLAG_DISABLE_WORKAROUNDS = (1 << 20),
+	/*!
+	 * Disable device state event caching.  This allows channel
+	 * drivers to selectively prevent device state events from being
+	 * cached by certain channels such as anonymous calls which have
+	 * no persistent represenatation that can be tracked.
+	 */
+	AST_FLAG_DISABLE_DEVSTATE_CACHE = (1 << 21),
+	/*!
+	 * This flag indicates that a dual channel redirect is in
+	 * progress.  The bridge needs to wait until the flag is cleared
+	 * to continue.
+	 */
+	AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT = (1 << 22),
 };
 
 /*! \brief ast_bridge_config flags */
@@ -1686,7 +1701,7 @@ int ast_is_deferrable_frame(const struct ast_frame *frame);
 /*!
  * \brief Wait for a specified amount of time, looking for hangups
  * \param chan channel to wait for
- * \param ms length of time in milliseconds to sleep
+ * \param ms length of time in milliseconds to sleep. This should never be less than zero.
  * \details
  * Waits for a specified amount of time, servicing the channel as required.
  * \return returns -1 on hangup, otherwise 0.
@@ -1696,7 +1711,7 @@ int ast_safe_sleep(struct ast_channel *chan, int ms);
 /*!
  * \brief Wait for a specified amount of time, looking for hangups and a condition argument
  * \param chan channel to wait for
- * \param ms length of time in milliseconds to sleep
+ * \param ms length of time in milliseconds to sleep.
  * \param cond a function pointer for testing continue condition
  * \param data argument to be passed to the condition test function
  * \return returns -1 on hangup, otherwise 0.
@@ -1874,7 +1889,7 @@ char *ast_recvtext(struct ast_channel *chan, int timeout);
 /*!
  * \brief Waits for a digit
  * \param c channel to wait for a digit on
- * \param ms how many milliseconds to wait
+ * \param ms how many milliseconds to wait (<0 for indefinite).
  * \return Returns <0 on error, 0 on no entry, and the digit on success.
  */
 int ast_waitfordigit(struct ast_channel *c, int ms);
@@ -1883,7 +1898,7 @@ int ast_waitfordigit(struct ast_channel *c, int ms);
  * \brief Wait for a digit
  * Same as ast_waitfordigit() with audio fd for outputting read audio and ctrlfd to monitor for reading.
  * \param c channel to wait for a digit on
- * \param ms how many milliseconds to wait
+ * \param ms how many milliseconds to wait (<0 for indefinite).
  * \param audiofd audio file descriptor to write to if audio frames are received
  * \param ctrlfd control file descriptor to monitor for reading
  * \return Returns 1 if ctrlfd becomes available

@@ -2282,10 +2282,122 @@ static void destroy_pattern_tree(struct match_char *pattern_tree) /* pattern tre
 	ast_free(pattern_tree);
 }
 
+/*!
+ * \internal
+ * \brief Get the length of the exten string.
+ *
+ * \param str Exten to get length.
+ *
+ * \retval strlen of exten.
+ */
+static int ext_cmp_exten_strlen(const char *str)
+{
+	int len;
+
+	len = 0;
+	for (;;) {
+		/* Ignore '-' chars as eye candy fluff. */
+		while (*str == '-') {
+			++str;
+		}
+		if (!*str) {
+			break;
+		}
+		++str;
+		++len;
+	}
+	return len;
+}
+
+/*!
+ * \internal
+ * \brief Partial comparison of non-pattern extens.
+ *
+ * \param left Exten to compare.
+ * \param right Exten to compare.  Also matches if this string ends first.
+ *
+ * \retval <0 if left < right
+ * \retval =0 if left == right
+ * \retval >0 if left > right
+ */
+static int ext_cmp_exten_partial(const char *left, const char *right)
+{
+	int cmp;
+
+	for (;;) {
+		/* Ignore '-' chars as eye candy fluff. */
+		while (*left == '-') {
+			++left;
+		}
+		while (*right == '-') {
+			++right;
+		}
+
+		if (!*right) {
+			/*
+			 * Right ended first for partial match or both ended at the same
+			 * time for a match.
+			 */
+			cmp = 0;
+			break;
+		}
+
+		cmp = *left - *right;
+		if (cmp) {
+			break;
+		}
+		++left;
+		++right;
+	}
+	return cmp;
+}
+
+/*!
+ * \internal
+ * \brief Comparison of non-pattern extens.
+ *
+ * \param left Exten to compare.
+ * \param right Exten to compare.
+ *
+ * \retval <0 if left < right
+ * \retval =0 if left == right
+ * \retval >0 if left > right
+ */
+static int ext_cmp_exten(const char *left, const char *right)
+{
+	int cmp;
+
+	for (;;) {
+		/* Ignore '-' chars as eye candy fluff. */
+		while (*left == '-') {
+			++left;
+		}
+		while (*right == '-') {
+			++right;
+		}
+
+		cmp = *left - *right;
+		if (cmp) {
+			break;
+		}
+		if (!*left) {
+			/*
+			 * Get here only if both strings ended at the same time.  cmp
+			 * would be non-zero if only one string ended.
+			 */
+			break;
+		}
+		++left;
+		++right;
+	}
+	return cmp;
+}
+
 /*
  * Special characters used in patterns:
  *	'_'	underscore is the leading character of a pattern.
  *		In other position it is treated as a regular char.
+ *	'-' The '-' is a separator and ignored.  Why?  So patterns like NXX-XXX-XXXX work.
  *	.	one or more of any character. Only allowed at the end of
  *		a pattern.
  *	!	zero or more of anything. Also impacts the result of CANMATCH
@@ -2314,144 +2426,227 @@ static void destroy_pattern_tree(struct match_char *pattern_tree) /* pattern tre
  */
 
 /*!
- * \brief helper functions to sort extensions and patterns in the desired way,
+ * \brief helper functions to sort extension patterns in the desired way,
  * so that more specific patterns appear first.
  *
- * ext_cmp1 compares individual characters (or sets of), returning
+ * \details
+ * The function compares individual characters (or sets of), returning
  * an int where bits 0-7 are the ASCII code of the first char in the set,
- * while bit 8-15 are the cardinality of the set minus 1.
- * This way more specific patterns (smaller cardinality) appear first.
+ * bits 8-15 are the number of characters in the set, and bits 16-20 are
+ * for special cases.
+ * This way more specific patterns (smaller character sets) appear first.
  * Wildcards have a special value, so that we can directly compare them to
  * sets by subtracting the two values. In particular:
- *  0x000xx		one character, xx
- *  0x0yyxx		yy character set starting with xx
- *  0x10000		'.' (one or more of anything)
- *  0x20000		'!' (zero or more of anything)
- *  0x30000		NUL (end of string)
- *  0x40000		error in set.
+ *  0x001xx     one character, character set starting with xx
+ *  0x0yyxx     yy characters, character set starting with xx
+ *  0x18000     '.' (one or more of anything)
+ *  0x28000     '!' (zero or more of anything)
+ *  0x30000     NUL (end of string)
+ *  0x40000     error in set.
  * The pointer to the string is advanced according to needs.
  * NOTES:
- *	1. the empty set is equivalent to NUL.
- *	2. given that a full set has always 0 as the first element,
- *	   we could encode the special cases as 0xffXX where XX
- *	   is 1, 2, 3, 4 as used above.
+ *  1. the empty set is ignored.
+ *  2. given that a full set has always 0 as the first element,
+ *     we could encode the special cases as 0xffXX where XX
+ *     is 1, 2, 3, 4 as used above.
  */
-static int ext_cmp1(const char **p, unsigned char *bitwise)
+static int ext_cmp_pattern_pos(const char **p, unsigned char *bitwise)
 {
-	int c, cmin = 0xff, count = 0;
+#define BITS_PER	8	/* Number of bits per unit (byte). */
+	unsigned char c;
+	unsigned char cmin;
+	int count;
 	const char *end;
 
-	/* load value and advance pointer */
-	c = *(*p)++;
+	do {
+		/* Get character and advance. (Ignore '-' chars as eye candy fluff.) */
+		do {
+			c = *(*p)++;
+		} while (c == '-');
 
-	/* always return unless we have a set of chars */
-	switch (toupper(c)) {
-	default:	/* ordinary character */
-		bitwise[c / 8] = 1 << (c % 8);
-		return 0x0100 | (c & 0xff);
+		/* always return unless we have a set of chars */
+		switch (c) {
+		default:
+			/* ordinary character */
+			bitwise[c / BITS_PER] = 1 << ((BITS_PER - 1) - (c % BITS_PER));
+			return 0x0100 | c;
 
-	case 'N':	/* 2..9 */
-		bitwise[6] = 0xfc;
-		bitwise[7] = 0x03;
-		return 0x0800 | '2';
+		case 'n':
+		case 'N':
+			/* 2..9 */
+			bitwise[6] = 0x3f;
+			bitwise[7] = 0xc0;
+			return 0x0800 | '2';
 
-	case 'X':	/* 0..9 */
-		bitwise[6] = 0xff;
-		bitwise[7] = 0x03;
-		return 0x0A00 | '0';
+		case 'x':
+		case 'X':
+			/* 0..9 */
+			bitwise[6] = 0xff;
+			bitwise[7] = 0xc0;
+			return 0x0A00 | '0';
 
-	case 'Z':	/* 1..9 */
-		bitwise[6] = 0xfe;
-		bitwise[7] = 0x03;
-		return 0x0900 | '1';
+		case 'z':
+		case 'Z':
+			/* 1..9 */
+			bitwise[6] = 0x7f;
+			bitwise[7] = 0xc0;
+			return 0x0900 | '1';
 
-	case '.':	/* wildcard */
-		return 0x18000;
+		case '.':
+			/* wildcard */
+			return 0x18000;
 
-	case '!':	/* earlymatch */
-		return 0x28000;	/* less specific than NULL */
+		case '!':
+			/* earlymatch */
+			return 0x28000;	/* less specific than '.' */
 
-	case '\0':	/* empty string */
-		*p = NULL;
-		return 0x30000;
+		case '\0':
+			/* empty string */
+			*p = NULL;
+			return 0x30000;
 
-	case '[':	/* pattern */
-		break;
-	}
-	/* locate end of set */
-	end = strchr(*p, ']');
-
-	if (end == NULL) {
-		ast_log(LOG_WARNING, "Wrong usage of [] in the extension\n");
-		return 0x40000;	/* XXX make this entry go last... */
-	}
-
-	for (; *p < end  ; (*p)++) {
-		unsigned char c1, c2;	/* first-last char in range */
-		c1 = (unsigned char)((*p)[0]);
-		if (*p + 2 < end && (*p)[1] == '-') { /* this is a range */
-			c2 = (unsigned char)((*p)[2]);
-			*p += 2;    /* skip a total of 3 chars */
-		} else {        /* individual character */
-			c2 = c1;
+		case '[':
+			/* char set */
+			break;
 		}
-		if (c1 < cmin) {
-			cmin = c1;
+		/* locate end of set */
+		end = strchr(*p, ']');
+
+		if (!end) {
+			ast_log(LOG_WARNING, "Wrong usage of [] in the extension\n");
+			return 0x40000;	/* XXX make this entry go last... */
 		}
-		for (; c1 <= c2; c1++) {
-			unsigned char mask = 1 << (c1 % 8);
-			/*!\note If two patterns score the same, the one with the lowest
-			 * ascii values will compare as coming first. */
-			/* Flag the character as included (used) and count it. */
-			if (!(bitwise[ c1 / 8 ] & mask)) {
-				bitwise[ c1 / 8 ] |= mask;
-				count += 0x100;
+
+		count = 0;
+		cmin = 0xFF;
+		for (; *p < end; ++*p) {
+			unsigned char c1;	/* first char in range */
+			unsigned char c2;	/* last char in range */
+
+			c1 = (*p)[0];
+			if (*p + 2 < end && (*p)[1] == '-') { /* this is a range */
+				c2 = (*p)[2];
+				*p += 2;    /* skip a total of 3 chars */
+			} else {        /* individual character */
+				c2 = c1;
+			}
+			if (c1 < cmin) {
+				cmin = c1;
+			}
+			for (; c1 <= c2; ++c1) {
+				unsigned char mask = 1 << ((BITS_PER - 1) - (c1 % BITS_PER));
+
+				/*
+				 * Note: If two character sets score the same, the one with the
+				 * lowest ASCII values will compare as coming first.  Must fill
+				 * in most significant bits for lower ASCII values to accomplish
+				 * the desired sort order.
+				 */
+				if (!(bitwise[c1 / BITS_PER] & mask)) {
+					/* Add the character to the set. */
+					bitwise[c1 / BITS_PER] |= mask;
+					count += 0x100;
+				}
 			}
 		}
-	}
-	(*p)++;
-	return count == 0 ? 0x30000 : (count | cmin);
+		++*p;
+	} while (!count);/* While the char set was empty. */
+	return count | cmin;
 }
 
 /*!
- * \brief the full routine to compare extensions in rules.
+ * \internal
+ * \brief Comparison of exten patterns.
+ *
+ * \param left Pattern to compare.
+ * \param right Pattern to compare.
+ *
+ * \retval <0 if left < right
+ * \retval =0 if left == right
+ * \retval >0 if left > right
  */
-static int ext_cmp(const char *a, const char *b)
+static int ext_cmp_pattern(const char *left, const char *right)
 {
-	/* make sure non-patterns come first.
-	 * If a is not a pattern, it either comes first or
-	 * we do a more complex pattern comparison.
-	 */
-	int ret = 0;
+	int cmp;
+	int left_pos;
+	int right_pos;
 
-	if (a[0] != '_')
-		return (b[0] == '_') ? -1 : strcmp(a, b);
+	for (;;) {
+		unsigned char left_bitwise[32] = { 0, };
+		unsigned char right_bitwise[32] = { 0, };
 
-	/* Now we know a is a pattern; if b is not, a comes first */
-	if (b[0] != '_')
-		return 1;
-
-	/* ok we need full pattern sorting routine.
-	 * skip past the underscores */
-	++a; ++b;
-	do {
-		unsigned char bitwise[2][32] = { { 0, } };
-		ret = ext_cmp1(&a, bitwise[0]) - ext_cmp1(&b, bitwise[1]);
-		if (ret == 0) {
-			/* Are the classes different, even though they score the same? */
-			ret = memcmp(bitwise[0], bitwise[1], 32);
+		left_pos = ext_cmp_pattern_pos(&left, left_bitwise);
+		right_pos = ext_cmp_pattern_pos(&right, right_bitwise);
+		cmp = left_pos - right_pos;
+		if (!cmp) {
+			/*
+			 * Are the character sets different, even though they score the same?
+			 *
+			 * Note: Must swap left and right to get the sense of the
+			 * comparison correct.  Otherwise, we would need to multiply by
+			 * -1 instead.
+			 */
+			cmp = memcmp(right_bitwise, left_bitwise, ARRAY_LEN(left_bitwise));
 		}
-	} while (!ret && a && b);
-	if (ret == 0) {
-		return 0;
-	} else {
-		return (ret > 0) ? 1 : -1;
+		if (cmp) {
+			break;
+		}
+		if (!left) {
+			/*
+			 * Get here only if both patterns ended at the same time.  cmp
+			 * would be non-zero if only one pattern ended.
+			 */
+			break;
+		}
 	}
+	return cmp;
+}
+
+/*!
+ * \internal
+ * \brief Comparison of dialplan extens for sorting purposes.
+ *
+ * \param left Exten/pattern to compare.
+ * \param right Exten/pattern to compare.
+ *
+ * \retval <0 if left < right
+ * \retval =0 if left == right
+ * \retval >0 if left > right
+ */
+static int ext_cmp(const char *left, const char *right)
+{
+	/* Make sure non-pattern extens come first. */
+	if (left[0] != '_') {
+		if (right[0] == '_') {
+			return -1;
+		}
+		/* Compare two non-pattern extens. */
+		return ext_cmp_exten(left, right);
+	}
+	if (right[0] != '_') {
+		return 1;
+	}
+
+	/*
+	 * OK, we need full pattern sorting routine.
+	 *
+	 * Skip past the underscores
+	 */
+	return ext_cmp_pattern(left + 1, right + 1);
 }
 
 int ast_extension_cmp(const char *a, const char *b)
 {
-	return ext_cmp(a, b);
+	int cmp;
+
+	cmp = ext_cmp(a, b);
+	if (cmp < 0) {
+		return -1;
+	}
+	if (cmp > 0) {
+		return 1;
+	}
+	return 0;
 }
 
 /*!
@@ -2474,15 +2669,9 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 	ast_log(LOG_NOTICE,"match core: pat: '%s', dat: '%s', mode=%d\n", pattern, data, (int)mode);
 #endif
 
-	if ( (mode == E_MATCH) && (pattern[0] == '_') && (!strcasecmp(pattern,data)) ) { /* note: if this test is left out, then _x. will not match _x. !!! */
-#ifdef NEED_DEBUG_HERE
-		ast_log(LOG_NOTICE,"return (1) - pattern matches pattern\n");
-#endif
-		return 1;
-	}
-
 	if (pattern[0] != '_') { /* not a pattern, try exact or partial match */
-		int ld = strlen(data), lp = strlen(pattern);
+		int lp = ext_cmp_exten_strlen(pattern);
+		int ld = ext_cmp_exten_strlen(data);
 
 		if (lp < ld) {		/* pattern too short, cannot match */
 #ifdef NEED_DEBUG_HERE
@@ -2493,11 +2682,11 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 		/* depending on the mode, accept full or partial match or both */
 		if (mode == E_MATCH) {
 #ifdef NEED_DEBUG_HERE
-			ast_log(LOG_NOTICE,"return (!strcmp(%s,%s) when mode== E_MATCH)\n", pattern, data);
+			ast_log(LOG_NOTICE,"return (!ext_cmp_exten(%s,%s) when mode== E_MATCH)\n", pattern, data);
 #endif
-			return !strcmp(pattern, data); /* 1 on match, 0 on fail */
+			return !ext_cmp_exten(pattern, data); /* 1 on match, 0 on fail */
 		}
-		if (ld == 0 || !strncasecmp(pattern, data, ld)) { /* partial or full match */
+		if (ld == 0 || !ext_cmp_exten_partial(pattern, data)) { /* partial or full match */
 #ifdef NEED_DEBUG_HERE
 			ast_log(LOG_NOTICE,"return (mode(%d) == E_MATCHMORE ? lp(%d) > ld(%d) : 1)\n", mode, lp, ld);
 #endif
@@ -2509,26 +2698,60 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 			return 0;
 		}
 	}
-	pattern++; /* skip leading _ */
+	if (mode == E_MATCH && data[0] == '_') {
+		/*
+		 * XXX It is bad design that we don't know if we should be
+		 * comparing data and pattern as patterns or comparing data if
+		 * it conforms to pattern when the function is called.  First,
+		 * assume they are both patterns.  If they don't match then try
+		 * to see if data conforms to the given pattern.
+		 *
+		 * note: if this test is left out, then _x. will not match _x. !!!
+		 */
+#ifdef NEED_DEBUG_HERE
+		ast_log(LOG_NOTICE, "Comparing as patterns first. pattern:%s data:%s\n", pattern, data);
+#endif
+		if (!ext_cmp_pattern(pattern + 1, data + 1)) {
+#ifdef NEED_DEBUG_HERE
+			ast_log(LOG_NOTICE,"return (1) - pattern matches pattern\n");
+#endif
+			return 1;
+		}
+	}
+
+	++pattern; /* skip leading _ */
 	/*
 	 * XXX below we stop at '/' which is a separator for the CID info. However we should
 	 * not store '/' in the pattern at all. When we insure it, we can remove the checks.
 	 */
-	while (*data && *pattern && *pattern != '/') {
+	for (;;) {
 		const char *end;
 
-		if (*data == '-') { /* skip '-' in data (just a separator) */
-			data++;
-			continue;
+		/* Ignore '-' chars as eye candy fluff. */
+		while (*data == '-') {
+			++data;
 		}
-		switch (toupper(*pattern)) {
+		while (*pattern == '-') {
+			++pattern;
+		}
+		if (!*data || !*pattern || *pattern == '/') {
+			break;
+		}
+
+		switch (*pattern) {
 		case '[':	/* a range */
-			end = strchr(pattern+1, ']'); /* XXX should deal with escapes ? */
-			if (end == NULL) {
+			++pattern;
+			end = strchr(pattern, ']'); /* XXX should deal with escapes ? */
+			if (!end) {
 				ast_log(LOG_WARNING, "Wrong usage of [] in the extension\n");
 				return 0;	/* unconditional failure */
 			}
-			for (pattern++; pattern != end; pattern++) {
+			if (pattern == end) {
+				/* Ignore empty character sets. */
+				++pattern;
+				continue;
+			}
+			for (; pattern < end; ++pattern) {
 				if (pattern+2 < end && pattern[1] == '-') { /* this is a range */
 					if (*data >= pattern[0] && *data <= pattern[2])
 						break;	/* match found */
@@ -2539,34 +2762,37 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 				} else if (*data == pattern[0])
 					break;	/* match found */
 			}
-			if (pattern == end) {
+			if (pattern >= end) {
 #ifdef NEED_DEBUG_HERE
-				ast_log(LOG_NOTICE,"return (0) when pattern==end\n");
+				ast_log(LOG_NOTICE,"return (0) when pattern>=end\n");
 #endif
 				return 0;
 			}
 			pattern = end;	/* skip and continue */
 			break;
+		case 'n':
 		case 'N':
 			if (*data < '2' || *data > '9') {
 #ifdef NEED_DEBUG_HERE
-				ast_log(LOG_NOTICE,"return (0) N is matched\n");
+				ast_log(LOG_NOTICE,"return (0) N is not matched\n");
 #endif
 				return 0;
 			}
 			break;
+		case 'x':
 		case 'X':
 			if (*data < '0' || *data > '9') {
 #ifdef NEED_DEBUG_HERE
-				ast_log(LOG_NOTICE,"return (0) X is matched\n");
+				ast_log(LOG_NOTICE,"return (0) X is not matched\n");
 #endif
 				return 0;
 			}
 			break;
+		case 'z':
 		case 'Z':
 			if (*data < '1' || *data > '9') {
 #ifdef NEED_DEBUG_HERE
-				ast_log(LOG_NOTICE,"return (0) Z is matched\n");
+				ast_log(LOG_NOTICE,"return (0) Z is not matched\n");
 #endif
 				return 0;
 			}
@@ -2581,10 +2807,6 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 			ast_log(LOG_NOTICE, "return (2) when '!' is matched\n");
 #endif
 			return 2;
-		case ' ':
-		case '-':	/* Ignore these in patterns */
-			data--; /* compensate the final data++ */
-			break;
 		default:
 			if (*data != *pattern) {
 #ifdef NEED_DEBUG_HERE
@@ -2592,9 +2814,10 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 #endif
 				return 0;
 			}
+			break;
 		}
-		data++;
-		pattern++;
+		++data;
+		++pattern;
 	}
 	if (*data)			/* data longer than pattern, no match */ {
 #ifdef NEED_DEBUG_HERE
@@ -2604,7 +2827,7 @@ static int _extension_match_core(const char *pattern, const char *data, enum ext
 	}
 
 	/*
-	 * match so far, but ran off the end of the data.
+	 * match so far, but ran off the end of data.
 	 * Depending on what is next, determine match or not.
 	 */
 	if (*pattern == '\0' || *pattern == '/') {	/* exact match */
@@ -4031,7 +4254,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			whereweare += (len + 3);
 
 			if (!var)
-				var = alloca(VAR_BUF_SIZE);
+				var = ast_alloca(VAR_BUF_SIZE);
 
 			/* Store variable name (and truncate) */
 			ast_copy_string(var, vars, len + 1);
@@ -4040,7 +4263,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			if (needsub) {
 				size_t used;
 				if (!ltmp)
-					ltmp = alloca(VAR_BUF_SIZE);
+					ltmp = ast_alloca(VAR_BUF_SIZE);
 
 				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
@@ -4049,7 +4272,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			}
 
 			if (!workspace)
-				workspace = alloca(VAR_BUF_SIZE);
+				workspace = ast_alloca(VAR_BUF_SIZE);
 
 			workspace[0] = '\0';
 
@@ -4120,7 +4343,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			whereweare += (len + 3);
 
 			if (!var)
-				var = alloca(VAR_BUF_SIZE);
+				var = ast_alloca(VAR_BUF_SIZE);
 
 			/* Store variable name (and truncate) */
 			ast_copy_string(var, vars, len + 1);
@@ -4129,7 +4352,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 			if (needsub) {
 				size_t used;
 				if (!ltmp)
-					ltmp = alloca(VAR_BUF_SIZE);
+					ltmp = ast_alloca(VAR_BUF_SIZE);
 
 				pbx_substitute_variables_helper_full(c, headp, var, ltmp, VAR_BUF_SIZE - 1, &used);
 				vars = ltmp;
@@ -4999,6 +5222,9 @@ static enum ast_pbx_result __ast_pbx_run(struct ast_channel *c,
 		int digit = 0;
 		int invalid = 0;
 		int timeout = 0;
+
+		/* No digits pressed yet */
+		dst_exten[pos] = '\0';
 
 		/* loop on priorities in this context/exten */
 		while (!(res = ast_spawn_extension(c, c->context, c->exten, c->priority,
@@ -6752,6 +6978,7 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 			continue;	/* not the name we want */
 
 		dpc->context_existence = 1;
+		dpc->total_context++;
 
 		ast_debug(3, "manager_show_dialplan: Found Context: %s \n", ast_get_context_name(c));
 
@@ -6775,8 +7002,6 @@ static int manager_show_dialplan_helper(struct mansession *s, const struct messa
 
 			dpc->extension_existence = 1;
 
-			/* may we print context info? */
-			dpc->total_context++;
 			dpc->total_exten++;
 
 			p = NULL;		/* walk next extension peers */
@@ -6878,22 +7103,26 @@ static int manager_show_dialplan(struct mansession *s, const struct message *m)
 
 	manager_show_dialplan_helper(s, m, idtext, context, exten, &counters, NULL);
 
-	if (context && !counters.context_existence) {
+	if (!ast_strlen_zero(context) && !counters.context_existence) {
 		char errorbuf[BUFSIZ];
 
 		snprintf(errorbuf, sizeof(errorbuf), "Did not find context %s", context);
 		astman_send_error(s, m, errorbuf);
 		return 0;
 	}
-	if (exten && !counters.extension_existence) {
+	if (!ast_strlen_zero(exten) && !counters.extension_existence) {
 		char errorbuf[BUFSIZ];
 
-		if (context)
+		if (!ast_strlen_zero(context))
 			snprintf(errorbuf, sizeof(errorbuf), "Did not find extension %s@%s", exten, context);
 		else
 			snprintf(errorbuf, sizeof(errorbuf), "Did not find extension %s in any context", exten);
 		astman_send_error(s, m, errorbuf);
 		return 0;
+	}
+
+	if (!counters.total_items) {
+		manager_dpsendack(s, m);
 	}
 
 	astman_append(s, "Event: ShowDialPlanComplete\r\n"
@@ -8306,8 +8535,15 @@ static int add_priority(struct ast_context *con, struct ast_exten *tmp,
 
 	for (ep = NULL; e ; ep = e, e = e->peer) {
 		if (e->label && tmp->label && e->priority != tmp->priority && !strcmp(e->label, tmp->label)) {
-			ast_log(LOG_WARNING, "Extension '%s', priority %d in '%s', label '%s' already in use at "
-					"priority %d\n", tmp->exten, tmp->priority, con->name, tmp->label, e->priority);
+			if (strcmp(e->exten, tmp->exten)) {
+				ast_log(LOG_WARNING,
+					"Extension '%s' priority %d in '%s', label '%s' already in use at aliased extension '%s' priority %d\n",
+					tmp->exten, tmp->priority, con->name, tmp->label, e->exten, e->priority);
+			} else {
+				ast_log(LOG_WARNING,
+					"Extension '%s' priority %d in '%s', label '%s' already in use at priority %d\n",
+					tmp->exten, tmp->priority, con->name, tmp->label, e->priority);
+			}
 			repeated_label = 1;
 		}
 		if (e->priority >= tmp->priority) {
@@ -8332,7 +8568,15 @@ static int add_priority(struct ast_context *con, struct ast_exten *tmp,
 		/* Can't have something exactly the same.  Is this a
 		   replacement?  If so, replace, otherwise, bonk. */
 		if (!replace) {
-			ast_log(LOG_WARNING, "Unable to register extension '%s', priority %d in '%s', already in use\n", tmp->exten, tmp->priority, con->name);
+			if (strcmp(e->exten, tmp->exten)) {
+				ast_log(LOG_WARNING,
+					"Unable to register extension '%s' priority %d in '%s', already in use by aliased extension '%s'\n",
+					tmp->exten, tmp->priority, con->name, e->exten);
+			} else {
+				ast_log(LOG_WARNING,
+					"Unable to register extension '%s' priority %d in '%s', already in use\n",
+					tmp->exten, tmp->priority, con->name);
+			}
 			if (tmp->datad) {
 				tmp->datad(tmp->data);
 				/* if you free this, null it out */
@@ -8520,7 +8764,7 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 	}
 
 	/* If we are adding a hint evalulate in variables and global variables */
-	if (priority == PRIORITY_HINT && strstr(application, "${") && !strstr(extension, "_")) {
+	if (priority == PRIORITY_HINT && strstr(application, "${") && extension[0] != '_') {
 		struct ast_channel *c = ast_dummy_channel_alloc();
 
 		if (c) {
@@ -8719,13 +8963,15 @@ static void *async_wait(void *data)
 	int res;
 	struct ast_frame *f;
 	struct ast_app *app;
+	struct timeval start = ast_tvnow();
+	int ms;
 
-	while (timeout && (chan->_state != AST_STATE_UP)) {
-		res = ast_waitfor(chan, timeout);
+	while ((ms = ast_remaining_ms(start, timeout)) &&
+			chan->_state != AST_STATE_UP) {
+		res = ast_waitfor(chan, ms);
 		if (res < 1)
 			break;
-		if (timeout > -1)
-			timeout = res;
+
 		f = ast_read(chan);
 		if (!f)
 			break;
@@ -10119,11 +10365,9 @@ int pbx_builtin_importvar(struct ast_channel *chan, const char *data)
 	if (channel && value && name) { /*! \todo XXX should do !ast_strlen_zero(..) of the args ? */
 		struct ast_channel *chan2 = ast_channel_get_by_name(channel);
 		if (chan2) {
-			char *s = alloca(strlen(value) + 4);
-			if (s) {
-				sprintf(s, "${%s}", value);
-				pbx_substitute_variables_helper(chan2, s, tmp, sizeof(tmp) - 1);
-			}
+			char *s = ast_alloca(strlen(value) + 4);
+			sprintf(s, "${%s}", value);
+			pbx_substitute_variables_helper(chan2, s, tmp, sizeof(tmp) - 1);
 			chan2 = ast_channel_unref(chan2);
 		}
 		pbx_builtin_setvar_helper(chan, name, tmp);
@@ -10304,9 +10548,36 @@ static const struct ast_data_entry pbx_data_providers[] = {
 	AST_DATA_ENTRY("asterisk/core/hints", &hints_data_provider),
 };
 
+/*! \internal \brief Clean up resources on Asterisk shutdown.
+ * \note Cleans up resources allocated in load_pbx */
+static void unload_pbx(void)
+{
+	int x;
+
+	if (device_state_sub) {
+		device_state_sub = ast_event_unsubscribe(device_state_sub);
+	}
+	if (device_state_tps) {
+		ast_taskprocessor_unreference(device_state_tps);
+		device_state_tps = NULL;
+	}
+
+	/* Unregister builtin applications */
+	for (x = 0; x < ARRAY_LEN(builtins); x++) {
+		ast_unregister_application(builtins[x].name);
+	}
+	ast_manager_unregister("ShowDialPlan");
+	ast_cli_unregister_multiple(pbx_cli, ARRAY_LEN(pbx_cli));
+	ast_custom_function_unregister(&exception_function);
+	ast_custom_function_unregister(&testtime_function);
+	ast_data_unregister(NULL);
+}
+
 int load_pbx(void)
 {
 	int x;
+
+	ast_register_atexit(unload_pbx);
 
 	/* Initialize the PBX */
 	ast_verb(1, "Asterisk PBX Core Initializing\n");
@@ -10697,10 +10968,24 @@ static int statecbs_cmp(void *obj, void *arg, int flags)
 	return (state_cb->change_cb == change_cb) ? CMP_MATCH | CMP_STOP : 0;
 }
 
+static void pbx_shutdown(void)
+{
+	if (hints) {
+		ao2_ref(hints, -1);
+		hints = NULL;
+	}
+	if (statecbs) {
+		ao2_ref(statecbs, -1);
+		statecbs = NULL;
+	}
+}
+
 int ast_pbx_init(void)
 {
 	hints = ao2_container_alloc(HASH_EXTENHINT_SIZE, hint_hash, hint_cmp);
 	statecbs = ao2_container_alloc(1, NULL, statecbs_cmp);
+
+	ast_register_atexit(pbx_shutdown);
 
 	return (hints && statecbs) ? 0 : -1;
 }

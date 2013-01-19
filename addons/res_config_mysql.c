@@ -144,7 +144,7 @@ static struct mysql_conn *find_database(const char *database, int for_write)
 		if (for_write) {
 			whichdb = ast_strdupa(ptr + 1);
 		} else {
-			whichdb = alloca(ptr - database + 1);
+			whichdb = ast_alloca(ptr - database + 1);
 			strncpy(whichdb, database, ptr - database);
 			whichdb[ptr - database] = '\0';
 		}
@@ -467,7 +467,7 @@ static struct ast_config *realtime_multi_mysql(const char *database, const char 
 	}
 
 	initfield = ast_strdupa(newparam);
-	if (initfield && (op = strchr(initfield, ' '))) {
+	if ((op = strchr(initfield, ' '))) {
 		*op = '\0';
 	}
 
@@ -1395,9 +1395,6 @@ static int unload_module(void)
 	if (option_verbose > 1)
 		ast_verbose(VERBOSE_PREFIX_2 "MySQL RealTime unloaded.\n");
 
-	ast_module_user_hangup_all();
-
-	usleep(1);
 	AST_RWLIST_WRLOCK(&databases);
 	while ((cur = AST_RWLIST_REMOVE_HEAD(&databases, list))) {
 		mysql_close(&cur->handle);

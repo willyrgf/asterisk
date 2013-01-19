@@ -116,7 +116,7 @@ static void  CB_ADD(struct ast_str **cb, const char *str)
 
 static void  CB_ADD_LEN(struct ast_str **cb, const char *str, int len)
 {
-	char *s = alloca(len + 1);
+	char *s = ast_alloca(len + 1);
 	ast_copy_string(s, str, len);
 	ast_str_append(cb, 0, "%s", str);
 }
@@ -1524,6 +1524,17 @@ static struct ast_config *config_text_file_load(const char *database, const char
 		while (!feof(f)) {
 			lineno++;
 			if (fgets(buf, sizeof(buf), f)) {
+				/* Skip lines that are too long */
+				if (strlen(buf) == sizeof(buf) - 1 && buf[sizeof(buf) - 1] != '\n') {
+					ast_log(LOG_WARNING, "Line %d too long, skipping. It begins with: %.32s...\n", lineno, buf);
+					while (fgets(buf, sizeof(buf), f)) {
+						if (strlen(buf) != sizeof(buf) - 1 || buf[sizeof(buf) - 1] == '\n') {
+							break;
+						}
+					}
+					continue;
+				}
+
 				if (ast_test_flag(&flags, CONFIG_FLAG_WITHCOMMENTS) && lline_buffer && ast_str_strlen(lline_buffer)) {
 					CB_ADD(&comment_buffer, ast_str_buffer(lline_buffer));       /* add the current lline buffer to the comment buffer */
 					ast_str_reset(lline_buffer);        /* erase the lline buffer */
@@ -2652,8 +2663,9 @@ int ast_parse_arg(const char *arg, enum ast_parse_flags flags,
 			error = 1;
 			goto int32_done;
 		}
+		errno = 0;
 		x = strtol(arg, &endptr, 0);
-		if (*endptr || x < INT32_MIN || x > INT32_MAX) {
+		if (*endptr || errno || x < INT32_MIN || x > INT32_MAX) {
 			/* Parse error, or type out of int32_t bounds */
 			error = 1;
 			goto int32_done;
@@ -2699,8 +2711,9 @@ int32_done:
 			error = 1;
 			goto uint32_done;
 		}
+		errno = 0;
 		x = strtoul(arg, &endptr, 0);
-		if (*endptr || x > UINT32_MAX) {
+		if (*endptr || errno || x > UINT32_MAX) {
 			error = 1;
 			goto uint32_done;
 		}
@@ -2910,7 +2923,7 @@ static char *handle_cli_config_reload(struct ast_cli_entry *e, int cmd, struct a
 	AST_LIST_LOCK(&cfmtime_head);
 	AST_LIST_TRAVERSE(&cfmtime_head, cfmtime, list) {
 		if (!strcmp(cfmtime->filename, a->argv[2])) {
-			char *buf = alloca(strlen("module reload ") + strlen(cfmtime->who_asked) + 1);
+			char *buf = ast_alloca(strlen("module reload ") + strlen(cfmtime->who_asked) + 1);
 			sprintf(buf, "module reload %s", cfmtime->who_asked);
 			ast_cli_command(a->fd, buf);
 		}
@@ -2950,8 +2963,22 @@ static struct ast_cli_entry cli_config[] = {
 	AST_CLI_DEFINE(handle_cli_config_list, "Show all files that have loaded a configuration file"),
 };
 
+static void config_shutdown(void)
+{
+	struct cache_file_mtime *cfmtime;
+
+	AST_LIST_LOCK(&cfmtime_head);
+	while ((cfmtime = AST_LIST_REMOVE_HEAD(&cfmtime_head, list))) {
+		ast_free(cfmtime);
+	}
+	AST_LIST_UNLOCK(&cfmtime_head);
+
+	ast_cli_unregister_multiple(cli_config, ARRAY_LEN(cli_config));
+}
+
 int register_config_cli(void)
 {
 	ast_cli_register_multiple(cli_config, ARRAY_LEN(cli_config));
+	ast_register_atexit(config_shutdown);
 	return 0;
 }

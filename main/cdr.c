@@ -295,9 +295,9 @@ void ast_cdr_getvar(struct ast_cdr *cdr, const char *name, char **ret, char *wor
 		cdr_get_tv(cdr->end, raw ? NULL : fmt, workspace, workspacelen);
 	else if (!strcasecmp(name, "duration")) {
 		snprintf(workspace, workspacelen, "%ld", cdr->end.tv_sec != 0 ? cdr->duration : (long)ast_tvdiff_ms(ast_tvnow(), cdr->start) / 1000);
-	} else if (!strcasecmp(name, "billsec"))
-		snprintf(workspace, workspacelen, "%ld", cdr->billsec || cdr->answer.tv_sec == 0 ? cdr->billsec : (long)ast_tvdiff_ms(ast_tvnow(), cdr->answer) / 1000);
-	else if (!strcasecmp(name, "disposition")) {
+	} else if (!strcasecmp(name, "billsec")) {
+		snprintf(workspace, workspacelen, "%ld", (cdr->billsec || !ast_tvzero(cdr->end) || ast_tvzero(cdr->answer)) ? cdr->billsec : (long)ast_tvdiff_ms(ast_tvnow(), cdr->answer) / 1000);	
+	} else if (!strcasecmp(name, "disposition")) {
 		if (raw) {
 			snprintf(workspace, workspacelen, "%ld", cdr->disposition);
 		} else {
@@ -1364,11 +1364,13 @@ void ast_cdr_detach(struct ast_cdr *cdr)
 	newtail->cdr = cdr;
 	batch->tail = newtail;
 	curr = batch->size++;
-	ast_mutex_unlock(&cdr_batch_lock);
 
 	/* if we have enough stuff to post, then do it */
-	if (curr >= (batchsize - 1))
+	if (curr >= (batchsize - 1)) {
 		submit_unscheduled_batch();
+	}
+
+	ast_mutex_unlock(&cdr_batch_lock);
 }
 
 static void *do_cdr(void *data)
@@ -1479,7 +1481,7 @@ static char *handle_cli_submit(struct ast_cli_entry *e, int cmd, struct ast_cli_
 static struct ast_cli_entry cli_submit = AST_CLI_DEFINE(handle_cli_submit, "Posts all pending batched CDR data");
 static struct ast_cli_entry cli_status = AST_CLI_DEFINE(handle_cli_status, "Display the CDR status");
 
-static int do_reload(int reload)
+static void do_reload(int reload)
 {
 	struct ast_config *config;
 	const char *enabled_value;
@@ -1495,11 +1497,10 @@ static int do_reload(int reload)
 	int cfg_time;
 	int was_enabled;
 	int was_batchmode;
-	int res=0;
 	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
 
 	if ((config = ast_config_load2("cdr.conf", "cdr", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
-		return 0;
+		return;
 	}
 
 	ast_mutex_lock(&cdr_batch_lock);
@@ -1517,7 +1518,7 @@ static int do_reload(int reload)
 
 	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEINVALID) {
 		ast_mutex_unlock(&cdr_batch_lock);
-		return 0;
+		return;
 	}
 
 	/* don't run the next scheduled CDR posting while reloading */
@@ -1580,7 +1581,6 @@ static int do_reload(int reload)
 		} else {
 			ast_cli_register(&cli_submit);
 			ast_register_atexit(ast_cdr_engine_term);
-			res = 0;
 		}
 	/* if this reload disabled the CDR and/or batch mode and there is a background thread,
 	   kill it */
@@ -1593,27 +1593,39 @@ static int do_reload(int reload)
 		ast_cond_destroy(&cdr_pending_cond);
 		ast_cli_unregister(&cli_submit);
 		ast_unregister_atexit(ast_cdr_engine_term);
-		res = 0;
 		/* if leaving batch mode, then post the CDRs in the batch,
 		   and don't reschedule, since we are stopping CDR logging */
 		if (!batchmode && was_batchmode) {
 			ast_cdr_engine_term();
 		}
-	} else {
-		res = 0;
 	}
 
 	ast_mutex_unlock(&cdr_batch_lock);
 	ast_config_destroy(config);
 	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: CDR\r\nMessage: CDR subsystem reload requested\r\n");
+}
 
-	return res;
+static void cdr_engine_shutdown(void)
+{
+	if (cdr_thread != AST_PTHREADT_NULL) {
+		/* wake up the thread so it will exit */
+		pthread_cancel(cdr_thread);
+		pthread_kill(cdr_thread, SIGURG);
+		pthread_join(cdr_thread, NULL);
+		cdr_thread = AST_PTHREADT_NULL;
+		ast_cond_destroy(&cdr_pending_cond);
+	}
+	ast_cli_unregister(&cli_submit);
+
+	ast_cli_unregister(&cli_status);
+	sched_context_destroy(sched);
+	sched = NULL;
+	ast_free(batch);
+	batch = NULL;
 }
 
 int ast_cdr_engine_init(void)
 {
-	int res;
-
 	sched = sched_context_create();
 	if (!sched) {
 		ast_log(LOG_ERROR, "Unable to create schedule context.\n");
@@ -1621,15 +1633,10 @@ int ast_cdr_engine_init(void)
 	}
 
 	ast_cli_register(&cli_status);
+	do_reload(0);
+	ast_register_atexit(cdr_engine_shutdown);
 
-	res = do_reload(0);
-	if (res) {
-		ast_mutex_lock(&cdr_batch_lock);
-		res = init_batch();
-		ast_mutex_unlock(&cdr_batch_lock);
-	}
-
-	return res;
+	return 0;
 }
 
 /* \note This actually gets called a couple of times at shutdown.  Once, before we start
@@ -1641,7 +1648,8 @@ void ast_cdr_engine_term(void)
 
 int ast_cdr_engine_reload(void)
 {
-	return do_reload(1);
+	do_reload(1);
+	return 0;
 }
 
 int ast_cdr_data_add_structure(struct ast_data *tree, struct ast_cdr *cdr, int recur)

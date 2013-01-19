@@ -648,7 +648,6 @@ struct ast_vm_user {
 	char *emailbody;                 /*!< E-mail body */
 	char pager[80];                  /*!< E-mail address to pager (no attachment) */
 	char serveremail[80];            /*!< From: Mail address */
-	char mailcmd[160];               /*!< Configurable mail command */
 	char language[MAX_LANGUAGE];     /*!< Config: Language setting */
 	char zonetag[80];                /*!< Time zone */
 	char locale[20];                 /*!< The locale (for presentation of date/time) */
@@ -951,7 +950,7 @@ static int inprocess_cmp_fn(void *obj, void *arg, int flags)
 
 static int inprocess_count(const char *context, const char *mailbox, int delta)
 {
-	struct inprocess *i, *arg = alloca(sizeof(*arg) + strlen(context) + strlen(mailbox) + 2);
+	struct inprocess *i, *arg = ast_alloca(sizeof(*arg) + strlen(context) + strlen(mailbox) + 2);
 	arg->context = arg->mailbox + strlen(mailbox) + 1;
 	strcpy(arg->mailbox, mailbox); /* SAFE */
 	strcpy(arg->context, context); /* SAFE */
@@ -1407,17 +1406,21 @@ static struct ast_vm_user *find_user_realtime(struct ast_vm_user *ivm, const cha
 	struct ast_vm_user *retval;
 
 	if ((retval = (ivm ? ivm : ast_calloc(1, sizeof(*retval))))) {
-		if (!ivm)
-			ast_set_flag(retval, VM_ALLOCED);	
-		else
+		if (ivm) {
 			memset(retval, 0, sizeof(*retval));
-		if (mailbox) 
-			ast_copy_string(retval->mailbox, mailbox, sizeof(retval->mailbox));
+		}
 		populate_defaults(retval);
-		if (!context && ast_test_flag((&globalflags), VM_SEARCH))
+		if (!ivm) {
+			ast_set_flag(retval, VM_ALLOCED);
+		}
+		if (mailbox) {
+			ast_copy_string(retval->mailbox, mailbox, sizeof(retval->mailbox));
+		}
+		if (!context && ast_test_flag((&globalflags), VM_SEARCH)) {
 			var = ast_load_realtime("voicemail", "mailbox", mailbox, SENTINEL);
-		else
+		} else {
 			var = ast_load_realtime("voicemail", "mailbox", mailbox, "context", context, SENTINEL);
+		}
 		if (var) {
 			apply_options_full(retval, var);
 			ast_variables_destroy(var);
@@ -1549,10 +1552,10 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 					}
 					value = strstr(tmp, ",");
 					if (!value) {
-						new = alloca(strlen(newpassword)+1);
+						new = ast_alloca(strlen(newpassword)+1);
 						sprintf(new, "%s", newpassword);
 					} else {
-						new = alloca((strlen(value) + strlen(newpassword) + 1));
+						new = ast_alloca((strlen(value) + strlen(newpassword) + 1));
 						sprintf(new, "%s%s", newpassword, value);
 					}
 					if (!(cat = ast_category_get(cfg, category))) {
@@ -1587,7 +1590,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 					} else {
 						var = NULL;
 					}
-					new = alloca(strlen(newpassword) + 1);
+					new = ast_alloca(strlen(newpassword) + 1);
 					sprintf(new, "%s", newpassword);
 					if (!(cat = ast_category_get(cfg, category))) {
 						ast_debug(4, "failed to get category!\n");
@@ -1802,6 +1805,11 @@ static void vm_imap_delete(char *file, int msgnum, struct ast_vm_user *vmu)
 
 	if (!(vms = get_vm_state_by_mailbox(vmu->mailbox, vmu->context, 1)) && !(vms = get_vm_state_by_mailbox(vmu->mailbox, vmu->context, 0))) {
 		ast_log(LOG_WARNING, "Couldn't find a vm_state for mailbox %s. Unable to set \\DELETED flag for message %d\n", vmu->mailbox, msgnum);
+		return;
+	}
+
+	if (msgnum < 0) {
+		imap_delete_old_greeting(file, vms);
 		return;
 	}
 
@@ -2419,8 +2427,10 @@ static int inboxcount2(const char *mailbox_context, int *urgentmsgs, int *newmsg
 			return -1;
 		}
 		if ((*newmsgs = __messagecount(context, mailboxnc, vmu->imapfolder)) < 0) {
+			free_user(vmu);
 			return -1;
 		}
+		free_user(vmu);
 	}
 	if (oldmsgs) {
 		if ((*oldmsgs = __messagecount(context, mailboxnc, "Old")) < 0) {
@@ -2737,8 +2747,9 @@ static struct ast_vm_user *find_user_realtime_imapuser(const char *imapuser)
 	vmu = ast_calloc(1, sizeof *vmu);
 	if (!vmu)
 		return NULL;
-	ast_set_flag(vmu, VM_ALLOCED);
+
 	populate_defaults(vmu);
+	ast_set_flag(vmu, VM_ALLOCED);
 
 	var = ast_load_realtime("voicemail", "imapuser", imapuser, NULL);
 	if (var) {
@@ -4195,7 +4206,7 @@ static int vm_delete(char *file)
 	int txtsize = 0;
 
 	txtsize = (strlen(file) + 5)*sizeof(char);
-	txt = alloca(txtsize);
+	txt = ast_alloca(txtsize);
 	/* Sprintf here would safe because we alloca'd exactly the right length,
 	 * but trying to eliminate all sprintf's anyhow
 	 */
@@ -8083,7 +8094,7 @@ static int vm_play_folder_name_gr(struct ast_channel *chan, char *box)
 	int cmd;
 	char *buf;
 
-	buf = alloca(strlen(box) + 2);
+	buf = ast_alloca(strlen(box) + 2);
 	strcpy(buf, box);
 	strcat(buf, "s");
 
@@ -10813,7 +10824,7 @@ static int append_mailbox(const char *context, const char *box, const char *data
 		read_password_from_file(secretfn, vmu->password, sizeof(vmu->password));
 	}
 
-	mailbox_full = alloca(strlen(box) + strlen(context) + 1);
+	mailbox_full = ast_alloca(strlen(box) + strlen(context) + 1);
 	strcpy(mailbox_full, box);
 	strcat(mailbox_full, "@");
 	strcat(mailbox_full, context);
@@ -10858,8 +10869,8 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 	if (!(vmu = ast_calloc(1, sizeof(*vmu)))) {
 		return AST_TEST_NOT_RUN;
 	}
-	ast_set_flag(vmu, VM_ALLOCED);
 	populate_defaults(vmu);
+	ast_set_flag(vmu, VM_ALLOCED);
 
 	apply_options(vmu, options_string);
 
@@ -10987,7 +10998,7 @@ AST_TEST_DEFINE(test_voicemail_vmuser)
 		res = 1;
 	}
 	if (strcasecmp(vmu->imapfolder, "INBOX")) {
-		ast_test_status_update(test, "Parse failure for imappasswd option\n");
+		ast_test_status_update(test, "Parse failure for imapfolder option\n");
 		res = 1;
 	}
 	if (strcasecmp(vmu->imapvmshareid, "6000")) {
@@ -11320,7 +11331,6 @@ static struct ast_cli_entry cli_voicemail[] = {
 		USER(ast_vm_user, emailbody, AST_DATA_STRING)			\
 		USER(ast_vm_user, pager, AST_DATA_STRING)			\
 		USER(ast_vm_user, serveremail, AST_DATA_STRING)			\
-		USER(ast_vm_user, mailcmd, AST_DATA_STRING)			\
 		USER(ast_vm_user, language, AST_DATA_STRING)			\
 		USER(ast_vm_user, zonetag, AST_DATA_STRING)			\
 		USER(ast_vm_user, callback, AST_DATA_STRING)			\
@@ -11348,7 +11358,6 @@ static struct ast_cli_entry cli_voicemail[] = {
 		USER(ast_vm_user, emailbody, AST_DATA_STRING)			\
 		USER(ast_vm_user, pager, AST_DATA_STRING)			\
 		USER(ast_vm_user, serveremail, AST_DATA_STRING)			\
-		USER(ast_vm_user, mailcmd, AST_DATA_STRING)			\
 		USER(ast_vm_user, language, AST_DATA_STRING)			\
 		USER(ast_vm_user, zonetag, AST_DATA_STRING)			\
 		USER(ast_vm_user, callback, AST_DATA_STRING)			\
@@ -11724,8 +11733,8 @@ static int manager_list_voicemail_users(struct mansession *s, const struct messa
 			vmu->fullname,
 			vmu->email,
 			vmu->pager,
-			vmu->serveremail,
-			vmu->mailcmd,
+			ast_strlen_zero(vmu->serveremail) ? serveremail : vmu->serveremail,
+			mailcmd,
 			vmu->language,
 			vmu->zonetag,
 			vmu->callback,
@@ -13565,7 +13574,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 					strcpy(flag, "Urgent");
 				} else if (flag) {
 					ast_verbose(VERBOSE_PREFIX_3 "UNmarking message as Urgent\n");
-					res = ast_play_and_wait(chan, "vm-urgent-removed");
+					res = ast_play_and_wait(chan, "vm-marked-nonurgent");
 					strcpy(flag, "");
 				} else {
 					ast_play_and_wait(chan, "vm-sorry");

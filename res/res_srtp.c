@@ -366,7 +366,8 @@ tryagain:
 
 			ast_debug(5, "SRTP try to re-create\n");
 			if (policy) {
-				if (srtp_create(&srtp->session, &policy->sp) == err_status_ok) {
+				int res_srtp_create = srtp_create(&srtp->session, &policy->sp);
+				if (res_srtp_create == err_status_ok) {
 					ast_debug(5, "SRTP re-created with first policy\n");
 					ao2_t_ref(policy, -1, "Unreffing first policy for re-creating srtp session");
 
@@ -384,10 +385,20 @@ tryagain:
 					ao2_iterator_destroy(&it);
 					goto tryagain;
 				}
+				ast_log(LOG_ERROR, "SRTP session could not be re-created after unprotect failure: %s\n", srtp_errstr(res_srtp_create));
+
+				/* If srtp_create() fails with a previously alloced session, it will have been dealloced before returning. */
+				srtp->session = NULL;
+
 				ao2_t_ref(policy, -1, "Unreffing first policy after srtp_create failed");
 			}
 			ao2_iterator_destroy(&it);
 		}
+	}
+
+	if (!srtp->session) {
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (res != err_status_ok && res != err_status_replay_fail ) {
@@ -437,6 +448,8 @@ static int ast_srtp_create(struct ast_srtp **srtp, struct ast_rtp_instance *rtp,
 
 	/* Any failures after this point can use ast_srtp_destroy to destroy the instance */
 	if (srtp_create(&temp->session, &policy->sp) != err_status_ok) {
+		/* Session either wasn't created or was created and dealloced. */
+		temp->session = NULL;
 		ast_srtp_destroy(temp);
 		return -1;
 	}

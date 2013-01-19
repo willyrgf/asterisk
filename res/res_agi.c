@@ -598,7 +598,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Enables/Disables the music on hold generator. If <replaceable>class</replaceable>
 			is not specified, then the <literal>default</literal> music on hold class will be
-			used.</para>
+			used. This generator will be stopped automatically when playing a file.</para>
 			<para>Always returns <literal>0</literal>.</para>
 		</description>
 	</agi>
@@ -648,7 +648,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Send the given file, allowing playback to be interrupted by the given
 			digits, if any. Returns <literal>0</literal> if playback completes without a digit
 			being pressed, or the ASCII numerical value of the digit if one was pressed,
-			or <literal>-1</literal> on error or if the channel was disconnected.</para>
+			or <literal>-1</literal> on error or if the channel was disconnected. If
+			musiconhold is playing before calling stream file it will be automatically
+			stopped and will not be restarted after completion.</para>
 		</description>
 		<see-also>
 			<ref type="agi">control stream file</ref>
@@ -1554,10 +1556,11 @@ static enum agi_result launch_ha_netscript(char *agiurl, char *argv[], int *fds)
 	unsigned short srvport;
 
 	/* format of agiurl is "hagi://host.domain[:port][/script/name]" */
-	if (!(host = ast_strdupa(agiurl + 7))) { /* Remove hagi:// */
+	if (strlen(agiurl) < 7) { /* Remove hagi:// */
 		ast_log(LOG_WARNING, "An error occurred parsing the AGI URI: %s", agiurl);
 		return AGI_RESULT_FAILURE;
 	}
+	host = ast_strdupa(agiurl + 7);
 
 	/* Strip off any script name */
 	if ((script = strchr(host, '/'))) {
@@ -2476,7 +2479,7 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, const char 
 			ast_set_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS);
 		}
 		if (ast_compat_res_agi && argc >= 3 && !ast_strlen_zero(argv[2])) {
-			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr;
+			char *compat = ast_alloca(strlen(argv[2]) * 2 + 1), *cptr;
 			const char *vptr;
 			for (cptr = compat, vptr = argv[2]; *vptr; vptr++) {
 				if (*vptr == ',') {
@@ -2689,16 +2692,18 @@ static int handle_dbdel(struct ast_channel *chan, AGI *agi, int argc, const char
 
 static int handle_dbdeltree(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
-	int res;
+	int num_deleted;
 
-	if ((argc < 3) || (argc > 4))
+	if ((argc < 3) || (argc > 4)) {
 		return RESULT_SHOWUSAGE;
-	if (argc == 4)
-		res = ast_db_deltree(argv[2], argv[3]);
-	else
-		res = ast_db_deltree(argv[2], NULL);
+	}
+	if (argc == 4) {
+		num_deleted = ast_db_deltree(argv[2], argv[3]);
+	} else {
+		num_deleted = ast_db_deltree(argv[2], NULL);
+	}
 
-	ast_agi_send(agi->fd, chan, "200 result=%c\n", res ? '0' : '1');
+	ast_agi_send(agi->fd, chan, "200 result=%c\n", num_deleted > 0 ? '0' : '1');
 	return RESULT_SUCCESS;
 }
 

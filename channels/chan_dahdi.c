@@ -71,12 +71,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * be placed in sig_analog and the duplicated code could be removed.
  */
 
-#ifdef HAVE_PRI
+#if defined(HAVE_PRI)
 #include "sig_pri.h"
+#ifndef PRI_RESTART
+#error "Upgrade your libpri"
 #endif
+#endif	/* defined(HAVE_PRI) */
 
 #if defined(HAVE_SS7)
 #include "sig_ss7.h"
+#if defined(LIBSS7_ABI_COMPATIBILITY)
+#error "Your installed libss7 is not compatible"
+#endif
 #endif	/* defined(HAVE_SS7) */
 
 #ifdef HAVE_OPENR2
@@ -1546,6 +1552,47 @@ static inline int dahdi_sig_pri_lib_handles(int signaling)
 	return handles;
 }
 
+static int analog_lib_handles(int signalling, int radio, int oprmode)
+{
+	switch (signalling) {
+	case SIG_FXOLS:
+	case SIG_FXOGS:
+	case SIG_FXOKS:
+	case SIG_FXSLS:
+	case SIG_FXSGS:
+	case SIG_FXSKS:
+	case SIG_EMWINK:
+	case SIG_EM:
+	case SIG_EM_E1:
+	case SIG_FEATD:
+	case SIG_FEATDMF:
+	case SIG_E911:
+	case SIG_FGC_CAMA:
+	case SIG_FGC_CAMAMF:
+	case SIG_FEATB:
+	case SIG_SFWINK:
+	case SIG_SF:
+	case SIG_SF_FEATD:
+	case SIG_SF_FEATDMF:
+	case SIG_FEATDMF_TA:
+	case SIG_SF_FEATB:
+		break;
+	default:
+		/* The rest of the function should cover the remainder of signalling types */
+		return 0;
+	}
+
+	if (radio) {
+		return 0;
+	}
+
+	if (oprmode) {
+		return 0;
+	}
+
+	return 1;
+}
+
 static enum analog_sigtype dahdisig_to_analogsig(int sig)
 {
 	switch (sig) {
@@ -2196,11 +2243,16 @@ static void my_get_and_handle_alarms(void *pvt)
 
 static void *my_get_sigpvt_bridged_channel(struct ast_channel *chan)
 {
-	struct dahdi_pvt *p = ast_bridged_channel(chan)->tech_pvt;
-	if (p)
-		return p->sig_pvt;
-	else
-		return NULL;
+	struct ast_channel *bridged = ast_bridged_channel(chan);
+
+	if (bridged && bridged->tech == &dahdi_tech) {
+		struct dahdi_pvt *p = bridged->tech_pvt;
+
+		if (analog_lib_handles(p->sig, p->radio, p->oprmode)) {
+			return p->sig_pvt;
+		}
+	}
+	return NULL;
 }
 
 static int my_get_sub_fd(void *pvt, enum analog_sub sub)
@@ -3312,7 +3364,7 @@ static void dahdi_pri_update_span_devstate(struct sig_pri_span *pri)
 	}
 	if (pri->congestion_devstate != new_state) {
 		pri->congestion_devstate = new_state;
-		ast_devstate_changed(AST_DEVICE_UNKNOWN, "DAHDI/I%d/congestion", pri->span);
+		ast_devstate_changed(AST_DEVICE_UNKNOWN, AST_DEVSTATE_NOT_CACHABLE, "DAHDI/I%d/congestion", pri->span);
 	}
 #if defined(THRESHOLD_DEVSTATE_PLACEHOLDER)
 	/* Update the span threshold device state and report any change. */
@@ -3328,7 +3380,7 @@ static void dahdi_pri_update_span_devstate(struct sig_pri_span *pri)
 	}
 	if (pri->threshold_devstate != new_state) {
 		pri->threshold_devstate = new_state;
-		ast_devstate_changed(AST_DEVICE_UNKNOWN, "DAHDI/I%d/threshold", pri->span);
+		ast_devstate_changed(AST_DEVICE_UNKNOWN, AST_DEVSTATE_NOT_CACHABLE, "DAHDI/I%d/threshold", pri->span);
 	}
 #endif	/* defined(THRESHOLD_DEVSTATE_PLACEHOLDER) */
 }
@@ -4653,45 +4705,6 @@ static char *dahdi_sig2str(int sig)
 }
 
 #define sig2str dahdi_sig2str
-
-static int analog_lib_handles(int signalling, int radio, int oprmode)
-{
-	switch (signalling) {
-	case SIG_FXOLS:
-	case SIG_FXOGS:
-	case SIG_FXOKS:
-	case SIG_FXSLS:
-	case SIG_FXSGS:
-	case SIG_FXSKS:
-	case SIG_EMWINK:
-	case SIG_EM:
-	case SIG_EM_E1:
-	case SIG_FEATD:
-	case SIG_FEATDMF:
-	case SIG_E911:
-	case SIG_FGC_CAMA:
-	case SIG_FGC_CAMAMF:
-	case SIG_FEATB:
-	case SIG_SFWINK:
-	case SIG_SF:
-	case SIG_SF_FEATD:
-	case SIG_SF_FEATDMF:
-	case SIG_FEATDMF_TA:
-	case SIG_SF_FEATB:
-		break;
-	default:
-		/* The rest of the function should cover the remainder of signalling types */
-		return 0;
-	}
-
-	if (radio)
-		return 0;
-
-	if (oprmode)
-		return 0;
-
-	return 1;
-}
 
 static int conf_add(struct dahdi_pvt *p, struct dahdi_subchannel *c, int idx, int slavechannel)
 {
@@ -6049,6 +6062,7 @@ static int dahdi_accept_r2_call_exec(struct ast_channel *chan, const char *data)
 		if (res == 0) {
 			continue;
 		}
+		res = 0;
 		f = ast_read(chan);
 		if (!f) {
 			ast_log(LOG_DEBUG, "No frame read on channel %s, going out ...\n", chan->name);
@@ -7220,6 +7234,7 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 	int priority = 0;
 	struct ast_channel *oc0, *oc1;
 	enum ast_bridge_result res;
+	struct timeval start = ast_tvnow();
 #ifdef PRI_2BCT
 	int triedtopribridge = 0;
 	q931_call *q931c0;
@@ -7441,6 +7456,7 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 	for (;;) {
 		struct ast_channel *c0_priority[2] = {c0, c1};
 		struct ast_channel *c1_priority[2] = {c1, c0};
+		int ms;
 
 		/* Here's our main loop...  Start by locking things, looking for private parts,
 		   and then balking if anything is wrong */
@@ -7460,8 +7476,8 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 
 		ast_channel_unlock(c0);
 		ast_channel_unlock(c1);
-
-		if (!timeoutms ||
+		ms = ast_remaining_ms(start, timeoutms);
+		if (!ms ||
 			(op0 != p0) ||
 			(op1 != p1) ||
 			(ofd0 != c0->fds[0]) ||
@@ -7509,7 +7525,7 @@ static enum ast_bridge_result dahdi_bridge(struct ast_channel *c0, struct ast_ch
 		}
 #endif
 
-		who = ast_waitfor_n(priority ? c0_priority : c1_priority, 2, &timeoutms);
+		who = ast_waitfor_n(priority ? c0_priority : c1_priority, 2, &ms);
 		if (!who) {
 			ast_debug(1, "Ooh, empty read...\n");
 			continue;
@@ -8918,11 +8934,20 @@ static struct ast_frame *dahdi_read(struct ast_channel *ast)
 		CHANNEL_DEADLOCK_AVOIDANCE(ast);
 
 		/*
-		 * For PRI channels, we must refresh the private pointer because
-		 * the call could move to another B channel while the Asterisk
-		 * channel is unlocked.
+		 * Check to see if the channel is still associated with the same
+		 * private structure.  While the Asterisk channel was unlocked
+		 * the following events may have occured:
+		 *
+		 * 1) A masquerade may have associated the channel with another
+		 * technology or private structure.
+		 *
+		 * 2) For PRI calls, call signaling could change the channel
+		 * association to another B channel (private structure).
 		 */
-		p = ast->tech_pvt;
+		if (ast->tech_pvt != p) {
+			/* The channel is no longer associated.  Quit gracefully. */
+			return &ast_null_frame;
+		}
 	}
 
 	idx = dahdi_get_index(ast, p, 0);
@@ -9779,7 +9804,8 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 	if (dashptr) {
 		*dashptr = '\0';
 	}
-	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, device_name);
+	tmp->flags |= AST_FLAG_DISABLE_DEVSTATE_CACHE;
+	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, AST_DEVSTATE_NOT_CACHABLE, device_name);
 
 	for (v = i->vars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp, v->name, v->value);
@@ -10487,6 +10513,9 @@ static void *analog_ss_thread(void *data)
 			/* If set to use DTMF CID signalling, listen for DTMF */
 			if (p->cid_signalling == CID_SIG_DTMF) {
 				int k = 0;
+				int off_ms;
+				struct timeval start = ast_tvnow();
+				int ms;
 				cs = NULL;
 				ast_debug(1, "Receiving DTMF cid on channel %s\n", chan->name);
 				dahdi_setlinear(p->subs[idx].dfd, 0);
@@ -10497,10 +10526,12 @@ static void *analog_ss_thread(void *data)
 				 * can drop some of them.
 				 */
 				ast_set_flag(chan, AST_FLAG_END_DTMF_ONLY);
-				res = 4000;/* This is a typical OFF time between rings. */
+				off_ms = 4000;/* This is a typical OFF time between rings. */
 				for (;;) {
 					struct ast_frame *f;
-					res = ast_waitfor(chan, res);
+
+					ms = ast_remaining_ms(start, off_ms);
+					res = ast_waitfor(chan, ms);
 					if (res <= 0) {
 						/*
 						 * We do not need to restore the dahdi_setlinear()
@@ -10520,7 +10551,7 @@ static void *analog_ss_thread(void *data)
 							dtmfbuf[k++] = f->subclass.integer;
 						}
 						ast_debug(1, "CID got digit '%c'\n", f->subclass.integer);
-						res = 4000;/* This is a typical OFF time between rings. */
+						start = ast_tvnow();
 					}
 					ast_frfree(f);
 					if (chan->_state == AST_STATE_RING ||
@@ -10543,6 +10574,9 @@ static void *analog_ss_thread(void *data)
 			} else if ((p->cid_signalling == CID_SIG_V23) || (p->cid_signalling == CID_SIG_V23_JP)) {
 				cs = callerid_new(p->cid_signalling);
 				if (cs) {
+					int off_ms;
+					struct timeval start;
+					int ms;
 					samples = 0;
 #if 1
 					bump_gains(p);
@@ -10619,10 +10653,13 @@ static void *analog_ss_thread(void *data)
 					}
 
 					/* Finished with Caller*ID, now wait for a ring to make sure there really is a call coming */
-					res = 4000;/* This is a typical OFF time between rings. */
+					start = ast_tvnow();
+					off_ms = 4000;/* This is a typical OFF time between rings. */
 					for (;;) {
 						struct ast_frame *f;
-						res = ast_waitfor(chan, res);
+
+						ms = ast_remaining_ms(start, off_ms);
+						res = ast_waitfor(chan, ms);
 						if (res <= 0) {
 							ast_log(LOG_WARNING, "CID timed out waiting for ring. "
 								"Exiting simple switch\n");
@@ -10750,12 +10787,18 @@ static void *analog_ss_thread(void *data)
 		} else if (p->use_callerid && p->cid_start == CID_START_RING) {
 			if (p->cid_signalling == CID_SIG_DTMF) {
 				int k = 0;
+				int off_ms;
+				struct timeval start;
+				int ms;
 				cs = NULL;
 				dahdi_setlinear(p->subs[idx].dfd, 0);
-				res = 2000;
+				off_ms = 2000;
+				start = ast_tvnow();
 				for (;;) {
 					struct ast_frame *f;
-					res = ast_waitfor(chan, res);
+
+					ms = ast_remaining_ms(start, off_ms);
+					res = ast_waitfor(chan, ms);
 					if (res <= 0) {
 						ast_log(LOG_WARNING, "DTMFCID timed out waiting for ring. "
 							"Exiting simple switch\n");
@@ -10771,7 +10814,7 @@ static void *analog_ss_thread(void *data)
 					if (f->frametype == AST_FRAME_DTMF) {
 						dtmfbuf[k++] = f->subclass.integer;
 						ast_log(LOG_DEBUG, "CID got digit '%c'\n", f->subclass.integer);
-						res = 2000;
+						start = ast_tvnow();
 					}
 					ast_frfree(f);
 
@@ -13108,7 +13151,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				analog_p->callwaitingcallerid = conf->chan.callwaitingcallerid;
 				analog_p->ringt = conf->chan.ringt;
 				analog_p->ringt_base = ringt_base;
-				analog_p->chan_tech = &dahdi_tech;
 				analog_p->onhooktime = time(NULL);
 				if (chan_sig & __DAHDI_SIG_FXO) {
 					memset(&p, 0, sizeof(p));
@@ -14051,9 +14093,6 @@ static void *mfcr2_monitor(void *data)
 #endif /* HAVE_OPENR2 */
 
 #if defined(HAVE_PRI)
-#ifndef PRI_RESTART
-#error "Upgrade your libpri"
-#endif
 static void dahdi_pri_message(struct pri *pri, char *s)
 {
 	int x;
@@ -14224,8 +14263,8 @@ static char *complete_span_helper(const char *line, const char *word, int pos, i
 
 	for (which = span = 0; span < NUM_SPANS; span++) {
 		if (pris[span].pri.pri && ++which > state) {
-			if (asprintf(&ret, "%d", span + 1) < 0) {	/* user indexes start from 1 */
-				ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+			if (ast_asprintf(&ret, "%d", span + 1) < 0) {	/* user indexes start from 1 */
+				ret = NULL;
 			}
 			break;
 		}

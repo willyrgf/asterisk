@@ -538,10 +538,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Checks a voicemail account for status.</para>
-			<para>Returns number of messages.</para>
+			<para>Returns whether there are messages waiting.</para>
 			<para>Message: Mailbox Status.</para>
 			<para>Mailbox: <replaceable>mailboxid</replaceable>.</para>
-			<para>Waiting: <replaceable>count</replaceable>.</para>
+			<para>Waiting: <literal>0</literal> if messages waiting, <literal>1</literal>
+			if no messages waiting.</para>
 		</description>
 	</manager>
 	<manager name="MailboxCount" language="en_US">
@@ -686,16 +687,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<para>Asterisk module name (including .so extension) or subsystem identifier:</para>
 				<enumlist>
 					<enum name="cdr" />
-					<enum name="enum" />
 					<enum name="dnsmgr" />
 					<enum name="extconfig" />
+					<enum name="enum" />
 					<enum name="manager" />
-					<enum name="rtp" />
 					<enum name="http" />
+					<enum name="logger" />
+					<enum name="features" />
+					<enum name="dsp" />
+					<enum name="udptl" />
+					<enum name="indications" />
+					<enum name="cel" />
+					<enum name="plc" />
 				</enumlist>
 			</parameter>
 			<parameter name="LoadType" required="true">
-				<para>The operation to be done on module.</para>
+				<para>The operation to be done on module. Subsystem identifiers may only
+				be reloaded.</para>
 				<enumlist>
 					<enum name="load" />
 					<enum name="unload" />
@@ -991,6 +999,11 @@ struct mansession_session {
 	AST_LIST_ENTRY(mansession_session) list;
 };
 
+enum mansession_message_parsing {
+	MESSAGE_OKAY,
+	MESSAGE_LINE_TOO_LONG
+};
+
 /* In case you didn't read that giant block of text above the mansession_session struct, the
  * 'mansession' struct is named this solely to keep the API the same in Asterisk. This structure really
  * represents data that is different from Manager action to Manager action. The mansession_session pointer
@@ -1001,6 +1014,7 @@ struct mansession {
 	struct ast_tcptls_session_instance *tcptls_session;
 	FILE *f;
 	int fd;
+	enum mansession_message_parsing parsing;
 	int write_error:1;
 	struct manager_custom_hook *hook;
 	ast_mutex_t lock;
@@ -1781,6 +1795,10 @@ static const char *__astman_get_header(const struct message *m, char *var, int m
 {
 	int x, l = strlen(var);
 	const char *result = "";
+
+	if (!m) {
+		return result;
+	}
 
 	for (x = 0; x < m->hdrcount; x++) {
 		const char *h = m->headers[x];
@@ -2582,7 +2600,7 @@ static void astman_append_json(struct mansession *s, const char *str)
 {
 	char *buf;
 
-	buf = alloca(2 * strlen(str) + 1);
+	buf = ast_alloca(2 * strlen(str) + 1);
 	json_escape(buf, str);
 	astman_append(s, "%s", buf);
 }
@@ -3430,6 +3448,7 @@ static int action_sendtext(struct mansession *s, const struct message *m)
 /*! \brief  action_redirect: The redirect manager command */
 static int action_redirect(struct mansession *s, const struct message *m)
 {
+	char buf[256];
 	const char *name = astman_get_header(m, "Channel");
 	const char *name2 = astman_get_header(m, "ExtraChannel");
 	const char *exten = astman_get_header(m, "Exten");
@@ -3438,8 +3457,10 @@ static int action_redirect(struct mansession *s, const struct message *m)
 	const char *context2 = astman_get_header(m, "ExtraContext");
 	const char *priority = astman_get_header(m, "Priority");
 	const char *priority2 = astman_get_header(m, "ExtraPriority");
-	struct ast_channel *chan, *chan2 = NULL;
-	int pi, pi2 = 0;
+	struct ast_channel *chan;
+	struct ast_channel *chan2;
+	int pi = 0;
+	int pi2 = 0;
 	int res;
 
 	if (ast_strlen_zero(name)) {
@@ -3447,84 +3468,134 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	if (!ast_strlen_zero(priority) && (sscanf(priority, "%30d", &pi) != 1)) {
-		if ((pi = ast_findlabel_extension(NULL, context, exten, priority, NULL)) < 1) {
-			astman_send_error(s, m, "Invalid priority");
+	if (ast_strlen_zero(context)) {
+		astman_send_error(s, m, "Context not specified");
+		return 0;
+	}
+	if (ast_strlen_zero(exten)) {
+		astman_send_error(s, m, "Exten not specified");
+		return 0;
+	}
+	if (ast_strlen_zero(priority)) {
+		astman_send_error(s, m, "Priority not specified");
+		return 0;
+	}
+	if (sscanf(priority, "%30d", &pi) != 1) {
+		pi = ast_findlabel_extension(NULL, context, exten, priority, NULL);
+	}
+	if (pi < 1) {
+		astman_send_error(s, m, "Priority is invalid");
+		return 0;
+	}
+
+	if (!ast_strlen_zero(name2) && !ast_strlen_zero(context2)) {
+		/* We have an ExtraChannel and an ExtraContext */
+		if (ast_strlen_zero(exten2)) {
+			astman_send_error(s, m, "ExtraExten not specified");
+			return 0;
+		}
+		if (ast_strlen_zero(priority2)) {
+			astman_send_error(s, m, "ExtraPriority not specified");
+			return 0;
+		}
+		if (sscanf(priority2, "%30d", &pi2) != 1) {
+			pi2 = ast_findlabel_extension(NULL, context2, exten2, priority2, NULL);
+		}
+		if (pi2 < 1) {
+			astman_send_error(s, m, "ExtraPriority is invalid");
 			return 0;
 		}
 	}
 
-	if (!ast_strlen_zero(priority2) && (sscanf(priority2, "%30d", &pi2) != 1)) {
-		if ((pi2 = ast_findlabel_extension(NULL, context2, exten2, priority2, NULL)) < 1) {
-			astman_send_error(s, m, "Invalid ExtraPriority");
-			return 0;
-		}
-	}
-
-	if (!(chan = ast_channel_get_by_name(name))) {
-		char buf[256];
+	chan = ast_channel_get_by_name(name);
+	if (!chan) {
 		snprintf(buf, sizeof(buf), "Channel does not exist: %s", name);
 		astman_send_error(s, m, buf);
 		return 0;
 	}
-
 	if (ast_check_hangup_locked(chan)) {
 		astman_send_error(s, m, "Redirect failed, channel not up.");
 		chan = ast_channel_unref(chan);
 		return 0;
 	}
 
-	if (!ast_strlen_zero(name2)) {
-		chan2 = ast_channel_get_by_name(name2);
-	}
-
-	if (chan2 && ast_check_hangup_locked(chan2)) {
-		astman_send_error(s, m, "Redirect failed, extra channel not up.");
+	if (ast_strlen_zero(name2)) {
+		/* Single channel redirect in progress. */
+		if (chan->pbx) {
+			ast_channel_lock(chan);
+			/* don't let the after-bridge code run the h-exten */
+			ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT);
+			ast_channel_unlock(chan);
+		}
+		res = ast_async_goto(chan, context, exten, pi);
+		if (!res) {
+			astman_send_ack(s, m, "Redirect successful");
+		} else {
+			astman_send_error(s, m, "Redirect failed");
+		}
 		chan = ast_channel_unref(chan);
-		chan2 = ast_channel_unref(chan2);
 		return 0;
 	}
 
-	if (chan->pbx) {
-		ast_channel_lock(chan);
-		ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT); /* don't let the after-bridge code run the h-exten */
-		ast_channel_unlock(chan);
+	chan2 = ast_channel_get_by_name(name2);
+	if (!chan2) {
+		snprintf(buf, sizeof(buf), "ExtraChannel does not exist: %s", name2);
+		astman_send_error(s, m, buf);
+		chan = ast_channel_unref(chan);
+		return 0;
+	}
+	if (ast_check_hangup_locked(chan2)) {
+		astman_send_error(s, m, "Redirect failed, extra channel not up.");
+		chan2 = ast_channel_unref(chan2);
+		chan = ast_channel_unref(chan);
+		return 0;
 	}
 
+	/* Dual channel redirect in progress. */
+	if (chan->pbx) {
+		ast_channel_lock(chan);
+		/* don't let the after-bridge code run the h-exten */
+		ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT
+			| AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
+		ast_channel_unlock(chan);
+	}
+	if (chan2->pbx) {
+		ast_channel_lock(chan2);
+		/* don't let the after-bridge code run the h-exten */
+		ast_set_flag(chan2, AST_FLAG_BRIDGE_HANGUP_DONT
+			| AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
+		ast_channel_unlock(chan2);
+	}
 	res = ast_async_goto(chan, context, exten, pi);
 	if (!res) {
-		if (!ast_strlen_zero(name2)) {
-			if (chan2) {
-				if (chan2->pbx) {
-					ast_channel_lock(chan2);
-					ast_set_flag(chan2, AST_FLAG_BRIDGE_HANGUP_DONT); /* don't let the after-bridge code run the h-exten */
-					ast_channel_unlock(chan2);
-				}
-				if (!ast_strlen_zero(context2)) {
-					res = ast_async_goto(chan2, context2, exten2, pi2);
-				} else {
-					res = ast_async_goto(chan2, context, exten, pi);
-				}
-			} else {
-				res = -1;
-			}
-			if (!res) {
-				astman_send_ack(s, m, "Dual Redirect successful");
-			} else {
-				astman_send_error(s, m, "Secondary redirect failed");
-			}
+		if (!ast_strlen_zero(context2)) {
+			res = ast_async_goto(chan2, context2, exten2, pi2);
 		} else {
-			astman_send_ack(s, m, "Redirect successful");
+			res = ast_async_goto(chan2, context, exten, pi);
+		}
+		if (!res) {
+			astman_send_ack(s, m, "Dual Redirect successful");
+		} else {
+			astman_send_error(s, m, "Secondary redirect failed");
 		}
 	} else {
 		astman_send_error(s, m, "Redirect failed");
 	}
 
-	chan = ast_channel_unref(chan);
-	if (chan2) {
-		chan2 = ast_channel_unref(chan2);
+	/* Release the bridge wait. */
+	if (chan->pbx) {
+		ast_channel_lock(chan);
+		ast_clear_flag(chan, AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
+		ast_channel_unlock(chan);
+	}
+	if (chan2->pbx) {
+		ast_channel_lock(chan2);
+		ast_clear_flag(chan2, AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
+		ast_channel_unlock(chan2);
 	}
 
+	chan2 = ast_channel_unref(chan2);
+	chan = ast_channel_unref(chan);
 	return 0;
 }
 
@@ -4083,6 +4154,7 @@ static int action_originate(struct mansession *s, const struct message *m)
 				strcasestr(app, "agi") ||         /* AGI(/bin/rm,-rf /)
 				                                     EAGI(/bin/rm,-rf /)       */
 				strcasestr(app, "mixmonitor") ||  /* MixMonitor(blah,,rm -rf)  */
+				strcasestr(app, "externalivr") || /* ExternalIVR(rm -rf)       */
 				(strstr(appdata, "SHELL") && (bad_appdata = 1)) ||       /* NoOp(${SHELL(rm -rf /)})  */
 				(strstr(appdata, "EVAL") && (bad_appdata = 1))           /* NoOp(${EVAL(${some_var_containing_SHELL})}) */
 				)) {
@@ -4677,7 +4749,7 @@ static int process_message(struct mansession *s, const struct message *m)
 			|| !strcasecmp(action, "Challenge"))) {
 		user = astman_get_header(m, "Username");
 
-		if (check_manager_session_inuse(user)) {
+		if (!ast_strlen_zero(user) && check_manager_session_inuse(user)) {
 			report_session_limit(s);
 			sleep(1);
 			mansession_lock(s);
@@ -4780,8 +4852,9 @@ static int get_input(struct mansession *s, char *output)
 	}
 	if (s->session->inlen >= maxlen) {
 		/* no crlf found, and buffer full - sorry, too long for us */
-		ast_log(LOG_WARNING, "Dumping long line with no return from %s: %s\n", ast_inet_ntoa(s->session->sin.sin_addr), src);
+		ast_log(LOG_WARNING, "Discarding message from %s. Line too long: %.25s...\n", ast_inet_ntoa(s->session->sin.sin_addr), src);
 		s->session->inlen = 0;
+		s->parsing = MESSAGE_LINE_TOO_LONG;
 	}
 	res = 0;
 	while (res == 0) {
@@ -4840,6 +4913,23 @@ static int get_input(struct mansession *s, char *output)
 
 /*!
  * \internal
+ * \brief Error handling for sending parse errors. This function handles locking, and clearing the
+ * parse error flag.
+ *
+ * \param s AMI session to process action request.
+ * \param m Message that's in error.
+ * \param error Error message to send.
+ */
+static void handle_parse_error(struct mansession *s, struct message *m, char *error)
+{
+	mansession_lock(s);
+	astman_send_error(s, m, error);
+	s->parsing = MESSAGE_OKAY;
+	mansession_unlock(s);
+}
+
+/*!
+ * \internal
  * \brief Read and process an AMI action request.
  *
  * \param s AMI session to process action request.
@@ -4891,7 +4981,15 @@ static int do_message(struct mansession *s)
 					mansession_unlock(s);
 					res = 0;
 				} else {
-					res = process_message(s, &m) ? -1 : 0;
+					switch (s->parsing) {
+					case MESSAGE_OKAY:
+						res = process_message(s, &m) ? -1 : 0;
+						break;
+					case MESSAGE_LINE_TOO_LONG:
+						handle_parse_error(s, &m, "Failed to parse message: line too long");
+						res = 0;
+						break;
+					}
 				}
 				break;
 			} else if (m.hdrcount < ARRAY_LEN(m.headers)) {
@@ -5031,6 +5129,10 @@ static void purge_sessions(int n_max)
 	struct mansession_session *session;
 	time_t now = time(NULL);
 	struct ao2_iterator i;
+
+	if (!sessions) {
+		return;
+	}
 
 	i = ao2_iterator_init(sessions, 0);
 	while ((session = ao2_iterator_next(&i)) && n_max > 0) {
@@ -6571,6 +6673,92 @@ static void load_channelvars(struct ast_variable *var)
 	AST_RWLIST_UNLOCK(&channelvars);
 }
 
+/*! \internal \brief Free a user record.  Should already be removed from the list */
+static void manager_free_user(struct ast_manager_user *user)
+{
+	if (user->a1_hash) {
+		ast_free(user->a1_hash);
+	}
+	if (user->secret) {
+		ast_free(user->secret);
+	}
+	ao2_t_callback(user->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
+	ao2_t_callback(user->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
+	ao2_t_ref(user->whitefilters, -1, "decrement ref for white container, should be last one");
+	ao2_t_ref(user->blackfilters, -1, "decrement ref for black container, should be last one");
+	ast_free_ha(user->ha);
+	ast_free(user);
+}
+
+/*! \internal \brief Clean up resources on Asterisk shutdown */
+static void manager_shutdown(void)
+{
+	struct ast_manager_user *user;
+
+	if (registered) {
+		ast_manager_unregister("Ping");
+		ast_manager_unregister("Events");
+		ast_manager_unregister("Logoff");
+		ast_manager_unregister("Login");
+		ast_manager_unregister("Challenge");
+		ast_manager_unregister("Hangup");
+		ast_manager_unregister("Status");
+		ast_manager_unregister("Setvar");
+		ast_manager_unregister("Getvar");
+		ast_manager_unregister("GetConfig");
+		ast_manager_unregister("GetConfigJSON");
+		ast_manager_unregister("UpdateConfig");
+		ast_manager_unregister("CreateConfig");
+		ast_manager_unregister("ListCategories");
+		ast_manager_unregister("Redirect");
+		ast_manager_unregister("Atxfer");
+		ast_manager_unregister("Originate");
+		ast_manager_unregister("Command");
+		ast_manager_unregister("ExtensionState");
+		ast_manager_unregister("AbsoluteTimeout");
+		ast_manager_unregister("MailboxStatus");
+		ast_manager_unregister("MailboxCount");
+		ast_manager_unregister("ListCommands");
+		ast_manager_unregister("SendText");
+		ast_manager_unregister("UserEvent");
+		ast_manager_unregister("WaitEvent");
+		ast_manager_unregister("CoreSettings");
+		ast_manager_unregister("CoreStatus");
+		ast_manager_unregister("Reload");
+		ast_manager_unregister("CoreShowChannels");
+		ast_manager_unregister("ModuleLoad");
+		ast_manager_unregister("ModuleCheck");
+		ast_manager_unregister("AOCMessage");
+		ast_manager_unregister("Filter");
+		ast_cli_unregister_multiple(cli_manager, ARRAY_LEN(cli_manager));
+	}
+
+	ast_tcptls_server_stop(&ami_desc);
+	ast_tcptls_server_stop(&amis_desc);
+
+	if (ami_tls_cfg.certfile) {
+		ast_free(ami_tls_cfg.certfile);
+		ami_tls_cfg.certfile = NULL;
+	}
+	if (ami_tls_cfg.pvtfile) {
+		ast_free(ami_tls_cfg.pvtfile);
+		ami_tls_cfg.pvtfile = NULL;
+	}
+	if (ami_tls_cfg.cipher) {
+		ast_free(ami_tls_cfg.cipher);
+		ami_tls_cfg.cipher = NULL;
+	}
+
+	if (sessions) {
+		ao2_ref(sessions, -1);
+		sessions = NULL;
+	}
+
+	while ((user = AST_LIST_REMOVE_HEAD(&users, list))) {
+		manager_free_user(user);
+	}
+}
+
 static int __init_manager(int reload)
 {
 	struct ast_config *ucfg = NULL, *cfg = NULL;
@@ -6628,6 +6816,9 @@ static int __init_manager(int reload)
 		/* Append placeholder event so master_eventq never runs dry */
 		append_event("Event: Placeholder\r\n\r\n", 0);
 	}
+
+	ast_register_atexit(manager_shutdown);
+
 	if ((cfg = ast_config_load2("manager.conf", "manager", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
 		return 0;
 	}
@@ -6944,19 +7135,7 @@ static int __init_manager(int reload)
 		/* We do not need to keep this user so take them out of the list */
 		AST_RWLIST_REMOVE_CURRENT(list);
 		ast_debug(4, "Pruning user '%s'\n", user->username);
-		/* Free their memory now */
-		if (user->a1_hash) {
-			ast_free(user->a1_hash);
-		}
-		if (user->secret) {
-			ast_free(user->secret);
-		}
-		ao2_t_callback(user->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
-		ao2_t_callback(user->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
-		ao2_t_ref(user->whitefilters, -1, "decrement ref for white container, should be last one");
-		ao2_t_ref(user->blackfilters, -1, "decrement ref for black container, should be last one");
-		ast_free_ha(user->ha);
-		ast_free(user);
+		manager_free_user(user);
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END;
 
@@ -7004,6 +7183,7 @@ static int __init_manager(int reload)
 	} else if (ast_ssl_setup(amis_desc.tls_cfg)) {
 		ast_tcptls_server_start(&amis_desc);
 	}
+
 	return 0;
 }
 

@@ -248,9 +248,9 @@ int ast_base64encode(char *dst, const unsigned char *src, int srclen, int max);
  */
 int ast_base64decode(unsigned char *dst, const char *src, int max);
 
-/*! \brief Turn text string to URI-encoded %XX version 
+/*! \brief Turn text string to URI-encoded %XX version
  *
- * \note 
+ * \note
  *  At this point, this function is encoding agnostic; it does not
  *  check whether it is fed legal UTF-8. We escape control
  *  characters (\x00-\x1F\x7F), '%', and all characters above 0x7F.
@@ -269,9 +269,23 @@ int ast_base64decode(unsigned char *dst, const char *src, int max);
 char *ast_uri_encode(const char *string, char *outbuf, int buflen, int do_special_char);
 
 /*!	\brief Decode URI, URN, URL (overwrite string)
-	\param s	String to be decoded 
+	\param s	String to be decoded
  */
 void ast_uri_decode(char *s);
+
+/*! ast_xml_escape
+	\brief Escape reserved characters for use in XML.
+
+	If \a outbuf is too short, the output string will be truncated.
+	Regardless, the output will always be null terminated.
+
+	\param string String to be converted
+	\param outbuf Resulting encoded string
+	\param buflen Size of output buffer
+	\return 0 for success
+	\return -1 if buflen is too short.
+ */
+int ast_xml_escape(const char *string, char *outbuf, size_t buflen);
 
 /*!
  * \brief Escape characters found in a quoted string.
@@ -623,13 +637,22 @@ int _ast_vasprintf(char **ret, const char *file, int lineno, const char *func, c
 
 #endif /* AST_DEBUG_MALLOC */
 
+/*!
+  \brief call __builtin_alloca to ensure we get gcc builtin semantics
+  \param size The size of the buffer we want allocated
+
+  This macro will attempt to allocate memory from the stack.  If it fails
+  you won't get a NULL returned, but a SEGFAULT if you're lucky.
+*/
+#define ast_alloca(size) __builtin_alloca(size)
+
 #if !defined(ast_strdupa) && defined(__GNUC__)
 /*!
   \brief duplicate a string in memory from the stack
   \param s The string to duplicate
 
-  This macro will duplicate the given string.  It returns a pointer to the stack
-  allocatted memory for the new string.
+  This macro will duplicate the given string.  It returns a pointer to stack
+  allocated memory for the new string.
 */
 #define ast_strdupa(s)                                                    \
 	(__extension__                                                    \
@@ -697,31 +720,26 @@ int ast_parse_digest(const char *digest, struct ast_http_digest *d, int request,
 
 
 #ifdef AST_DEVMODE
+void __ast_assert_failed(int condition, const char *condition_str, const char *file, int line, const char *function);
 #define ast_assert(a) _ast_assert(a, # a, __FILE__, __LINE__, __PRETTY_FUNCTION__)
-static void force_inline _ast_assert(int condition, const char *condition_str, 
-	const char *file, int line, const char *function)
+static void force_inline _ast_assert(int condition, const char *condition_str, const char *file, int line, const char *function)
 {
 	if (__builtin_expect(!condition, 1)) {
-		/* Attempt to put it into the logger, but hope that at least someone saw the
-		 * message on stderr ... */
-		ast_log(__LOG_ERROR, file, line, function, "FRACK!, Failed assertion %s (%d)\n",
-			condition_str, condition);
-		fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
-			condition_str, condition, line, function, file);
-		/* Give the logger a chance to get the message out, just in case we abort(), or
-		 * Asterisk crashes due to whatever problem just happened after we exit ast_assert(). */
-		usleep(1);
-#ifdef DO_CRASH
-		abort();
-		/* Just in case abort() doesn't work or something else super silly,
-		 * and for Qwell's amusement. */
-		*((int*)0)=0;
-#endif
+		__ast_assert_failed(condition, condition_str, file, line, function);
 	}
 }
 #else
 #define ast_assert(a)
 #endif
+
+/*!
+ * \brief Force a crash if DO_CRASH is defined.
+ *
+ * \note If DO_CRASH is not defined then the function returns.
+ *
+ * \return Nothing
+ */
+void ast_do_crash(void);
 
 #include "asterisk/strings.h"
 

@@ -51,8 +51,8 @@ int __ast_pthread_mutex_init(int tracking, const char *filename, int lineno, con
 	int res;
 	pthread_mutexattr_t  attr;
 
-	t->track = NULL;
 #ifdef DEBUG_THREADS
+	t->track = NULL;
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS) && defined(CAN_COMPARE_MUTEX_TO_INIT_VALUE)
 	if ((t->mutex) != ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
 /*
@@ -1141,13 +1141,13 @@ int __ast_rwlock_timedrdlock(const char *filename, int line, const char *func, a
 	res = pthread_rwlock_timedrdlock(&t->lock, abs_timeout);
 #else
 	do {
-		struct timeval _start = ast_tvnow(), _diff;
+		struct timeval _now;
 		for (;;) {
 			if (!(res = pthread_rwlock_tryrdlock(&t->lock))) {
 				break;
 			}
-			_diff = ast_tvsub(ast_tvnow(), _start);
-			if (_diff.tv_sec > abs_timeout->tv_sec || (_diff.tv_sec == abs_timeout->tv_sec && _diff.tv_usec * 1000 > abs_timeout->tv_nsec)) {
+			_now = ast_tvnow();
+			if (_now.tv_sec > abs_timeout->tv_sec || (_now.tv_sec == abs_timeout->tv_sec && _now.tv_usec * 1000 > abs_timeout->tv_nsec)) {
 				break;
 			}
 			usleep(1);
@@ -1244,13 +1244,13 @@ int __ast_rwlock_timedwrlock(const char *filename, int line, const char *func, a
 	res = pthread_rwlock_timedwrlock(&t->lock, abs_timeout);
 #else
 	do {
-		struct timeval _start = ast_tvnow(), _diff;
+		struct timeval _now;
 		for (;;) {
 			if (!(res = pthread_rwlock_trywrlock(&t->lock))) {
 				break;
 			}
-			_diff = ast_tvsub(ast_tvnow(), _start);
-			if (_diff.tv_sec > abs_timeout->tv_sec || (_diff.tv_sec == abs_timeout->tv_sec && _diff.tv_usec * 1000 > abs_timeout->tv_nsec)) {
+			_now = ast_tvnow();
+			if (_now.tv_sec > abs_timeout->tv_sec || (_now.tv_sec == abs_timeout->tv_sec && _now.tv_usec * 1000 > abs_timeout->tv_nsec)) {
 				break;
 			}
 			usleep(1);
