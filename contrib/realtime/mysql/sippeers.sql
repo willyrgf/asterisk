@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS `sippeers` (
       `callingpres` enum('allowed_not_screened','allowed_passed_screen','allowed_failed_screen','allowed','prohib_not_screened','prohib_passed_screen','prohib_failed_screen','prohib') DEFAULT NULL,
       `mohinterpret` varchar(40) DEFAULT NULL,
       `mohsuggest` varchar(40) DEFAULT NULL,
+      `path` varchar(256) DEFAULT NULL,
       `parkinglot` varchar(40) DEFAULT NULL,
       `hasvoicemail` enum('yes','no') DEFAULT NULL,
       `subscribemwi` enum('yes','no') DEFAULT NULL,
