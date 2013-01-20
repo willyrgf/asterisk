@@ -21,12 +21,22 @@
 ===
 ===========================================================
 
-From 11 to 12:
 
 AMI:
  - The SIP SIPqualifypeer action now sends a response indicating it will qualify
    a peer once a peer has been found to qualify.  Once the qualify has been
    completed it will now issue a SIPqualifypeerdone event.
+ - Version 1.4 - The details of what happens to a channel when a masquerade
+   happens (transfers, parking, etc) have changed.
+   - The Masquerade event now includes the Uniqueid's of the clone and original
+     channels.
+   - Channels no longer swap Uniqueid's as a result of the masquerade.
+   - Instead of a shell game of renames, there's now a single rename, appending
+     <ZOMBIE> to the name of the original channel.
+
+CEL:
+ - The Uniqueid field for a channel is now a stable identifier, and will not
+   change due to transfers, parking, etc.
 
 Queues:
  - Queue logging for PAUSEALL/UNPAUSEALL now only occurs if the interface this is
@@ -38,6 +48,8 @@ Queues:
    now only record a disposition of BUSY if all Queue members were actually
    busy on a call or some Queue members were busy or paused.  Previously, any
    Queue member being paused would result in a disposition of BUSY.
+ - Removed the queues.conf check_state_unknown option.  It is no longer
+   necessary.
 
 Dial:
  - Now recognizes 'W' to pause sending DTMF for one second in addition to
@@ -64,6 +76,9 @@ Dialplan:
  - Asterisk has always had code to ignore dash '-' characters that are not
    part of a character set in the dialplan extensions.  The code now
    consistently ignores these characters when matching dialplan extensions.
+ - BRIDGE_FEATURES channel variable is now casesensitive for feature letter codes.
+   Uppercase variants apply them to the calling party while lowercase variants
+   apply them to the called party.
 
 From 10 to 11:
 

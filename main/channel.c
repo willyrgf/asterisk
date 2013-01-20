@@ -73,6 +73,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/data.h"
 #include "asterisk/channel_internal.h"
 #include "asterisk/features.h"
+#include "asterisk/test.h"
 
 /*** DOCUMENTATION
  ***/
@@ -155,11 +156,13 @@ static struct ao2_container *channels;
  *
  * \ref causes.h
 */
-static const struct {
+struct causes_map {
 	int cause;
 	const char *name;
 	const char *desc;
-} causes[] = {
+};
+
+static const struct causes_map causes[] = {
 	{ AST_CAUSE_UNALLOCATED, "UNALLOCATED", "Unallocated (unassigned) number" },
 	{ AST_CAUSE_NO_ROUTE_TRANSIT_NET, "NO_ROUTE_TRANSIT_NET", "No route to specified transmit network" },
 	{ AST_CAUSE_NO_ROUTE_DESTINATION, "NO_ROUTE_DESTINATION", "No route to destination" },
@@ -602,6 +605,7 @@ int ast_check_hangup(struct ast_channel *chan)
 	if (ast_tvdiff_ms(*ast_channel_whentohangup(chan), ast_tvnow()) > 0)		/* no if hangup time has not come yet. */
 		return 0;
 	ast_debug(4, "Hangup time has come: %" PRIi64 "\n", ast_tvdiff_ms(*ast_channel_whentohangup(chan), ast_tvnow()));
+	ast_test_suite_event_notify("HANGUP_TIME", "Channel: %s", ast_channel_name(chan));
 	ast_channel_softhangup_internal_flag_add(chan, AST_SOFTHANGUP_TIMEOUT);	/* record event */
 	return 1;
 }
@@ -2479,7 +2483,7 @@ static void ast_channel_destructor(void *obj)
 		 * instance is dead, we don't know the state of all other possible
 		 * instances.
 		 */
-		ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, device_name);
+		ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, (ast_test_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE) ? AST_DEVSTATE_NOT_CACHABLE : AST_DEVSTATE_CACHABLE), device_name);
 	}
 
 	ast_channel_nativeformats_set(chan, ast_format_cap_destroy(ast_channel_nativeformats(chan)));
@@ -3242,6 +3246,7 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 				now = ast_tvnow();
 			diff = ast_tvsub(*ast_channel_whentohangup(c[x]), now);
 			if (diff.tv_sec < 0 || ast_tvzero(diff)) {
+				ast_test_suite_event_notify("HANGUP_TIME", "Channel: %s", ast_channel_name(c[x]));
 				/* Should already be hungup */
 				ast_channel_softhangup_internal_flag_add(c[x], AST_SOFTHANGUP_TIMEOUT);
 				ast_channel_unlock(c[x]);
@@ -3315,6 +3320,7 @@ struct ast_channel *ast_waitfor_nandfds(struct ast_channel **c, int n, int *fds,
 		now = ast_tvnow();
 		for (x = 0; x < n; x++) {
 			if (!ast_tvzero(*ast_channel_whentohangup(c[x])) && ast_tvcmp(*ast_channel_whentohangup(c[x]), now) <= 0) {
+				ast_test_suite_event_notify("HANGUP_TIME", "Channel: %s", ast_channel_name(c[x]));
 				ast_channel_softhangup_internal_flag_add(c[x], AST_SOFTHANGUP_TIMEOUT);
 				if (winner == NULL) {
 					winner = c[x];
@@ -6496,7 +6502,11 @@ static void __ast_change_name_nolink(struct ast_channel *chan, const char *newna
 			<synopsis>Raised when the name of a channel is changed.</synopsis>
 		</managerEventInstance>
 	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "Rename", "Channel: %s\r\nNewname: %s\r\nUniqueid: %s\r\n", ast_channel_name(chan), newname, ast_channel_uniqueid(chan));
+	ast_manager_event(chan, EVENT_FLAG_CALL, "Rename",
+		"Channel: %s\r\n"
+		"Newname: %s\r\n"
+		"Uniqueid: %s\r\n",
+		ast_channel_name(chan), newname, ast_channel_uniqueid(chan));
 	ast_channel_name_set(chan, newname);
 }
 
@@ -6855,10 +6865,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	struct ast_format rformat;
 	struct ast_format wformat;
 	struct ast_format tmp_format;
-	char newn[AST_CHANNEL_NAME];
-	char orig[AST_CHANNEL_NAME];
-	char masqn[AST_CHANNEL_NAME];
-	char zombn[AST_CHANNEL_NAME];
+	char tmp_name[AST_CHANNEL_NAME];
+	const char *tmp_id;
 	char clone_sending_dtmf_digit;
 	struct timeval clone_sending_dtmf_tv;
 
@@ -6961,11 +6969,17 @@ int ast_do_masquerade(struct ast_channel *original)
 				<parameter name="Clone">
 					<para>The name of the channel whose information will be going into the Original channel.</para>
 				</parameter>
+				<parameter name="CloneUniqueid">
+					<para>The uniqueid of the channel whose information will be going into the Original channel.</para>
+				</parameter>
 				<parameter name="CloneState">
 					<para>The current state of the clone channel.</para>
 				</parameter>
 				<parameter name="Original">
 					<para>The name of the channel whose information will be replaced by the Clone channel's information.</para>
+				</parameter>
+				<parameter name="OriginalUniqueid">
+					<para>The uniqueid of the channel whose information will be replaced by the Clone channel's information.</para>
 				</parameter>
 				<parameter name="OriginalState">
 					<para>The current state of the original channel.</para>
@@ -6975,10 +6989,12 @@ int ast_do_masquerade(struct ast_channel *original)
 	***/
 	ast_manager_event_multichan(EVENT_FLAG_CALL, "Masquerade", 2, chans,
 		"Clone: %s\r\n"
+		"CloneUniqueid: %s\r\n"
 		"CloneState: %s\r\n"
 		"Original: %s\r\n"
+		"OriginalUniqueid: %s\r\n"
 		"OriginalState: %s\r\n",
-		ast_channel_name(clonechan), ast_state2str(ast_channel_state(clonechan)), ast_channel_name(original), ast_state2str(ast_channel_state(original)));
+		ast_channel_name(clonechan), ast_channel_uniqueid(clonechan), ast_state2str(ast_channel_state(clonechan)), ast_channel_name(original), ast_channel_uniqueid(original), ast_state2str(ast_channel_state(original)));
 
 	/*
 	 * Remember the original read/write formats.  We turn off any
@@ -6993,18 +7009,23 @@ int ast_do_masquerade(struct ast_channel *original)
 	clone_sending_dtmf_digit = ast_channel_sending_dtmf_digit(clonechan);
 	clone_sending_dtmf_tv = ast_channel_sending_dtmf_tv(clonechan);
 
-	/* Save the original name */
-	ast_copy_string(orig, ast_channel_name(original), sizeof(orig));
-	/* Save the new name */
-	ast_copy_string(newn, ast_channel_name(clonechan), sizeof(newn));
-	/* Create the masq name */
-	snprintf(masqn, sizeof(masqn), "%s<MASQ>", newn);
+	/* Swap uniqueid's of the channels. This needs to happen before channel renames,
+	 * so rename events get the proper id's.
+	 */
+	tmp_id = ast_strdupa(ast_channel_uniqueid(clonechan));
+	ast_channel_uniqueid_set(clonechan, ast_channel_uniqueid(original));
+	ast_channel_uniqueid_set(original, tmp_id);
 
-	/* Mangle the name of the clone channel */
-	__ast_change_name_nolink(clonechan, masqn);
+	/* Swap channel names. This uses ast_channel_name_set directly, so we
+	 * don't get any spurious rename events.
+	 */
+	ast_copy_string(tmp_name, ast_channel_name(clonechan), sizeof(tmp_name));
+	ast_channel_name_set(clonechan, ast_channel_name(original));
+	ast_channel_name_set(original, tmp_name);
 
-	/* Copy the name from the clone channel */
-	__ast_change_name_nolink(original, newn);
+	/* Now zombify the clonechan. This gets a real rename event. */
+	snprintf(tmp_name, sizeof(tmp_name), "%s<ZOMBIE>", ast_channel_name(clonechan)); /* quick, hide the brains! */
+	__ast_change_name_nolink(clonechan, tmp_name);
 
 	/* share linked id's */
 	ast_channel_set_linkgroup(original, clonechan);
@@ -7070,10 +7091,6 @@ int ast_do_masquerade(struct ast_channel *original)
 	origstate = ast_channel_state(original);
 	ast_channel_state_set(original, ast_channel_state(clonechan));
 	ast_channel_state_set(clonechan, origstate);
-
-	/* Mangle the name of the clone channel */
-	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
-	__ast_change_name_nolink(clonechan, zombn);
 
 	/* Update the type. */
 	t_pvt = ast_channel_monitor(original);
@@ -7396,7 +7413,7 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 	/* We have to pass AST_DEVICE_UNKNOWN here because it is entirely possible that the channel driver
 	 * for this channel is using the callback method for device state. If we pass in an actual state here
 	 * we override what they are saying the state is and things go amuck. */
-	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, name);
+	ast_devstate_changed_literal(AST_DEVICE_UNKNOWN, (ast_test_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE) ? AST_DEVSTATE_NOT_CACHABLE : AST_DEVSTATE_CACHABLE), name);
 
 	/* setstate used to conditionally report Newchannel; this is no more */
 	/*** DOCUMENTATION
@@ -7455,22 +7472,26 @@ struct ast_channel *ast_bridged_channel(struct ast_channel *chan)
 
 static void bridge_playfile(struct ast_channel *chan, struct ast_channel *peer, const char *sound, int remain)
 {
-	int min = 0, sec = 0, check;
+	int check;
 
 	check = ast_autoservice_start(peer);
-	if (check)
+	if (check) {
 		return;
-
-	if (remain > 0) {
-		if (remain / 60 > 1) {
-			min = remain / 60;
-			sec = remain % 60;
-		} else {
-			sec = remain;
-		}
 	}
 
-	if (!strcmp(sound,"timeleft")) {	/* Queue support */
+	if (!strcmp(sound, "timeleft")) {	/* Queue support */
+		int min = 0;
+		int sec = 0;
+
+		if (remain > 0) {
+			if (remain / 60 > 1) {
+				min = remain / 60;
+				sec = remain % 60;
+			} else {
+				sec = remain;
+			}
+		}
+
 		ast_stream_and_wait(chan, "vm-youhave", "");
 		if (min) {
 			ast_say_number(chan, min, AST_DIGIT_ANY, ast_channel_language(chan), NULL);
@@ -7545,16 +7566,18 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 			res = AST_BRIDGE_RETRY;
 			break;
 		}
-		if (config->nexteventts.tv_sec) {
+		if (!ast_tvzero(config->nexteventts)) {
 			to = ast_tvdiff_ms(config->nexteventts, ast_tvnow());
 			if (to <= 0) {
-				if (config->timelimit && !config->feature_timer && !ast_test_flag(config, AST_FEATURE_WARNING_ACTIVE)) {
-					res = AST_BRIDGE_RETRY;
-					/* generic bridge ending to play warning */
-					ast_set_flag(config, AST_FEATURE_WARNING_ACTIVE);
-				} else if (config->feature_timer) {
+				if (config->feature_timer) {
 					/* feature timer expired - make sure we do not play warning */
 					ast_clear_flag(config, AST_FEATURE_WARNING_ACTIVE);
+					/* Indicate a feature timeout. */
+					res = AST_BRIDGE_RETRY;
+				} else if (config->timelimit
+					&& !ast_test_flag(config, AST_FEATURE_WARNING_ACTIVE)) {
+					/* generic bridge ending to play warning */
+					ast_set_flag(config, AST_FEATURE_WARNING_ACTIVE);
 					res = AST_BRIDGE_RETRY;
 				} else {
 					res = AST_BRIDGE_COMPLETE;
@@ -7562,17 +7585,6 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				break;
 			}
 		} else {
-			/* If a feature has been started and the bridge is configured to
-			 * to not break, leave the channel bridge when the feature timer
-			 * time has elapsed so the DTMF will be sent to the other side.
-			 */
-			if (!ast_tvzero(config->nexteventts)) {
-				int diff = ast_tvdiff_ms(config->nexteventts, ast_tvnow());
-				if (diff <= 0) {
-					res = AST_BRIDGE_RETRY;
-					break;
-				}
-			}
 			to = -1;
 		}
 		/* Calculate the appropriate max sleep interval - in general, this is the time,
@@ -7755,40 +7767,41 @@ static void manager_bridge_event(int onoff, int type, struct ast_channel *c0, st
 		S_COR(ast_channel_caller(c1)->id.number.valid, ast_channel_caller(c1)->id.number.str, ""));
 }
 
+static void update_bridge_vars_set(struct ast_channel *chan, const char *name, const char *pvtid)
+{
+	if (!ast_strlen_zero(pbx_builtin_getvar_helper(chan, "BRIDGEPEER"))) {
+		pbx_builtin_setvar_helper(chan, "BRIDGEPEER", name);
+	}
+	if (pvtid) {
+		pbx_builtin_setvar_helper(chan, "BRIDGEPVTCALLID", pvtid);
+	}
+}
+
 static void update_bridge_vars(struct ast_channel *c0, struct ast_channel *c1)
 {
 	const char *c0_name;
 	const char *c1_name;
 	const char *c0_pvtid = NULL;
 	const char *c1_pvtid = NULL;
+#define UPDATE_BRIDGE_VARS_GET(chan, name, pvtid)									\
+	do {																			\
+		name = ast_strdupa(ast_channel_name(chan));									\
+		if (ast_channel_tech(chan)->get_pvt_uniqueid) {								\
+			pvtid = ast_strdupa(ast_channel_tech(chan)->get_pvt_uniqueid(chan));	\
+		}																			\
+	} while (0)
 
 	ast_channel_lock(c1);
-	c1_name = ast_strdupa(ast_channel_name(c1));
-	if (ast_channel_tech(c1)->get_pvt_uniqueid) {
-		c1_pvtid = ast_strdupa(ast_channel_tech(c1)->get_pvt_uniqueid(c1));
-	}
+	UPDATE_BRIDGE_VARS_GET(c1, c1_name, c1_pvtid);
 	ast_channel_unlock(c1);
 
 	ast_channel_lock(c0);
-	if (!ast_strlen_zero(pbx_builtin_getvar_helper(c0, "BRIDGEPEER"))) {
-		pbx_builtin_setvar_helper(c0, "BRIDGEPEER", c1_name);
-	}
-	if (c1_pvtid) {
-		pbx_builtin_setvar_helper(c0, "BRIDGEPVTCALLID", c1_pvtid);
-	}
-	c0_name = ast_strdupa(ast_channel_name(c0));
-	if (ast_channel_tech(c0)->get_pvt_uniqueid) {
-		c0_pvtid = ast_strdupa(ast_channel_tech(c0)->get_pvt_uniqueid(c0));
-	}
+	update_bridge_vars_set(c0, c1_name, c1_pvtid);
+	UPDATE_BRIDGE_VARS_GET(c0, c0_name, c0_pvtid);
 	ast_channel_unlock(c0);
 
 	ast_channel_lock(c1);
-	if (!ast_strlen_zero(pbx_builtin_getvar_helper(c1, "BRIDGEPEER"))) {
-		pbx_builtin_setvar_helper(c1, "BRIDGEPEER", c0_name);
-	}
-	if (c0_pvtid) {
-		pbx_builtin_setvar_helper(c1, "BRIDGEPVTCALLID", c0_pvtid);
-	}
+	update_bridge_vars_set(c1, c0_name, c0_pvtid);
 	ast_channel_unlock(c1);
 }
 
@@ -7823,7 +7836,7 @@ static void bridge_play_sounds(struct ast_channel *c0, struct ast_channel *c1)
 enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_channel *c1,
 					  struct ast_bridge_config *config, struct ast_frame **fo, struct ast_channel **rc)
 {
-	enum ast_bridge_result res = AST_BRIDGE_COMPLETE;
+	enum ast_bridge_result res;
 	struct ast_format_cap *o0nativeformats;
 	struct ast_format_cap *o1nativeformats;
 	long time_left_ms=0;
@@ -7835,18 +7848,18 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	if (ast_channel_internal_bridged_channel(c0)) {
 		ast_log(LOG_WARNING, "%s is already in a bridge with %s\n",
 			ast_channel_name(c0), ast_channel_name(ast_channel_internal_bridged_channel(c0)));
-		return -1;
+		return AST_BRIDGE_FAILED;
 	}
 	if (ast_channel_internal_bridged_channel(c1)) {
 		ast_log(LOG_WARNING, "%s is already in a bridge with %s\n",
 			ast_channel_name(c1), ast_channel_name(ast_channel_internal_bridged_channel(c1)));
-		return -1;
+		return AST_BRIDGE_FAILED;
 	}
 
 	/* Stop if we're a zombie or need a soft hangup */
 	if (ast_test_flag(ast_channel_flags(c0), AST_FLAG_ZOMBIE) || ast_check_hangup_locked(c0) ||
 	    ast_test_flag(ast_channel_flags(c1), AST_FLAG_ZOMBIE) || ast_check_hangup_locked(c1))
-		return -1;
+		return AST_BRIDGE_FAILED;
 
 	o0nativeformats = ast_format_cap_dup(ast_channel_nativeformats(c0));
 	o1nativeformats = ast_format_cap_dup(ast_channel_nativeformats(c1));
@@ -7854,7 +7867,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		ast_format_cap_destroy(o0nativeformats);
 		ast_format_cap_destroy(o1nativeformats);
 		ast_log(LOG_WARNING, "failed to copy native formats\n");
-		return -1;
+		return AST_BRIDGE_FAILED;
 	}
 
 	caller_warning = ast_test_flag(&config->features_caller, AST_FEATURE_PLAY_WARNING);
@@ -7895,8 +7908,7 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			config->nexteventts = ast_tvsub(config->nexteventts, ast_samp2tv(next_warn, 1000));
 		}
 	} else {
-		config->nexteventts.tv_sec = 0;
-		config->nexteventts.tv_usec = 0;
+		config->nexteventts = ast_tv(0, 0);
 	}
 
 	if (!ast_channel_tech(c0)->send_digit_begin)
@@ -7913,8 +7925,6 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		struct timeval now = { 0, };
 		int to;
 
-		to = -1;
-
 		if (!ast_tvzero(config->nexteventts)) {
 			now = ast_tvnow();
 			to = ast_tvdiff_ms(config->nexteventts, now);
@@ -7925,6 +7935,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 				}
 				to = 0;
 			}
+		} else {
+			to = -1;
 		}
 
 		if (config->timelimit) {
@@ -7938,7 +7950,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 				if (callee_warning && config->end_sound)
 					bridge_playfile(c1, c0, config->end_sound, 0);
 				*fo = NULL;
-				res = 0;
+				res = AST_BRIDGE_COMPLETE;
+				ast_test_suite_event_notify("BRIDGE_TIMELIMIT",
+					"Channel1: %s\r\n"
+					"Channel2: %s",
+					ast_channel_name(c0), ast_channel_name(c1));
 				break;
 			}
 
@@ -7969,15 +7985,13 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			}
 			ast_channel_internal_bridged_channel_set(c0, c1);
 			ast_channel_internal_bridged_channel_set(c1, c0);
-			ast_debug(1, "Unbridge signal received. Ending native bridge.\n");
-			continue;
 		}
 
 		/* Stop if we're a zombie or need a soft hangup */
 		if (ast_test_flag(ast_channel_flags(c0), AST_FLAG_ZOMBIE) || ast_check_hangup_locked(c0) ||
 		    ast_test_flag(ast_channel_flags(c1), AST_FLAG_ZOMBIE) || ast_check_hangup_locked(c1)) {
 			*fo = NULL;
-			res = 0;
+			res = AST_BRIDGE_COMPLETE;
 			ast_debug(1, "Bridge stops because we're zombie or need a soft hangup: c0=%s, c1=%s, flags: %s,%s,%s,%s\n",
 				ast_channel_name(c0), ast_channel_name(c1),
 				ast_test_flag(ast_channel_flags(c0), AST_FLAG_ZOMBIE) ? "Yes" : "No",
@@ -8000,28 +8014,21 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		    ast_framehook_list_is_empty(ast_channel_framehooks(c0)) && ast_framehook_list_is_empty(ast_channel_framehooks(c1)) &&
 		    !ast_channel_masq(c0) && !ast_channel_masqr(c0) && !ast_channel_masq(c1) && !ast_channel_masqr(c1)) {
 			int timeoutms = to - 1000 > 0 ? to - 1000 : to;
+
 			/* Looks like they share a bridge method and nothing else is in the way */
 			ast_set_flag(ast_channel_flags(c0), AST_FLAG_NBRIDGE);
 			ast_set_flag(ast_channel_flags(c1), AST_FLAG_NBRIDGE);
-			if ((res = ast_channel_tech(c0)->bridge(c0, c1, config->flags, fo, rc, timeoutms)) == AST_BRIDGE_COMPLETE) {
-				manager_bridge_event(0, 1, c0, c1);
+			res = ast_channel_tech(c0)->bridge(c0, c1, config->flags, fo, rc, timeoutms);
+			ast_clear_flag(ast_channel_flags(c0), AST_FLAG_NBRIDGE);
+			ast_clear_flag(ast_channel_flags(c1), AST_FLAG_NBRIDGE);
+			if (res == AST_BRIDGE_COMPLETE) {
 				ast_debug(1, "Returning from native bridge, channels: %s, %s\n", ast_channel_name(c0), ast_channel_name(c1));
 
-				ast_clear_flag(ast_channel_flags(c0), AST_FLAG_NBRIDGE);
-				ast_clear_flag(ast_channel_flags(c1), AST_FLAG_NBRIDGE);
-
 				if ((ast_channel_softhangup_internal_flag(c0) | ast_channel_softhangup_internal_flag(c1)) & AST_SOFTHANGUP_UNBRIDGE) {/* Bit operators are intentional. */
+					ast_debug(1, "Unbridge signal received. Ending native bridge.\n");
 					continue;
 				}
-
-				ast_channel_internal_bridged_channel_set(c0, NULL);
-				ast_channel_internal_bridged_channel_set(c1, NULL);
-				ast_format_cap_destroy(o0nativeformats);
-				ast_format_cap_destroy(o1nativeformats);
-				return res;
-			} else {
-				ast_clear_flag(ast_channel_flags(c0), AST_FLAG_NBRIDGE);
-				ast_clear_flag(ast_channel_flags(c1), AST_FLAG_NBRIDGE);
+				break;
 			}
 			switch (res) {
 			case AST_BRIDGE_RETRY:
@@ -8044,10 +8051,8 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 		    !(ast_channel_generator(c0) || ast_channel_generator(c1))) {
 			if (ast_channel_make_compatible(c0, c1)) {
 				ast_log(LOG_WARNING, "Can't make %s and %s compatible\n", ast_channel_name(c0), ast_channel_name(c1));
-				manager_bridge_event(0, 1, c0, c1);
-				ast_format_cap_destroy(o0nativeformats);
-				ast_format_cap_destroy(o1nativeformats);
-				return AST_BRIDGE_FAILED;
+				res = AST_BRIDGE_FAILED;
+				break;
 			}
 
 			ast_format_cap_copy(o0nativeformats, ast_channel_nativeformats(c0));

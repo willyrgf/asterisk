@@ -11,6 +11,7 @@
 --- Functionality changes from Asterisk 11 to Asterisk 12 --------------------
 ------------------------------------------------------------------------------
 
+
 AMI (Asterisk Manager Interface)
 ------------------
  * The SIPshowpeer action will now include a 'SubscribeContext' field for a peer
@@ -30,6 +31,26 @@ AMI (Asterisk Manager Interface)
    than 15 characters and no longer shows authorization requirement for commands.
    'Manager Show Command' now displays the privileges needed for using a given
    manager command instead.
+
+Channel Drivers
+------------------
+
+chan_mobile
+------------------
+ * Added general support for busy detection.
+
+ * Added ECAM command support for Sony Ericsson phones.
+
+
+Features
+-------------------
+ * The BRIDGE_FEATURES channel variable would previously only set features for
+   the calling party and would set this feature regardless of whether the
+   feature was in caps or in lowercase. Use of a caps feature for a letter
+   will now apply the feature to the calling party while use of a lowercase
+   letter will apply that feature to the called party.
+
+ * Add support for automixmonitor to the BRIDGE_FEATURES channel variable.
 
 Logging
 -------------------
@@ -939,8 +960,6 @@ Queue changes
  * Added member option ignorebusy this when set and ringinuse is not
    will allow per member control of multiple calls as ringinuse does for
    the Queue.
- * Added global option check_state_unknown to enforce checking of device state
-   when the device state is unknown app_queue will see unknown as available.
 
 Applications
 ------------

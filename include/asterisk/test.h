@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2009-2010, Digium, Inc.
+ * Copyright (C) 2009-2013, Digium, Inc.
  *
  * David Vossel <dvossel@digium.com>
  * Russell Bryant <russell@digium.com>
@@ -35,7 +35,7 @@
 #include "asterisk/strings.h"
 #endif
 
-/*! 
+/*!
 
 \page AstUnitTestAPI Asterisk Unit Test API
 
@@ -57,7 +57,7 @@
 
 \code
    AST_TEST_DEFINE(sample_test_cb) \\The name of the callback function
-   {                               \\The the function's body 
+   {                               \\The the function's body
       switch (cmd) {
       case TEST_INIT:
           info->name = "sample_test";
@@ -86,7 +86,7 @@
       Details of the test execution, especially failure details, should be provided
       by using the ast_test_status_update() function.
 
-\subsection RegisterTest Register a Test 
+\subsection RegisterTest Register a Test
 
    Register the test using the AST_TEST_REGISTER macro.
 
@@ -145,12 +145,10 @@
  * \param state		The state the application has changed to
  * \param fmt		The message with format parameters to add to the manager event
  *
- * \returns 0 on success
- * \returns any other value on failure
+ * \return Nothing
  */
-int __ast_test_suite_event_notify(const char *file, const char *func, int line,
-		const char *state, const char *fmt, ...)
-		__attribute__((format(printf, 5, 6)));
+void __ast_test_suite_event_notify(const char *file, const char *func, int line, const char *state, const char *fmt, ...)
+	__attribute__((format(printf, 5, 6)));
 
 /*!
  * \brief Notifies the test suite of a failed assert on an expression
@@ -162,11 +160,9 @@ int __ast_test_suite_event_notify(const char *file, const char *func, int line,
  *
  * \param exp	The expression to evaluate
  *
- * \returns 0 on success
- * \returns any other value on failure
+ * \return Nothing
  */
-int __ast_test_suite_assert_notify(const char *file, const char *func, int line,
-		const char *exp);
+void __ast_test_suite_assert_notify(const char *file, const char *func, int line, const char *exp);
 
 /*!
  * \ref __ast_test_suite_event_notify()
@@ -177,13 +173,17 @@ int __ast_test_suite_assert_notify(const char *file, const char *func, int line,
 /*!
  * \ref __ast_test_suite_assert_notify()
  */
-#define ast_test_suite_assert(exp) \
-	( (exp) ? (void)0 : __ast_test_suite_assert_notify(__FILE__, __PRETTY_FUNCTION__, __LINE__, #exp))
+#define ast_test_suite_assert(exp)				\
+	do {										\
+		if (__builtin_expect(!(exp), 1)) {		\
+			__ast_test_suite_assert_notify(__FILE__, __PRETTY_FUNCTION__, __LINE__, #exp); \
+		}										\
+	} while (0)
 
 #else
 
-#define ast_test_suite_event_notify(s, f, ...) (void)0;
-#define ast_test_suite_assert(exp) (void)0;
+#define ast_test_suite_event_notify(s, f, ...)
+#define ast_test_suite_assert(exp)
 
 #endif
 
@@ -234,7 +234,7 @@ struct ast_test_info {
  * \retval AST_TEST_FAIL for failure
  */
 typedef enum ast_test_result_state (ast_test_cb_t)(struct ast_test_info *info,
-		enum ast_test_command cmd, struct ast_test *test);
+	enum ast_test_command cmd, struct ast_test *test);
 
 /*!
  * \brief unregisters a test with the test framework
@@ -275,14 +275,39 @@ void ast_test_debug(struct ast_test *test, const char *fmt, ...) __attribute__((
  * \retval 0 success
  * \retval -1 failure
  */
-int __ast_test_status_update(const char *file, const char *func, int line,
-		struct ast_test *test, const char *fmt, ...)
-		__attribute__((format(printf, 5, 6)));
+int __ast_test_status_update(const char *file, const char *func, int line, struct ast_test *test, const char *fmt, ...)
+	__attribute__((format(printf, 5, 6)));
 
 /*!
  * \ref __ast_test_status_update()
  */
 #define ast_test_status_update(t, f, ...) __ast_test_status_update(__FILE__, __PRETTY_FUNCTION__, __LINE__, (t), (f), ## __VA_ARGS__)
+
+/*!
+ * \brief Check a test condition, failing the test if it's not true.
+ *
+ * \since 12.0.0
+ *
+ * This macro evaluates \a condition. If the condition evaluates to true (non-zero),
+ * nothing happens. If it evaluates to false (zero), then the failure is printed
+ * using \ref ast_test_status_update, and the current test is ended with AST_TEST_FAIL.
+ *
+ * Sadly, the name 'ast_test_assert' was already taken.
+ *
+ * Note that since this macro returns from the current test, there must not be any
+ * cleanup work to be done before returning. Use \ref RAII_VAR for test cleanup.
+ *
+ * \param test Currently executing test
+ * \param condition Boolean condition to check.
+ */
+#define ast_test_validate(test, condition)				\
+	do {								\
+		if (!(condition)) {					\
+			__ast_test_status_update(__FILE__, __PRETTY_FUNCTION__, __LINE__, (test), "Condition failed: %s\n", #condition); \
+			return AST_TEST_FAIL;				\
+		}							\
+	} while(0)
+
 
 #endif /* TEST_FRAMEWORK */
 #endif /* _AST_TEST_H */

@@ -1257,7 +1257,7 @@ static void notify_metermaids(const char *exten, char *context, enum ast_device_
 	ast_debug(4, "Notification of state change to metermaids %s@%s\n to state '%s'",
 		exten, context, ast_devstate2str(state));
 
-	ast_devstate_changed(state, "park:%s@%s", exten, context);
+	ast_devstate_changed(state, AST_DEVSTATE_CACHABLE, "park:%s@%s", exten, context);
 }
 
 /*! \brief metermaids callback from devicestate.c */
@@ -4227,22 +4227,32 @@ static void set_bridge_features_on_config(struct ast_bridge_config *config, cons
 	}
 
 	for (feature = features; *feature; feature++) {
-		switch (*feature) {
-		case 'T' :
+		struct ast_flags *party;
+		char this_feature;
+
+		if (isupper(*feature)) {
+			party = &(config->features_caller);
+		} else {
+			party = &(config->features_callee);
+		}
+
+		this_feature = tolower(*feature);
+
+		switch (this_feature) {
 		case 't' :
-			ast_set_flag(&(config->features_caller), AST_FEATURE_REDIRECT);
+			ast_set_flag(party, AST_FEATURE_REDIRECT);
 			break;
-		case 'K' :
 		case 'k' :
-			ast_set_flag(&(config->features_caller), AST_FEATURE_PARKCALL);
+			ast_set_flag(party, AST_FEATURE_PARKCALL);
 			break;
-		case 'H' :
 		case 'h' :
-			ast_set_flag(&(config->features_caller), AST_FEATURE_DISCONNECT);
+			ast_set_flag(party, AST_FEATURE_DISCONNECT);
 			break;
-		case 'W' :
 		case 'w' :
-			ast_set_flag(&(config->features_caller), AST_FEATURE_AUTOMON);
+			ast_set_flag(party, AST_FEATURE_AUTOMON);
+			break;
+		case 'x' :
+			ast_set_flag(party, AST_FEATURE_AUTOMIXMON);
 			break;
 		default :
 			ast_log(LOG_WARNING, "Skipping unknown feature code '%c'\n", *feature);
@@ -4760,6 +4770,11 @@ before_you_go:
 	if (silgen) {
 		ast_channel_stop_silence_generator(who == chan ? peer : chan, silgen);
 		silgen = NULL;
+	}
+
+	/* Wait for any dual redirect to complete. */
+	while (ast_test_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT)) {
+		sched_yield();
 	}
 
 	if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT)) {
