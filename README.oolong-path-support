@@ -7,17 +7,16 @@ Olle E. Johansson
 SIP PATH header support for Asterisk
 ====================================
 
-This branch is based on Klaus Darillions work in
-https://reviewboard.asterisk.org/r/991/
+This branch is based on Klaus Darillions work in https://reviewboard.asterisk.org/r/991/
 
-Issue in the bug tracker:
-https://issues.asterisk.org/jira/browse/ASTERISK-16884
+Issue in the bug tracker: https://issues.asterisk.org/jira/browse/ASTERISK-16884
 
 I've added
 - Realtime support (not tested)
 - Global flag support
 
-Tested without realtime, it works as expected.
+Tested without realtime, it works as expected. If you test with Realtime, please provide feedback in the 
+bug tracker. All tests done with Kamailio - http://www.kamailio.org
 
 What is path header?
 ====================
