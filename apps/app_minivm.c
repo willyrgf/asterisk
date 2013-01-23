@@ -26,7 +26,6 @@
  * based on the Comedian Mail voicemail system (app_voicemail.c).
  * 
  * \par See also
- * \arg \ref Config_minivm
  * \arg \ref Config_minivm_examples
  * \arg \ref App_minivm
  *
@@ -1159,7 +1158,6 @@ static const char *ast_str_encode_mime(struct ast_str **end, ssize_t maxlen, con
 {
 	struct ast_str *tmp = ast_str_alloca(80);
 	int first_section = 1;
-	*end = '\0';
 
 	ast_str_reset(*end);
 	ast_str_set(&tmp, -1, "=?%s?Q?", charset);
@@ -1229,6 +1227,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	char dur[PATH_MAX];
 	char tmp[80] = "/tmp/astmail-XXXXXX";
 	char tmp2[PATH_MAX];
+	char newtmp[PATH_MAX]; /* Only used with volgain */
 	struct timeval now;
 	struct ast_tm tm;
 	struct minivm_zone *the_zone = NULL;
@@ -1255,6 +1254,8 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 
 	if (ast_strlen_zero(email)) {
 		ast_log(LOG_WARNING, "No address to send message to.\n");
+		ast_free(str1);
+		ast_free(str2);
 		return -1;	
 	}
 
@@ -1266,26 +1267,23 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 
 	/* If we have a gain option, process it now with sox */
 	if (type == MVM_MESSAGE_EMAIL && (vmu->volgain < -.001 || vmu->volgain > .001) ) {
-		char newtmp[PATH_MAX];
 		char tmpcmd[PATH_MAX];
 		int tmpfd;
-
-		/**
-		 * XXX
-		 * /bug tmpfd is a leaked fd.  The file is also never unlinked.
-		 *      See app_voicemail.c for how the code works there that
-		 *      doesn't have this bug.
-		 */
 
 		ast_copy_string(newtmp, "/tmp/XXXXXX", sizeof(newtmp));
 		ast_debug(3, "newtmp: %s\n", newtmp);
 		tmpfd = mkstemp(newtmp);
-		if (tmpfd > -1) {
-			snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, filename, format, newtmp, format);
-			ast_safe_system(tmpcmd);
-			finalfilename = newtmp;
-			ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", filename, format, vmu->volgain, vmu->username);
+		if (tmpfd < 0) {
+			ast_log(LOG_WARNING, "Failed to create temporary file for volgain: %d\n", errno);
+			ast_free(str1);
+			ast_free(str2);
+			return -1;
 		}
+		snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, filename, format, newtmp, format);
+		ast_safe_system(tmpcmd);
+		close(tmpfd);
+		finalfilename = newtmp;
+		ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", filename, format, vmu->volgain, vmu->username);
 	} else {
 		finalfilename = ast_strdupa(filename);
 	}
@@ -1309,10 +1307,17 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	}
 	if (!p) {
 		ast_log(LOG_WARNING, "Unable to open temporary file '%s'\n", tmp);
+		ast_free(str1);
+		ast_free(str2);
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
 	ast = ast_dummy_channel_alloc();
+	if (!ast) {
+		ast_free(str1);
+		ast_free(str2);
+		return -1;
+	}
 
 	snprintf(dur, sizeof(dur), "%d:%02d", duration / 60, duration % 60);
 
@@ -1473,8 +1478,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	ast_safe_system(tmp2);
 	ast_debug(1, "Sent message to %s with command '%s' - %s\n", vmu->email, global_mailcmd, template->attachment ? "(media attachment)" : "");
 	ast_debug(3, "Actual command used: %s\n", tmp2);
-	if (ast)
-		ast = ast_channel_release(ast);
+	ast = ast_channel_unref(ast);
 	ast_free(str1);
 	ast_free(str2);
 	return 0;
@@ -1541,7 +1545,7 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 	snprintf(fn, sizeof(fn), "%s%s/%s/greet", MVM_SPOOL_DIR, domain, username);
 
 	if (ast_fileexists(fn, NULL, NULL) > 0) {
-		res = ast_streamfile(chan, fn, chan->language);
+		res = ast_streamfile(chan, fn, ast_channel_language(chan));
 		if (res) 
 			return -1;
 		res = ast_waitstream(chan, ecodes);
@@ -1563,23 +1567,23 @@ static int invent_message(struct ast_channel *chan, char *domain, char *username
 		}
 
 		if (numericusername) {
-			if (ast_streamfile(chan, "vm-theperson", chan->language))
+			if (ast_streamfile(chan, "vm-theperson", ast_channel_language(chan)))
 				return -1;
 			if ((res = ast_waitstream(chan, ecodes)))
 				return res;
 
-			res = ast_say_digit_str(chan, username, ecodes, chan->language);
+			res = ast_say_digit_str(chan, username, ecodes, ast_channel_language(chan));
 			if (res)
 				return res;
 		} else {
-			if (ast_streamfile(chan, "vm-theextensionis", chan->language))
+			if (ast_streamfile(chan, "vm-theextensionis", ast_channel_language(chan)))
 				return -1;
 			if ((res = ast_waitstream(chan, ecodes)))
 				return res;
 		}
 	}
 
-	res = ast_streamfile(chan, busy ? "vm-isonphone" : "vm-isunavail", chan->language);
+	res = ast_streamfile(chan, busy ? "vm-isonphone" : "vm-isunavail", ast_channel_language(chan));
 	if (res)
 		return -1;
 	res = ast_waitstream(chan, ecodes);
@@ -1603,7 +1607,7 @@ static int vm_delete(char *file)
 /*!\internal
  * \brief Record voicemail message & let caller review or re-record it, or set options if applicable */
 static int play_record_review(struct ast_channel *chan, char *playfile, char *recordfile, int maxtime, char *fmt,
-			      int outsidecaller, struct minivm_account *vmu, int *duration, const char *unlockdir,
+			      int outsidecaller, struct minivm_account *vmu, int *duration, int *sound_duration, const char *unlockdir,
 			      signed char record_gain)
 {
 	int cmd = 0;
@@ -1635,7 +1639,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 		case '2':
 			/* Review */
 			ast_verb(3, "Reviewing the message\n");
-			ast_streamfile(chan, recordfile, chan->language);
+			ast_streamfile(chan, recordfile, ast_channel_language(chan));
 			cmd = ast_waitstream(chan, AST_DIGIT_ANY);
 			break;
 		case '3':
@@ -1653,7 +1657,7 @@ static int play_record_review(struct ast_channel *chan, char *playfile, char *re
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &record_gain, sizeof(record_gain), 0);
 			if (ast_test_flag(vmu, MVM_OPERATOR))
 				canceldtmf = "0";
-			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, global_silencethreshold, global_maxsilence, unlockdir, acceptdtmf, canceldtmf);
+			cmd = ast_play_and_record_full(chan, playfile, recordfile, maxtime, fmt, duration, sound_duration, global_silencethreshold, global_maxsilence, unlockdir, acceptdtmf, canceldtmf);
 			if (record_gain)
 				ast_channel_setoption(chan, AST_OPTION_RXGAIN, &zero_gain, sizeof(zero_gain), 0);
 			if (cmd == -1) /* User has hung up, no options to give */
@@ -1744,10 +1748,10 @@ static void run_externnotify(struct ast_channel *chan, struct minivm_account *vm
 	snprintf(arguments, sizeof(arguments), "%s %s@%s %s %s&", 
 		ast_strlen_zero(vmu->externnotify) ? global_externnotify : vmu->externnotify, 
 		vmu->username, vmu->domain,
-		(chan->caller.id.name.valid && chan->caller.id.name.str)
-			? chan->caller.id.name.str : "",
-		(chan->caller.id.number.valid && chan->caller.id.number.str)
-			? chan->caller.id.number.str : "");
+		(ast_channel_caller(chan)->id.name.valid && ast_channel_caller(chan)->id.name.str)
+			? ast_channel_caller(chan)->id.name.str : "",
+		(ast_channel_caller(chan)->id.number.valid && ast_channel_caller(chan)->id.number.str)
+			? ast_channel_caller(chan)->id.number.str : "");
 
 	ast_debug(1, "Executing: %s\n", arguments);
 	ast_safe_system(arguments);
@@ -1842,6 +1846,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	FILE *txt;
 	int res = 0, txtdes;
 	int duration = 0;
+	int sound_duration = 0;
 	char date[256];
 	char tmpdir[PATH_MAX];
 	char ext_context[256] = "";
@@ -1899,7 +1904,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	txtdes = mkstemp(tmptxtfile);
 	if (txtdes < 0) {
 		ast_log(LOG_ERROR, "Unable to create message file %s: %s\n", tmptxtfile, strerror(errno));
-		res = ast_streamfile(chan, "vm-mailboxfull", chan->language);
+		res = ast_streamfile(chan, "vm-mailboxfull", ast_channel_language(chan));
 		if (!res)
 			res = ast_waitstream(chan, "");
 		pbx_builtin_setvar_helper(chan, "MVM_RECORD_STATUS", "FAILED");
@@ -1908,7 +1913,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 
 	if (res >= 0) {
 		/* Unless we're *really* silent, try to send the beep */
-		res = ast_streamfile(chan, "beep", chan->language);
+		res = ast_streamfile(chan, "beep", ast_channel_language(chan));
 		if (!res)
 			res = ast_waitstream(chan, "");
 	}
@@ -1917,7 +1922,7 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 	/* Store information */
 	ast_debug(2, "Open file for metadata: %s\n", tmptxtfile);
 
-	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, NULL, options->record_gain);
+	res = play_record_review(chan, NULL, tmptxtfile, global_vmmaxmessage, fmt, 1, vmu, &duration, &sound_duration, NULL, options->record_gain);
 
 	txt = fdopen(txtdes, "w+");
 	if (!txt) {
@@ -1932,18 +1937,18 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 		ast_strftime(timebuf, sizeof(timebuf), "%H:%M:%S", &tm);
 
 		ast_callerid_merge(callerid, sizeof(callerid),
-			S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL),
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+			S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, NULL),
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL),
 			"Unknown");
 		snprintf(logbuf, sizeof(logbuf),
 			/* "Mailbox:domain:macrocontext:exten:priority:callerchan:callerid:origdate:origtime:duration:durationstatus:accountcode" */
 			"%s:%s:%s:%s:%d:%s:%s:%s:%s:%d:%s:%s\n",
 			username,
-			chan->context,
-			chan->macrocontext, 
-			chan->exten,
-			chan->priority,
-			chan->name,
+			ast_channel_context(chan),
+			ast_channel_macrocontext(chan), 
+			ast_channel_exten(chan),
+			ast_channel_priority(chan),
+			ast_channel_name(chan),
 			callerid,
 			date, 
 			timebuf,
@@ -1958,8 +1963,8 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
 			ast_mutex_unlock(&minivmloglock);
 		}
 
-		if (duration < global_vmminmessage) {
-			ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", duration, global_vmminmessage);
+		if (sound_duration < global_vmminmessage) {
+			ast_verb(3, "Recording was %d seconds long but needs to be at least %d - abandoning\n", sound_duration, global_vmminmessage);
 			fclose(txt);
 			ast_filedelete(tmptxtfile, NULL);
 			unlink(tmptxtfile);
@@ -2045,10 +2050,6 @@ static int minivm_mwi_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmpptr = ast_strdupa((char *)data);
-	if (!tmpptr) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 	if (argc < 4) {
 		ast_log(LOG_ERROR, "%d arguments passed to MiniVM_MWI, need 4.\n", argc);
@@ -2082,7 +2083,7 @@ static int minivm_notify_exec(struct ast_channel *chan, const char *data)
 	char *domain;
 	char *tmpptr;
 	struct minivm_account *vmu;
-	char *username = argv[0];
+	char *username;
 	const char *template = "";
 	const char *filename;
 	const char *format;
@@ -2093,10 +2094,6 @@ static int minivm_notify_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmpptr = ast_strdupa((char *)data);
-	if (!tmpptr) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 
 	if (argc == 2 && !ast_strlen_zero(argv[1]))
@@ -2138,8 +2135,8 @@ static int minivm_notify_exec(struct ast_channel *chan, const char *data)
 		ast_channel_unlock(chan);
 		res = notify_new_message(chan, template, vmu, filename, atoi(duration_string),
 			format,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
-			S_COR(chan->caller.id.name.valid, chan->caller.id.name.str, NULL));
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL),
+			S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, NULL));
 	}
 
 	pbx_builtin_setvar_helper(chan, "MVM_NOTIFY_STATUS", res == 0 ? "SUCCESS" : "FAILED");
@@ -2169,7 +2166,7 @@ static int minivm_record_exec(struct ast_channel *chan, const char *data)
 	memset(&leave_options, 0, sizeof(leave_options));
 
 	/* Answer channel if it's not already answered */
-	if (chan->_state != AST_STATE_UP)
+	if (ast_channel_state(chan) != AST_STATE_UP)
 		ast_answer(chan);
 
 	if (ast_strlen_zero(data))  {
@@ -2177,10 +2174,6 @@ static int minivm_record_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmp = ast_strdupa((char *)data);
-	if (!tmp) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmp, ',', argv, ARRAY_LEN(argv));
 	if (argc == 2) {
 		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
@@ -2240,10 +2233,6 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmpptr = ast_strdupa((char *)data);
-	if (!tmpptr) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 
 	if (argc == 2) {
@@ -2271,7 +2260,7 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 	}
 
 	/* Answer channel if it's not already answered */
-	if (chan->_state != AST_STATE_UP)
+	if (ast_channel_state(chan) != AST_STATE_UP)
 		ast_answer(chan);
 
 	/* Setup pre-file if appropriate */
@@ -2301,18 +2290,18 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 	if (ast_test_flag(vmu, MVM_OPERATOR)) {
 		if (!ast_strlen_zero(vmu->exit)) {
 			if (ast_exists_extension(chan, vmu->exit, "o", 1,
-				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+				S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 				strncat(ecodes, "0", sizeof(ecodes) - strlen(ecodes) - 1);
 				ouseexten = 1;
 			}
-		} else if (ast_exists_extension(chan, chan->context, "o", 1,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+		} else if (ast_exists_extension(chan, ast_channel_context(chan), "o", 1,
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 			strncat(ecodes, "0", sizeof(ecodes) - strlen(ecodes) - 1);
 			ouseexten = 1;
 		}
-		else if (!ast_strlen_zero(chan->macrocontext)
-			&& ast_exists_extension(chan, chan->macrocontext, "o", 1,
-				S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+		else if (!ast_strlen_zero(ast_channel_macrocontext(chan))
+			&& ast_exists_extension(chan, ast_channel_macrocontext(chan), "o", 1,
+				S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 			strncat(ecodes, "0", sizeof(ecodes) - strlen(ecodes) - 1);
 			ousemacro = 1;
 		}
@@ -2320,15 +2309,15 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 
 	if (!ast_strlen_zero(vmu->exit)) {
 		if (ast_exists_extension(chan, vmu->exit, "a", 1,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 			strncat(ecodes, "*", sizeof(ecodes) -  strlen(ecodes) - 1);
 		}
-	} else if (ast_exists_extension(chan, chan->context, "a", 1,
-		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+	} else if (ast_exists_extension(chan, ast_channel_context(chan), "a", 1,
+		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 		strncat(ecodes, "*", sizeof(ecodes) -  strlen(ecodes) - 1);
-	} else if (!ast_strlen_zero(chan->macrocontext)
-		&& ast_exists_extension(chan, chan->macrocontext, "a", 1,
-			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
+	} else if (!ast_strlen_zero(ast_channel_macrocontext(chan))
+		&& ast_exists_extension(chan, ast_channel_macrocontext(chan), "a", 1,
+			S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL))) {
 		strncat(ecodes, "*", sizeof(ecodes) -  strlen(ecodes) - 1);
 		ausemacro = 1;
 	}
@@ -2336,7 +2325,7 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 	res = 0;	/* Reset */
 	/* Play the beginning intro if desired */
 	if (!ast_strlen_zero(prefile)) {
-		if (ast_streamfile(chan, prefile, chan->language) > -1) 
+		if (ast_streamfile(chan, prefile, ast_channel_language(chan)) > -1) 
 			res = ast_waitstream(chan, ecodes);
 	} else {
 		ast_debug(2, "%s doesn't exist, doing what we can\n", prefile);
@@ -2355,7 +2344,7 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 		res = 0;
 	}
 	if (!res && !ast_test_flag(&leave_options, OPT_SILENT)) {
-		res = ast_streamfile(chan, SOUND_INTRO, chan->language);
+		res = ast_streamfile(chan, SOUND_INTRO, ast_channel_language(chan));
 		if (!res)
 			res = ast_waitstream(chan, ecodes);
 		if (res == '#') {
@@ -2368,27 +2357,25 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 	/* Check for a '*' here in case the caller wants to escape from voicemail to something
 	   other than the operator -- an automated attendant or mailbox login for example */
 	if (res == '*') {
-		chan->exten[0] = 'a';
-		chan->exten[1] = '\0';
+		ast_channel_exten_set(chan, "a");
 		if (!ast_strlen_zero(vmu->exit)) {
-			ast_copy_string(chan->context, vmu->exit, sizeof(chan->context));
-		} else if (ausemacro && !ast_strlen_zero(chan->macrocontext)) {
-			ast_copy_string(chan->context, chan->macrocontext, sizeof(chan->context));
+			ast_channel_context_set(chan, vmu->exit);
+		} else if (ausemacro && !ast_strlen_zero(ast_channel_macrocontext(chan))) {
+			ast_channel_context_set(chan, ast_channel_macrocontext(chan));
 		}
-		chan->priority = 0;
+		ast_channel_priority_set(chan, 0);
 		pbx_builtin_setvar_helper(chan, "MVM_GREET_STATUS", "USEREXIT");
 		res = 0;
 	} else if (res == '0') { /* Check for a '0' here */
 		if(ouseexten || ousemacro) {
-			chan->exten[0] = 'o';
-			chan->exten[1] = '\0';
+			ast_channel_exten_set(chan, "o");
 			if (!ast_strlen_zero(vmu->exit)) {
-				ast_copy_string(chan->context, vmu->exit, sizeof(chan->context));
-			} else if (ousemacro && !ast_strlen_zero(chan->macrocontext)) {
-				ast_copy_string(chan->context, chan->macrocontext, sizeof(chan->context));
+				ast_channel_context_set(chan, vmu->exit);
+			} else if (ousemacro && !ast_strlen_zero(ast_channel_macrocontext(chan))) {
+				ast_channel_context_set(chan, ast_channel_macrocontext(chan));
 			}
 			ast_play_and_wait(chan, "transfer");
-			chan->priority = 0;
+			ast_channel_priority_set(chan, 0);
 			pbx_builtin_setvar_helper(chan, "MVM_GREET_STATUS", "USEREXIT");
 		}
 		res =  0;
@@ -2456,7 +2443,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, const char *data)
 	char *domain;
 	char *tmpptr = NULL;
 	struct minivm_account *vmu;
-	char *username = argv[0];
+	char *username;
 	struct ast_flags flags = { 0 };
 	char *opts[OPT_ARG_ARRAY_SIZE];
 	int error = FALSE;
@@ -2467,14 +2454,9 @@ static int minivm_accmess_exec(struct ast_channel *chan, const char *data)
 	if (ast_strlen_zero(data))  {
 		ast_log(LOG_ERROR, "MinivmAccmess needs at least two arguments: account and option\n");
 		error = TRUE;
-	} else 
+	} else {
 		tmpptr = ast_strdupa((char *)data);
-	if (!error) {
-		if (!tmpptr) {
-			ast_log(LOG_ERROR, "Out of memory\n");
-			error = TRUE;
-		} else
-			argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
+		argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 	}
 
 	if (argc <=1) {
@@ -2517,7 +2499,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, const char *data)
 	}
 
 	/* Answer channel if it's not already answered */
-	if (chan->_state != AST_STATE_UP)
+	if (ast_channel_state(chan) != AST_STATE_UP)
 		ast_answer(chan);
 	
 	/* Here's where the action is */
@@ -2536,7 +2518,7 @@ static int minivm_accmess_exec(struct ast_channel *chan, const char *data)
 	}
 	snprintf(filename,sizeof(filename), "%s%s/%s/%s", MVM_SPOOL_DIR, vmu->domain, vmu->username, message);
 	/* Maybe we should check the result of play_record_review ? */
-	play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, FALSE);
+	play_record_review(chan, prompt, filename, global_maxgreet, default_vmformat, 0, vmu, &duration, NULL, NULL, FALSE);
 
 	ast_debug(1, "Recorded new %s message in %s (duration %d)\n", message, filename, duration);
 
@@ -2614,7 +2596,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 			char *varname = ast_strdupa(var->value);
 			struct ast_variable *tmpvar;
 
-			if (varname && (varval = strchr(varname, '='))) {
+			if ((varval = strchr(varname, '='))) {
 				*varval = '\0';
 				varval++;
 				if ((tmpvar = ast_variable_new(varname, varval, ""))) {
@@ -2672,11 +2654,6 @@ static int timezone_add(const char *zonename, const char *config)
 		return 0;
 
 	msg_format = ast_strdupa(config);
-	if (msg_format == NULL) {
-		ast_log(LOG_WARNING, "Out of memory.\n");
-		ast_free(newzone);
-		return 0;
-	}
 
 	timezone_str = strsep(&msg_format, "|");
 	if (!msg_format) {
@@ -3192,10 +3169,7 @@ static int minivm_account_func_read(struct ast_channel *chan, const char *cmd, c
 	struct minivm_account *vmu;
 	char *username, *domain, *colname;
 
-	if (!(username = ast_strdupa(data))) {
-		ast_log(LOG_ERROR, "Memory Error!\n");
-		return -1;
-	}
+	username = ast_strdupa(data);
 
 	if ((colname = strchr(username, ':'))) {
 		*colname = '\0';
@@ -3340,16 +3314,13 @@ static int access_counter_file(char *directory, char *countername, int value, in
 static int minivm_counter_func_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
 	char *username, *domain, *countername;
-	struct minivm_account *vmu = NULL;
 	char userpath[BUFSIZ];
 	int res;
 
 	*buf = '\0';
 
-	if (!(username = ast_strdupa(data))) {	/* Copy indata to local buffer */
-		ast_log(LOG_WARNING, "Memory error!\n");
-		return -1;
-	}
+	username = ast_strdupa(data);
+
 	if ((countername = strchr(username, ':'))) {
 		*countername = '\0';
 		countername++;
@@ -3378,7 +3349,7 @@ static int minivm_counter_func_read(struct ast_channel *chan, const char *cmd, c
 	}
 
 	/* If we can't find account or if the account is temporary, return. */
-	if (!ast_strlen_zero(username) && !(vmu = find_account(domain, username, FALSE))) {
+	if (!ast_strlen_zero(username) && !find_account(domain, username, FALSE)) {
 		ast_log(LOG_ERROR, "Minivm account does not exist: %s@%s\n", username, domain);
 		return 0;
 	}
@@ -3397,7 +3368,6 @@ static int minivm_counter_func_write(struct ast_channel *chan, const char *cmd, 
 {
 	char *username, *domain, *countername, *operand;
 	char userpath[BUFSIZ];
-	struct minivm_account *vmu;
 	int change = 0;
 	int operation = 0;
 
@@ -3405,10 +3375,7 @@ static int minivm_counter_func_write(struct ast_channel *chan, const char *cmd, 
 		return -1;
 	change = atoi(value);
 
-	if (!(username = ast_strdupa(data))) {	/* Copy indata to local buffer */
-		ast_log(LOG_WARNING, "Memory error!\n");
-		return -1;
-	}
+	username = ast_strdupa(data);
 
 	if ((countername = strchr(username, ':'))) {
 		*countername = '\0';
@@ -3442,7 +3409,7 @@ static int minivm_counter_func_write(struct ast_channel *chan, const char *cmd, 
 	}
 
 	/* If we can't find account or if the account is temporary, return. */
-	if (!ast_strlen_zero(username) && !(vmu = find_account(domain, username, FALSE))) {
+	if (!ast_strlen_zero(username) && !find_account(domain, username, FALSE)) {
 		ast_log(LOG_ERROR, "Minivm account does not exist: %s@%s\n", username, domain);
 		return 0;
 	}

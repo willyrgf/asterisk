@@ -90,8 +90,6 @@ static void destroy_multiplexed_thread(void *obj)
 	if (multiplexed_thread->pipe[1] > -1) {
 		close(multiplexed_thread->pipe[1]);
 	}
-
-	return;
 }
 
 /*! \brief Create function which finds/reserves/references a multiplexed thread structure */
@@ -173,8 +171,6 @@ static void multiplexed_nudge(struct multiplexed_thread *multiplexed_thread)
 	while (multiplexed_thread->waiting) {
 		sched_yield();
 	}
-
-	return;
 }
 
 /*! \brief Destroy function which unreserves/unreferences/removes a multiplexed thread structure */
@@ -236,11 +232,11 @@ static void *multiplexed_thread_function(void *data)
 				}
 			}
 		}
-		if (winner && winner->bridge) {
-			struct ast_bridge *bridge = winner->bridge;
+		if (winner && ast_channel_internal_bridge(winner)) {
+			struct ast_bridge *bridge = ast_channel_internal_bridge(winner);
 			int stop = 0;
 			ao2_unlock(multiplexed_thread);
-			while ((bridge = winner->bridge) && ao2_trylock(bridge)) {
+			while ((bridge = ast_channel_internal_bridge(winner)) && ao2_trylock(bridge)) {
 				sched_yield();
 				if (multiplexed_thread->thread == AST_PTHREADT_STOP) {
 					stop = 1;
@@ -294,7 +290,8 @@ static void multiplexed_add_or_remove(struct multiplexed_thread *multiplexed_thr
 		ao2_ref(multiplexed_thread, +1);
 		if (ast_pthread_create(&multiplexed_thread->thread, NULL, multiplexed_thread_function, multiplexed_thread)) {
 			ao2_ref(multiplexed_thread, -1);
-			ast_debug(1, "Failed to create an actual thread for multiplexed thread '%p', trying next time\n", multiplexed_thread);
+			ast_log(LOG_WARNING, "Failed to create the bridge thread for multiplexed thread '%p', trying next time\n",
+				multiplexed_thread);
 		}
 	} else if (!multiplexed_thread->service_count && multiplexed_thread->thread != AST_PTHREADT_NULL) {
 		thread = multiplexed_thread->thread;
@@ -308,8 +305,6 @@ static void multiplexed_add_or_remove(struct multiplexed_thread *multiplexed_thr
 	if (thread != AST_PTHREADT_NULL) {
 		pthread_join(thread, NULL);
 	}
-
-	return;
 }
 
 /*! \brief Join function which actually adds the channel into the array to be monitored */
@@ -318,7 +313,7 @@ static int multiplexed_bridge_join(struct ast_bridge *bridge, struct ast_bridge_
 	struct ast_channel *c0 = AST_LIST_FIRST(&bridge->channels)->chan, *c1 = AST_LIST_LAST(&bridge->channels)->chan;
 	struct multiplexed_thread *multiplexed_thread = bridge->bridge_pvt;
 
-	ast_debug(1, "Adding channel '%s' to multiplexed thread '%p' for monitoring\n", bridge_channel->chan->name, multiplexed_thread);
+	ast_debug(1, "Adding channel '%s' to multiplexed thread '%p' for monitoring\n", ast_channel_name(bridge_channel->chan), multiplexed_thread);
 
 	multiplexed_add_or_remove(multiplexed_thread, bridge_channel->chan, 1);
 
@@ -327,9 +322,9 @@ static int multiplexed_bridge_join(struct ast_bridge *bridge, struct ast_bridge_
 		return 0;
 	}
 
-	if ((ast_format_cmp(&c0->writeformat, &c1->readformat) == AST_FORMAT_CMP_EQUAL) &&
-		(ast_format_cmp(&c0->readformat, &c1->writeformat) == AST_FORMAT_CMP_EQUAL) &&
-		(ast_format_cap_identical(c0->nativeformats, c1->nativeformats))) {
+	if ((ast_format_cmp(ast_channel_writeformat(c0), ast_channel_readformat(c1)) == AST_FORMAT_CMP_EQUAL) &&
+		(ast_format_cmp(ast_channel_readformat(c0), ast_channel_writeformat(c1)) == AST_FORMAT_CMP_EQUAL) &&
+		(ast_format_cap_identical(ast_channel_nativeformats(c0), ast_channel_nativeformats(c1)))) {
 		return 0;
 	}
 
@@ -341,7 +336,7 @@ static int multiplexed_bridge_leave(struct ast_bridge *bridge, struct ast_bridge
 {
 	struct multiplexed_thread *multiplexed_thread = bridge->bridge_pvt;
 
-	ast_debug(1, "Removing channel '%s' from multiplexed thread '%p'\n", bridge_channel->chan->name, multiplexed_thread);
+	ast_debug(1, "Removing channel '%s' from multiplexed thread '%p'\n", ast_channel_name(bridge_channel->chan), multiplexed_thread);
 
 	multiplexed_add_or_remove(multiplexed_thread, bridge_channel->chan, 0);
 
@@ -353,11 +348,9 @@ static void multiplexed_bridge_suspend(struct ast_bridge *bridge, struct ast_bri
 {
 	struct multiplexed_thread *multiplexed_thread = bridge->bridge_pvt;
 
-	ast_debug(1, "Suspending channel '%s' from multiplexed thread '%p'\n", bridge_channel->chan->name, multiplexed_thread);
+	ast_debug(1, "Suspending channel '%s' from multiplexed thread '%p'\n", ast_channel_name(bridge_channel->chan), multiplexed_thread);
 
 	multiplexed_add_or_remove(multiplexed_thread, bridge_channel->chan, 0);
-
-	return;
 }
 
 /*! \brief Unsuspend function which means control of the channel is coming back to us */
@@ -365,11 +358,9 @@ static void multiplexed_bridge_unsuspend(struct ast_bridge *bridge, struct ast_b
 {
 	struct multiplexed_thread *multiplexed_thread = bridge->bridge_pvt;
 
-	ast_debug(1, "Unsuspending channel '%s' from multiplexed thread '%p'\n", bridge_channel->chan->name, multiplexed_thread);
+	ast_debug(1, "Unsuspending channel '%s' from multiplexed thread '%p'\n", ast_channel_name(bridge_channel->chan), multiplexed_thread);
 
 	multiplexed_add_or_remove(multiplexed_thread, bridge_channel->chan, 1);
-
-	return;
 }
 
 /*! \brief Write function for writing frames into the bridge */
@@ -377,14 +368,17 @@ static enum ast_bridge_write_result multiplexed_bridge_write(struct ast_bridge *
 {
 	struct ast_bridge_channel *other;
 
+	/* If this is the only channel in this bridge then immediately exit */
 	if (AST_LIST_FIRST(&bridge->channels) == AST_LIST_LAST(&bridge->channels)) {
 		return AST_BRIDGE_WRITE_FAILED;
 	}
 
+	/* Find the channel we actually want to write to */
 	if (!(other = (AST_LIST_FIRST(&bridge->channels) == bridge_channel ? AST_LIST_LAST(&bridge->channels) : AST_LIST_FIRST(&bridge->channels)))) {
 		return AST_BRIDGE_WRITE_FAILED;
 	}
 
+	/* Write the frame out if they are in the waiting state... don't worry about freeing it, the bridging core will take care of it */
 	if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 		ast_write(other->chan, frame);
 	}

@@ -23,6 +23,10 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -76,13 +80,8 @@ static int celgenuserevent_exec(struct ast_channel *chan, const char *data)
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;
+	ast_unregister_application(app);
+	return 0;
 }
 
 static int load_module(void)

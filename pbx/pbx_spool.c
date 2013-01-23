@@ -67,6 +67,8 @@ enum {
 	SPOOL_FLAG_ALWAYS_DELETE = (1 << 0),
 	/* Don't unlink the call file after processing, move in qdonedir */
 	SPOOL_FLAG_ARCHIVE = (1 << 1),
+	/* Connect the channel with the outgoing extension once early media is received */
+	SPOOL_FLAG_EARLY_MEDIA = (1 << 2),
 };
 
 static char qdir[255];
@@ -101,36 +103,58 @@ struct outgoing {
 static void queue_file(const char *filename, time_t when);
 #endif
 
-static int init_outgoing(struct outgoing *o)
-{
-	struct ast_format tmpfmt;
-	o->priority = 1;
-	o->retrytime = 300;
-	o->waittime = 45;
-
-	if (!(o->capabilities = ast_format_cap_alloc_nolock())) {
-		return -1;
-	}
-	ast_format_cap_add(o->capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));
-
-	ast_set_flag(&o->options, SPOOL_FLAG_ALWAYS_DELETE);
-	if (ast_string_field_init(o, 128)) {
-		return -1;
-	}
-	return 0;
-}
-
 static void free_outgoing(struct outgoing *o)
 {
 	if (o->vars) {
 		ast_variables_destroy(o->vars);
 	}
-	ast_string_field_free_memory(o);
 	o->capabilities = ast_format_cap_destroy(o->capabilities);
+	ast_string_field_free_memory(o);
 	ast_free(o);
 }
 
-static int apply_outgoing(struct outgoing *o, const char *fn, FILE *f)
+static struct outgoing *new_outgoing(const char *fn)
+{
+	struct outgoing *o;
+	struct ast_format tmpfmt;
+
+	o = ast_calloc(1, sizeof(*o));
+	if (!o) {
+		return NULL;
+	}
+
+	/* Initialize the new object. */
+	o->priority = 1;
+	o->retrytime = 300;
+	o->waittime = 45;
+	ast_set_flag(&o->options, SPOOL_FLAG_ALWAYS_DELETE);
+	if (ast_string_field_init(o, 128)) {
+		/*
+		 * No need to call free_outgoing here since the failure was to
+		 * allocate string fields and no variables have been allocated
+		 * yet.
+		 */
+		ast_free(o);
+		return NULL;
+	}
+	ast_string_field_set(o, fn, fn);
+	if (ast_strlen_zero(o->fn)) {
+		/* String field set failed.  Since this string is important we must fail. */
+		free_outgoing(o);
+		return NULL;
+	}
+
+	o->capabilities = ast_format_cap_alloc_nolock();
+	if (!o->capabilities) {
+		free_outgoing(o);
+		return NULL;
+	}
+	ast_format_cap_add(o->capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));
+
+	return o;
+}
+
+static int apply_outgoing(struct outgoing *o, FILE *f)
 {
 	char buf[256];
 	char *c, *c2;
@@ -164,105 +188,105 @@ static int apply_outgoing(struct outgoing *o, const char *fn, FILE *f)
 		}
 
 		/* Trim trailing white space */
-		while(!ast_strlen_zero(buf) && buf[strlen(buf) - 1] < 33)
-			buf[strlen(buf) - 1] = '\0';
-		if (!ast_strlen_zero(buf)) {
-			c = strchr(buf, ':');
-			if (c) {
-				*c = '\0';
-				c++;
-				while ((*c) && (*c < 33))
-					c++;
+		ast_trim_blanks(buf);
+		if (ast_strlen_zero(buf)) {
+			continue;
+		}
+		c = strchr(buf, ':');
+		if (!c) {
+			ast_log(LOG_NOTICE, "Syntax error at line %d of %s\n", lineno, o->fn);
+			continue;
+		}
+		*c = '\0';
+		c = ast_skip_blanks(c + 1);
 #if 0
-				printf("'%s' is '%s' at line %d\n", buf, c, lineno);
+		printf("'%s' is '%s' at line %d\n", buf, c, lineno);
 #endif
-				if (!strcasecmp(buf, "channel")) {
-					if ((c2 = strchr(c, '/'))) {
-						*c2 = '\0';
-						c2++;
-						ast_string_field_set(o, tech, c);
-						ast_string_field_set(o, dest, c2);
+		if (!strcasecmp(buf, "channel")) {
+			if ((c2 = strchr(c, '/'))) {
+				*c2 = '\0';
+				c2++;
+				ast_string_field_set(o, tech, c);
+				ast_string_field_set(o, dest, c2);
+			} else {
+				ast_log(LOG_NOTICE, "Channel should be in form Tech/Dest at line %d of %s\n", lineno, o->fn);
+			}
+		} else if (!strcasecmp(buf, "callerid")) {
+			char cid_name[80] = {0}, cid_num[80] = {0};
+			ast_callerid_split(c, cid_name, sizeof(cid_name), cid_num, sizeof(cid_num));
+			ast_string_field_set(o, cid_num, cid_num);
+			ast_string_field_set(o, cid_name, cid_name);
+		} else if (!strcasecmp(buf, "application")) {
+			ast_string_field_set(o, app, c);
+		} else if (!strcasecmp(buf, "data")) {
+			ast_string_field_set(o, data, c);
+		} else if (!strcasecmp(buf, "maxretries")) {
+			if (sscanf(c, "%30d", &o->maxretries) != 1) {
+				ast_log(LOG_WARNING, "Invalid max retries at line %d of %s\n", lineno, o->fn);
+				o->maxretries = 0;
+			}
+		} else if (!strcasecmp(buf, "codecs")) {
+			ast_parse_allow_disallow(NULL, o->capabilities, c, 1);
+		} else if (!strcasecmp(buf, "context")) {
+			ast_string_field_set(o, context, c);
+		} else if (!strcasecmp(buf, "extension")) {
+			ast_string_field_set(o, exten, c);
+		} else if (!strcasecmp(buf, "priority")) {
+			if ((sscanf(c, "%30d", &o->priority) != 1) || (o->priority < 1)) {
+				ast_log(LOG_WARNING, "Invalid priority at line %d of %s\n", lineno, o->fn);
+				o->priority = 1;
+			}
+		} else if (!strcasecmp(buf, "retrytime")) {
+			if ((sscanf(c, "%30d", &o->retrytime) != 1) || (o->retrytime < 1)) {
+				ast_log(LOG_WARNING, "Invalid retrytime at line %d of %s\n", lineno, o->fn);
+				o->retrytime = 300;
+			}
+		} else if (!strcasecmp(buf, "waittime")) {
+			if ((sscanf(c, "%30d", &o->waittime) != 1) || (o->waittime < 1)) {
+				ast_log(LOG_WARNING, "Invalid waittime at line %d of %s\n", lineno, o->fn);
+				o->waittime = 45;
+			}
+		} else if (!strcasecmp(buf, "retry")) {
+			o->retries++;
+		} else if (!strcasecmp(buf, "startretry")) {
+			if (sscanf(c, "%30ld", &o->callingpid) != 1) {
+				ast_log(LOG_WARNING, "Unable to retrieve calling PID!\n");
+				o->callingpid = 0;
+			}
+		} else if (!strcasecmp(buf, "endretry") || !strcasecmp(buf, "abortretry")) {
+			o->callingpid = 0;
+			o->retries++;
+		} else if (!strcasecmp(buf, "delayedretry")) {
+		} else if (!strcasecmp(buf, "setvar") || !strcasecmp(buf, "set")) {
+			c2 = c;
+			strsep(&c2, "=");
+			if (c2) {
+				var = ast_variable_new(c, c2, o->fn);
+				if (var) {
+					/* Always insert at the end, because some people want to treat the spool file as a script */
+					if (last) {
+						last->next = var;
 					} else {
-						ast_log(LOG_NOTICE, "Channel should be in form Tech/Dest at line %d of %s\n", lineno, fn);
+						o->vars = var;
 					}
-				} else if (!strcasecmp(buf, "callerid")) {
-					char cid_name[80] = {0}, cid_num[80] = {0};
-					ast_callerid_split(c, cid_name, sizeof(cid_name), cid_num, sizeof(cid_num));
-					ast_string_field_set(o, cid_num, cid_num);
-					ast_string_field_set(o, cid_name, cid_name);
-				} else if (!strcasecmp(buf, "application")) {
-					ast_string_field_set(o, app, c);
-				} else if (!strcasecmp(buf, "data")) {
-					ast_string_field_set(o, data, c);
-				} else if (!strcasecmp(buf, "maxretries")) {
-					if (sscanf(c, "%30d", &o->maxretries) != 1) {
-						ast_log(LOG_WARNING, "Invalid max retries at line %d of %s\n", lineno, fn);
-						o->maxretries = 0;
-					}
-				} else if (!strcasecmp(buf, "codecs")) {
-					ast_parse_allow_disallow(NULL, o->capabilities, c, 1);
-				} else if (!strcasecmp(buf, "context")) {
-					ast_string_field_set(o, context, c);
-				} else if (!strcasecmp(buf, "extension")) {
-					ast_string_field_set(o, exten, c);
-				} else if (!strcasecmp(buf, "priority")) {
-					if ((sscanf(c, "%30d", &o->priority) != 1) || (o->priority < 1)) {
-						ast_log(LOG_WARNING, "Invalid priority at line %d of %s\n", lineno, fn);
-						o->priority = 1;
-					}
-				} else if (!strcasecmp(buf, "retrytime")) {
-					if ((sscanf(c, "%30d", &o->retrytime) != 1) || (o->retrytime < 1)) {
-						ast_log(LOG_WARNING, "Invalid retrytime at line %d of %s\n", lineno, fn);
-						o->retrytime = 300;
-					}
-				} else if (!strcasecmp(buf, "waittime")) {
-					if ((sscanf(c, "%30d", &o->waittime) != 1) || (o->waittime < 1)) {
-						ast_log(LOG_WARNING, "Invalid waittime at line %d of %s\n", lineno, fn);
-						o->waittime = 45;
-					}
-				} else if (!strcasecmp(buf, "retry")) {
-					o->retries++;
-				} else if (!strcasecmp(buf, "startretry")) {
-					if (sscanf(c, "%30ld", &o->callingpid) != 1) {
-						ast_log(LOG_WARNING, "Unable to retrieve calling PID!\n");
-						o->callingpid = 0;
-					}
-				} else if (!strcasecmp(buf, "endretry") || !strcasecmp(buf, "abortretry")) {
-					o->callingpid = 0;
-					o->retries++;
-				} else if (!strcasecmp(buf, "delayedretry")) {
-				} else if (!strcasecmp(buf, "setvar") || !strcasecmp(buf, "set")) {
-					c2 = c;
-					strsep(&c2, "=");
-					if (c2) {
-						var = ast_variable_new(c, c2, fn);
-						if (var) {
-							/* Always insert at the end, because some people want to treat the spool file as a script */
-							if (last) {
-								last->next = var;
-							} else {
-								o->vars = var;
-							}
-							last = var;
-						}
-					} else
-						ast_log(LOG_WARNING, "Malformed \"%s\" argument.  Should be \"%s: variable=value\"\n", buf, buf);
-				} else if (!strcasecmp(buf, "account")) {
-					ast_string_field_set(o, account, c);
-				} else if (!strcasecmp(buf, "alwaysdelete")) {
-					ast_set2_flag(&o->options, ast_true(c), SPOOL_FLAG_ALWAYS_DELETE);
-				} else if (!strcasecmp(buf, "archive")) {
-					ast_set2_flag(&o->options, ast_true(c), SPOOL_FLAG_ARCHIVE);
-				} else {
-					ast_log(LOG_WARNING, "Unknown keyword '%s' at line %d of %s\n", buf, lineno, fn);
+					last = var;
 				}
 			} else
-				ast_log(LOG_NOTICE, "Syntax error at line %d of %s\n", lineno, fn);
+				ast_log(LOG_WARNING, "Malformed \"%s\" argument.  Should be \"%s: variable=value\"\n", buf, buf);
+		} else if (!strcasecmp(buf, "account")) {
+			ast_string_field_set(o, account, c);
+		} else if (!strcasecmp(buf, "alwaysdelete")) {
+			ast_set2_flag(&o->options, ast_true(c), SPOOL_FLAG_ALWAYS_DELETE);
+		} else if (!strcasecmp(buf, "archive")) {
+			ast_set2_flag(&o->options, ast_true(c), SPOOL_FLAG_ARCHIVE);
+		} else if (!strcasecmp(buf, "early_media")) {
+			ast_set2_flag(&o->options, ast_true(c), SPOOL_FLAG_EARLY_MEDIA);
+		} else {
+			ast_log(LOG_WARNING, "Unknown keyword '%s' at line %d of %s\n", buf, lineno, o->fn);
 		}
 	}
-	ast_string_field_set(o, fn, fn);
 	if (ast_strlen_zero(o->tech) || ast_strlen_zero(o->dest) || (ast_strlen_zero(o->app) && ast_strlen_zero(o->exten))) {
-		ast_log(LOG_WARNING, "At least one of app or extension must be specified, along with tech and dest in file %s\n", fn);
+		ast_log(LOG_WARNING, "At least one of app or extension must be specified, along with tech and dest in file %s\n", o->fn);
 		return -1;
 	}
 	return 0;
@@ -326,7 +350,7 @@ static int remove_from_queue(struct outgoing *o, const char *status)
 	}
 
 	snprintf(newfn, sizeof(newfn), "%s/%s", qdonedir, bname);
-	/* a existing call file the archive dir is overwritten */
+	/* If there is already a call file with the name in the archive dir, it will be overwritten. */
 	unlink(newfn);
 	if (rename(o->fn, newfn) != 0) {
 		unlink(o->fn);
@@ -349,11 +373,16 @@ static void *attempt_thread(void *data)
 	int res, reason;
 	if (!ast_strlen_zero(o->app)) {
 		ast_verb(3, "Attempting call on %s/%s for application %s(%s) (Retry %d)\n", o->tech, o->dest, o->app, o->data, o->retries);
-		res = ast_pbx_outgoing_app(o->tech, o->capabilities, (void *) o->dest, o->waittime * 1000, o->app, o->data, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
+		res = ast_pbx_outgoing_app(o->tech, o->capabilities, o->dest, o->waittime * 1000,
+			o->app, o->data, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name,
+			o->vars, o->account, NULL);
 		o->vars = NULL;
 	} else {
 		ast_verb(3, "Attempting call on %s/%s for %s@%s:%d (Retry %d)\n", o->tech, o->dest, o->exten, o->context,o->priority, o->retries);
-		res = ast_pbx_outgoing_exten(o->tech, o->capabilities, (void *) o->dest, o->waittime * 1000, o->context, o->exten, o->priority, &reason, 2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL);
+		res = ast_pbx_outgoing_exten(o->tech, o->capabilities, o->dest,
+			o->waittime * 1000, o->context, o->exten, o->priority, &reason,
+			2 /* wait to finish */, o->cid_num, o->cid_name, o->vars, o->account, NULL,
+			ast_test_flag(&o->options, SPOOL_FLAG_EARLY_MEDIA));
 		o->vars = NULL;
 	}
 	if (res) {
@@ -391,47 +420,46 @@ static void launch_service(struct outgoing *o)
 /* Called from scan_thread or queue_file */
 static int scan_service(const char *fn, time_t now)
 {
-	struct outgoing *o = NULL;
+	struct outgoing *o;
 	FILE *f;
-	int res = 0;
+	int res;
 
-	if (!(o = ast_calloc(1, sizeof(*o)))) {
-		ast_log(LOG_WARNING, "Out of memory ;(\n");
-		return -1;
-	}
-
-	if (init_outgoing(o)) {
-		/* No need to call free_outgoing here since we know the failure
-		 * was to allocate string fields and no variables have been allocated
-		 * yet.
-		 */
-		ast_free(o);
+	o = new_outgoing(fn);
+	if (!o) {
 		return -1;
 	}
 
 	/* Attempt to open the file */
-	if (!(f = fopen(fn, "r"))) {
+	f = fopen(o->fn, "r");
+	if (!f) {
+#if defined(HAVE_INOTIFY) || defined(HAVE_KQUEUE)
+		/*!
+		 * \todo XXX There is some odd delayed duplicate servicing of
+		 * call files going on.  We need to suppress the error message
+		 * if the file does not exist as a result.
+		 */
+		if (errno != ENOENT)
+#endif
+		{
+			ast_log(LOG_WARNING, "Unable to open %s: '%s'(%d), deleting\n",
+				o->fn, strerror(errno), (int) errno);
+		}
 		remove_from_queue(o, "Failed");
 		free_outgoing(o);
-#if !defined(HAVE_INOTIFY) && !defined(HAVE_KQUEUE)
-		ast_log(LOG_WARNING, "Unable to open %s: %s, deleting\n", fn, strerror(errno));
-#endif
 		return -1;
 	}
 
 	/* Read in and verify the contents */
-	if (apply_outgoing(o, fn, f)) {
+	res = apply_outgoing(o, f);
+	fclose(f);
+	if (res) {
+		ast_log(LOG_WARNING, "Invalid file contents in %s, deleting\n", o->fn);
 		remove_from_queue(o, "Failed");
 		free_outgoing(o);
-		ast_log(LOG_WARNING, "Invalid file contents in %s, deleting\n", fn);
-		fclose(f);
 		return -1;
 	}
 
-#if 0
-	printf("Filename: %s, Retries: %d, max: %d\n", fn, o->retries, o->maxretries);
-#endif
-	fclose(f);
+	ast_debug(1, "Filename: %s, Retries: %d, max: %d\n", o->fn, o->retries, o->maxretries);
 	if (o->retries <= o->maxretries) {
 		now += o->retrytime;
 		if (o->callingpid && (o->callingpid == ast_mainpid)) {
@@ -449,14 +477,14 @@ static int scan_service(const char *fn, time_t now)
 			safe_append(o, now, "StartRetry");
 			launch_service(o);
 		}
-		res = now;
-	} else {
-		ast_log(LOG_NOTICE, "Queued call to %s/%s expired without completion after %d attempt%s\n", o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
-		remove_from_queue(o, "Expired");
-		free_outgoing(o);
+		return now;
 	}
 
-	return res;
+	ast_log(LOG_NOTICE, "Queued call to %s/%s expired without completion after %d attempt%s\n",
+		o->tech, o->dest, o->retries - 1, ((o->retries - 1) != 1) ? "s" : "");
+	remove_from_queue(o, "Expired");
+	free_outgoing(o);
+	return 0;
 }
 
 #if defined(HAVE_INOTIFY) || defined(HAVE_KQUEUE)
@@ -471,6 +499,7 @@ static AST_LIST_HEAD_STATIC(dirlist, direntry);
 #if defined(HAVE_INOTIFY)
 /* Only one thread is accessing this list, so no lock is necessary */
 static AST_LIST_HEAD_NOLOCK_STATIC(createlist, direntry);
+static AST_LIST_HEAD_NOLOCK_STATIC(openlist, direntry);
 #endif
 
 static void queue_file(const char *filename, time_t when)
@@ -480,8 +509,8 @@ static void queue_file(const char *filename, time_t when)
 	int res;
 	time_t now = time(NULL);
 
-	if (filename[0] != '/') {
-		char *fn = alloca(strlen(qdir) + strlen(filename) + 2);
+	if (!strchr(filename, '/')) {
+		char *fn = ast_alloca(strlen(qdir) + strlen(filename) + 2);
 		sprintf(fn, "%s/%s", qdir, filename); /* SAFE */
 		filename = fn;
 	}
@@ -551,14 +580,47 @@ static void queue_file_create(const char *filename)
 		return;
 	}
 	strcpy(cur->name, filename);
+	/* We'll handle this file unless an IN_OPEN event occurs within 2 seconds */
+	cur->mtime = time(NULL) + 2;
 	AST_LIST_INSERT_TAIL(&createlist, cur, list);
+}
+
+static void queue_file_open(const char *filename)
+{
+	struct direntry *cur;
+
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&createlist, cur, list) {
+		if (!strcmp(cur->name, filename)) {
+			AST_LIST_REMOVE_CURRENT(list);
+			AST_LIST_INSERT_TAIL(&openlist, cur, list);
+			break;
+		}
+	}
+	AST_LIST_TRAVERSE_SAFE_END
+}
+
+static void queue_created_files(void)
+{
+	struct direntry *cur;
+	time_t now = time(NULL);
+
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&createlist, cur, list) {
+		if (cur->mtime > now) {
+			break;
+		}
+
+		AST_LIST_REMOVE_CURRENT(list);
+		queue_file(cur->name, 0);
+		ast_free(cur);
+	}
+	AST_LIST_TRAVERSE_SAFE_END
 }
 
 static void queue_file_write(const char *filename)
 {
 	struct direntry *cur;
 	/* Only queue entries where an IN_CREATE preceded the IN_CLOSE_WRITE */
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&createlist, cur, list) {
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&openlist, cur, list) {
 		if (!strcmp(cur->name, filename)) {
 			AST_LIST_REMOVE_CURRENT(list);
 			ast_free(cur);
@@ -605,7 +667,7 @@ static void *scan_thread(void *unused)
 	}
 
 #ifdef HAVE_INOTIFY
-	inotify_add_watch(inotify_fd, qdir, IN_CREATE | IN_CLOSE_WRITE | IN_MOVED_TO);
+	inotify_add_watch(inotify_fd, qdir, IN_CREATE | IN_OPEN | IN_CLOSE_WRITE | IN_MOVED_TO);
 #endif
 
 	/* First, run through the directory and clear existing entries */
@@ -641,14 +703,35 @@ static void *scan_thread(void *unused)
 			/* Convert from seconds to milliseconds, unless there's nothing
 			 * in the queue already, in which case, we wait forever. */
 			int waittime = next == INT_MAX ? -1 : (next - now) * 1000;
+			if (!AST_LIST_EMPTY(&createlist)) {
+				waittime = 1000;
+			}
 			/* When a file arrives, add it to the queue, in mtime order. */
 			if ((res = poll(&pfd, 1, waittime)) > 0 && (stage = 1) &&
 				(res = read(inotify_fd, &buf, sizeof(buf))) >= sizeof(*iev)) {
 				ssize_t len = 0;
 				/* File(s) added to directory, add them to my list */
 				for (iev = (void *) buf; res >= sizeof(*iev); iev = (struct inotify_event *) (((char *) iev) + len)) {
+					/* For an IN_MOVED_TO event, simply process the file. However, if
+					 * we get an IN_CREATE event it *might* be an open(O_CREAT) or it
+					 * might be a hardlink (like smsq does, since rename() might
+					 * overwrite an existing file). So we have to see if we get a
+					 * subsequent IN_OPEN event on the same file. If we do, keep it
+					 * on the openlist and wait for the corresponding IN_CLOSE_WRITE.
+					 * If we *don't* see an IN_OPEN event, then it was a hard link so
+					 * it can be processed immediately.
+					 *
+					 * Unfortunately, although open(O_CREAT) is an atomic file system
+					 * operation, the inotify subsystem doesn't give it to us in a
+					 * single event with both IN_CREATE|IN_OPEN set. It's two separate
+					 * events, and the kernel doesn't even give them to us at the same
+					 * time. We can read() from inotify_fd after the IN_CREATE event,
+					 * and get *nothing* from it. The IN_OPEN arrives only later! So
+					 * we have a very short timeout of 2 seconds. */
 					if (iev->mask & IN_CREATE) {
 						queue_file_create(iev->name);
+					} else if (iev->mask & IN_OPEN) {
+						queue_file_open(iev->name);
 					} else if (iev->mask & IN_CLOSE_WRITE) {
 						queue_file_write(iev->name);
 					} else if (iev->mask & IN_MOVED_TO) {
@@ -663,6 +746,9 @@ static void *scan_thread(void *unused)
 			} else if (res < 0 && errno != EINTR && errno != EAGAIN) {
 				ast_debug(1, "Got an error back from %s(2): %s\n", stage ? "read" : "poll", strerror(errno));
 			}
+			time(&now);
+		}
+		queue_created_files();
 #else
 			struct timespec ts2 = { next - now, 0 };
 			if (kevent(inotify_fd, NULL, 0, &kev, 1, &ts2) <= 0) {
@@ -675,9 +761,9 @@ static void *scan_thread(void *unused)
 					queue_file(de->d_name, 0);
 				}
 			}
-#endif
 			time(&now);
 		}
+#endif
 
 		/* Empty the list of all entries ready to be processed */
 		AST_LIST_LOCK(&dirlist);
@@ -699,14 +785,17 @@ static void *scan_thread(void *unused)
 	struct dirent *de;
 	char fn[256];
 	int res;
-	time_t last = 0, next = 0, now;
+	int force_poll = 1;
+	time_t last = 0;
+	time_t next = 0;
+	time_t now;
 	struct timespec ts = { .tv_sec = 1 };
 
 	while (!ast_fully_booted) {
 		nanosleep(&ts, NULL);
 	}
 
-	for(;;) {
+	for (;;) {
 		/* Wait a sec */
 		nanosleep(&ts, NULL);
 		time(&now);
@@ -717,34 +806,50 @@ static void *scan_thread(void *unused)
 		}
 
 		/* Make sure it is time for us to execute our check */
-		if ((st.st_mtime == last) && (next && (next > now)))
+		if (!force_poll && st.st_mtime == last && (!next || now < next)) {
+			/*
+			 * The directory timestamp did not change and any delayed
+			 * call-file is not ready to be executed.
+			 */
 			continue;
+		}
 
 #if 0
 		printf("atime: %ld, mtime: %ld, ctime: %ld\n", st.st_atime, st.st_mtime, st.st_ctime);
 		printf("Ooh, something changed / timeout\n");
 #endif
-		next = 0;
-		last = st.st_mtime;
 
 		if (!(dir = opendir(qdir))) {
 			ast_log(LOG_WARNING, "Unable to open directory %s: %s\n", qdir, strerror(errno));
 			continue;
 		}
 
+		/*
+		 * Since the dir timestamp is available at one second
+		 * resolution, we cannot know if it was updated within the same
+		 * second after we scanned it.  Therefore, we will force another
+		 * scan if the dir was just modified.
+		 */
+		force_poll = (st.st_mtime == now);
+
+		next = 0;
+		last = st.st_mtime;
 		while ((de = readdir(dir))) {
 			snprintf(fn, sizeof(fn), "%s/%s", qdir, de->d_name);
 			if (stat(fn, &st)) {
 				ast_log(LOG_WARNING, "Unable to stat %s: %s\n", fn, strerror(errno));
 				continue;
 			}
-			if (!S_ISREG(st.st_mode))
+			if (!S_ISREG(st.st_mode)) {
+				/* Not a regular file. */
 				continue;
+			}
 			if (st.st_mtime <= now) {
 				res = scan_service(fn, now);
 				if (res > 0) {
-					/* Update next service time */
-					if (!next || (res < next)) {
+					/* The call-file is delayed or to be retried later. */
+					if (!next || res < next) {
+						/* This delayed call file expires earlier. */
 						next = res;
 					}
 				} else if (res) {
@@ -754,9 +859,11 @@ static void *scan_thread(void *unused)
 					next = st.st_mtime;
 				}
 			} else {
-				/* Update "next" update if necessary */
-				if (!next || (st.st_mtime < next))
+				/* The file's timestamp is in the future. */
+				if (!next || st.st_mtime < next) {
+					/* This call-file's timestamp expires earlier. */
 					next = st.st_mtime;
+				}
 			}
 		}
 		closedir(dir);

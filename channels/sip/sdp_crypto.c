@@ -25,6 +25,10 @@
  * \author Mikael Magnusson <mikma@users.sourceforge.net>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -32,6 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "include/sdp_crypto.h"
+#include "include/srtp.h"
 
 #define SRTP_MASTER_LEN 30
 #define SRTP_MASTERKEY_LEN 16
@@ -45,15 +50,14 @@ struct sdp_crypto {
 	char *a_crypto;
 	unsigned char local_key[SRTP_MASTER_LEN];
 	char local_key64[SRTP_MASTER_LEN64];
+	unsigned char remote_key[SRTP_MASTER_LEN];
 };
 
 static int set_crypto_policy(struct ast_srtp_policy *policy, int suite_val, const unsigned char *master_key, unsigned long ssrc, int inbound);
 
 static struct sdp_crypto *sdp_crypto_alloc(void)
 {
-	struct sdp_crypto *crypto;
-
-	return crypto = ast_calloc(1, sizeof(*crypto));
+	return ast_calloc(1, sizeof(struct sdp_crypto));
 }
 
 void sdp_crypto_destroy(struct sdp_crypto *crypto)
@@ -161,15 +165,9 @@ static int sdp_crypto_activate(struct sdp_crypto *p, int suite_val, unsigned cha
 		goto err;
 	}
 
-	/* FIXME MIKMA */
-	/* ^^^ I wish I knew what needed fixing... */
-	if (ast_rtp_instance_add_srtp_policy(rtp, local_policy)) {
-		ast_log(LOG_WARNING, "Could not set local SRTP policy\n");
-		goto err;
-	}
-
-	if (ast_rtp_instance_add_srtp_policy(rtp, remote_policy)) {
-		ast_log(LOG_WARNING, "Could not set remote SRTP policy\n");
+	/* Add the SRTP policies */
+	if (ast_rtp_instance_add_srtp_policy(rtp, remote_policy, local_policy)) {
+		ast_log(LOG_WARNING, "Could not set SRTP policies\n");
 		goto err;
 	}
 
@@ -188,7 +186,7 @@ err:
 	return res;
 }
 
-int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_instance *rtp)
+int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_instance *rtp, struct sip_srtp *srtp)
 {
 	char *str = NULL;
 	char *tag = NULL;
@@ -221,15 +219,17 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 		return -1;
 	}
 
-	if (session_params) {
+	if (!ast_strlen_zero(session_params)) {
 		ast_log(LOG_WARNING, "Unsupported crypto parameters: %s", session_params);
 		return -1;
 	}
 
 	if (!strcmp(suite, "AES_CM_128_HMAC_SHA1_80")) {
 		suite_val = AST_AES_CM_128_HMAC_SHA1_80;
+		ast_set_flag(srtp, SRTP_CRYPTO_TAG_80);
 	} else if (!strcmp(suite, "AES_CM_128_HMAC_SHA1_32")) {
 		suite_val = AST_AES_CM_128_HMAC_SHA1_32;
+		ast_set_flag(srtp, SRTP_CRYPTO_TAG_32);
 	} else {
 		ast_log(LOG_WARNING, "Unsupported crypto suite: %s\n", suite);
 		return -1;
@@ -261,11 +261,16 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 		return -1;
 	}
 
-
 	if ((key_len = ast_base64decode(remote_key, key_salt, sizeof(remote_key))) != SRTP_MASTER_LEN) {
-		ast_log(LOG_WARNING, "SRTP sdescriptions key %d != %d\n", key_len, SRTP_MASTER_LEN);
+		ast_log(LOG_WARNING, "SRTP descriptions key %d != %d\n", key_len, SRTP_MASTER_LEN);
 		return -1;
 	}
+
+	if (!memcmp(p->remote_key, remote_key, sizeof(p->remote_key))) {
+		ast_debug(1, "SRTP remote key unchanged; maintaining current policy\n");
+		return 0;
+	}
+	memcpy(p->remote_key, remote_key, sizeof(p->remote_key));
 
 	if (sdp_crypto_activate(p, suite_val, remote_key, rtp) < 0) {
 		return -1;
@@ -276,23 +281,21 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 			ast_log(LOG_ERROR, "Could not allocate memory for a_crypto\n");
 			return -1;
 		}
-
 		snprintf(p->a_crypto, attr_len + 10, "a=crypto:%s %s inline:%s\r\n", tag, suite, p->local_key64);
 	}
-
 	return 0;
 }
 
-int sdp_crypto_offer(struct sdp_crypto *p)
+int sdp_crypto_offer(struct sdp_crypto *p, int taglen)
 {
 	char crypto_buf[128];
-	const char *crypto_suite = "AES_CM_128_HMAC_SHA1_80"; /* Crypto offer */
 
 	if (p->a_crypto) {
 		ast_free(p->a_crypto);
 	}
 
-	if (snprintf(crypto_buf, sizeof(crypto_buf), "a=crypto:1 %s inline:%s\r\n",  crypto_suite, p->local_key64) < 1) {
+	if (snprintf(crypto_buf, sizeof(crypto_buf), "a=crypto:1 AES_CM_128_HMAC_SHA1_%i inline:%s\r\n",
+			taglen, p->local_key64) < 1) {
 		return -1;
 	}
 
