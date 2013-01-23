@@ -111,14 +111,12 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	/* Grab the extension to transfer to */
 	if (!grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
 		ast_stream_and_wait(bridge_channel->chan, "pbx-invalid", AST_DIGIT_ANY);
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
 		return 0;
 	}
 
 	/* Get a channel that is the destination we wish to call */
 	if (!(chan = dial_transfer(bridge_channel->chan, exten, context))) {
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
 		return 0;
 	}
 
@@ -131,7 +129,11 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 /*! \brief Attended transfer feature to turn it into a threeway call */
 static int attended_threeway_transfer(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-	/* This is sort of abusing the depart state but in this instance it is only going to be handled in the below function so it is okay */
+	/*
+	 * This is sort of abusing the depart state but in this instance
+	 * it is only going to be handled by feature_attended_transfer()
+	 * so it is okay.
+	 */
 	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
 	return 0;
 }
@@ -176,14 +178,12 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	/* Grab the extension to transfer to */
 	if (!grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
 		ast_stream_and_wait(bridge_channel->chan, "pbx-invalid", AST_DIGIT_ANY);
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
 		return 0;
 	}
 
 	/* Get a channel that is the destination we wish to call */
 	if (!(chan = dial_transfer(bridge_channel->chan, exten, context))) {
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
 		return 0;
 	}
 
@@ -191,7 +191,6 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	if (!(attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX, 0))) {
 		ast_hangup(chan);
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
 		return 0;
 	}
 
@@ -228,7 +227,6 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		}
 	} else {
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
 	}
 
 	/* Now that all channels are out of it we can destroy the bridge and the called features structure */
@@ -241,7 +239,11 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 /*! \brief Internal built in feature for hangup */
 static int feature_hangup(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-	/* This is very simple, we basically change the state on the bridge channel to end and the core takes care of the rest */
+	/*
+	 * This is very simple, we simply change the state on the
+	 * bridge_channel to force the channel out of the bridge and the
+	 * core takes care of the rest.
+	 */
 	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 	return 0;
 }

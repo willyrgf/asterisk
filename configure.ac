@@ -597,7 +597,7 @@ AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ffsll
 # so that AC_CHECK_FUNCS can detect functions in that library.
 AC_CHECK_LIB([m], [sqrt])
 # BSD might not have exp2, and/or log2
-AC_CHECK_FUNCS([exp2 log2 exp10 log10 sin cos tan asin acos atan atan2 pow rint exp log remainder fmod round trunc floor ceil])
+AC_CHECK_FUNCS([exp2 log2 exp10 log10 sin cos tan asin acos atan atan2 pow rint exp log remainder fmod round roundf trunc floor ceil])
 
 # Certain architectures don't really have long double, even though
 # AC_CHECK_FUNCS would otherwise find the following functions.
@@ -1053,6 +1053,27 @@ AC_COMPILE_IFELSE(
 	[AST_NESTED_FUNCTIONS=-fnested-functions]
 )
 AC_SUBST(AST_NESTED_FUNCTIONS)
+
+dnl Check to see if rpath should be set in LDFLAGS
+AC_ARG_ENABLE(rpath,
+	[AC_HELP_STRING([--disable-rpath],
+			[Disables rpath linker option checking])],
+	[case "${enableval}" in
+		y|ye|yes) check_rpath=yes ;;
+		n|no) check_rpath=no ;;
+                *) AC_MSG_ERROR(bad value ${enableval} for --disable-rpath) ;;
+	esac], [check_rpath=yes])
+
+AC_MSG_CHECKING(whether to use rpath)
+AST_RPATH=
+if test "${check_rpath}" != yes; then
+	AC_MSG_RESULT(skipped)
+elif test "${prefix}" = /usr || test "${prefix}" = NONE; then
+	AC_MSG_RESULT(not needed)
+else
+	AST_RPATH="-Wl,-rpath,${libdir}"
+fi
+AC_SUBST(AST_RPATH)
 
 AC_MSG_CHECKING(for sysinfo)
 AC_LINK_IFELSE(

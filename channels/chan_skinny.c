@@ -3125,25 +3125,6 @@ static void update_connectedline(struct skinny_subchannel *sub, const void *data
 	SKINNY_DEBUG(DEBUG_SUB, 3, "Sub %d - Updating\n", sub->callid);
 
 	send_callinfo(sub);
-	if (ast_channel_state(sub->owner) == AST_STATE_UP) {
-		transmit_callstate(d, l->instance, sub->callid, SKINNY_CONNECTED);
-		transmit_displaypromptstatus(d, "Connected", 0, l->instance, sub->callid);
-	} else {
-		if (sub->calldirection == SKINNY_INCOMING) {
-			transmit_callstate(d, l->instance, sub->callid, SKINNY_RINGIN);
-			transmit_displaypromptstatus(d, "Ring-In", 0, l->instance, sub->callid);
-		} else {
-			if (!sub->ringing) {
-				transmit_callstate(d, l->instance, sub->callid, SKINNY_RINGOUT);
-				transmit_displaypromptstatus(d, "Ring-Out", 0, l->instance, sub->callid);
-				sub->ringing = 1;
-			} else {
-				transmit_callstate(d, l->instance, sub->callid, SKINNY_PROGRESS);
-				transmit_displaypromptstatus(d, "Call Progress", 0, l->instance, sub->callid);
-				sub->progress = 1;
-			}
-		}
-	}
 }
 
 static void mwi_event_cb(const struct ast_event *event, void *userdata)
@@ -5265,6 +5246,9 @@ static void setsubstate(struct skinny_subchannel *sub, int state)
 			ast_log(LOG_WARNING, "Cannot set substate to SUBSTATE_RINGOUT from %s (on call-%d)\n", substate2str(sub->substate), sub->callid);
 			return;
 		}
+		if (sub->substate != SUBSTATE_PROGRESS) {
+			transmit_callstate(d, l->instance, sub->callid, SKINNY_PROGRESS);
+		}
 
 		if (!d->earlyrtp) {
 			transmit_start_tone(d, SKINNY_ALERT, l->instance, sub->callid);
@@ -5308,6 +5292,9 @@ static void setsubstate(struct skinny_subchannel *sub, int state)
 		sub->substate = SUBSTATE_CALLWAIT;
 		break;
 	case SUBSTATE_CONNECTED:
+		if (sub->substate == SUBSTATE_RINGIN) {
+			transmit_callstate(d, l->instance, sub->callid, SKINNY_OFFHOOK);
+		}
 		if (sub->substate == SUBSTATE_HOLD) {
 			ast_queue_control(sub->owner, AST_CONTROL_UNHOLD);
 			transmit_connect(d, sub);
@@ -6865,15 +6852,21 @@ static void destroy_session(struct skinnysession *s)
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&sessions, cur, list) {
 		if (cur == s) {
 			AST_LIST_REMOVE_CURRENT(list);
-			if (s->fd > -1)
+			if (s->fd > -1) {
 				close(s->fd);
+			}
 
-			if (!s->device)
-				ast_atomic_fetchadd_int(&unauth_sessions, -1);
+			if (s->device) {
+				s->device->session = NULL;
+			} else {
+ 				ast_atomic_fetchadd_int(&unauth_sessions, -1);
+			}
 
 			ast_mutex_destroy(&s->lock);
 
 			ast_free(s);
+
+			break;
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END
@@ -7011,21 +7004,22 @@ static void *skinny_session(void *data)
 		res = get_input(s);
 		if (res < 0) {
 			ast_verb(3, "Ending Skinny session from %s (bad input)\n", ast_inet_ntoa(s->sin.sin_addr));
-			break;
+			destroy_session(s);
+			return NULL;
 		}
 
 		if (res > 0)
 		{
 			if (!(req = skinny_req_parse(s))) {
-				destroy_session(s);
 				ast_verb(3, "Ending Skinny session from %s (failed parse)\n", ast_inet_ntoa(s->sin.sin_addr));
+				destroy_session(s);
 				return NULL;
 			}
 
 			res = handle_message(req, s);
 			if (res < 0) {
-				destroy_session(s);
 				ast_verb(3, "Ending Skinny session from %s\n", ast_inet_ntoa(s->sin.sin_addr));
+				destroy_session(s);
 				return NULL;
 			}
 		}
