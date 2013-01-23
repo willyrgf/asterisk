@@ -27134,6 +27134,10 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	ast_copy_flags(&p->flags[1], &peer->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 	ast_copy_flags(&p->flags[2], &peer->flags[2], SIP_PAGE3_FLAGS_TO_COPY);
 	copy_route(&p->route, peer->path);
+	if (p->route) {
+		/* Parse SIP URI of first route-set hop and use it as target address */
+		__set_address_from_contact(p->route->hop, &p->sa, p->socket.type == SIP_TRANSPORT_TLS ? 1 : 0);	
+	}
 
 	/* Send OPTIONs to peer's fullcontact */
 	if (!ast_strlen_zero(peer->fullcontact)) {
