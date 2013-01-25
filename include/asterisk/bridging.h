@@ -156,8 +156,8 @@ struct ast_bridge_channel {
 	int fds[4];
 	/*! Bit to indicate whether the channel is suspended from the bridge or not */
 	unsigned int suspended:1;
-	/*! Bit to indicate if a imparted channel is allowed to get hungup after leaving the bridge by the bridging core. */
-	unsigned int allow_impart_hangup:1;
+	/*! TRUE if the imparted channel must wait for an explicit depart from the bridge to reclaim the channel. */
+	unsigned int depart_wait:1;
 	/*! Features structure for features that are specific to this channel */
 	struct ast_bridge_features *features;
 	/*! Technology optimization parameters used by bridging technologies capable of
@@ -212,6 +212,8 @@ struct ast_bridge_video_mode {
  * \brief Structure that contains information about a bridge
  */
 struct ast_bridge {
+	/*! Condition, used if we want to wake up the bridge thread. */
+	ast_cond_t cond;
 	/*! Number of channels participating in the bridge */
 	int num;
 	/*! The video mode this bridge is using */
@@ -249,7 +251,9 @@ struct ast_bridge {
 	struct ast_callid *callid;
 	/*! Linked list of channels participating in the bridge */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
-	};
+	/*! Linked list of channels removed from the bridge and waiting to be departed. */
+	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) depart_wait;
+};
 
 /*!
  * \brief Create a new bridge
@@ -264,7 +268,7 @@ struct ast_bridge {
  *
  * \code
  * struct ast_bridge *bridge;
- * bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX, AST_BRIDGE_FLAG_DISSOLVE);
+ * bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX, AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
  * \endcode
  *
  * This creates a simple two party bridge that will be destroyed once one of
@@ -374,9 +378,9 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  *
  * \param bridge Bridge to impart on
  * \param chan Channel to impart
- * \param swap Channel to swap out if swapping
- * \param features Bridge features structure
- * \param allow_hangup  Indicates if the bridge thread should manage hanging up of the channel or not.
+ * \param swap Channel to swap out if swapping.  NULL if not swapping.
+ * \param features Bridge features structure. Must be NULL or obtained by ast_bridge_features_new().
+ * \param independent TRUE if caller does not want to reclaim the channel using ast_bridge_depart().
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -387,18 +391,34 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  * ast_bridge_impart(bridge, chan, NULL, NULL, 0);
  * \endcode
  *
- * This adds a channel pointed to by the chan pointer to the bridge pointed to by
- * the bridge pointer. This function will return immediately and will not wait
- * until the channel is no longer part of the bridge.
+ * \details
+ * This adds a channel pointed to by the chan pointer to the
+ * bridge pointed to by the bridge pointer.  This function will
+ * return immediately and will not wait until the channel is no
+ * longer part of the bridge.
  *
- * If this channel will be replacing another channel the other channel can be specified
- * in the swap parameter. The other channel will be thrown out of the bridge in an
- * atomic fashion.
+ * If this channel will be replacing another channel the other
+ * channel can be specified in the swap parameter.  The other
+ * channel will be thrown out of the bridge in an atomic
+ * fashion.
  *
- * If channel specific features are enabled a pointer to the features structure
- * can be specified in the features parameter.
+ * If channel specific features are enabled, a pointer to the
+ * features structure can be specified in the features
+ * parameter.
+ *
+ * \note If you impart a channel as not independent you MUST
+ * ast_bridge_depart() the channel.  The bridge channel thread
+ * is created join-able.  The implication is that the channel is
+ * special and is not intended to be moved to another bridge.
+ *
+ * \note If you impart a channel as independent you must not
+ * ast_bridge_depart() the channel.  The bridge channel thread
+ * is created non-join-able.  The channel must be treated as if
+ * it were placed into the bridge by ast_bridge_join().
+ * Channels placed into a bridge by ast_bridge_join() are
+ * removed by a third party using ast_bridge_remove().
  */
-int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struct ast_channel *swap, struct ast_bridge_features *features, int allow_hangup);
+int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struct ast_channel *swap, struct ast_bridge_features *features, int independent);
 
 /*!
  * \brief Depart a channel from a bridge
@@ -420,7 +440,7 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
  * This does not hang up the channel.
  *
  * \note This API call can only be used on channels that were added to the bridge
- *       using the ast_bridge_impart API call.
+ *       using the ast_bridge_impart API call with the independent flag FALSE.
  */
 int ast_bridge_depart(struct ast_bridge *bridge, struct ast_channel *chan);
 

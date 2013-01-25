@@ -47,8 +47,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/file.h"
 #include "asterisk/app.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/pbx.h"
 
-/*! \brief Helper function that presents dialtone and grabs extension */
+/*!
+ * \brief Helper function that presents dialtone and grabs extension
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
 static int grab_transfer(struct ast_channel *chan, char *exten, size_t exten_len, const char *context)
 {
 	int res;
@@ -56,15 +62,34 @@ static int grab_transfer(struct ast_channel *chan, char *exten, size_t exten_len
 	/* Play the simple "transfer" prompt out and wait */
 	res = ast_stream_and_wait(chan, "pbx-transfer", AST_DIGIT_ANY);
 	ast_stopstream(chan);
-
-	/* If the person hit a DTMF digit while the above played back stick it into the buffer */
+	if (res < 0) {
+		/* Hangup or error */
+		return -1;
+	}
 	if (res) {
-		exten[0] = (char)res;
+		/* Store the DTMF digit that interrupted playback of the file. */
+		exten[0] = res;
 	}
 
 	/* Drop to dialtone so they can enter the extension they want to transfer to */
-	res = ast_app_dtget(chan, context, exten, exten_len, 100, 1000);
-
+	res = ast_app_dtget(chan, context, exten, exten_len, exten_len - 1, 3000);
+	if (res < 0) {
+		/* Hangup or error */
+		res = -1;
+	} else if (!res) {
+		/* 0 for invalid extension dialed. */
+		if (ast_strlen_zero(exten)) {
+			ast_debug(1, "%s dialed no digits.\n", ast_channel_name(chan));
+		} else {
+			ast_debug(1, "%s dialed '%s@%s' does not exist.\n",
+				ast_channel_name(chan), exten, context);
+		}
+		ast_stream_and_wait(chan, "pbx-invalid", AST_DIGIT_NONE);
+		res = -1;
+	} else {
+		/* Dialed extension is valid. */
+		res = 0;
+	}
 	return res;
 }
 
@@ -79,7 +104,9 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
 	snprintf(destination, sizeof(destination), "%s@%s", exten, context);
 
 	/* Now we request that chan_local prepare to call the destination */
-	if (!(chan = ast_request("Local", ast_channel_nativeformats(caller), caller, destination, &cause))) {
+	chan = ast_request("Local", ast_channel_nativeformats(caller), caller, destination,
+		&cause);
+	if (!chan) {
 		return NULL;
 	}
 
@@ -100,28 +127,65 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
 	return chan;
 }
 
+/*!
+ * \internal
+ * \brief Determine the transfer context to use.
+ * \since 12.0.0
+ *
+ * \param transferer Channel initiating the transfer.
+ * \param context User supplied context if available.  May be NULL.
+ *
+ * \return The context to use for the transfer.
+ */
+static const char *get_transfer_context(struct ast_channel *transferer, const char *context)
+{
+	if (!ast_strlen_zero(context)) {
+		return context;
+	}
+	context = pbx_builtin_getvar_helper(transferer, "TRANSFER_CONTEXT");
+	if (!ast_strlen_zero(context)) {
+		return context;
+	}
+	context = ast_channel_macrocontext(transferer);
+	if (!ast_strlen_zero(context)) {
+		return context;
+	}
+	context = ast_channel_context(transferer);
+	if (!ast_strlen_zero(context)) {
+		return context;
+	}
+	return "default";
+}
+
 /*! \brief Internal built in feature for blind transfers */
 static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
 	char exten[AST_MAX_EXTENSION] = "";
 	struct ast_channel *chan = NULL;
 	struct ast_bridge_features_blind_transfer *blind_transfer = hook_pvt;
-	const char *context = (blind_transfer && !ast_strlen_zero(blind_transfer->context) ? blind_transfer->context : ast_channel_context(bridge_channel->chan));
+	const char *context;
+
+	ast_channel_lock(bridge_channel->chan);
+	context = ast_strdupa(get_transfer_context(bridge_channel->chan,
+		blind_transfer ? blind_transfer->context : NULL));
+	ast_channel_unlock(bridge_channel->chan);
 
 	/* Grab the extension to transfer to */
-	if (!grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
-		ast_stream_and_wait(bridge_channel->chan, "pbx-invalid", AST_DIGIT_ANY);
+	if (grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
 		return 0;
 	}
 
 	/* Get a channel that is the destination we wish to call */
-	if (!(chan = dial_transfer(bridge_channel->chan, exten, context))) {
-		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
+	chan = dial_transfer(bridge_channel->chan, exten, context);
+	if (!chan) {
 		return 0;
 	}
 
-	/* This is sort of the fun part. We impart the above channel onto the bridge, and have it take our place. */
-	ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL, 1);
+	/* Impart the new channel onto the bridge, and have it take our place. */
+	if (ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL, 1)) {
+		ast_hangup(chan);
+		return 0;
+	}
 
 	return 0;
 }
@@ -138,102 +202,113 @@ static int attended_threeway_transfer(struct ast_bridge *bridge, struct ast_brid
 	return 0;
 }
 
-/*! \brief Attended transfer abort feature */
-static int attended_abort_transfer(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
-{
-	struct ast_bridge_channel *called_bridge_channel = NULL;
-
-	/* It is possible (albeit unlikely) that the bridge channels list may change, so we have to ensure we do all of our magic while locked */
-	ao2_lock(bridge);
-
-	if (AST_LIST_FIRST(&bridge->channels) != bridge_channel) {
-		called_bridge_channel = AST_LIST_FIRST(&bridge->channels);
-	} else {
-		called_bridge_channel = AST_LIST_LAST(&bridge->channels);
-	}
-
-	/* Now we basically eject the other channel from the bridge. This will cause their thread to hang them up, and our own code to consider the transfer failed. */
-	if (called_bridge_channel) {
-		ast_bridge_change_state(called_bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
-	}
-
-	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
-
-	ao2_unlock(bridge);
-
-	return 0;
-}
-
 /*! \brief Internal built in feature for attended transfers */
 static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
 	char exten[AST_MAX_EXTENSION] = "";
-	struct ast_channel *chan = NULL;
-	struct ast_bridge *attended_bridge = NULL;
-	struct ast_bridge_features caller_features, called_features;
+	struct ast_channel *peer;
+	struct ast_bridge *attended_bridge;
+	struct ast_bridge_features caller_features;
 	enum ast_bridge_channel_state attended_bridge_result;
+	int xfer_failed;
 	struct ast_bridge_features_attended_transfer *attended_transfer = hook_pvt;
-	const char *context = (attended_transfer && !ast_strlen_zero(attended_transfer->context) ? attended_transfer->context : ast_channel_context(bridge_channel->chan));
+	const char *context;
+
+	ast_channel_lock(bridge_channel->chan);
+	context = ast_strdupa(get_transfer_context(bridge_channel->chan,
+		attended_transfer ? attended_transfer->context : NULL));
+	ast_channel_unlock(bridge_channel->chan);
 
 	/* Grab the extension to transfer to */
-	if (!grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
-		ast_stream_and_wait(bridge_channel->chan, "pbx-invalid", AST_DIGIT_ANY);
+	if (grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
 		return 0;
 	}
 
 	/* Get a channel that is the destination we wish to call */
-	if (!(chan = dial_transfer(bridge_channel->chan, exten, context))) {
-		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
+	peer = dial_transfer(bridge_channel->chan, exten, context);
+	if (!peer) {
+		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
 		return 0;
 	}
 
 	/* Create a bridge to use to talk to the person we are calling */
-	if (!(attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX, 0))) {
-		ast_hangup(chan);
-		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
+	attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_NATIVE,
+		AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
+	if (!attended_bridge) {
+		ast_hangup(peer);
+		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
 		return 0;
 	}
 
-	/* Setup our called features structure so that if they hang up we immediately get thrown out of the bridge */
-	ast_bridge_features_init(&called_features);
-	ast_bridge_features_set_flag(&called_features, AST_BRIDGE_FLAG_DISSOLVE);
-
 	/* This is how this is going down, we are imparting the channel we called above into this bridge first */
-	ast_bridge_impart(attended_bridge, chan, NULL, &called_features, 1);
+	if (ast_bridge_impart(attended_bridge, peer, NULL, NULL, 0)) {
+		ast_bridge_destroy(attended_bridge);
+		ast_hangup(peer);
+		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
+		return 0;
+	}
 
 	/* Before we join setup a features structure with the hangup option, just in case they want to use DTMF */
 	ast_bridge_features_init(&caller_features);
 /* BUGBUG bridging API features does not support features.conf featuremap */
 /* BUGBUG bridging API features does not support the features.conf atxfer bounce between C & B channels */
 	ast_bridge_features_enable(&caller_features, AST_BRIDGE_BUILTIN_HANGUP,
-				   (attended_transfer && !ast_strlen_zero(attended_transfer->complete) ? attended_transfer->complete : "*1"), NULL);
-	ast_bridge_features_hook(&caller_features, (attended_transfer && !ast_strlen_zero(attended_transfer->threeway) ? attended_transfer->threeway : "*2"),
-				 attended_threeway_transfer, NULL, NULL);
-	ast_bridge_features_hook(&caller_features, (attended_transfer && !ast_strlen_zero(attended_transfer->abort) ? attended_transfer->abort : "*3"),
-				 attended_abort_transfer, NULL, NULL);
+		attended_transfer && !ast_strlen_zero(attended_transfer->complete)
+			? attended_transfer->complete : "*1",
+		NULL);
+	ast_bridge_features_hook(&caller_features,
+		attended_transfer && !ast_strlen_zero(attended_transfer->threeway)
+			? attended_transfer->threeway : "*2",
+		attended_threeway_transfer, NULL, NULL);
 
 	/* But for the caller we want to join the bridge in a blocking fashion so we don't spin around in this function doing nothing while waiting */
 	attended_bridge_result = ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL);
 
-	/* Since the above returned the caller features structure is of no more use */
-	ast_bridge_features_cleanup(&caller_features);
-
-	/* Drop the channel we are transferring to out of the above bridge since it has ended */
-	if ((attended_bridge_result != AST_BRIDGE_CHANNEL_STATE_HANGUP) && !ast_bridge_depart(attended_bridge, chan)) {
-		/* If the user wants to turn this into a threeway transfer then do so, otherwise they take our place */
-		if (attended_bridge_result == AST_BRIDGE_CHANNEL_STATE_DEPART) {
-			/* We want to impart them upon the bridge and just have us return to it as normal */
-			ast_bridge_impart(bridge, chan, NULL, NULL, 1);
-		} else {
-			ast_bridge_impart(bridge, chan, bridge_channel->chan, NULL, 1);
-		}
+	/* Wait for peer thread to exit bridge and die. */
+	if (!ast_autoservice_start(bridge_channel->chan)) {
+		ast_bridge_depart(attended_bridge, peer);
+		ast_autoservice_stop(bridge_channel->chan);
 	} else {
-		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_ANY);
+		ast_bridge_depart(attended_bridge, peer);
 	}
 
-	/* Now that all channels are out of it we can destroy the bridge and the called features structure */
-	ast_bridge_features_cleanup(&called_features);
+	/* Now that all channels are out of it we can destroy the bridge and the feature structures */
+	ast_bridge_features_cleanup(&caller_features);
 	ast_bridge_destroy(attended_bridge);
+
+	xfer_failed = -1;
+	switch (attended_bridge_result) {
+	case AST_BRIDGE_CHANNEL_STATE_END:
+		if (!ast_check_hangup_locked(bridge_channel->chan)) {
+			/* Transferer aborted the transfer. */
+			break;
+		}
+
+		/* The peer takes our place in the bridge. */
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+		xfer_failed = ast_bridge_impart(bridge, peer, bridge_channel->chan, NULL, 1);
+		break;
+	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
+		/* Peer hungup */
+		break;
+	case AST_BRIDGE_CHANNEL_STATE_DEPART:
+		/*
+		 * Transferer wants to convert to a threeway call.
+		 *
+		 * Just impart the peer onto the bridge and have us return to it
+		 * as normal.
+		 */
+		xfer_failed = ast_bridge_impart(bridge, peer, NULL, NULL, 1);
+		break;
+	default:
+		break;
+	}
+	if (xfer_failed) {
+		ast_hangup(peer);
+		if (!ast_check_hangup_locked(bridge_channel->chan)) {
+			ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
+		}
+	}
 
 	return 0;
 }

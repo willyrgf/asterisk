@@ -72,6 +72,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/cel.h"
 #include "asterisk/test.h"
+#include "asterisk/bridging.h"
 
 /*
  * Party A - transferee
@@ -3710,6 +3711,7 @@ static int feature_interpret_helper(struct ast_channel *chan, struct ast_channel
 	return res;
 }
 
+#if 0//BUGBUG
 /*!
  * \brief Check the dynamic features
  * \param chan,peer,config,code,sense
@@ -3756,6 +3758,7 @@ static int feature_interpret(struct ast_channel *chan, struct ast_channel *peer,
 
 	return res;
 }
+#endif
 
 
 int ast_feature_detect(struct ast_channel *chan, struct ast_flags *features, const char *code, struct ast_call_feature *feature) {
@@ -3763,6 +3766,7 @@ int ast_feature_detect(struct ast_channel *chan, struct ast_flags *features, con
 	return feature_interpret_helper(chan, NULL, NULL, code, 0, NULL, features, FEATURE_INTERPRET_DETECT, feature);
 }
 
+#if 0//BUGBUG
 /*! \brief Check if a feature exists */
 static int feature_check(struct ast_channel *chan, struct ast_flags *features, char *code) {
 	struct ast_str *chan_dynamic_features;
@@ -3781,6 +3785,7 @@ static int feature_check(struct ast_channel *chan, struct ast_flags *features, c
 
 	return res;
 }
+#endif
 
 static void set_config_flags(struct ast_channel *chan, struct ast_bridge_config *config)
 {
@@ -4309,6 +4314,78 @@ void ast_bridge_end_dtmf(struct ast_channel *chan, char digit, struct timeval st
 }
 
 /*!
+ * \internal
+ * \brief Setup bridge channel features.
+ * \since 12.0.0
+ *
+ * \param features Bridge features to setup.
+ * \param flags DTMF features to enable.
+ *
+ * \retval 0 on success.
+ * \retval -1 on failure.
+ */
+static int setup_bridge_channel_features(struct ast_bridge_features *features, struct ast_flags *flags)
+{
+	struct ast_call_feature *dtmf;
+	int res = 0;
+
+	if (ast_test_flag(flags, AST_FEATURE_REDIRECT)) {
+		/* Add atxfer and blind transfer. */
+		ast_rwlock_rdlock(&features_lock);
+		dtmf = ast_find_call_feature("blindxfer");
+		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+/* BUGBUG need to supply a blind transfer structure and destructor to use other than defaults */
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_BLINDTRANSFER, dtmf->exten, NULL);
+		}
+		dtmf = ast_find_call_feature("atxfer");
+		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+/* BUGBUG need to supply an attended transfer structure and destructor to use other than defaults */
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, dtmf->exten, NULL);
+		}
+		ast_rwlock_unlock(&features_lock);
+	}
+	if (ast_test_flag(flags, AST_FEATURE_DISCONNECT)) {
+		ast_rwlock_rdlock(&features_lock);
+		dtmf = ast_find_call_feature("disconnect");
+		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_HANGUP, dtmf->exten, NULL);
+		}
+		ast_rwlock_unlock(&features_lock);
+	}
+	if (ast_test_flag(flags, AST_FEATURE_PARKCALL)) {
+		ast_rwlock_rdlock(&features_lock);
+		dtmf = ast_find_call_feature("parkcall");
+		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_PARKCALL, dtmf->exten, NULL);
+		}
+		ast_rwlock_unlock(&features_lock);
+	}
+	if (ast_test_flag(flags, AST_FEATURE_AUTOMON)) {
+		ast_rwlock_rdlock(&features_lock);
+		dtmf = ast_find_call_feature("automon");
+		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMON, dtmf->exten, NULL);
+		}
+		ast_rwlock_unlock(&features_lock);
+	}
+	if (ast_test_flag(flags, AST_FEATURE_AUTOMIXMON)) {
+		ast_rwlock_rdlock(&features_lock);
+		dtmf = ast_find_call_feature("automixmon");
+		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMIXMON, dtmf->exten, NULL);
+		}
+		ast_rwlock_unlock(&features_lock);
+	}
+
+#if 0	/* BUGBUG don't report errors untill all of the builtin features are supported. */
+	return res ? -1 : 0;
+#else
+	return 0;
+#endif
+/* BUGBUG dynamic features not handled yet.  App run returns non-zero breaks bridge and ast_bridge_call returns 0.  App returns zero continues bridge. */
+}
+
+/*!
  * \brief bridge the call and set CDR
  *
  * \param chan The bridge considers this channel the caller.
@@ -4324,27 +4401,22 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 {
 	/* Copy voice back and forth between the two channels.  Give the peer
 	   the ability to transfer calls with '#<extension' syntax. */
-	struct ast_frame *f;
-	struct ast_channel *who;
-	char chan_featurecode[FEATURE_MAX_LEN + 1]="";
-	char peer_featurecode[FEATURE_MAX_LEN + 1]="";
 	char orig_channame[AST_CHANNEL_NAME];
 	char orig_peername[AST_CHANNEL_NAME];
 	int res;
-	int diff;
-	int hasfeatures=0;
-	int hadfeatures=0;
-	int sendingdtmfdigit = 0;
 	int we_disabled_peer_cdr = 0;
-	struct ast_option_header *aoh;
 	struct ast_cdr *bridge_cdr = NULL;
 	struct ast_cdr *chan_cdr = ast_channel_cdr(chan); /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *peer_cdr = ast_channel_cdr(peer); /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_chan_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
 	struct ast_cdr *new_peer_cdr = NULL; /* the proper chan cdr, if there are forked cdrs */
-	struct ast_silence_generator *silgen = NULL;
 	/*! TRUE if h-exten or hangup handlers run. */
 	int hangup_run = 0;
+
+	struct ast_bridge *bridge;
+	struct ast_bridge_features chan_features;
+	struct ast_bridge_features *peer_features;
+
 
 	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", ast_channel_name(peer));
 	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", ast_channel_name(chan));
@@ -4500,7 +4572,6 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 		 * present. */
 		ast_clear_flag(bridge_cdr, AST_CDR_FLAG_DIALED);
 	}
-	ast_cel_report_event(chan, AST_CEL_BRIDGE_START, NULL, NULL, peer);
 
 	/* If we are bridging a call, stop worrying about forwarding loops. We presume that if
 	 * a call is being bridged, that the humans in charge know what they're doing. If they
@@ -4508,255 +4579,87 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	clear_dialed_interfaces(chan);
 	clear_dialed_interfaces(peer);
 
-	for (;;) {
-		struct ast_channel *other;	/* used later */
+	/* Setup DTMF features. */
+	ast_bridge_features_init(&chan_features);
+	peer_features = ast_bridge_features_new();
+	if (!peer_features
+		|| setup_bridge_channel_features(peer_features, &config->features_callee)
+		|| setup_bridge_channel_features(&chan_features, &config->features_caller)) {
+		ast_bridge_features_destroy(peer_features);
+		ast_bridge_features_cleanup(&chan_features);
 
-		res = ast_channel_bridge(chan, peer, config, &f, &who);
-
-		if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE)
-			|| ast_test_flag(ast_channel_flags(peer), AST_FLAG_ZOMBIE)) {
-			/* Zombies are present time to leave! */
-			res = -1;
-			if (f) {
-				ast_frfree(f);
-			}
-			goto before_you_go;
+		if (bridge_cdr) {
+			ast_cdr_discard(bridge_cdr);
 		}
-
-		/* When frame is not set, we are probably involved in a situation
-		   where we've timed out.
-		   When frame is set, we'll come this code twice; once for DTMF_BEGIN
-		   and also for DTMF_END. If we flow into the following 'if' for both, then
-		   our wait times are cut in half, as both will subtract from the
-		   feature_timer. Not good!
-		*/
-		if (config->feature_timer && (!f || f->frametype == AST_FRAME_DTMF_END)) {
-			/* Update feature timer for next pass */
-			diff = ast_tvdiff_ms(ast_tvnow(), config->feature_start_time);
-			if (res == AST_BRIDGE_RETRY) {
-				/* The feature fully timed out but has not been updated. Skip
-				 * the potential round error from the diff calculation and
-				 * explicitly set to expired. */
-				config->feature_timer = -1;
-			} else {
-				config->feature_timer -= diff;
-			}
-
-			if (hasfeatures) {
-				if (config->feature_timer <= 0) {
-					/* Not *really* out of time, just out of time for
-					   digits to come in for features. */
-					ast_debug(1, "Timed out for feature!\n");
-					if (!ast_strlen_zero(peer_featurecode)) {
-						ast_dtmf_stream(chan, peer, peer_featurecode, 0, f ? f->len : 0);
-						memset(peer_featurecode, 0, sizeof(peer_featurecode));
-					}
-					if (!ast_strlen_zero(chan_featurecode)) {
-						ast_dtmf_stream(peer, chan, chan_featurecode, 0, f ? f->len : 0);
-						memset(chan_featurecode, 0, sizeof(chan_featurecode));
-					}
-					if (f)
-						ast_frfree(f);
-					hasfeatures = !ast_strlen_zero(chan_featurecode) || !ast_strlen_zero(peer_featurecode);
-					if (!hasfeatures) {
-						/* No more digits expected - reset the timer */
-						config->feature_timer = 0;
-					}
-					hadfeatures = hasfeatures;
-					/* Continue as we were */
-					continue;
-				} else if (!f) {
-					/* The bridge returned without a frame and there is a feature in progress.
-					 * However, we don't think the feature has quite yet timed out, so just
-					 * go back into the bridge. */
-					continue;
-				}
-			} else {
-				if (config->feature_timer <=0) {
-					/* We ran out of time */
-					config->feature_timer = 0;
-					who = chan;
-					if (f)
-						ast_frfree(f);
-					f = NULL;
-					res = 0;
-				}
-			}
-		}
-		if (res < 0) {
-			if (!ast_test_flag(ast_channel_flags(chan), AST_FLAG_ZOMBIE) && !ast_test_flag(ast_channel_flags(peer), AST_FLAG_ZOMBIE) && !ast_check_hangup(chan) && !ast_check_hangup(peer)) {
-				ast_log(LOG_WARNING, "Bridge failed on channels %s and %s\n", ast_channel_name(chan), ast_channel_name(peer));
-			}
-			goto before_you_go;
-		}
-
-		if (!f || (f->frametype == AST_FRAME_CONTROL &&
-				(f->subclass.integer == AST_CONTROL_HANGUP || f->subclass.integer == AST_CONTROL_BUSY ||
-					f->subclass.integer == AST_CONTROL_CONGESTION))) {
-			/*
-			 * If the bridge was broken for a hangup that isn't real,
-			 * then don't run the h extension, because the channel isn't
-			 * really hung up. This should really only happen with AST_SOFTHANGUP_ASYNCGOTO,
-			 * but it doesn't hurt to check AST_SOFTHANGUP_UNBRIDGE either.
-			 */
-			ast_channel_lock(chan);
-			if (ast_channel_softhangup_internal_flag(chan) & (AST_SOFTHANGUP_ASYNCGOTO | AST_SOFTHANGUP_UNBRIDGE)) {
-				ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT);
-			}
-			ast_channel_unlock(chan);
-			res = -1;
-			break;
-		}
-		/* many things should be sent to the 'other' channel */
-		other = (who == chan) ? peer : chan;
-		if (f->frametype == AST_FRAME_CONTROL) {
-			switch (f->subclass.integer) {
-			case AST_CONTROL_RINGING:
-			case AST_CONTROL_FLASH:
-			case AST_CONTROL_MCID:
-			case -1:
-				ast_indicate(other, f->subclass.integer);
-				break;
-			case AST_CONTROL_CONNECTED_LINE:
-				if (ast_channel_connected_line_sub(who, other, f, 1) &&
-					ast_channel_connected_line_macro(who, other, f, who != chan, 1)) {
-					ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
-				}
-				break;
-			case AST_CONTROL_REDIRECTING:
-				if (ast_channel_redirecting_sub(who, other, f, 1) &&
-					ast_channel_redirecting_macro(who, other, f, who != chan, 1)) {
-					ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
-				}
-				break;
-			case AST_CONTROL_PVT_CAUSE_CODE:
-			case AST_CONTROL_AOC:
-			case AST_CONTROL_HOLD:
-			case AST_CONTROL_UNHOLD:
-				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
-				break;
-			case AST_CONTROL_OPTION:
-				aoh = f->data.ptr;
-				/* Forward option Requests, but only ones we know are safe
-				 * These are ONLY sent by chan_iax2 and I'm not convinced that
-				 * they are useful. I haven't deleted them entirely because I
-				 * just am not sure of the ramifications of removing them. */
-				if (aoh && aoh->flag == AST_OPTION_FLAG_REQUEST) {
-					switch (ntohs(aoh->option)) {
-					case AST_OPTION_TONE_VERIFY:
-					case AST_OPTION_TDD:
-					case AST_OPTION_RELAXDTMF:
-					case AST_OPTION_AUDIO_MODE:
-					case AST_OPTION_DIGIT_DETECT:
-					case AST_OPTION_FAX_DETECT:
-						ast_channel_setoption(other, ntohs(aoh->option), aoh->data,
-							f->datalen - sizeof(struct ast_option_header), 0);
-					}
-				}
-				break;
-			}
-		} else if (f->frametype == AST_FRAME_DTMF_BEGIN) {
-			struct ast_flags *cfg;
-			char dtmfcode[2] = { f->subclass.integer, };
-			size_t featurelen;
-
-			if (who == chan) {
-				featurelen = strlen(chan_featurecode);
-				cfg = &(config->features_caller);
-			} else {
-				featurelen = strlen(peer_featurecode);
-				cfg = &(config->features_callee);
-			}
-			/* Take a peek if this (possibly) matches a feature. If not, just pass this
-			 * DTMF along untouched. If this is not the first digit of a multi-digit code
-			 * then we need to fall through and stream the characters if it matches */
-			if (featurelen == 0
-				&& feature_check(chan, cfg, &dtmfcode[0]) == AST_FEATURE_RETURN_PASSDIGITS) {
-				if (option_debug > 3) {
-					ast_log(LOG_DEBUG, "Passing DTMF through, since it is not a feature code\n");
-				}
-				ast_write(other, f);
-				sendingdtmfdigit = 1;
-			} else {
-				/* If ast_opt_transmit_silence is set, then we need to make sure we are
-				 * transmitting something while we hold on to the DTMF waiting for a
-				 * feature. */
-				if (!silgen && ast_opt_transmit_silence) {
-					silgen = ast_channel_start_silence_generator(other);
-				}
-				if (option_debug > 3) {
-					ast_log(LOG_DEBUG, "Not passing DTMF through, since it may be a feature code\n");
-				}
-			}
-		} else if (f->frametype == AST_FRAME_DTMF_END) {
-			char *featurecode;
-			int sense;
-			unsigned int dtmfduration = f->len;
-
-			hadfeatures = hasfeatures;
-			/* This cannot overrun because the longest feature is one shorter than our buffer */
-			if (who == chan) {
-				sense = FEATURE_SENSE_CHAN;
-				featurecode = chan_featurecode;
-			} else  {
-				sense = FEATURE_SENSE_PEER;
-				featurecode = peer_featurecode;
-			}
-
-			if (sendingdtmfdigit == 1) {
-				/* We let the BEGIN go through happily, so let's not bother with the END,
-				 * since we already know it's not something we bother with */
-				ast_write(other, f);
-				sendingdtmfdigit = 0;
-			} else {
-				/*! append the event to featurecode. we rely on the string being zero-filled, and
-				 * not overflowing it.
-				 * \todo XXX how do we guarantee the latter ?
-				 */
-				featurecode[strlen(featurecode)] = f->subclass.integer;
-				/* Get rid of the frame before we start doing "stuff" with the channels */
-				ast_frfree(f);
-				f = NULL;
-				if (silgen) {
-					ast_channel_stop_silence_generator(other, silgen);
-					silgen = NULL;
-				}
-				config->feature_timer = 0;
-				res = feature_interpret(chan, peer, config, featurecode, sense);
-				switch(res) {
-				case AST_FEATURE_RETURN_PASSDIGITS:
-					ast_dtmf_stream(other, who, featurecode, 0, dtmfduration);
-					/* Fall through */
-				case AST_FEATURE_RETURN_SUCCESS:
-					memset(featurecode, 0, sizeof(chan_featurecode));
-					break;
-				}
-				if (res >= AST_FEATURE_RETURN_PASSDIGITS) {
-					res = 0;
-				} else {
-					break;
-				}
-				hasfeatures = !ast_strlen_zero(chan_featurecode) || !ast_strlen_zero(peer_featurecode);
-				if (hadfeatures && !hasfeatures) {
-					/* Feature completed or timed out */
-					config->feature_timer = 0;
-				} else if (hasfeatures) {
-					if (config->timelimit) {
-						/* No warning next time - we are waiting for feature code */
-						ast_set_flag(config, AST_FEATURE_WARNING_ACTIVE);
-					}
-					config->feature_start_time = ast_tvnow();
-					config->feature_timer = featuredigittimeout;
-					ast_debug(1, "Set feature timer to %ld ms\n", config->feature_timer);
-				}
-			}
-		}
-		if (f)
-			ast_frfree(f);
+		return -1;
 	}
-	ast_cel_report_event(chan, AST_CEL_BRIDGE_END, NULL, NULL, peer);
 
-before_you_go:
+	ast_cel_report_event(chan, AST_CEL_BRIDGE_START, NULL, NULL, peer);/* BUGBUG expected to go away. */
+
+	/* Create bridge */
+	bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_NATIVE,
+		AST_BRIDGE_FLAG_DISSOLVE_HANGUP | AST_BRIDGE_FLAG_DISSOLVE_EMPTY | AST_BRIDGE_FLAG_SMART);
+	if (!bridge) {
+		ast_bridge_features_destroy(peer_features);
+		ast_bridge_features_cleanup(&chan_features);
+
+		ast_cel_report_event(chan, AST_CEL_BRIDGE_END, NULL, NULL, peer);/* BUGBUG expected to go away. */
+		if (bridge_cdr) {
+			ast_cdr_discard(bridge_cdr);
+		}
+		return -1;
+	}
+
+	/* Put peer into the bridge */
+/* BUGBUG imparting the peer this way must be changed.  The peer ultimately cannot be returned to the caller. */
+	if (ast_bridge_impart(bridge, peer, NULL, peer_features, 0)) {
+		ast_bridge_destroy(bridge);
+		ast_bridge_features_destroy(peer_features);
+		ast_bridge_features_cleanup(&chan_features);
+
+		ast_cel_report_event(chan, AST_CEL_BRIDGE_END, NULL, NULL, peer);/* BUGBUG expected to go away. */
+		if (bridge_cdr) {
+			ast_cdr_discard(bridge_cdr);
+		}
+		return -1;
+	}
+
+	/* Join bridge */
+	res = -1;
+	switch (ast_bridge_join(bridge, chan, NULL, &chan_features, NULL)) {
+	case AST_BRIDGE_CHANNEL_STATE_END:
+	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
+	case AST_BRIDGE_CHANNEL_STATE_DEPART:
+		/*
+		 * If the bridge was broken for a hangup that isn't real, then
+		 * don't run the h extension, because the channel isn't really
+		 * hung up.  This should really only happen with
+		 * AST_SOFTHANGUP_ASYNCGOTO.
+		 */
+		ast_channel_lock(chan);
+		if (ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO) {
+			ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT);
+			res = 0;
+		}
+		ast_channel_unlock(chan);
+		break;
+	default:
+		break;
+	}
+
+	/* Wait for peer thread to exit bridge and die. */
+	if (!ast_autoservice_start(chan)) {
+		ast_bridge_depart(bridge, peer);
+		ast_autoservice_stop(chan);
+	} else {
+		ast_bridge_depart(bridge, peer);
+	}
+
+	ast_bridge_destroy(bridge);
+	ast_bridge_features_cleanup(&chan_features);
+
+	ast_cel_report_event(chan, AST_CEL_BRIDGE_END, NULL, NULL, peer);/* BUGBUG expected to go away. */
+
 	if (ast_channel_sending_dtmf_digit(chan)) {
 		ast_bridge_end_dtmf(chan, ast_channel_sending_dtmf_digit(chan),
 			ast_channel_sending_dtmf_tv(chan), "bridge end");
@@ -4764,12 +4667,6 @@ before_you_go:
 	if (ast_channel_sending_dtmf_digit(peer)) {
 		ast_bridge_end_dtmf(peer, ast_channel_sending_dtmf_digit(peer),
 			ast_channel_sending_dtmf_tv(peer), "bridge end");
-	}
-
-	/* Just in case something weird happened and we didn't clean up the silence generator... */
-	if (silgen) {
-		ast_channel_stop_silence_generator(who == chan ? peer : chan, silgen);
-		silgen = NULL;
 	}
 
 	/* Wait for any dual redirect to complete. */

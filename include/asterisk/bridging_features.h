@@ -30,10 +30,12 @@ extern "C" {
 
 /*! \brief Flags used for bridge features */
 enum ast_bridge_feature_flags {
-	/*! Upon hangup the bridge should be discontinued */
-	AST_BRIDGE_FLAG_DISSOLVE = (1 << 0),
+	/*! Upon channel hangup the bridge should be ended. */
+	AST_BRIDGE_FLAG_DISSOLVE_HANGUP = (1 << 0),
 	/*! Move between bridging technologies as needed. */
 	AST_BRIDGE_FLAG_SMART = (1 << 1),
+	/*! The bridge ends when the last channel leaves. (There is no external bridge manager.) */
+	AST_BRIDGE_FLAG_DISSOLVE_EMPTY = (1 << 2),
 };
 
 /*! \brief Built in DTMF features */
@@ -52,6 +54,25 @@ enum ast_bridge_builtin_feature {
 	 * AST_BRIDGE_CHANNEL_STATE_END.
 	 */
 	AST_BRIDGE_BUILTIN_HANGUP,
+	/*!
+	 * DTMF based Park
+	 *
+	 * \details The bridge is parked and the channel hears the
+	 * parking slot to which it was parked.
+	 */
+	AST_BRIDGE_BUILTIN_PARKCALL,
+	/*!
+	 * DTMF one-touch-record toggle using Monitor app.
+	 *
+	 * \note Only valid on two party bridges.
+	 */
+	AST_BRIDGE_BUILTIN_AUTOMON,
+	/*!
+	 * DTMF one-touch-record toggle using MixMonitor app.
+	 *
+	 * \note Only valid on two party bridges.
+	 */
+	AST_BRIDGE_BUILTIN_AUTOMIXMON,
 
 	/*! End terminator for list of built in features. Must remain last. */
 	AST_BRIDGE_BUILTIN_END
@@ -153,14 +174,12 @@ struct ast_bridge_features_blind_transfer {
  * \brief Structure that contains configuration information for the attended transfer built in feature
  */
 struct ast_bridge_features_attended_transfer {
-	/*! DTMF string used to abort the transfer */
-	char abort[MAXIMUM_DTMF_FEATURE_STRING];
+	/*! Context to use for transfers */
+	char context[AST_MAX_CONTEXT];
 	/*! DTMF string used to turn the transfer into a three way conference */
 	char threeway[MAXIMUM_DTMF_FEATURE_STRING];
 	/*! DTMF string used to complete the transfer */
 	char complete[MAXIMUM_DTMF_FEATURE_STRING];
-	/*! Context to use for transfers */
-	char context[AST_MAX_CONTEXT];
 };
 
 /*!
@@ -288,11 +307,11 @@ int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_br
  * \code
  * struct ast_bridge_features features;
  * ast_bridge_features_init(&features);
- * ast_bridge_features_set_flag(&features, AST_BRIDGE_FLAG_DISSOLVE);
+ * ast_bridge_features_set_flag(&features, AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
  * \endcode
  *
- * This sets the AST_BRIDGE_FLAG_DISSOLVE feature to be enabled on the features structure
- * 'features'.
+ * This sets the AST_BRIDGE_FLAG_DISSOLVE_HANGUP feature to be
+ * enabled on the features structure 'features'.
  */
 void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast_bridge_feature_flags flag);
 
@@ -339,6 +358,41 @@ int ast_bridge_features_init(struct ast_bridge_features *features);
  *       or a memory leak may occur.
  */
 void ast_bridge_features_cleanup(struct ast_bridge_features *features);
+
+/*!
+ * \brief Allocate a new bridge features struct.
+ * \since 12.0.0
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge_features *features;
+ * features = ast_bridge_features_new();
+ * ast_bridge_features_destroy(features);
+ * \endcode
+ *
+ * \retval features New allocated features struct.
+ * \retval NULL on error.
+ */
+struct ast_bridge_features *ast_bridge_features_new(void);
+
+/*!
+ * \brief Destroy an allocated bridge features struct.
+ * \since 12.0.0
+ *
+ * \param features Bridge features structure
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge_features *features;
+ * features = ast_bridge_features_new();
+ * ast_bridge_features_destroy(features);
+ * \endcode
+ *
+ * \return Nothing
+ */
+void ast_bridge_features_destroy(struct ast_bridge_features *features);
 
 /*!
  * \brief Play a DTMF stream into a bridge, optionally not to a given channel
