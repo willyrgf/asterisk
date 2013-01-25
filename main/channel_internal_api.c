@@ -1034,6 +1034,15 @@ void ast_channel_creationtime_set(struct ast_channel *chan, struct timeval *valu
 }
 
 /* Evil softhangup accessors */
+#if defined(WHY_HUNGUP)
+static void BUGBUG_softhangup_check(struct ast_channel *chan)
+{
+	if (chan->softhangup && !strcmp(chan->name, "DAHDI/3-1")) {
+		char *crash = NULL;
+		*crash = '\0';
+	}
+}
+#endif	/* defined(WHY_HUNGUP) */
 int ast_channel_softhangup_internal_flag(struct ast_channel *chan)
 {
 	return chan->softhangup;
@@ -1041,10 +1050,16 @@ int ast_channel_softhangup_internal_flag(struct ast_channel *chan)
 void ast_channel_softhangup_internal_flag_set(struct ast_channel *chan, int value)
 {
 	chan->softhangup = value;
+#if defined(WHY_HUNGUP)
+	BUGBUG_softhangup_check(chan);
+#endif	/* defined(WHY_HUNGUP) */
 }
 void ast_channel_softhangup_internal_flag_add(struct ast_channel *chan, int value)
 {
 	chan->softhangup |= value;
+#if defined(WHY_HUNGUP)
+	BUGBUG_softhangup_check(chan);
+#endif	/* defined(WHY_HUNGUP) */
 }
 void ast_channel_softhangup_internal_flag_clear(struct ast_channel *chan, int value)
 {

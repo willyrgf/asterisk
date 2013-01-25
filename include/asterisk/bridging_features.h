@@ -61,6 +61,7 @@ enum ast_bridge_builtin_feature {
 	 * parking slot to which it was parked.
 	 */
 	AST_BRIDGE_BUILTIN_PARKCALL,
+/* BUGBUG does Monitor and/or MixMonitor require a two party bridge?  MixMonitor is used by ConfBridge so maybe it doesn't. */
 	/*!
 	 * DTMF one-touch-record toggle using Monitor app.
 	 *
@@ -157,6 +158,7 @@ struct ast_bridge_features {
 	unsigned int usable:1;
 	/*! Bit to indicate whether the channel/bridge is muted or not */
 	unsigned int mute:1;
+/* BUGBUG why is dtmf_passthrough not a feature_flags bit? */
 	/*! Bit to indicate whether DTMF should be passed into the bridge tech or not.  */
 	unsigned int dtmf_passthrough:1;
 
@@ -166,6 +168,7 @@ struct ast_bridge_features {
  * \brief Structure that contains configuration information for the blind transfer built in feature
  */
 struct ast_bridge_features_blind_transfer {
+/* BUGBUG the context should be figured out based upon TRANSFER_CONTEXT channel variable of A/B or current context of A/B. More appropriate for when channel moved to other bridges. */
 	/*! Context to use for transfers */
 	char context[AST_MAX_CONTEXT];
 };
@@ -174,6 +177,7 @@ struct ast_bridge_features_blind_transfer {
  * \brief Structure that contains configuration information for the attended transfer built in feature
  */
 struct ast_bridge_features_attended_transfer {
+/* BUGBUG the context should be figured out based upon TRANSFER_CONTEXT channel variable of A/B or current context of A/B. More appropriate for when channel moved to other bridges. */
 	/*! Context to use for transfers */
 	char context[AST_MAX_CONTEXT];
 	/*! DTMF string used to turn the transfer into a three way conference */

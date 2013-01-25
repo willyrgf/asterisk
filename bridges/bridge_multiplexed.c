@@ -59,8 +59,10 @@ struct multiplexed_thread {
 	pthread_t thread;
 	/*! Pipe used to wake up the multiplexed thread */
 	int pipe[2];
+/* BUGBUG this is only large enough for the supported number of bridge channel pairs.  It is not large enough to handle transient channels being swapped. */
 	/*! Channels in this thread */
 	struct ast_channel *chans[MULTIPLEXED_MAX_CHANNELS];
+/* BUGBUG this should be changed to the number of 1-1 bridges muxed instead of the number of channels. */
 	/*! Number of channels in this thread */
 	unsigned int count;
 	/*! Bit used to indicate that the thread is waiting on channels */

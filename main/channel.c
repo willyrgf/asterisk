@@ -7853,6 +7853,7 @@ static void bridge_play_sounds(struct ast_channel *c0, struct ast_channel *c1)
 	}
 }
 
+/* BUGBUG ast_channel_bridge() and anything that only it calls will be removed. */
 /*! \brief Bridge two channels together */
 enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_channel *c1,
 					  struct ast_bridge_config *config, struct ast_frame **fo, struct ast_channel **rc)

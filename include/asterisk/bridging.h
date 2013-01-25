@@ -93,6 +93,7 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 	/*! Bridged channel was ast_bridge_depart() from the bridge without being hung up */
 	AST_BRIDGE_CHANNEL_STATE_DEPART,
+/* BUGBUG the following states should be removed and replaced with bridge queued actions. */
 	/*! Bridged channel is executing a feature hook */
 	AST_BRIDGE_CHANNEL_STATE_FEATURE,
 	/*! Bridged channel is sending a DTMF stream out */

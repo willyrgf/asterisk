@@ -72,6 +72,7 @@ static int grab_transfer(struct ast_channel *chan, char *exten, size_t exten_len
 	}
 
 	/* Drop to dialtone so they can enter the extension they want to transfer to */
+/* BUGBUG the timeout needs to be configurable from features.conf. */
 	res = ast_app_dtget(chan, context, exten, exten_len, exten_len - 1, 3000);
 	if (res < 0) {
 		/* Hangup or error */
@@ -101,6 +102,11 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
 	int cause;
 
 	/* Fill the variable with the extension and context we want to call */
+/* BUGBUG if local channel optimization is using masquerades then this needs /n so the destination keeps its DTMF features.
+ * Or use /n to keep the peer channel stable until after the atxfer completes and remove the /n from the channel.
+ *
+ * Local channel optimization currently is disabled because I don't set the chan->bridge pointers.
+ */
 	snprintf(destination, sizeof(destination), "%s@%s", exten, context);
 
 	/* Now we request that chan_local prepare to call the destination */
@@ -165,6 +171,7 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	struct ast_bridge_features_blind_transfer *blind_transfer = hook_pvt;
 	const char *context;
 
+/* BUGBUG the peer needs to be put on hold for the transfer. */
 	ast_channel_lock(bridge_channel->chan);
 	context = ast_strdupa(get_transfer_context(bridge_channel->chan,
 		blind_transfer ? blind_transfer->context : NULL));
@@ -174,6 +181,10 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	if (grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
 		return 0;
 	}
+
+/* BUGBUG just need to ast_async_goto the peer so this bridge will go away and not accumulate local channels and bridges if the destination is to an application. */
+/* ast_async_goto actually is a blind transfer. */
+/* BUGBUG Use the bridge count to determine if can do DTMF transfer features.  If count is not 2 then don't allow it. */
 
 	/* Get a channel that is the destination we wish to call */
 	chan = dial_transfer(bridge_channel->chan, exten, context);
@@ -214,6 +225,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	struct ast_bridge_features_attended_transfer *attended_transfer = hook_pvt;
 	const char *context;
 
+/* BUGBUG the peer needs to be put on hold for the transfer. */
 	ast_channel_lock(bridge_channel->chan);
 	context = ast_strdupa(get_transfer_context(bridge_channel->chan,
 		attended_transfer ? attended_transfer->context : NULL));
@@ -231,16 +243,20 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		return 0;
 	}
 
+/* BUGBUG we need to wait for Party C (peer) to answer before dumping into the transient B-C bridge. */
+
 	/* Create a bridge to use to talk to the person we are calling */
 	attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_NATIVE,
 		AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
 	if (!attended_bridge) {
 		ast_hangup(peer);
+/* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
 		return 0;
 	}
 
 	/* This is how this is going down, we are imparting the channel we called above into this bridge first */
+/* BUGBUG we should impart the peer as an independent and move it to the original bridge. */
 	if (ast_bridge_impart(attended_bridge, peer, NULL, NULL, 0)) {
 		ast_bridge_destroy(attended_bridge);
 		ast_hangup(peer);
@@ -252,6 +268,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	ast_bridge_features_init(&caller_features);
 /* BUGBUG bridging API features does not support features.conf featuremap */
 /* BUGBUG bridging API features does not support the features.conf atxfer bounce between C & B channels */
+/* BUGBUG The atxfer feature hooks need to be passed a pointer to where to mark which hook happened.  Rather than relying on the bridge join return value. */
 	ast_bridge_features_enable(&caller_features, AST_BRIDGE_BUILTIN_HANGUP,
 		attended_transfer && !ast_strlen_zero(attended_transfer->complete)
 			? attended_transfer->complete : "*1",

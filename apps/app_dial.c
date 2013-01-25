@@ -3044,6 +3044,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 
 				ast_channel_setoption(chan, AST_OPTION_OPRMODE, &oprmode, sizeof(oprmode), 0);
 			}
+/* BUGBUG need to determine where peer is going to execute on bridge completion. */
 			res = ast_bridge_call(chan, peer, &config);
 		}
 

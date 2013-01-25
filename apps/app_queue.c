@@ -5890,6 +5890,7 @@ static int try_calling(struct queue_ent *qe, const struct ast_flags opts, char *
 
 		time(&callstart);
 		transfer_ds = setup_transfer_datastore(qe, member, callstart, callcompletedinsl);
+/* BUGBUG need to determine where peer is going to execute on bridge completion. */
 		bridge = ast_bridge_call(qe->chan, peer, &bridge_config);
 
 		/* If the queue member did an attended transfer, then the TRANSFER already was logged in the queue_log

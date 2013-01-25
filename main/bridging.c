@@ -129,6 +129,9 @@ static void bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
 /*! \note This function assumes the bridge_channel is locked. */
 static void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
+	ast_debug(1, "BUGBUG Setting bridge channel %p state from:%d to:%d\n",
+		bridge_channel, bridge_channel->state, new_state);
+
 	/* Change the state on the bridge channel */
 	bridge_channel->state = new_state;
 
@@ -313,6 +316,7 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge *bridge, struct as
 		return frame;
 	}
 
+/* BUGBUG the feature hook matching needs to be done here.  Any matching feature hook needs to be queued onto the bridge_channel.  Also the feature hook digit timeout needs to be handled. */
 	/* See if this DTMF matches the beginnings of any feature hooks, if so we switch to the feature state to either execute the feature or collect more DTMF */
 	AST_LIST_TRAVERSE(&features->hooks, hook, entry) {
 		if (hook->dtmf[0] == frame->subclass.integer) {
@@ -660,6 +664,7 @@ int ast_bridge_destroy(struct ast_bridge *bridge)
 	}
 
 	if (bridge->thread != AST_PTHREADT_NULL) {
+/* BUGBUG this needs to be moved to the last bridge_channel removal code if the bridge flag AST_BRIDGE_FLAG_DISSOLVE_EMPTY. */
 		bridge_stop(bridge);
 	}
 
@@ -983,6 +988,7 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 			break;
 		}
 
+/* BUGBUG need to record the duration of DTMF digits so when the string is played back, they are reproduced. */
 		/* Add the above DTMF into the DTMF string so we can do our matching */
 		dtmf[dtmf_len++] = res;
 
@@ -1345,6 +1351,9 @@ static void *bridge_channel_ind_thread(void *data)
 
 	ao2_ref(bridge_channel, -1);
 
+/* BUGBUG need to run a PBX on this channel or hangup. */
+/* BUGBUG need to start the PBX at the appropriate location. */
+/* BUGBUG need to determine where to execute in the dialplan. */
 	switch (state) {
 	case AST_BRIDGE_CHANNEL_STATE_DEPART:
 		ast_log(LOG_ERROR, "Independently imparted channel was departed: %s\n",
@@ -1563,6 +1572,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	struct ast_bridge_channel *bridge_channel;
+/* BUGBUG the case of a disolved bridge while channel is suspended is not handled. */
 
 	ao2_lock(bridge);
 
@@ -1581,6 +1591,7 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan)
 int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	struct ast_bridge_channel *bridge_channel;
+/* BUGBUG the case of a disolved bridge while channel is suspended is not handled. */
 
 	ao2_lock(bridge);
 
@@ -1672,6 +1683,7 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
 
 int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config)
 {
+/* BUGBUG a destructor for config is needed if it is going to be non-NULL */
 	if (ARRAY_LEN(builtin_features_handlers) <= feature
 		|| !builtin_features_handlers[feature]) {
 		return -1;

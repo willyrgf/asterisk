@@ -8250,6 +8250,7 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 	 * continue in the dialplan.
 	 */
 	ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT);
+/* BUGBUG need to determine where peer is going to execute on bridge completion. */
 	ast_bridge_call(chan, final_dest_chan, &bconfig);
 
 	/* The bridge has ended, set BRIDGERESULT to SUCCESS. */
