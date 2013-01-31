@@ -1683,6 +1683,7 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	struct ast_bridge_channel *bridge_channel;
 /* BUGBUG the case of a disolved bridge while channel is suspended is not handled. */
+/* BUGBUG suspend/unsuspend needs to be rethought. The caller must block until it has successfully suspended the channel for temporary control. */
 
 	ao2_lock(bridge);
 

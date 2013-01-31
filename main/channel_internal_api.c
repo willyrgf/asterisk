@@ -62,6 +62,7 @@ struct ast_channel {
 	void *music_state;				/*!< Music State*/
 	void *generatordata;				/*!< Current generator data if there is any */
 	struct ast_generator *generator;		/*!< Current active data generator */
+/* BUGBUG bridged_channel must be eliminated from ast_channel */
 	struct ast_channel * bridged_channel;			/*!< Who are we bridged to, if we're bridged.
 							 *   Who is proxying for us, if we are proxied (i.e. chan_agent).
 							 *   Do not access directly, use ast_bridged_channel(chan) */
@@ -185,6 +186,7 @@ struct ast_channel {
 
 	unsigned short transfercapability;		/*!< ISDN Transfer Capability - AST_FLAG_DIGITAL is not enough */
 
+/* BUGBUG the bridge pointer must change to an ast_channel_bridge pointer because it will never change while the channel is in the bridging system whereas the bridge could change. */
 	struct ast_bridge *bridge;                      /*!< Bridge this channel is participating in */
 	struct ast_timer *timer;			/*!< timer object that provided timingfd */
 

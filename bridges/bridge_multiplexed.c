@@ -468,6 +468,7 @@ static enum ast_bridge_write_result multiplexed_bridge_write(struct ast_bridge *
 
 	/* The bridging core takes care of freeing the passed in frame. */
 	if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+/* BUGBUG need to handle control frames in a bridge tech specific way here.  Mostly just queue action to bridge channel. */
 		if (!other->suspended) {
 			ast_write(other->chan, frame);
 		}
