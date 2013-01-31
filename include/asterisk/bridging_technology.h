@@ -155,12 +155,11 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
  * application, this function has been created to allow the bridging technology to communicate
  * that information with the bridging core.
  *
- * \param bridge The bridge that the channel is a part of.
  * \param bridge_channel The bridge channel that has either started or stopped talking.
  * \param started_talking set to 1 when this indicates the channel has started talking set to 0
  * when this indicates the channel has stopped talking.
  */
-void ast_bridge_notify_talking(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, int started_talking);
+void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int started_talking);
 
 /*!
  * \brief Suspend a bridge technology from consideration

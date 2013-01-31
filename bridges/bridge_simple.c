@@ -80,9 +80,11 @@ static enum ast_bridge_write_result simple_bridge_write(struct ast_bridge *bridg
 		return AST_BRIDGE_WRITE_FAILED;
 	}
 
-	/* Write the frame out if they are in the waiting state... don't worry about freeing it, the bridging core will take care of it */
+	/* The bridging core takes care of freeing the passed in frame. */
 	if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ast_write(other->chan, frame);
+		if (!other->suspended) {
+			ast_write(other->chan, frame);
+		}
 	}
 
 	return AST_BRIDGE_WRITE_SUCCESS;

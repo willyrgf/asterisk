@@ -1373,21 +1373,9 @@ static void conf_handle_talker_destructor(void *pvt_data)
 	ast_free(pvt_data);
 }
 
-static void conf_handle_talker_cb(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *pvt_data)
+static void conf_handle_talker_cb(struct ast_bridge_channel *bridge_channel, void *pvt_data, int talking)
 {
-	char *conf_name = pvt_data;
-	int talking;
-
-	switch (bridge_channel->state) {
-	case AST_BRIDGE_CHANNEL_STATE_START_TALKING:
-		talking = 1;
-		break;
-	case AST_BRIDGE_CHANNEL_STATE_STOP_TALKING:
-		talking = 0;
-		break;
-	default:
-		return; /* uhh this shouldn't happen, but bail if it does. */
-	}
+	const char *conf_name = pvt_data;
 
 	/* notify AMI someone is has either started or stopped talking */
 	/*** DOCUMENTATION
@@ -1405,11 +1393,14 @@ static void conf_handle_talker_cb(struct ast_bridge *bridge, struct ast_bridge_c
 		</managerEventInstance>
 	***/
 	ast_manager_event(bridge_channel->chan, EVENT_FLAG_CALL, "ConfbridgeTalking",
-	      "Channel: %s\r\n"
-	      "Uniqueid: %s\r\n"
-	      "Conference: %s\r\n"
-	      "TalkingStatus: %s\r\n",
-	      ast_channel_name(bridge_channel->chan), ast_channel_uniqueid(bridge_channel->chan), conf_name, talking ? "on" : "off");
+		"Channel: %s\r\n"
+		"Uniqueid: %s\r\n"
+		"Conference: %s\r\n"
+		"TalkingStatus: %s\r\n",
+		ast_channel_name(bridge_channel->chan),
+		ast_channel_uniqueid(bridge_channel->chan),
+		conf_name,
+		talking ? "on" : "off");
 }
 
 static int conf_get_pin(struct ast_channel *chan, struct conference_bridge_user *conference_bridge_user)

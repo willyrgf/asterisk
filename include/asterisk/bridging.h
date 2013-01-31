@@ -93,15 +93,6 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 	/*! Bridged channel was ast_bridge_depart() from the bridge without being hung up */
 	AST_BRIDGE_CHANNEL_STATE_DEPART,
-/* BUGBUG the following states should be removed and replaced with bridge queued actions. */
-	/*! Bridged channel is executing a feature hook */
-	AST_BRIDGE_CHANNEL_STATE_FEATURE,
-	/*! Bridged channel is sending a DTMF stream out */
-	AST_BRIDGE_CHANNEL_STATE_DTMF,
-	/*! Bridged channel began talking */
-	AST_BRIDGE_CHANNEL_STATE_START_TALKING,
-	/*! Bridged channel has stopped talking */
-	AST_BRIDGE_CHANNEL_STATE_STOP_TALKING,
 };
 
 /*! \brief Return values for bridge technology write function */
@@ -162,12 +153,23 @@ struct ast_bridge_channel {
 	/*! Technology optimization parameters used by bridging technologies capable of
 	 *  optimizing based upon talk detection. */
 	struct ast_bridge_tech_optimizations tech_args;
-	/*! Queue of DTMF digits used for DTMF streaming */
-	char dtmf_stream_q[8];
 	/*! Call ID associated with bridge channel */
 	struct ast_callid *callid;
 	/*! Linked list information */
 	AST_LIST_ENTRY(ast_bridge_channel) entry;
+	/*! Queue of actions to perform on the channel. */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) action_queue;
+};
+
+enum ast_bridge_action_type {
+	/*! Bridged channel is to detect a feature hook */
+	AST_BRIDGE_ACTION_FEATURE,
+	/*! Bridged channel is to send a DTMF stream out */
+	AST_BRIDGE_ACTION_DTMF_STREAM,
+	/*! Bridged channel is to indicate talking start */
+	AST_BRIDGE_ACTION_TALKING_START,
+	/*! Bridged channel is to indicate talking stop */
+	AST_BRIDGE_ACTION_TALKING_STOP,
 };
 
 enum ast_bridge_video_mode_type {
@@ -556,6 +558,21 @@ int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
  *       make sure the channel either hangs up or returns to the bridge.
  */
 void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state);
+
+/*!
+ * \brief Put an action onto the specified bridge_channel.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Channel to queue the action on.
+ * \param action What to do.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ *
+ * \note This API call is meant for internal bridging operations.
+ * \note BUGBUG This may get moved.
+ */
+int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, struct ast_frame *action);
 
 /*!
  * \brief Adjust the internal mixing sample rate of a bridge

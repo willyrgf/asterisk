@@ -578,7 +578,7 @@ static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *brid
 	ast_mutex_unlock(&sc->lock);
 
 	if (update_talking != -1) {
-		ast_bridge_notify_talking(bridge, bridge_channel, update_talking);
+		ast_bridge_notify_talking(bridge_channel, update_talking);
 	}
 
 	return res;

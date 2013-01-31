@@ -108,13 +108,13 @@ typedef void (*ast_bridge_features_hook_pvt_destructor)(void *hook_pvt);
  * to receive updates on when a bridge_channel has started and stopped
  * talking
  *
- * \param bridge The bridge that the channel is part of
  * \param bridge_channel Channel executing the feature
+ * \param talking TRUE if the channel is now talking
  *
  * \retval 0 success
  * \retval -1 failure
  */
-typedef void (*ast_bridge_talking_indicate_callback)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *pvt_data);
+typedef void (*ast_bridge_talking_indicate_callback)(struct ast_bridge_channel *bridge_channel, void *pvt_data, int talking);
 
 
 typedef void (*ast_bridge_talking_indicate_destructor)(void *pvt_data);
