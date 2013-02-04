@@ -369,6 +369,10 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge *bridge, struct as
 static int bridge_drop_control_frame(int subclass)
 {
 /* BUGBUG I think this code should be removed. Let the bridging tech determine what to do with control frames. */
+#if 1
+	/* Block all control frames. */
+	return 1;
+#else
 	switch (subclass) {
 	case AST_CONTROL_READ_ACTION:
 	case AST_CONTROL_CC:
@@ -384,6 +388,7 @@ static int bridge_drop_control_frame(int subclass)
 	default:
 		return 0;
 	}
+#endif
 }
 
 void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int started_talking)
