@@ -58,8 +58,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					available to that particular channel driver.</para>
 				</argument>
 				<argument name="Technology2/Resource2" multiple="true">
-					<para>Optional extra devices to dial inparallel</para>
-					<para>If you need more then one enter them as Technology2/Resource2&amp;
+					<para>Optional extra devices to dial in parallel</para>
+					<para>If you need more than one, enter them as Technology2/Resource2&amp;
 					Technology3/Resourse3&amp;.....</para>
 				</argument>
 			</parameter>
@@ -75,25 +75,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Quiet, do not play beep to caller</para>
 					</option>
 					<option name="r">
-						<para>Record the page into a file (ConfBridge option <literal>r</literal>)</para>
+						<para>Record the page into a file (<literal>CONFBRIDGE(bridge,record_conference)</literal>)</para>
 					</option>
 					<option name="s">
 						<para>Only dial a channel if its device state says that it is <literal>NOT_INUSE</literal></para>
 					</option>
 					<option name="A">
 						<argument name="x" required="true">
-							<para>The announcement to playback in all devices</para>
+							<para>The announcement to playback to all devices</para>
 						</argument>
-						<para>Play an announcement simultaneously to all paged participants</para>
+						<para>Play an announcement to all paged participants</para>
 					</option>
 					<option name="n">
-						<para>Do not play simultaneous announcement to caller (implies <literal>A(x)</literal>)</para>
+						<para>Do not play announcement to caller (alters <literal>A(x)</literal> behavior)</para>
 					</option>
 				</optionlist>
 			</parameter>
 			<parameter name="timeout">
 				<para>Specify the length of time that the system will attempt to connect a call.
-				After this duration, any intercom calls that have not been answered will be hung up by the
+				After this duration, any page calls that have not been answered will be hung up by the
 				system.</para>
 			</parameter>
 		</syntax>
@@ -101,7 +101,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Places outbound calls to the given <replaceable>technology</replaceable>/<replaceable>resource</replaceable>
 			and dumps them into a conference bridge as muted participants. The original
 			caller is dumped into the conference as a speaker and the room is
-			destroyed when the original callers leaves.</para>
+			destroyed when the original caller leaves.</para>
 		</description>
 		<see-also>
 			<ref type="application">ConfBridge</ref>
@@ -141,6 +141,70 @@ struct page_options {
 	struct ast_flags flags;
 };
 
+/*!
+ * \internal
+ * \brief Setup the page bridge profile.
+ *
+ * \param chan Setup bridge profile on this channel.
+ * \param options Options to setup bridge profile.
+ *
+ * \return Nothing
+ */
+static void setup_profile_bridge(struct ast_channel *chan, struct page_options *options)
+{
+	/* Use default_bridge as a starting point */
+	ast_func_write(chan, "CONFBRIDGE(bridge,template)", "");
+	if (ast_test_flag(&options->flags, PAGE_RECORD)) {
+		ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
+	}
+}
+
+/*!
+ * \internal
+ * \brief Setup the paged user profile.
+ *
+ * \param chan Setup user profile on this channel.
+ * \param options Options to setup paged user profile.
+ *
+ * \return Nothing
+ */
+static void setup_profile_paged(struct ast_channel *chan, struct page_options *options)
+{
+	/* Use default_user as a starting point */
+	ast_func_write(chan, "CONFBRIDGE(user,template)", "");
+	ast_func_write(chan, "CONFBRIDGE(user,quiet)", "yes");
+	ast_func_write(chan, "CONFBRIDGE(user,end_marked)", "yes");
+	if (!ast_test_flag(&options->flags, PAGE_DUPLEX)) {
+		ast_func_write(chan, "CONFBRIDGE(user,startmuted)", "yes");
+	}
+	if (ast_test_flag(&options->flags, PAGE_ANNOUNCE)
+		&& !ast_strlen_zero(options->opts[OPT_ARG_ANNOUNCE])) {
+		ast_func_write(chan, "CONFBRIDGE(user,announcement)", options->opts[OPT_ARG_ANNOUNCE]);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Setup the caller user profile.
+ *
+ * \param chan Setup user profile on this channel.
+ * \param options Options to setup caller user profile.
+ *
+ * \return Nothing
+ */
+static void setup_profile_caller(struct ast_channel *chan, struct page_options *options)
+{
+	/* Use default_user as a starting point if not already setup. */
+	ast_func_write(chan, "CONFBRIDGE(user,template)", "");
+	ast_func_write(chan, "CONFBRIDGE(user,quiet)", "yes");
+	ast_func_write(chan, "CONFBRIDGE(user,marked)", "yes");
+	if (!ast_test_flag(&options->flags, PAGE_NOCALLERANNOUNCE)
+		&& ast_test_flag(&options->flags, PAGE_ANNOUNCE)
+		&& !ast_strlen_zero(options->opts[OPT_ARG_ANNOUNCE])) {
+		ast_func_write(chan, "CONFBRIDGE(user,announcement)", options->opts[OPT_ARG_ANNOUNCE]);
+	}
+}
+
 static void page_state_callback(struct ast_dial *dial)
 {
 	struct ast_channel *chan;
@@ -152,22 +216,8 @@ static void page_state_callback(struct ast_dial *dial)
 		return;
 	}
 
-	ast_func_write(chan, "CONFBRIDGE(bridge,template)", "default_bridge");
-
-	if (ast_test_flag(&options->flags, PAGE_RECORD)) {
-		ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
-	}
-
-	ast_func_write(chan, "CONFBRIDGE(user,quiet)", "yes");
-	ast_func_write(chan, "CONFBRIDGE(user,end_marked)", "yes");
-
-	if (!ast_test_flag(&options->flags, PAGE_DUPLEX)) {
-		ast_func_write(chan, "CONFBRIDGE(user,startmuted)", "yes");
-	}
-
-	if (ast_test_flag(&options->flags, PAGE_ANNOUNCE) && !ast_strlen_zero(options->opts[OPT_ARG_ANNOUNCE])) {
-		ast_func_write(chan, "CONFBRIDGE(user,announcement)", options->opts[OPT_ARG_ANNOUNCE]);
-	}
+	setup_profile_bridge(chan, options);
+	setup_profile_paged(chan, options);
 }
 
 static int page_exec(struct ast_channel *chan, const char *data)
@@ -302,17 +352,10 @@ static int page_exec(struct ast_channel *chan, const char *data)
 	}
 
 	if (!res) {
-		ast_func_write(chan, "CONFBRIDGE(bridge,template)", "default_bridge");
-
-		if (ast_test_flag(&options.flags, PAGE_RECORD)) {
-			ast_func_write(chan, "CONFBRIDGE(bridge,record_conference)", "yes");
-		}
-
-		ast_func_write(chan, "CONFBRIDGE(user,quiet)", "yes");
-		ast_func_write(chan, "CONFBRIDGE(user,marked)", "yes");
+		setup_profile_bridge(chan, &options);
+		setup_profile_caller(chan, &options);
 
 		snprintf(confbridgeopts, sizeof(confbridgeopts), "%u", confid);
-
 		pbx_exec(chan, app, confbridgeopts);
 	}
 
