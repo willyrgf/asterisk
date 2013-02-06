@@ -374,13 +374,13 @@ static int bridge_channel_interval_ready(struct ast_bridge_channel *bridge_chann
 {
 	struct ast_bridge_features_hook *hook;
 
-	if (!bridge_channel->features || !bridge_channel->features->usable || !ast_heap_size(bridge_channel->features->interval_hooks)) {
+	if (!bridge_channel->features || !bridge_channel->features->usable
+		|| !bridge_channel->features->interval_hooks) {
 		return 0;
 	}
 
 	hook = ast_heap_peek(bridge_channel->features->interval_hooks, 1);
-
-	if (!hook || (ast_tvdiff_ms(hook->interval_trip_time, ast_tvnow()) > 0)) {
+	if (!hook || ast_tvdiff_ms(hook->interval_trip_time, ast_tvnow()) > 0) {
 		return 0;
 	}
 
@@ -433,7 +433,8 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 		bridge_channel = find_bridge_channel(bridge, chan);
 	}
 
-	if (bridge_channel && bridge_channel->features && (interval_timer = bridge_channel->features->interval_timer)) {
+	if (bridge_channel && bridge_channel->features
+		&& (interval_timer = bridge_channel->features->interval_timer)) {
 		if (ast_wait_for_input(ast_timer_fd(interval_timer), 0) == 1) {
 			ast_timer_ack(interval_timer, 1);
 			if (bridge_channel_interval_ready(bridge_channel)) {
@@ -441,6 +442,7 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 					.frametype = AST_FRAME_BRIDGE_ACTION,
 					.subclass.integer = AST_BRIDGE_ACTION_INTERVAL,
 				};
+
 				ast_bridge_channel_queue_action(bridge_channel, &interval_action);
 			}
 		}
@@ -1057,13 +1059,18 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 		int execution_time = 0;
 
 		if (ast_tvdiff_ms(hook->interval_trip_time, start) > 0) {
-			ast_debug(1, "Hook '%p' on '%p' wants to happen in the future, stopping our traversal\n", hook, bridge_channel);
+			ast_debug(1, "Hook '%p' on '%p' wants to happen in the future, stopping our traversal\n",
+				hook, bridge_channel);
 			break;
 		}
 
 		ast_debug(1, "Executing hook '%p' on channel '%p'\n", hook, bridge_channel);
 		res = hook->callback(bridge, bridge_channel, hook->hook_pvt);
 
+		/*
+		 * Must be popped after the callback.  The callback could call
+		 * ast_bridge_features_interval_update().
+		 */
 		ast_heap_pop(bridge_channel->features->interval_hooks);
 
 		if (res || !hook->interval) {
@@ -1645,9 +1652,6 @@ int ast_bridge_depart(struct ast_bridge *bridge, struct ast_channel *chan)
 			break;
 		}
 
-
-/* XXX What I want to check in the morning is whether or not the block below is ever entered at all, just just the Hi part. */
-
 		/* Was the channel already removed from the bridge? */
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&bridge->depart_wait, bridge_channel, entry) {
 			if (bridge_channel->chan == chan) {
@@ -1910,13 +1914,15 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 {
 	struct ast_bridge_features_hook *hook = NULL;
 
-	if (!interval || !callback || !(hook = ast_calloc(1, sizeof(*hook)))) {
+	if (!interval || !callback || !features || !features->interval_hooks
+		|| !(hook = ast_calloc(1, sizeof(*hook)))) {
 		return -1;
 	}
 
 	if (!features->interval_timer) {
 		if (!(features->interval_timer = ast_timer_open())) {
 			ast_log(LOG_ERROR, "Failed to open a timer when adding a timed bridging feature.\n");
+			ast_free(hook);
 			return -1;
 		}
 		ast_timer_set_rate(features->interval_timer, BRIDGE_FEATURES_INTERVAL_RATE);
@@ -1928,7 +1934,8 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	hook->hook_pvt = hook_pvt;
 	hook->interval_strict = strict ? 1 : 0;
 
-	ast_debug(1, "Putting interval hook '%p' in the interval hooks heap on features '%p'\n", hook, features);
+	ast_debug(1, "Putting interval hook '%p' in the interval hooks heap on features '%p'\n",
+		hook, features);
 	hook->interval_trip_time = ast_tvadd(ast_tvnow(), ast_samp2tv(hook->interval, 1000));
 	ast_heap_push(features->interval_hooks, hook);
 	features->usable = 1;
@@ -1939,11 +1946,16 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 int ast_bridge_features_interval_update(struct ast_bridge_channel *bridge_channel, unsigned int interval)
 {
 	struct ast_bridge_features_hook *hook;
-	if (!bridge_channel->features || !bridge_channel->features->usable || !ast_heap_size(bridge_channel->features->interval_hooks)) {
+
+	if (!bridge_channel->features || !bridge_channel->features->usable
+		|| !bridge_channel->features->interval_hooks) {
 		return -1;
 	}
 
 	hook = ast_heap_peek(bridge_channel->features->interval_hooks, 1);
+	if (!hook) {
+		return -1;
+	}
 	hook->interval = interval;
 
 	return 0;
@@ -1976,15 +1988,13 @@ static int bridge_features_duration_callback(struct ast_bridge *bridge, struct a
 	struct ast_bridge_features_limits *limits = hook_pvt;
 
 	if (!ast_strlen_zero(limits->duration_sound)) {
-		ast_stream_and_wait(bridge_channel->chan, limits->duration_sound, "");
+		ast_stream_and_wait(bridge_channel->chan, limits->duration_sound, AST_DIGIT_NONE);
 	}
 
 	ao2_lock(bridge_channel);
-
 	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT){
 		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 	}
-
 	ao2_unlock(bridge_channel);
 
 	return -1;
@@ -1994,12 +2004,12 @@ static int bridge_features_warning_sound_callback(struct ast_bridge *bridge, str
 {
 	struct ast_bridge_features_limits *limits = hook_pvt;
 
-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END) {
-		ast_debug(1, "Skipping warning, the channel state is already set to end.\n");
+	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+		ast_debug(1, "Skipping warning, the channel state is already set to leave bridge.\n");
 		return -1;
 	}
 
-	ast_stream_and_wait(bridge_channel->chan, limits->warning_sound, "");
+	ast_stream_and_wait(bridge_channel->chan, limits->warning_sound, AST_DIGIT_NONE);
 
 	/* It may be necessary to resume music on hold after we play the sound file. */
 	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
@@ -2010,7 +2020,6 @@ static int bridge_features_warning_sound_callback(struct ast_bridge *bridge, str
 		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
 	}
 
-
 	return !limits->frequency ? -1 : 0;
 }
 
@@ -2019,15 +2028,15 @@ static int bridge_features_warning_time_left_callback(struct ast_bridge *bridge,
 	struct ast_bridge_features_limits *limits = hook_pvt;
 	struct ast_bridge_features_hook *interval_hook;
 	unsigned int remaining = 0;
-	int heap_traversal_index, heap_size;
+	int heap_traversal_index;
+	int heap_size;
 
-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END) {
-		ast_debug(1, "Skipping warning, the channel state is already set to end.\n");
+	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+		ast_debug(1, "Skipping warning, the channel state is already set to leave bridge.\n");
 		return -1;
 	}
 
 	heap_size = ast_heap_size(bridge_channel->features->interval_hooks);
-
 	for (heap_traversal_index = 0; heap_traversal_index < heap_size; heap_traversal_index++) {
 		interval_hook = ast_heap_peek(bridge_channel->features->interval_hooks, heap_traversal_index + 1);
 		if (interval_hook->callback == bridge_features_duration_callback) {
@@ -2037,37 +2046,38 @@ static int bridge_features_warning_time_left_callback(struct ast_bridge *bridge,
 	}
 
 	if (remaining > 0) {
-		unsigned int min = 0, sec = 0;
+		unsigned int min;
+		unsigned int sec;
 
 		if ((remaining / 60) > 1) {
 			min = remaining / 60;
 			sec = remaining % 60;
 		} else {
+			min = 0;
 			sec = remaining;
 		}
 
-		ast_stream_and_wait(bridge_channel->chan, "vm-youhave", "");
-
+		ast_stream_and_wait(bridge_channel->chan, "vm-youhave", AST_DIGIT_NONE);
 		if (min) {
-			ast_say_number(bridge_channel->chan, min, AST_DIGIT_ANY, ast_channel_language(bridge_channel->chan), NULL);
-			ast_stream_and_wait(bridge_channel->chan, "queue-minutes", "");
+			ast_say_number(bridge_channel->chan, min, AST_DIGIT_NONE,
+				ast_channel_language(bridge_channel->chan), NULL);
+			ast_stream_and_wait(bridge_channel->chan, "queue-minutes", AST_DIGIT_NONE);
 		}
-
 		if (sec) {
-			ast_say_number(bridge_channel->chan, sec, AST_DIGIT_ANY, ast_channel_language(bridge_channel->chan), NULL);
-			ast_stream_and_wait(bridge_channel->chan, "queue-seconds", "");
+			ast_say_number(bridge_channel->chan, sec, AST_DIGIT_NONE,
+				ast_channel_language(bridge_channel->chan), NULL);
+			ast_stream_and_wait(bridge_channel->chan, "queue-seconds", AST_DIGIT_NONE);
 		}
-	}
 
-	/* It may be necessary to resume music on hold after we finish playing the announcment. */
-	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
-		ast_moh_start(bridge_channel->chan, NULL, NULL);
+		/* It may be necessary to resume music on hold after we finish playing the announcment. */
+		if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
+			ast_moh_start(bridge_channel->chan, NULL, NULL);
+		}
 	}
 
 	if (limits->frequency) {
 		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
 	}
-
 
 	return !limits->frequency ? -1 : 0;
 }
@@ -2078,12 +2088,15 @@ void ast_bridge_features_set_limits(struct ast_bridge_features *features, struct
 		return;
 	}
 
-	ast_bridge_features_interval_hook(features, limits->duration, 0, bridge_features_duration_callback, limits, NULL);
+	ast_bridge_features_interval_hook(features, limits->duration, 0,
+		bridge_features_duration_callback, limits, NULL);
 
 	if (limits->warning && limits->warning < limits->duration) {
 		ast_bridge_features_interval_hook(features, limits->warning, 1,
-						  !ast_strlen_zero(limits->warning_sound) ? bridge_features_warning_sound_callback : bridge_features_warning_time_left_callback,
-						  limits, NULL);
+			!ast_strlen_zero(limits->warning_sound)
+				? bridge_features_warning_sound_callback
+				: bridge_features_warning_time_left_callback,
+			limits, NULL);
 	}
 }
 
@@ -2095,8 +2108,10 @@ void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast
 
 static int interval_hook_time_cmp(void *a, void *b)
 {
-	int ret = ast_tvcmp(((struct ast_bridge_features_hook *) b)->interval_trip_time, ((struct ast_bridge_features_hook *) a)->interval_trip_time);
-	return ret;
+	struct ast_bridge_features_hook *hook_a = a;
+	struct ast_bridge_features_hook *hook_b = b;
+
+	return ast_tvcmp(hook_b->interval_trip_time, hook_a->interval_trip_time);
 }
 
 int ast_bridge_features_init(struct ast_bridge_features *features)
@@ -2108,9 +2123,8 @@ int ast_bridge_features_init(struct ast_bridge_features *features)
 	AST_LIST_HEAD_INIT_NOLOCK(&features->hooks);
 
 	/* Initialize the interval hook heap */
-	if (!features->interval_hooks) {
-		features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp, offsetof(struct ast_bridge_features_hook, __heap_index));
-	}
+	features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp,
+		offsetof(struct ast_bridge_features_hook, __heap_index));
 
 	return 0;
 }
@@ -2119,15 +2133,7 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 {
 	struct ast_bridge_features_hook *hook;
 
-	/* This is relatively simple, hooks are kept as a list on the features structure so we just pop them off and free them */
-	while ((hook = AST_LIST_REMOVE_HEAD(&features->hooks, entry))) {
-		if (hook->destructor) {
-			hook->destructor(hook->hook_pvt);
-		}
-		ast_free(hook);
-	}
-
-	/* Interval hooks heap needs to be broken down in a similar fashion. */
+	/* Destroy each interval hook. */
 	if (features->interval_hooks) {
 		while ((hook = ast_heap_pop(features->interval_hooks))) {
 			if (hook->destructor) {
@@ -2136,17 +2142,24 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 			ast_free(hook);
 		}
 
-		ast_heap_destroy(features->interval_hooks);
+		features->interval_hooks = ast_heap_destroy(features->interval_hooks);
+	}
+	if (features->interval_timer) {
+		ast_timer_close(features->interval_timer);
+		features->interval_timer = NULL;
+	}
+
+	/* Destroy each DTMF feature hook. */
+	while ((hook = AST_LIST_REMOVE_HEAD(&features->hooks, entry))) {
+		if (hook->destructor) {
+			hook->destructor(hook->hook_pvt);
+		}
+		ast_free(hook);
 	}
 
 	if (features->talker_destructor_cb && features->talker_pvt_data) {
 		features->talker_destructor_cb(features->talker_pvt_data);
 		features->talker_pvt_data = NULL;
-	}
-
-	if (features->interval_timer) {
-		ast_timer_close(features->interval_timer);
-		features->interval_timer = NULL;
 	}
 }
 

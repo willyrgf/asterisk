@@ -93,7 +93,7 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 	/*! Bridged channel was ast_bridge_depart() from the bridge without being hung up */
 	AST_BRIDGE_CHANNEL_STATE_DEPART,
-	/*! Bridged channel was ast_bridge_depart() from the bridge during AST_BRIDGE_CHANNEL_STATE_END without being hung up */
+	/*! Bridged channel was ast_bridge_depart() from the bridge during AST_BRIDGE_CHANNEL_STATE_END */
 	AST_BRIDGE_CHANNEL_STATE_DEPART_END,
 };
 
@@ -552,14 +552,14 @@ int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
  * Example usage:
  *
  * \code
- * ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_WAIT);
+ * ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
  * \endcode
  *
  * This places the channel pointed to by bridge_channel into the state
- * AST_BRIDGE_CHANNEL_STATE_WAIT.
+ * AST_BRIDGE_CHANNEL_STATE_HANGUP.
  *
  * \note This API call is only meant to be used in feature hook callbacks to
- *       make sure the channel either hangs up or returns to the bridge.
+ *       request the channel exit the bridge.
  */
 void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state);
 

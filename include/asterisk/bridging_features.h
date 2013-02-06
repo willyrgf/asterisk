@@ -90,7 +90,7 @@ struct ast_bridge_channel;
  * \param hook_pvt Private data passed in when the hook was created
  *
  * \retval 0 success
- * \retval -1 failure
+ * \retval -1 failure The callback hook is removed.
  */
 typedef int (*ast_bridge_features_hook_callback)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt);
 
@@ -131,7 +131,7 @@ struct ast_bridge_features_hook {
 	union {
 		/*! DTMF String that is examined during a feature hook lookup */
 		char dtmf[MAXIMUM_DTMF_FEATURE_STRING];
-		/*! Interval that the feature hook should execute at in milliseconds*/
+		/*! Interval that the feature hook should execute at in milliseconds */
 		unsigned int interval;
 	};
 	/*! Time at which the interval should actually trip */
@@ -146,7 +146,7 @@ struct ast_bridge_features_hook {
 	AST_LIST_ENTRY(ast_bridge_features_hook) entry;
 	/*! Heap index for interval hooks */
 	ssize_t __heap_index;
-	/*! Bit to indicate that we should take into account the time spent executing the callback when rescheduling the interval hook */
+	/*! TRUE if we should take into account the time spent executing the callback when rescheduling the interval hook */
 	unsigned int interval_strict:1;
 };
 
@@ -280,9 +280,6 @@ int ast_bridge_features_unregister(enum ast_bridge_builtin_feature feature);
  * This makes the bridging core call pound_callback if a channel that has this
  * feature structure inputs the DTMF string '#'. A pointer to useful data may be
  * provided to the hook_pvt parameter.
- *
- * \note It is important that the callback set the bridge channel state back to
- *       AST_BRIDGE_CHANNEL_STATE_WAIT or the bridge thread will not service the channel.
  */
 int ast_bridge_features_hook(struct ast_bridge_features *features,
 	const char *dtmf,
@@ -290,7 +287,8 @@ int ast_bridge_features_hook(struct ast_bridge_features *features,
 	void *hook_pvt,
 	ast_bridge_features_hook_pvt_destructor destructor);
 
-/*! \brief attach a custom interval hook to a bridge features structure
+/*!
+ * \brief attach a custom interval hook to a bridge features structure
  *
  * \param features Bridge features structure
  * \param interval The interval that the hook should execute at in milliseconds
@@ -310,9 +308,6 @@ int ast_bridge_features_hook(struct ast_bridge_features *features,
  *
  * This makes the bridging core call playback_callback every second. A pointer to useful
  * data may be provided to the hook_pvt parameter.
- *
- * \note It is important that the callback set the bridge channel state back to
- *       AST_BRIDGE_CHANNEL_STATE_WAIT or the bridge thread will not service the channel.
  */
 int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	unsigned int interval,
@@ -321,7 +316,8 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	void *hook_pvt,
 	ast_bridge_features_hook_pvt_destructor destructor);
 
-/*! \brief Update the interval on an interval hook that is currently executing a callback
+/*!
+ * \brief Update the interval on an interval hook that is currently executing a callback
  *
  * \param bridge_channel The bridge channel that is executing the callback
  * \param interval The new interval value or 0 to remove the interval hook
@@ -382,7 +378,8 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
  */
 int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config);
 
-/*! \brief Limit the amount of time a channel may stay in the bridge and optionally play warning messages as time runs out
+/*!
+ * \brief Limit the amount of time a channel may stay in the bridge and optionally play warning messages as time runs out
  *
  * \param features Bridge features structure
  * \param limits Configured limits applicable to the channel

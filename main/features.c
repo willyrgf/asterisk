@@ -4389,7 +4389,7 @@ static void bridge_config_set_limits_warning_values(struct ast_bridge_config *co
 {
 	ast_copy_string(limits->duration_sound, config->end_sound, sizeof(limits->duration_sound));
 
-	/* XXX 'timeleft' is a hard-coded value that is set when the argument isn't provided. This should probably be changed. */
+/* BUGBUG 'timeleft' is a hard-coded value that is set when the argument isn't provided. This should probably be changed. */
 	if (strcmp("timeleft", config->warning_sound)) {
 		ast_copy_string(limits->warning_sound, config->warning_sound, sizeof(limits->warning_sound));
 	}
@@ -4407,6 +4407,7 @@ static void bridge_config_set_limits_warning_values(struct ast_bridge_config *co
  */
 static void bridge_config_set_limits(struct ast_bridge_config *config, struct ast_bridge_features_limits *caller_limits, struct ast_bridge_features_limits *callee_limits)
 {
+/* BUGBUG remove test code here when cleaning up. */
 	//ast_set_flag(&(config->features_callee), AST_FEATURE_PLAY_WARNING);
 	/* = {.duration = 20000, .duration_sound = "tt-weasels", .warning = 9800, .frequency = 10000}; */
 
@@ -4418,7 +4419,8 @@ static void bridge_config_set_limits(struct ast_bridge_config *config, struct as
 		bridge_config_set_limits_warning_values(config, callee_limits);
 	}
 
-	caller_limits->duration = callee_limits->duration = config->timelimit;
+	caller_limits->duration = config->timelimit;
+	callee_limits->duration = config->timelimit;
 }
 
 /*!
@@ -8108,8 +8110,11 @@ int ast_bridge_timelimit(struct ast_channel *chan, struct ast_bridge_config *con
 		calldurationlimit->tv_usec = (config->timelimit % 1000) * 1000;
 		ast_verb(3, "Setting call duration limit to %.3lf seconds.\n",
 			calldurationlimit->tv_sec + calldurationlimit->tv_usec / 1000000.0);
-		config->timelimit = play_to_caller = play_to_callee =
-		config->play_warning = config->warning_freq = 0;
+		play_to_caller = 0;
+		play_to_callee = 0;
+		config->timelimit = 0;
+		config->play_warning = 0;
+		config->warning_freq = 0;
 	} else {
 		ast_verb(4, "Limit Data for this call:\n");
 		ast_verb(4, "timelimit      = %ld ms (%.3lf s)\n", config->timelimit, config->timelimit / 1000.0);
