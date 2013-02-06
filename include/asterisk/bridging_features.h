@@ -128,8 +128,14 @@ typedef void (*ast_bridge_talking_indicate_destructor)(void *pvt_data);
  * \brief Structure that is the essence of a features hook
  */
 struct ast_bridge_features_hook {
-	/*! DTMF String that is examined during a feature hook lookup */
-	char dtmf[MAXIMUM_DTMF_FEATURE_STRING];
+	union {
+		/*! DTMF String that is examined during a feature hook lookup */
+		char dtmf[MAXIMUM_DTMF_FEATURE_STRING];
+		/*! Interval that the feature hook should execute at in milliseconds*/
+		unsigned int interval;
+	};
+	/*! Time at which the interval should actually trip */
+	struct timeval interval_trip_time;
 	/*! Callback that is called when DTMF string is matched */
 	ast_bridge_features_hook_callback callback;
 	/*! Callback to destroy hook_pvt data right before destruction. */
@@ -138,7 +144,13 @@ struct ast_bridge_features_hook {
 	void *hook_pvt;
 	/*! Linked list information */
 	AST_LIST_ENTRY(ast_bridge_features_hook) entry;
+	/*! Heap index for interval hooks */
+	ssize_t __heap_index;
+	/*! Bit to indicate that we should take into account the time spent executing the callback when rescheduling the interval hook */
+	unsigned int interval_strict:1;
 };
+
+#define BRIDGE_FEATURES_INTERVAL_RATE 10
 
 /*!
  * \brief Structure that contains features information
@@ -146,10 +158,14 @@ struct ast_bridge_features_hook {
 struct ast_bridge_features {
 	/*! Attached DTMF based feature hooks */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_features_hook) hooks;
+	/*! Attached interval based feature hooks */
+	struct ast_heap *interval_hooks;
 	/*! Callback to indicate when a bridge channel has started and stopped talking */
 	ast_bridge_talking_indicate_callback talker_cb;
 	/*! Callback to destroy any pvt data stored for the talker. */
 	ast_bridge_talking_indicate_destructor talker_destructor_cb;
+	/*! Used to determine when interval based features should be checked */
+	struct ast_timer *interval_timer;
 	/*! Talker callback pvt data */
 	void *talker_pvt_data;
 	/*! Feature flags that are enabled */
@@ -184,6 +200,22 @@ struct ast_bridge_features_attended_transfer {
 	char threeway[MAXIMUM_DTMF_FEATURE_STRING];
 	/*! DTMF string used to complete the transfer */
 	char complete[MAXIMUM_DTMF_FEATURE_STRING];
+};
+
+/*!
+ * \brief Structure that contains configuration information for the limits feature
+ */
+struct ast_bridge_features_limits {
+	/*! Maximum duration that the channel is allowed to be in the bridge (specified in milliseconds) */
+	unsigned int duration;
+	/*! Duration into the call when warnings should begin (specified in milliseconds or 0 to disable) */
+	unsigned int warning;
+	/*! Interval between the warnings (specified in milliseconds or 0 to disable) */
+	unsigned int frequency;
+	/*! Sound file to play when the maximum duration is reached (if empty, then nothing will be played) */
+	char duration_sound[256];
+	/*! Sound file to play when the warning time is reached (if empty, then the remaining time will be played) */
+	char warning_sound[256];
 };
 
 /*!
@@ -258,6 +290,58 @@ int ast_bridge_features_hook(struct ast_bridge_features *features,
 	void *hook_pvt,
 	ast_bridge_features_hook_pvt_destructor destructor);
 
+/*! \brief attach a custom interval hook to a bridge features structure
+ *
+ * \param features Bridge features structure
+ * \param interval The interval that the hook should execute at in milliseconds
+ * \param strict If set this takes into account the time spent executing the callback when rescheduling the interval hook
+ * \param callback Function to execute upon activation
+ * \param hook_pvt Unique data
+ * \param destructor Optional destructor callback for hook_pvt data
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * \code
+ * struct ast_bridge_features features;
+ * ast_bridge_features_init(&features);
+ * ast_bridge_features_interval_hook(&features, 1000, 0, playback_callback, NULL, NULL);
+ * \endcode
+ *
+ * This makes the bridging core call playback_callback every second. A pointer to useful
+ * data may be provided to the hook_pvt parameter.
+ *
+ * \note It is important that the callback set the bridge channel state back to
+ *       AST_BRIDGE_CHANNEL_STATE_WAIT or the bridge thread will not service the channel.
+ */
+int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
+	unsigned int interval,
+	unsigned int strict,
+	ast_bridge_features_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_features_hook_pvt_destructor destructor);
+
+/*! \brief Update the interval on an interval hook that is currently executing a callback
+ *
+ * \param bridge_channel The bridge channel that is executing the callback
+ * \param interval The new interval value or 0 to remove the interval hook
+ *
+ * \retval 0 on success
+ * \retval 1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_bridge_features_interval_update(bridge_channel, 10000);
+ * \endcode
+ *
+ * This updates the executing interval hook so that it will be triggered next in 10 seconds.
+ *
+ * \note This can only be called from the context of the interval hook callback itself. If this
+ *       is called outside the callback then behavior is undefined.
+ */
+int ast_bridge_features_interval_update(struct ast_bridge_channel *bridge_channel, unsigned int interval);
+
 /*!
  * \brief Set a callback on the features structure to receive talking notifications on.
  *
@@ -297,6 +381,27 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
  * to a built in feature callback function.
  */
 int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config);
+
+/*! \brief Limit the amount of time a channel may stay in the bridge and optionally play warning messages as time runs out
+ *
+ * \param features Bridge features structure
+ * \param limits Configured limits applicable to the channel
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge_features features;
+ * struct ast_bridge_features_limits limits = { .duration = 10000, };
+ * ast_bridge_features_init(&features);
+ * ast_bridge_features_set_limits(&features, &limits);
+ * \endcode
+ *
+ * This sets the maximum time the channel can be in the bridge to 10 seconds and does not play any warnings.
+ *
+ * \note This API call can only be used on a features structure that will be used in association with a bridge channel.
+ * \note The ast_bridge_features_limits structure must remain accessible for the lifetime of the features structure.
+ */
+void ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits);
 
 /*!
  * \brief Set a flag on a bridge features structure

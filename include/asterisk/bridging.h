@@ -93,6 +93,8 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 	/*! Bridged channel was ast_bridge_depart() from the bridge without being hung up */
 	AST_BRIDGE_CHANNEL_STATE_DEPART,
+	/*! Bridged channel was ast_bridge_depart() from the bridge during AST_BRIDGE_CHANNEL_STATE_END without being hung up */
+	AST_BRIDGE_CHANNEL_STATE_DEPART_END,
 };
 
 /*! \brief Return values for bridge technology write function */
@@ -164,6 +166,8 @@ struct ast_bridge_channel {
 enum ast_bridge_action_type {
 	/*! Bridged channel is to detect a feature hook */
 	AST_BRIDGE_ACTION_FEATURE,
+	/*! Bridged channel is to act on an interval hook */
+	AST_BRIDGE_ACTION_INTERVAL,
 	/*! Bridged channel is to send a DTMF stream out */
 	AST_BRIDGE_ACTION_DTMF_STREAM,
 	/*! Bridged channel is to indicate talking start */

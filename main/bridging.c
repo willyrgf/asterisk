@@ -47,6 +47,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/test.h"
 
+#include "asterisk/heap.h"
+#include "asterisk/say.h"
+#include "asterisk/timing.h"
+#include "asterisk/musiconhold.h"
+
 static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
 
 /* Initial starting point for the bridge array of channels */
@@ -365,6 +370,23 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge *bridge, struct as
 	return frame;
 }
 
+static int bridge_channel_interval_ready(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_bridge_features_hook *hook;
+
+	if (!bridge_channel->features || !bridge_channel->features->usable || !ast_heap_size(bridge_channel->features->interval_hooks)) {
+		return 0;
+	}
+
+	hook = ast_heap_peek(bridge_channel->features->interval_hooks, 1);
+
+	if (!hook || (ast_tvdiff_ms(hook->interval_trip_time, ast_tvnow()) > 0)) {
+		return 0;
+	}
+
+	return 1;
+}
+
 /*! \brief Internal function used to determine whether a control frame should be dropped or not */
 static int bridge_drop_control_frame(int subclass)
 {
@@ -404,9 +426,24 @@ void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int st
 
 void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan, int outfd)
 {
+	struct ast_timer *interval_timer;
+
 	/* If no bridge channel has been provided and the actual channel has been provided find it */
 	if (chan && !bridge_channel) {
 		bridge_channel = find_bridge_channel(bridge, chan);
+	}
+
+	if (bridge_channel && bridge_channel->features && (interval_timer = bridge_channel->features->interval_timer)) {
+		if (ast_wait_for_input(ast_timer_fd(interval_timer), 0) == 1) {
+			ast_timer_ack(interval_timer, 1);
+			if (bridge_channel_interval_ready(bridge_channel)) {
+				struct ast_frame interval_action = {
+					.frametype = AST_FRAME_BRIDGE_ACTION,
+					.subclass.integer = AST_BRIDGE_ACTION_INTERVAL,
+				};
+				ast_bridge_channel_queue_action(bridge_channel, &interval_action);
+			}
+		}
 	}
 
 	/* If a bridge channel with actual channel is present read a frame and handle it */
@@ -1009,6 +1046,48 @@ static void bridge_channel_unsuspend(struct ast_bridge *bridge, struct ast_bridg
 	}
 }
 
+/*! \brief Internal function that activates interval hooks on a bridge channel */
+static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_bridge_features_hook *hook;
+
+	while ((hook = ast_heap_peek(bridge_channel->features->interval_hooks, 1))) {
+		int res;
+		struct timeval start = ast_tvnow();
+		int execution_time = 0;
+
+		if (ast_tvdiff_ms(hook->interval_trip_time, start) > 0) {
+			ast_debug(1, "Hook '%p' on '%p' wants to happen in the future, stopping our traversal\n", hook, bridge_channel);
+			break;
+		}
+
+		ast_debug(1, "Executing hook '%p' on channel '%p'\n", hook, bridge_channel);
+		res = hook->callback(bridge, bridge_channel, hook->hook_pvt);
+
+		ast_heap_pop(bridge_channel->features->interval_hooks);
+
+		if (res || !hook->interval) {
+			ast_debug(1, "Hook '%p' is being removed from '%p'\n", hook, bridge_channel);
+			ast_free(hook);
+			continue;
+		}
+
+		ast_debug(1, "Updating hook '%p' and adding it back to '%p'\n", hook, bridge_channel);
+
+		if (hook->interval_strict) {
+			execution_time = ast_tvdiff_ms(ast_tvnow(), start);
+		}
+
+		/* resetting start */
+		start = ast_tvnow();
+
+		hook->interval_trip_time = ast_tvadd(start, ast_samp2tv(hook->interval - execution_time, 1000));
+
+		ast_debug(1, "Sticking hook '%p' in heap on '%p'\n", hook, bridge_channel->features);
+		ast_heap_push(bridge_channel->features->interval_hooks, hook);
+	}
+}
+
 /*!
  * \brief Internal function that executes a feature on a bridge channel
  * \note Neither the bridge nor the bridge_channel locks should be held when entering
@@ -1126,6 +1205,13 @@ static void bridge_channel_dtmf_stream(struct ast_bridge_channel *bridge_channel
 static void bridge_channel_action_bridge(struct ast_bridge_channel *bridge_channel, struct ast_frame *action)
 {
 	switch (action->subclass.integer) {
+	case AST_BRIDGE_ACTION_INTERVAL:
+		bridge_channel_suspend(bridge_channel->bridge, bridge_channel);
+		ao2_unlock(bridge_channel->bridge);
+		bridge_channel_interval(bridge_channel->bridge, bridge_channel);
+		ao2_lock(bridge_channel->bridge);
+		bridge_channel_unsuspend(bridge_channel->bridge, bridge_channel);
+		break;
 	case AST_BRIDGE_ACTION_FEATURE:
 		bridge_channel_suspend(bridge_channel->bridge, bridge_channel);
 		ao2_unlock(bridge_channel->bridge);
@@ -1301,8 +1387,13 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	ast_channel_internal_bridge_set(bridge_channel->chan, NULL);
 
 	/* See if we need to dissolve the bridge itself if they hung up */
-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END) {
+	switch (bridge_channel->state) {
+	case AST_BRIDGE_CHANNEL_STATE_END:
+	case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
 		bridge_check_dissolve(bridge_channel->bridge, bridge_channel);
+		break;
+	default:
+		break;
 	}
 
 	/* Tell the bridge technology we are leaving so they tear us down */
@@ -1318,7 +1409,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	AST_LIST_REMOVE(&bridge_channel->bridge->channels, bridge_channel, entry);
 
 	if (bridge_channel->depart_wait
-		&& bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_DEPART) {
+		&& bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_DEPART
+		&& bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_DEPART_END) {
 		/* Put the channel into the ast_bridge_depart wait list. */
 		AST_LIST_INSERT_TAIL(&bridge_channel->bridge->depart_wait, bridge_channel, entry);
 	}
@@ -1540,9 +1632,21 @@ int ast_bridge_depart(struct ast_bridge *bridge, struct ast_channel *chan)
 				ao2_unlock(bridge);
 				return -1;
 			}
-			ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
+			ao2_lock(bridge_channel);
+			switch (bridge_channel->state) {
+			case AST_BRIDGE_CHANNEL_STATE_END:
+				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART_END);
+				break;
+			default:
+				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
+				break;
+			}
+			ao2_unlock(bridge_channel);
 			break;
 		}
+
+
+/* XXX What I want to check in the morning is whether or not the block below is ever entered at all, just just the Hi part. */
 
 		/* Was the channel already removed from the bridge? */
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&bridge->depart_wait, bridge_channel, entry) {
@@ -1797,6 +1901,54 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
 	features->talker_pvt_data = pvt_data;
 }
 
+int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
+	unsigned int interval,
+	unsigned int strict,
+	ast_bridge_features_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_features_hook_pvt_destructor destructor)
+{
+	struct ast_bridge_features_hook *hook = NULL;
+
+	if (!interval || !callback || !(hook = ast_calloc(1, sizeof(*hook)))) {
+		return -1;
+	}
+
+	if (!features->interval_timer) {
+		if (!(features->interval_timer = ast_timer_open())) {
+			ast_log(LOG_ERROR, "Failed to open a timer when adding a timed bridging feature.\n");
+			return -1;
+		}
+		ast_timer_set_rate(features->interval_timer, BRIDGE_FEATURES_INTERVAL_RATE);
+	}
+
+	hook->interval = interval;
+	hook->callback = callback;
+	hook->destructor = destructor;
+	hook->hook_pvt = hook_pvt;
+	hook->interval_strict = strict ? 1 : 0;
+
+	ast_debug(1, "Putting interval hook '%p' in the interval hooks heap on features '%p'\n", hook, features);
+	hook->interval_trip_time = ast_tvadd(ast_tvnow(), ast_samp2tv(hook->interval, 1000));
+	ast_heap_push(features->interval_hooks, hook);
+	features->usable = 1;
+
+	return 0;
+}
+
+int ast_bridge_features_interval_update(struct ast_bridge_channel *bridge_channel, unsigned int interval)
+{
+	struct ast_bridge_features_hook *hook;
+	if (!bridge_channel->features || !bridge_channel->features->usable || !ast_heap_size(bridge_channel->features->interval_hooks)) {
+		return -1;
+	}
+
+	hook = ast_heap_peek(bridge_channel->features->interval_hooks, 1);
+	hook->interval = interval;
+
+	return 0;
+}
+
 int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config)
 {
 /* BUGBUG a destructor for config is needed if it is going to be non-NULL */
@@ -1819,10 +1971,132 @@ int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_br
 	return ast_bridge_features_hook(features, dtmf, builtin_features_handlers[feature], config, NULL);
 }
 
+static int bridge_features_duration_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	struct ast_bridge_features_limits *limits = hook_pvt;
+
+	if (!ast_strlen_zero(limits->duration_sound)) {
+		ast_stream_and_wait(bridge_channel->chan, limits->duration_sound, "");
+	}
+
+	ao2_lock(bridge_channel);
+
+	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT){
+		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+	}
+
+	ao2_unlock(bridge_channel);
+
+	return -1;
+}
+
+static int bridge_features_warning_sound_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	struct ast_bridge_features_limits *limits = hook_pvt;
+
+	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END) {
+		ast_debug(1, "Skipping warning, the channel state is already set to end.\n");
+		return -1;
+	}
+
+	ast_stream_and_wait(bridge_channel->chan, limits->warning_sound, "");
+
+	/* It may be necessary to resume music on hold after we play the sound file. */
+	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
+		ast_moh_start(bridge_channel->chan, NULL, NULL);
+	}
+
+	if (limits->frequency) {
+		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
+	}
+
+
+	return !limits->frequency ? -1 : 0;
+}
+
+static int bridge_features_warning_time_left_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	struct ast_bridge_features_limits *limits = hook_pvt;
+	struct ast_bridge_features_hook *interval_hook;
+	unsigned int remaining = 0;
+	int heap_traversal_index, heap_size;
+
+	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_END) {
+		ast_debug(1, "Skipping warning, the channel state is already set to end.\n");
+		return -1;
+	}
+
+	heap_size = ast_heap_size(bridge_channel->features->interval_hooks);
+
+	for (heap_traversal_index = 0; heap_traversal_index < heap_size; heap_traversal_index++) {
+		interval_hook = ast_heap_peek(bridge_channel->features->interval_hooks, heap_traversal_index + 1);
+		if (interval_hook->callback == bridge_features_duration_callback) {
+			remaining = ast_tvdiff_ms(interval_hook->interval_trip_time, ast_tvnow()) / 1000;
+			break;
+		}
+	}
+
+	if (remaining > 0) {
+		unsigned int min = 0, sec = 0;
+
+		if ((remaining / 60) > 1) {
+			min = remaining / 60;
+			sec = remaining % 60;
+		} else {
+			sec = remaining;
+		}
+
+		ast_stream_and_wait(bridge_channel->chan, "vm-youhave", "");
+
+		if (min) {
+			ast_say_number(bridge_channel->chan, min, AST_DIGIT_ANY, ast_channel_language(bridge_channel->chan), NULL);
+			ast_stream_and_wait(bridge_channel->chan, "queue-minutes", "");
+		}
+
+		if (sec) {
+			ast_say_number(bridge_channel->chan, sec, AST_DIGIT_ANY, ast_channel_language(bridge_channel->chan), NULL);
+			ast_stream_and_wait(bridge_channel->chan, "queue-seconds", "");
+		}
+	}
+
+	/* It may be necessary to resume music on hold after we finish playing the announcment. */
+	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
+		ast_moh_start(bridge_channel->chan, NULL, NULL);
+	}
+
+	if (limits->frequency) {
+		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
+	}
+
+
+	return !limits->frequency ? -1 : 0;
+}
+
+void ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits)
+{
+	if (!limits->duration) {
+		return;
+	}
+
+	ast_bridge_features_interval_hook(features, limits->duration, 0, bridge_features_duration_callback, limits, NULL);
+
+	if (limits->warning && limits->warning < limits->duration) {
+		ast_bridge_features_interval_hook(features, limits->warning, 1,
+						  !ast_strlen_zero(limits->warning_sound) ? bridge_features_warning_sound_callback : bridge_features_warning_time_left_callback,
+						  limits, NULL);
+	}
+}
+
 void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast_bridge_feature_flags flag)
 {
 	ast_set_flag(&features->feature_flags, flag);
 	features->usable = 1;
+}
+
+static int interval_hook_time_cmp(void *a, void *b)
+{
+	int ret = ast_tvcmp(((struct ast_bridge_features_hook *) b)->interval_trip_time, ((struct ast_bridge_features_hook *) a)->interval_trip_time);
+	return ret;
 }
 
 int ast_bridge_features_init(struct ast_bridge_features *features)
@@ -1832,6 +2106,11 @@ int ast_bridge_features_init(struct ast_bridge_features *features)
 
 	/* Initialize the hooks list, just in case */
 	AST_LIST_HEAD_INIT_NOLOCK(&features->hooks);
+
+	/* Initialize the interval hook heap */
+	if (!features->interval_hooks) {
+		features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp, offsetof(struct ast_bridge_features_hook, __heap_index));
+	}
 
 	return 0;
 }
@@ -1847,9 +2126,27 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 		}
 		ast_free(hook);
 	}
+
+	/* Interval hooks heap needs to be broken down in a similar fashion. */
+	if (features->interval_hooks) {
+		while ((hook = ast_heap_pop(features->interval_hooks))) {
+			if (hook->destructor) {
+				hook->destructor(hook->hook_pvt);
+			}
+			ast_free(hook);
+		}
+
+		ast_heap_destroy(features->interval_hooks);
+	}
+
 	if (features->talker_destructor_cb && features->talker_pvt_data) {
 		features->talker_destructor_cb(features->talker_pvt_data);
 		features->talker_pvt_data = NULL;
+	}
+
+	if (features->interval_timer) {
+		ast_timer_close(features->interval_timer);
+		features->interval_timer = NULL;
 	}
 }
 
@@ -1857,7 +2154,11 @@ struct ast_bridge_features *ast_bridge_features_new(void)
 {
 	struct ast_bridge_features *features;
 
-	features = ast_calloc(1, sizeof(*features));
+	features = ast_malloc(sizeof(*features));
+	if (features) {
+		ast_bridge_features_init(features);
+	}
+
 	return features;
 }
 

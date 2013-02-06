@@ -4385,6 +4385,42 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 /* BUGBUG dynamic features not handled yet.  App run returns non-zero breaks bridge and ast_bridge_call returns 0.  App returns zero continues bridge. */
 }
 
+static void bridge_config_set_limits_warning_values(struct ast_bridge_config *config, struct ast_bridge_features_limits *limits)
+{
+	ast_copy_string(limits->duration_sound, config->end_sound, sizeof(limits->duration_sound));
+
+	/* XXX 'timeleft' is a hard-coded value that is set when the argument isn't provided. This should probably be changed. */
+	if (strcmp("timeleft", config->warning_sound)) {
+		ast_copy_string(limits->warning_sound, config->warning_sound, sizeof(limits->warning_sound));
+	}
+
+	limits->frequency = config->warning_freq;
+	limits->warning = config->play_warning;
+}
+
+/*!
+ * \internal brief Setup limit hook structures on calls that need limits
+ *
+ * \param config ast_bridge_config which provides the limit data
+ * \param caller_limits pointer to an ast_bridge_features_limits struct which will store the caller side limits
+ * \param callee_limits pointer to an ast_bridge_features_limits struct which will store the callee side limits
+ */
+static void bridge_config_set_limits(struct ast_bridge_config *config, struct ast_bridge_features_limits *caller_limits, struct ast_bridge_features_limits *callee_limits)
+{
+	//ast_set_flag(&(config->features_callee), AST_FEATURE_PLAY_WARNING);
+	/* = {.duration = 20000, .duration_sound = "tt-weasels", .warning = 9800, .frequency = 10000}; */
+
+	if (ast_test_flag(&config->features_caller, AST_FEATURE_PLAY_WARNING)) {
+		bridge_config_set_limits_warning_values(config, caller_limits);
+	}
+
+	if (ast_test_flag(&config->features_callee, AST_FEATURE_PLAY_WARNING)) {
+		bridge_config_set_limits_warning_values(config, callee_limits);
+	}
+
+	caller_limits->duration = callee_limits->duration = config->timelimit;
+}
+
 /*!
  * \brief bridge the call and set CDR
  *
@@ -4417,6 +4453,9 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	struct ast_bridge_features chan_features;
 	struct ast_bridge_features *peer_features;
 
+	/* These are used for the 'L' option of Dial/Bridge */
+	struct ast_bridge_features_limits call_duration_limits_chan = {0};
+	struct ast_bridge_features_limits call_duration_limits_peer = {0};
 
 	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", ast_channel_name(peer));
 	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", ast_channel_name(chan));
@@ -4592,6 +4631,12 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 			ast_cdr_discard(bridge_cdr);
 		}
 		return -1;
+	}
+
+	if (config->timelimit) {
+		bridge_config_set_limits(config, &call_duration_limits_chan, &call_duration_limits_peer);
+		ast_bridge_features_set_limits(&chan_features, &call_duration_limits_chan);
+		ast_bridge_features_set_limits(peer_features, &call_duration_limits_peer);
 	}
 
 	ast_cel_report_event(chan, AST_CEL_BRIDGE_START, NULL, NULL, peer);/* BUGBUG expected to go away. */
