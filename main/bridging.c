@@ -2024,7 +2024,7 @@ static int bridge_features_duration_callback(struct ast_bridge *bridge, struct a
 	ao2_lock(bridge_channel);
 	switch (bridge_channel->state) {
 	case AST_BRIDGE_CHANNEL_STATE_WAIT:
-		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 		break;
 	default:
 		break;
