@@ -4672,27 +4672,21 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	}
 
 	/* Join bridge */
+	ast_bridge_join(bridge, chan, NULL, &chan_features, NULL);
+
+	/*
+	 * If the bridge was broken for a hangup that isn't real, then
+	 * don't run the h extension, because the channel isn't really
+	 * hung up.  This should really only happen with
+	 * AST_SOFTHANGUP_ASYNCGOTO.
+	 */
 	res = -1;
-	switch (ast_bridge_join(bridge, chan, NULL, &chan_features, NULL)) {
-	case AST_BRIDGE_CHANNEL_STATE_END:
-	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
-	case AST_BRIDGE_CHANNEL_STATE_DEPART:
-		/*
-		 * If the bridge was broken for a hangup that isn't real, then
-		 * don't run the h extension, because the channel isn't really
-		 * hung up.  This should really only happen with
-		 * AST_SOFTHANGUP_ASYNCGOTO.
-		 */
-		ast_channel_lock(chan);
-		if (ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO) {
-			ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT);
-			res = 0;
-		}
-		ast_channel_unlock(chan);
-		break;
-	default:
-		break;
+	ast_channel_lock(chan);
+	if (ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO) {
+		ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT);
+		res = 0;
 	}
+	ast_channel_unlock(chan);
 
 	/* Wait for peer thread to exit bridge and die. */
 	if (!ast_autoservice_start(chan)) {

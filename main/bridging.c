@@ -309,12 +309,10 @@ static void bridge_force_out_all(struct ast_bridge *bridge)
 	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
 		ao2_lock(bridge_channel);
 		switch (bridge_channel->state) {
-		case AST_BRIDGE_CHANNEL_STATE_END:
-		case AST_BRIDGE_CHANNEL_STATE_HANGUP:
-		case AST_BRIDGE_CHANNEL_STATE_DEPART:
+		case AST_BRIDGE_CHANNEL_STATE_WAIT:
+			ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 			break;
 		default:
-			ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 			break;
 		}
 		ao2_unlock(bridge_channel);
@@ -462,8 +460,12 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 		if (!frame || (frame->frametype == AST_FRAME_CONTROL && frame->subclass.integer == AST_CONTROL_HANGUP)) {
 			/* Signal the thread that is handling the bridged channel that it should be ended */
 			ao2_lock(bridge_channel);
-			if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			switch (bridge_channel->state) {
+			case AST_BRIDGE_CHANNEL_STATE_WAIT:
 				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+				break;
+			default:
+				break;
 			}
 			ao2_unlock(bridge_channel);
 		} else if (frame->frametype == AST_FRAME_CONTROL && bridge_drop_control_frame(frame->subclass.integer)) {
@@ -1170,8 +1172,12 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 		 */
 		if (bridge_channel->chan && ast_check_hangup_locked(bridge_channel->chan)) {
 			ao2_lock(bridge_channel);
-			if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			switch (bridge_channel->state) {
+			case AST_BRIDGE_CHANNEL_STATE_WAIT:
 				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+				break;
+			default:
+				break;
 			}
 			ao2_unlock(bridge_channel);
 		}
@@ -1311,8 +1317,12 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		if (bridge_channel2) {
 			ast_debug(1, "Swapping bridge channel %p out from bridge %p so bridge channel %p can slip in\n", bridge_channel2, bridge_channel->bridge, bridge_channel);
 			ao2_lock(bridge_channel2);
-			if (bridge_channel2->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			switch (bridge_channel2->state) {
+			case AST_BRIDGE_CHANNEL_STATE_WAIT:
 				ast_bridge_change_state_nolock(bridge_channel2, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+				break;
+			default:
+				break;
 			}
 			ao2_unlock(bridge_channel2);
 		}
@@ -1418,11 +1428,16 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	bridge_channel->bridge->num--;
 	AST_LIST_REMOVE(&bridge_channel->bridge->channels, bridge_channel, entry);
 
-	if (bridge_channel->depart_wait
-		&& bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_DEPART
-		&& bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_DEPART_END) {
-		/* Put the channel into the ast_bridge_depart wait list. */
-		AST_LIST_INSERT_TAIL(&bridge_channel->bridge->depart_wait, bridge_channel, entry);
+	if (bridge_channel->depart_wait) {
+		switch (bridge_channel->state) {
+		case AST_BRIDGE_CHANNEL_STATE_DEPART:
+		case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
+			break;
+		default:
+			/* Put the channel into the ast_bridge_depart wait list. */
+			AST_LIST_INSERT_TAIL(&bridge_channel->bridge->depart_wait, bridge_channel, entry);
+			break;
+		}
 	}
 
 	bridge_array_remove(bridge_channel->bridge, bridge_channel->chan);
@@ -1569,14 +1584,13 @@ static void *bridge_channel_ind_thread(void *data)
 /* BUGBUG need to determine where to execute in the dialplan. */
 	switch (state) {
 	case AST_BRIDGE_CHANNEL_STATE_DEPART:
+	case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
 		ast_log(LOG_ERROR, "Independently imparted channel was departed: %s\n",
 			ast_channel_name(chan));
 		ast_assert(0);
 		/* fallthrough */
 	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
 	case AST_BRIDGE_CHANNEL_STATE_END:
-		ast_hangup(chan);
-		break;
 	default:
 		ast_hangup(chan);
 		break;
@@ -1647,6 +1661,15 @@ int ast_bridge_depart(struct ast_bridge *bridge, struct ast_channel *chan)
 			case AST_BRIDGE_CHANNEL_STATE_END:
 				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART_END);
 				break;
+			case AST_BRIDGE_CHANNEL_STATE_DEPART:
+			case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
+				/*
+				 * Should never happen.  It likely means that
+				 * ast_bridge_depart() is called by two threads for the same
+				 * channel.
+				 */
+				ast_assert(0);
+				break;
 			default:
 				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
 				break;
@@ -1694,8 +1717,12 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan)
 	}
 
 	ao2_lock(bridge_channel);
-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+	switch (bridge_channel->state) {
+	case AST_BRIDGE_CHANNEL_STATE_WAIT:
 		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+		break;
+	default:
+		break;
 	}
 	ao2_unlock(bridge_channel);
 
@@ -1995,8 +2022,12 @@ static int bridge_features_duration_callback(struct ast_bridge *bridge, struct a
 	}
 
 	ao2_lock(bridge_channel);
-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT){
+	switch (bridge_channel->state) {
+	case AST_BRIDGE_CHANNEL_STATE_WAIT:
 		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+		break;
+	default:
+		break;
 	}
 	ao2_unlock(bridge_channel);
 
