@@ -1075,6 +1075,9 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 
 		if (res || !hook->interval) {
 			ast_debug(1, "Hook '%p' is being removed from '%p'\n", hook, bridge_channel);
+			if (hook->destructor) {
+				hook->destructor(hook->hook_pvt);
+			}
 			ast_free(hook);
 			continue;
 		}
