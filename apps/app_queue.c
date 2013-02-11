@@ -5209,9 +5209,6 @@ static int try_calling(struct queue_ent *qe, const struct ast_flags opts, char *
 	if (ast_test_flag(&opts, OPT_CALLER_AUTOMON)) {
 		ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_AUTOMON);
 	}
-	if (ast_test_flag(&opts, OPT_GO_ON)) {
-		ast_set_flag(&(bridge_config.features_caller), AST_FEATURE_NO_H_EXTEN);
-	}
 	if (ast_test_flag(&opts, OPT_DATA_QUALITY)) {
 		nondataquality = 0;
 	}

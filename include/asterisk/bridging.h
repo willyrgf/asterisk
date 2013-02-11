@@ -67,12 +67,12 @@ extern "C" {
 
 /*! \brief Capabilities for a bridge technology */
 enum ast_bridge_capability {
-	/*! Bridge is only capable of mixing 2 channels */
-	AST_BRIDGE_CAPABILITY_1TO1MIX = (1 << 1),
-	/*! Bridge is capable of mixing 2 or more channels */
-	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 2),
 	/*! Bridge should natively bridge two channels if possible */
-	AST_BRIDGE_CAPABILITY_NATIVE = (1 << 3),
+	AST_BRIDGE_CAPABILITY_NATIVE = (1 << 1),
+	/*! Bridge is only capable of mixing 2 channels */
+	AST_BRIDGE_CAPABILITY_1TO1MIX = (1 << 2),
+	/*! Bridge is capable of mixing 2 or more channels */
+	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 3),
 	/*! Bridge should run using the multithreaded model */
 	AST_BRIDGE_CAPABILITY_MULTITHREADED = (1 << 4),
 	/*! Bridge should run a central bridge thread */
@@ -87,7 +87,7 @@ enum ast_bridge_capability {
 enum ast_bridge_channel_state {
 	/*! Waiting for a signal (Channel in the bridge) */
 	AST_BRIDGE_CHANNEL_STATE_WAIT = 0,
-	/*! Bridged channel has ended itself (it has hung up) */
+	/*! Bridged channel was forced out and should be hung up (Bridge may dissolve.) */
 	AST_BRIDGE_CHANNEL_STATE_END,
 	/*! Bridged channel was forced out and should be hung up */
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
@@ -352,13 +352,15 @@ int ast_bridge_destroy(struct ast_bridge *bridge);
  * \param swap Channel to swap out if swapping
  * \param features Bridge features structure
  * \param tech_args Optional Bridging tech optimization parameters for this channel.
+ * \param join_on_empty TRUE to join the bridge even if the bridge is empty.
+ * \param pass_reference TRUE if the bridge reference is being passed by the caller.
  *
  * \retval state that channel exited the bridge with
  *
  * Example usage:
  *
  * \code
- * ast_bridge_join(bridge, chan, NULL, NULL);
+ * ast_bridge_join(bridge, chan, NULL, NULL, NULL, 0, 0);
  * \endcode
  *
  * This adds a channel pointed to by the chan pointer to the bridge pointed to by
@@ -376,7 +378,9 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *chan,
 	struct ast_channel *swap,
 	struct ast_bridge_features *features,
-	struct ast_bridge_tech_optimizations *tech_args);
+	struct ast_bridge_tech_optimizations *tech_args,
+	int join_on_empty,
+	int pass_reference);
 
 /*!
  * \brief Impart (non-blocking) a channel onto a bridge

@@ -263,7 +263,6 @@ static void channel_data_add_flags(struct ast_data *tree,
 	ast_data_add_bool(tree, "END_DTMF_ONLY", ast_test_flag(ast_channel_flags(chan), AST_FLAG_END_DTMF_ONLY));
 	ast_data_add_bool(tree, "MASQ_NOSTREAM", ast_test_flag(ast_channel_flags(chan), AST_FLAG_MASQ_NOSTREAM));
 	ast_data_add_bool(tree, "BRIDGE_HANGUP_RUN", ast_test_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_RUN));
-	ast_data_add_bool(tree, "BRIDGE_HANGUP_DONT", ast_test_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT));
 	ast_data_add_bool(tree, "DISABLE_WORKAROUNDS", ast_test_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_WORKAROUNDS));
 	ast_data_add_bool(tree, "DISABLE_DEVSTATE_CACHE", ast_test_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE));
 }

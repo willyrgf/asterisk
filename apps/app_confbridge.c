@@ -447,7 +447,7 @@ static void *record_thread(void *obj)
 		chan = ast_channel_ref(conference_bridge->record_chan);
 		ast_answer(chan);
 		pbx_exec(chan, mixmonapp, ast_str_buffer(filename));
-		ast_bridge_join(conference_bridge->bridge, chan, NULL, NULL, NULL);
+		ast_bridge_join(conference_bridge->bridge, chan, NULL, NULL, NULL, 1, 0);
 
 		ast_hangup(chan); /* This will eat this thread's reference to the channel as well */
 		/* STOP has been called. Wait for either a START or an EXIT */
@@ -1659,7 +1659,9 @@ static int confbridge_exec(struct ast_channel *chan, const char *data)
 		chan,
 		NULL,
 		&conference_bridge_user.features,
-		&conference_bridge_user.tech_args);
+		&conference_bridge_user.tech_args,
+		1,
+		0);
 	send_leave_event(conference_bridge_user.chan, conference_bridge->name);
 
 	/* if we're shutting down, don't attempt to do further processing */

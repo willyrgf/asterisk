@@ -895,10 +895,6 @@ enum {
 	 *  a message aimed at preventing a subsequent hangup exten being run at the pbx_run
 	 *  level */
 	AST_FLAG_BRIDGE_HANGUP_RUN = (1 << 17),
-	/*! This flag indicates that the hangup exten should NOT be run when the
-	 *  bridge terminates, this will allow the hangup in the pbx loop to be run instead.
-	 *  */
-	AST_FLAG_BRIDGE_HANGUP_DONT = (1 << 18),
 	/*! Disable certain workarounds.  This reintroduces certain bugs, but allows
 	 *  some non-traditional dialplans (like AGI) to continue to function.
 	 */
@@ -927,7 +923,6 @@ enum {
 	AST_FEATURE_AUTOMON =      (1 << 4),
 	AST_FEATURE_PARKCALL =     (1 << 5),
 	AST_FEATURE_AUTOMIXMON =   (1 << 6),
-	AST_FEATURE_NO_H_EXTEN =   (1 << 7),
 	AST_FEATURE_WARNING_ACTIVE = (1 << 8),
 };
 

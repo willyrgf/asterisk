@@ -746,12 +746,12 @@ int ast_bridge_destroy(struct ast_bridge *bridge)
 	ao2_lock(bridge);
 
 	if (bridge->callid) {
-/* BUGBUG the bridge callid needs to be verified. */
+/* BUGBUG the bridge callid needs to be verified.  Move to the bridge destructor. */
 		bridge->callid = ast_callid_unref(bridge->callid);
 	}
 
 	if (bridge->thread != AST_PTHREADT_NULL) {
-/* BUGBUG this needs to be moved to the last bridge_channel removal code if the bridge flag AST_BRIDGE_FLAG_DISSOLVE_EMPTY. */
+/* BUGBUG this needs to be moved to the bridge ao2 destructor. */
 		bridge_stop(bridge);
 	}
 
@@ -1507,12 +1507,17 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *chan,
 	struct ast_channel *swap,
 	struct ast_bridge_features *features,
-	struct ast_bridge_tech_optimizations *tech_args)
+	struct ast_bridge_tech_optimizations *tech_args,
+	int join_on_empty,
+	int pass_reference)
 {
 	struct ast_bridge_channel *bridge_channel;
 	enum ast_bridge_channel_state state;
 
 	bridge_channel = bridge_channel_alloc(bridge);
+	if (pass_reference) {
+		ao2_ref(bridge, -1);
+	}
 	if (!bridge_channel) {
 		return AST_BRIDGE_CHANNEL_STATE_HANGUP;
 	}
@@ -1525,6 +1530,7 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
 
+/* BUGBUG need to deal with join_on_empty */
 	bridge_channel_join(bridge_channel);
 	state = bridge_channel->state;
 

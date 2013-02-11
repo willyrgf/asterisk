@@ -3782,12 +3782,6 @@ static int action_redirect(struct mansession *s, const struct message *m)
 
 	if (ast_strlen_zero(name2)) {
 		/* Single channel redirect in progress. */
-		if (ast_channel_pbx(chan)) {
-			ast_channel_lock(chan);
-			/* don't let the after-bridge code run the h-exten */
-			ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT);
-			ast_channel_unlock(chan);
-		}
 		res = ast_async_goto(chan, context, exten, pi);
 		if (!res) {
 			astman_send_ack(s, m, "Redirect successful");
@@ -3812,19 +3806,16 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
+/* BUGBUG The use of AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT will need to be reexamined. */
 	/* Dual channel redirect in progress. */
 	if (ast_channel_pbx(chan)) {
 		ast_channel_lock(chan);
-		/* don't let the after-bridge code run the h-exten */
-		ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_HANGUP_DONT
-			| AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
+		ast_set_flag(ast_channel_flags(chan), AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
 		ast_channel_unlock(chan);
 	}
 	if (ast_channel_pbx(chan2)) {
 		ast_channel_lock(chan2);
-		/* don't let the after-bridge code run the h-exten */
-		ast_set_flag(ast_channel_flags(chan2), AST_FLAG_BRIDGE_HANGUP_DONT
-			| AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
+		ast_set_flag(ast_channel_flags(chan2), AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT);
 		ast_channel_unlock(chan2);
 	}
 	res = ast_async_goto(chan, context, exten, pi);

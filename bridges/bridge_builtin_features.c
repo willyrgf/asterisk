@@ -246,7 +246,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 /* BUGBUG we need to wait for Party C (peer) to answer before dumping into the transient B-C bridge. */
 
 	/* Create a bridge to use to talk to the person we are calling */
-	attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_NATIVE,
+	attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX,
 		AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
 	if (!attended_bridge) {
 		ast_hangup(peer);
@@ -279,7 +279,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		attended_threeway_transfer, NULL, NULL);
 
 	/* But for the caller we want to join the bridge in a blocking fashion so we don't spin around in this function doing nothing while waiting */
-	attended_bridge_result = ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL);
+	attended_bridge_result = ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL, 0, 0);
 
 	/* Wait for peer thread to exit bridge and die. */
 	if (!ast_autoservice_start(bridge_channel->chan)) {

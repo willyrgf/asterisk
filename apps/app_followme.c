@@ -1520,7 +1520,6 @@ static int app_exec(struct ast_channel *chan, const char *data)
 		}
 
 		res = ast_bridge_call(caller, outbound, &config);
-		ast_autoservice_chan_hangup_peer(caller, outbound);
 	}
 
 outrun:

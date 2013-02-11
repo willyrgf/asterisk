@@ -30,12 +30,12 @@ extern "C" {
 
 /*! \brief Flags used for bridge features */
 enum ast_bridge_feature_flags {
-	/*! Upon channel hangup the bridge should be ended. */
+	/*! Upon channel hangup all bridge participants should be kicked out. */
 	AST_BRIDGE_FLAG_DISSOLVE_HANGUP = (1 << 0),
 	/*! Move between bridging technologies as needed. */
 	AST_BRIDGE_FLAG_SMART = (1 << 1),
-	/*! The bridge ends when the last channel leaves. (There is no external bridge manager.) */
-	AST_BRIDGE_FLAG_DISSOLVE_EMPTY = (1 << 2),
+	/*! This channel leaves the bridge if the only other participants have this flag set. */
+	AST_BRIDGE_FLAG_LONELY = (1 << 2),
 };
 
 /*! \brief Built in DTMF features */
