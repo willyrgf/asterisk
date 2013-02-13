@@ -1187,8 +1187,8 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 static void free_old_route(struct sip_route *route);
 static void list_route(struct sip_route *route);
 static void build_route(struct sip_pvt *p, struct sip_request *req, int backwards, int resp);
-static void build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_request *req, char *pathbuf);
-static void copy_route(struct sip_route **d, struct sip_route *s);
+static int build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_request *req, char *pathbuf);
+static int copy_route(struct sip_route **dst, const struct sip_route *src);
 static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sockaddr *addr,
 					      struct sip_request *req, const char *uri);
 static struct sip_pvt *get_sip_pvt_byid_locked(const char *callid, const char *totag, const char *fromtag);
@@ -5322,7 +5322,7 @@ static void update_peer(struct sip_peer *p, int expire)
 	int rtcachefriends = ast_test_flag(&p->flags[1], SIP_PAGE2_RTCACHEFRIENDS);
 	if (sip_cfg.peer_rtupdate &&
 	    (p->is_realtime || rtcachefriends)) {
-		char path[SIPBUFSIZE*2];
+		char path[SIPBUFSIZE * 2];
 		make_route_list(p->path, path, sizeof(path));
 		realtime_update_peer(p->name, &p->addr, p->username, p->fullcontact, p->useragent, expire, p->deprecated_username, p->lastms, path);
 	}
@@ -6429,7 +6429,7 @@ static int sip_call(struct ast_channel *ast, const char *dest, int timeout)
 	ast_clear_flag(&p->flags[1], SIP_PAGE2_FAX_DETECT_T38);
 
 	if (p->options->transfer) {
-		char buf[SIPBUFSIZE/2];
+		char buf[SIPBUFSIZE / 2];
 
 		if (referer) {
 			if (sipdebug)
@@ -11381,12 +11381,14 @@ static int process_sdp_a_image(const char *a, struct sip_pvt *p)
  *  is supported for this dialog. */
 static int add_supported(struct sip_pvt *pvt, struct sip_request *req)
 {
+	char supported_value[SIPBUFSIZE];
 	int res;
-	if (st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) {
-		res = add_header(req, "Supported", "replaces, timer");
-	} else {
-		res = add_header(req, "Supported", "replaces");
-	}
+
+	sprintf(supported_value, "replaces%s%s",
+		(st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) ? ", timer" : "",
+		ast_test_flag(&pvt->flags[0], SIP_USEPATH) ? ", path" : "");
+	res = add_header(req, "Supported", supported_value);
+
 	return res;
 }
 
@@ -11562,7 +11564,7 @@ static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const st
 /*! \brief Add route header into request per learned route */
 static void add_route(struct sip_request *req, struct sip_route *route)
 {
-	char r[SIPBUFSIZE*2];
+	char r[SIPBUFSIZE * 2];
 
 	if (!route)
 		return;
@@ -11868,6 +11870,9 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 			char *brackets = strchr(contact_uri, '<');
 			snprintf(contact, sizeof(contact), "%s%s%s;expires=%d", brackets ? "" : "<", contact_uri, brackets ? "" : ">", p->expiry);
 			add_header(resp, "Contact", contact);	/* Not when we unregister */
+		}
+		if (p->method == SIP_REGISTER && ast_test_flag(&p->flags[0], SIP_USEPATH)) {
+			copy_header(resp, req, "Path");
 		}
 	} else if (!ast_strlen_zero(p->our_contact) && resp_needs_contact(msg, p->method)) {
 		add_header(resp, "Contact", p->our_contact);
@@ -15382,6 +15387,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	add_header(&req, "To", to);
 	add_header(&req, "Call-ID", p->callid);
 	add_header(&req, "CSeq", tmp);
+	add_supported(p, &req);
 	if (!ast_strlen_zero(global_useragent))
 		add_header(&req, "User-Agent", global_useragent);
 
@@ -15797,7 +15803,7 @@ static int sip_poke_peer_s(const void *data)
 static void reg_source_db(struct sip_peer *peer)
 {
 	char data[256];
-	char path[SIPBUFSIZE*2];
+	char path[SIPBUFSIZE * 2];
 	struct ast_sockaddr sa;
 	int expire;
 	char full_addr[128];
@@ -15856,11 +15862,9 @@ static void reg_source_db(struct sip_peer *peer)
 			sip_unref_peer(peer, "remove registration ref"),
 			sip_ref_peer(peer, "add registration ref"));
 	register_peer_exten(peer, TRUE);
-	if (ast_db_get("SIP/RegistryPath", peer->name, path, sizeof(path))) {
-		return;
+	if (!ast_db_get("SIP/RegistryPath", peer->name, path, sizeof(path))) {
+		build_path(NULL, peer, NULL, path);
 	}
-	build_path(0, peer, 0, path);
-
 }
 
 /*! \brief Save contact header for 200 OK on INVITE */
@@ -16156,12 +16160,15 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		}
 	}
 	pvt->expiry = expire;
-	build_path(pvt, peer, req, 0);
+	if (!build_path(pvt, peer, req, NULL)) {
+		/* Tell the dialog to use the Path header in the response */
+		ast_set2_flag(&pvt->flags[0], 1, SIP_USEPATH);
+	}
 	snprintf(data, sizeof(data), "%s:%d:%s:%s", ast_sockaddr_stringify(&peer->addr),
 		 expire, peer->username, peer->fullcontact);
 	/* We might not immediately be able to reconnect via TCP, but try caching it anyhow */
 	if (!peer->rt_fromcontact || !sip_cfg.peer_rtupdate) {
-		char path[SIPBUFSIZE*2];
+		char path[SIPBUFSIZE * 2];
 		if (peer->path) {
 			make_route_list(peer->path, path, sizeof(path));
 			ast_db_put("SIP/RegistryPath", peer->name, path);
@@ -16336,43 +16343,73 @@ static void build_route(struct sip_pvt *p, struct sip_request *req, int backward
 	}
 }
 
-/*! \brief copy route-set */
-static void copy_route(struct sip_route **d, struct sip_route *s)
+/*! \internal \brief Create a new route
+ * \retval NULL on error
+ * \retval sip_route on success
+ */
+static struct sip_route *create_route(const char *hop, struct sip_route *prev)
+{
+	struct sip_route *route;
+	int len;
+
+	if (ast_strlen_zero(hop)) {
+		return NULL;
+	}
+	len = strlen(hop) + 1;
+
+	/* ast_calloc is not needed because all fields are initialized in
+	 * this block */
+	route = ast_malloc(sizeof(*route) + len);
+	if (!route) {
+		return NULL;
+	}
+	ast_copy_string(route->hop, hop, len);
+
+	route->next = NULL;
+	if (prev) {
+		prev->next = route;
+	}
+	return route;
+}
+
+/*! \internal \brief copy route-set
+ * \retval non-zero on failure
+ * \retval 0 on success
+ */
+static int copy_route(struct sip_route **dst, const struct sip_route *src)
 {
 	struct sip_route *thishop, *head, *tail;
-	/* Build a tailq, then assign it to **d when done.
-	 */
+
+	/* Build a tailq, then assign it to **d when done. */
 	head = NULL;
 	tail = head;
-	while (s) {
-		int len = strlen(s->hop) + 1;
-		if ((thishop = ast_malloc(sizeof(*thishop) + len))) {
-			/* ast_calloc is not needed because all fields are initialized in this block */
-			ast_copy_string(thishop->hop, s->hop, len);
-			ast_debug(2, "copy_route: copied hop: <%s>\n", thishop->hop);
-			thishop->next = NULL;
-			/* Link in at the end */
-			if (tail) {
-				tail->next = thishop;
-			} else {
-				head = thishop;
-			}
-			tail = thishop;
+	for (; src; src = src->next) {
+		thishop = create_route(src->hop, tail);
+		if (!thishop) {
+			return -1;
 		}
-		s = s->next;
+		if (!head) {
+			head = thishop;
+		}
+		tail = thishop;
+
+		ast_debug(2, "copy_route: copied hop: <%s>\n", thishop->hop);
 	}
-	*d = head;
+	*dst = head;
+
+	return 0;
 }
+
 /*! \brief Build route list from Path header
  *  RFC 3327 requires that the Path header contains SIP URIs with lr paramter.
  *  Thus, we do not care about strict routing SIP routers
  */
-static void build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_request *req, char *pathbuf)
+static int build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_request *req, char *pathbuf)
 {
 	struct sip_route *thishop, *head, *tail;
 	int start = 0;
 	int len;
-	const char *rr;
+	char *pr;
 
 	if (peer->path) {
 		free_old_route(peer->path);
@@ -16381,25 +16418,24 @@ static void build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_requ
 
 	if (!ast_test_flag(&peer->flags[0], SIP_USEPATH)) {
 		ast_debug(2, "build_path: do not use Path headers\n");
-		return;
+		return -1;
 	}
 	ast_debug(2, "build_path: try to build pre-loaded route-set by parsing Path headers\n");
 
-	/* Build a tailq, then assign it to peer->path when done.
-	 */
+	/* Build a tailq, then assign it to peer->path when done. */
 	head = NULL;
 	tail = head;
 	/* 1st we pass through all the hops in any Path headers */
 	for (;;) {
 		/* Either loop over the request's Path headers or parse the buffer */
 		if (req) {
-			rr = __get_header(req, "Path", &start);
-			if (*rr == '\0') {
+			pr = ast_strdupa(__get_header(req, "Path", &start));
+			if (*pr == '\0') {
 				break;
 			}
 		} else if (pathbuf) {
 			if (start == 0) {
-				rr = pathbuf;
+				pr = ast_strdupa(pathbuf);
 				start++;
 			} else {
 				break;
@@ -16407,24 +16443,21 @@ static void build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_requ
 		} else {
 			break;
 		}
-		for (; (rr = strchr(rr, '<')) ; rr += len) { /* Each route entry */
-			++rr;
-			len = strcspn(rr, ">") + 1;
-			/* Make a struct route */
-			if ((thishop = ast_malloc(sizeof(*thishop) + len))) {
-				/* ast_calloc is not needed because all fields are initialized in this block */
-				ast_copy_string(thishop->hop, rr, len);
-				ast_debug(2, "build_path: Path hop: <%s>\n", thishop->hop);
-				/* Link in */
-				thishop->next = NULL;
-				/* Link in at the end */
-				if (tail) {
-					tail->next = thishop;
-				} else {
-					head = thishop;
-				}
-				tail = thishop;
+		for (; (pr = strchr(pr, '<')) ; pr += (len + 1)) {
+			/* Parse out each route entry */
+			++pr;
+			len = strcspn(pr, ">");
+			*(pr + len) = '\0';
+			thishop = create_route(pr, tail);
+			if (!thishop) {
+				return -1;
 			}
+
+			if (!head) {
+				head = thishop;
+			}
+			tail = thishop;
+			ast_debug(2, "build_path: Path hop: <%s>\n", thishop->hop);
 		}
 	}
 
@@ -16435,6 +16468,7 @@ static void build_path(struct sip_pvt *p, struct sip_peer *peer, struct sip_requ
 	if (p && sip_debug_test_pvt(p)) {
 		list_route(peer->path);
 	}
+	return 0;
 }
 
 /*! \brief builds the sip_pvt's nonce field which is used for the authentication 
@@ -20111,12 +20145,12 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		if (!peer->path) {
 			ast_cli(fd, "N/A\n");
 		} else {
-			struct sip_route *r=peer->path;
+			struct sip_route *r = peer->path;
 			int first = 1;
 			while (r) {
 				ast_cli(fd, "%s<%s>", first ? "" : ", ", r->hop);
 				first = 0;
-				r=r->next;
+				r = r->next;
 			}
 			ast_cli(fd, "\n");
 		}
@@ -23480,7 +23514,7 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 {
 	int expires, expires_ms;
 	struct sip_registry *r;
-	r=p->registry;
+	r = p->registry;
 	
 	switch (resp) {
 	case 401:	/* Unauthorized */

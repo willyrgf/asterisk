@@ -294,7 +294,7 @@
 #define SIP_PROG_INBAND_NO     (1 << 25)
 #define SIP_PROG_INBAND_YES    (2 << 25)
 
-#define SIP_USEPATH          (1 << 27) /*!< P: Trust and use incoming Path headers? */
+#define SIP_USEPATH          (1 << 27) /*!< GDP: Trust and use incoming Path headers? */
 #define SIP_SENDRPID         (3 << 29) /*!< DP: Remote Party-ID Support */
 #define SIP_SENDRPID_NO      (0 << 29)
 #define SIP_SENDRPID_PAI     (1 << 29) /*!< Use "P-Asserted-Identity" for rpid */

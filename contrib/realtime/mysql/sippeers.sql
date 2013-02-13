@@ -91,6 +91,7 @@ CREATE TABLE IF NOT EXISTS `sippeers` (
       `ignoresdpversion` enum('yes','no') DEFAULT NULL,
       `allowtransfer` enum('yes','no') DEFAULT NULL,
       `dynamic` enum('yes','no') DEFAULT NULL,
+      `supportpath` enum('yes','no') DEFAULT NULL,
       PRIMARY KEY (`id`),
       UNIQUE KEY `name` (`name`),
       KEY `ipaddr` (`ipaddr`,`port`),
