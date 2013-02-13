@@ -1142,18 +1142,16 @@ static void *bridge_call_thread(void *data)
 		ast_channel_data_set(tobj->peer, "(Empty)");
 	}
 
-/* BUGBUG If tobj->return_to_pbx need to setup datastore where peer is going to execute on bridge completion. */
+	if (tobj->return_to_pbx) {
+		ast_after_bridge_set_goto(tobj->chan, ast_channel_context(tobj->chan),
+			ast_channel_exten(tobj->chan), ast_channel_priority(tobj->chan));
+		ast_after_bridge_set_goto(tobj->peer, ast_channel_context(tobj->peer),
+			ast_channel_exten(tobj->peer), ast_channel_priority(tobj->peer));
+	}
+
 	ast_bridge_call(tobj->chan, tobj->peer, &tobj->bconfig);
 
-	if (tobj->return_to_pbx && !ast_check_hangup(tobj->chan)) {
-		ast_log(LOG_VERBOSE, "putting chan %s into PBX again\n", ast_channel_name(tobj->chan));
-		if (ast_pbx_run(tobj->chan)) {
-			ast_log(LOG_WARNING, "FAILED continuing PBX on chan %s\n", ast_channel_name(tobj->chan));
-			ast_hangup(tobj->chan);
-		}
-	} else {
-		ast_hangup(tobj->chan);
-	}
+	ast_after_bridge_goto_run(tobj->chan);
 
 	ast_free(tobj);
 
@@ -7759,12 +7757,17 @@ int ast_bridge_timelimit(struct ast_channel *chan, struct ast_bridge_config *con
  */
 static int bridge_exec(struct ast_channel *chan, const char *data)
 {
-	struct ast_channel *current_dest_chan, *final_dest_chan, *chans[2];
+	struct ast_channel *current_dest_chan;
+	struct ast_channel *final_dest_chan;
+	struct ast_channel *chans[2];
 	char *tmp_data  = NULL;
 	struct ast_flags opts = { 0, };
 	struct ast_bridge_config bconfig = { { 0, }, };
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
 	struct timeval calldurationlimit = { 0, };
+	const char *context;
+	const char *extension;
+	int priority;
 
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(dest_chan);
@@ -7923,56 +7926,28 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 	if (ast_test_flag(&opts, OPT_CALLER_PARK))
 		ast_set_flag(&(bconfig.features_caller), AST_FEATURE_PARKCALL);
 
-/* BUGBUG need to determine where peer is going to execute on bridge completion. */
+	/* Setup after bridge goto location. */
+	if (ast_test_flag(&opts, OPT_CALLEE_GO_ON)) {
+		ast_channel_lock(chan);
+		context = ast_strdupa(ast_channel_context(chan));
+		extension = ast_strdupa(ast_channel_exten(chan));
+		priority = ast_channel_priority(chan);
+		ast_channel_unlock(chan);
+		ast_after_bridge_set_go_on(final_dest_chan, context, extension, priority,
+			opt_args[OPT_ARG_CALLEE_GO_ON]);
+	} else if (!ast_test_flag(&opts, OPT_CALLEE_KILL)) {
+		ast_channel_lock(final_dest_chan);
+		context = ast_strdupa(ast_channel_context(final_dest_chan));
+		extension = ast_strdupa(ast_channel_exten(final_dest_chan));
+		priority = ast_channel_priority(final_dest_chan);
+		ast_channel_unlock(final_dest_chan);
+		ast_after_bridge_set_goto(final_dest_chan, context, extension, priority);
+	}
+
 	ast_bridge_call(chan, final_dest_chan, &bconfig);
 
 	/* The bridge has ended, set BRIDGERESULT to SUCCESS. */
 	pbx_builtin_setvar_helper(chan, "BRIDGERESULT", "SUCCESS");
-
-	/* If the other channel has not been hung up, return it to the PBX */
-	if (!ast_check_hangup(final_dest_chan)) {
-		if (ast_test_flag(&opts, OPT_CALLEE_GO_ON)) {
-			char *caller_context;
-			char *caller_extension;
-			int caller_priority;
-			int goto_opt;
-
-			ast_channel_lock(chan);
-			caller_context = ast_strdupa(ast_channel_context(chan));
-			caller_extension = ast_strdupa(ast_channel_exten(chan));
-			caller_priority = ast_channel_priority(chan);
-			ast_channel_unlock(chan);
-
-			if (!ast_strlen_zero(opt_args[OPT_ARG_CALLEE_GO_ON])) {
-				ast_replace_subargument_delimiter(opt_args[OPT_ARG_CALLEE_GO_ON]);
-				/* Set current dialplan position to bridger dialplan position */
-				goto_opt = ast_goto_if_exists(final_dest_chan, caller_context, caller_extension, caller_priority)
-					/* Then perform the goto */
-					|| ast_parseable_goto(final_dest_chan, opt_args[OPT_ARG_CALLEE_GO_ON]);
-			} else { /* F() */
-				goto_opt = ast_goto_if_exists(final_dest_chan, caller_context, caller_extension, caller_priority + 1);
-			}
-			if (goto_opt || ast_pbx_start(final_dest_chan)) {
-				ast_autoservice_chan_hangup_peer(chan, final_dest_chan);
-			}
-		} else if (!ast_test_flag(&opts, OPT_CALLEE_KILL)) {
-			ast_debug(1, "starting new PBX in %s,%s,%d for chan %s\n",
-				ast_channel_context(final_dest_chan), ast_channel_exten(final_dest_chan),
-				ast_channel_priority(final_dest_chan), ast_channel_name(final_dest_chan));
-
-			if (ast_pbx_start(final_dest_chan)) {
-				ast_log(LOG_WARNING, "FAILED continuing PBX on dest chan %s\n", ast_channel_name(final_dest_chan));
-				ast_autoservice_chan_hangup_peer(chan, final_dest_chan);
-			} else {
-				ast_debug(1, "SUCCESS continuing PBX on chan %s\n", ast_channel_name(final_dest_chan));
-			}
-		} else {
-			ast_autoservice_chan_hangup_peer(chan, final_dest_chan);
-		}
-	} else {
-		ast_debug(1, "chan %s was hungup\n", ast_channel_name(final_dest_chan));
-		ast_autoservice_chan_hangup_peer(chan, final_dest_chan);
-	}
 done:
 	ast_free((char *) bconfig.warning_sound);
 	ast_free((char *) bconfig.end_sound);

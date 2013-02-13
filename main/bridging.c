@@ -45,6 +45,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/file.h"
 #include "asterisk/module.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/pbx.h"
 #include "asterisk/test.h"
 
 #include "asterisk/heap.h"
@@ -1503,6 +1504,286 @@ static struct ast_bridge_channel *bridge_channel_alloc(struct ast_bridge *bridge
 	return bridge_channel;
 }
 
+struct after_bridge_goto_ds {
+	/*! Goto string that can be parsed by ast_parseable_goto(). */
+	const char *parseable_goto;
+	/*! Specific goto context or default context for parseable_goto. */
+	const char *context;
+	/*! Specific goto exten or default exten for parseable_goto. */
+	const char *exten;
+	/*! Specific goto priority or default priority for parseable_goto. */
+	int priority;
+	/*! TRUE if the peer should run the h exten. */
+	unsigned int run_h_exten:1;
+	/*! Specific goto location */
+	unsigned int specific:1;
+};
+
+/*!
+ * \internal
+ * \brief Destroy the after bridge goto datastore.
+ * \since 12.0.0
+ *
+ * \param data After bridge goto data to destroy.
+ *
+ * \return Nothing
+ */
+static void after_bridge_goto_destroy(void *data)
+{
+	struct after_bridge_goto_ds *after_bridge = data;
+
+	ast_free((char *) after_bridge->parseable_goto);
+	ast_free((char *) after_bridge->context);
+	ast_free((char *) after_bridge->exten);
+}
+
+/*!
+ * \internal
+ * \brief Fixup the after bridge goto datastore.
+ * \since 12.0.0
+ *
+ * \param data After bridge goto data to fixup.
+ * \param old_chan The datastore is moving from this channel.
+ * \param new_chan The datastore is moving to this channel.
+ *
+ * \return Nothing
+ */
+static void after_bridge_goto_fixup(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan)
+{
+	/* There can be only one.  Discard any already on the new channel. */
+	ast_after_bridge_goto_discard(new_chan);
+}
+
+static const struct ast_datastore_info after_bridge_goto_info = {
+	.type = "after-bridge-goto",
+	.destroy = after_bridge_goto_destroy,
+	.chan_fixup = after_bridge_goto_fixup,
+};
+
+/*!
+ * \internal
+ * \brief Remove channel goto location after the bridge and return it.
+ * \since 12.0.0
+ *
+ * \param chan Channel to remove after bridge goto location.
+ *
+ * \retval datastore on success.
+ * \retval NULL on error or not found.
+ */
+static struct ast_datastore *after_bridge_goto_remove(struct ast_channel *chan)
+{
+	struct ast_datastore *datastore;
+
+	ast_channel_lock(chan);
+	datastore = ast_channel_datastore_find(chan, &after_bridge_goto_info, NULL);
+	if (datastore && ast_channel_datastore_remove(chan, datastore)) {
+		datastore = NULL;
+	}
+	ast_channel_unlock(chan);
+
+	return datastore;
+}
+
+void ast_after_bridge_goto_discard(struct ast_channel *chan)
+{
+	struct ast_datastore *datastore;
+
+	datastore = after_bridge_goto_remove(chan);
+	if (datastore) {
+		ast_datastore_free(datastore);
+	}
+}
+
+int ast_after_bridge_goto_setup(struct ast_channel *chan)
+{
+	struct ast_datastore *datastore;
+	struct after_bridge_goto_ds *after_bridge;
+	int goto_failed = -1;
+
+	/* Determine if we are going to setup a dialplan location and where. */
+	if (ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO) {
+		/* An async goto has already setup a location. */
+		ast_channel_clear_softhangup(chan, AST_SOFTHANGUP_ASYNCGOTO);
+		if (!ast_check_hangup(chan)) {
+			goto_failed = 0;
+		}
+		return goto_failed;
+	}
+
+	/* Get after bridge goto datastore. */
+	datastore = after_bridge_goto_remove(chan);
+	if (!datastore) {
+		return goto_failed;
+	}
+
+	after_bridge = datastore->data;
+	if (after_bridge->run_h_exten) {
+		if (ast_exists_extension(chan, after_bridge->context, "h", 1,
+			S_COR(ast_channel_caller(chan)->id.number.valid,
+				ast_channel_caller(chan)->id.number.str, NULL))) {
+			ast_debug(1, "Running after bridge goto h exten %s,h,1\n",
+				ast_channel_context(chan));
+			ast_pbx_h_exten_run(chan, after_bridge->context);
+		}
+	} else if (!ast_check_hangup(chan)) {
+		if (after_bridge->specific) {
+			goto_failed = ast_explicit_goto(chan, after_bridge->context,
+				after_bridge->exten, after_bridge->priority);
+		} else if (!ast_strlen_zero(after_bridge->parseable_goto)) {
+			char *context;
+			char *exten;
+			int priority;
+
+			/* Option F(x) for Bridge(), Dial(), and Queue() */
+
+			/* Save current dialplan location in case of failure. */
+			context = ast_strdupa(ast_channel_context(chan));
+			exten = ast_strdupa(ast_channel_exten(chan));
+			priority = ast_channel_priority(chan);
+
+			/* Set current dialplan position to default dialplan position */
+			ast_explicit_goto(chan, after_bridge->context, after_bridge->exten,
+				after_bridge->priority);
+
+			/* Then perform the goto */
+			goto_failed = ast_parseable_goto(chan, after_bridge->parseable_goto);
+			if (goto_failed) {
+				/* Restore original dialplan location. */
+				ast_channel_context_set(chan, context);
+				ast_channel_exten_set(chan, exten);
+				ast_channel_priority_set(chan, priority);
+			}
+		} else {
+			/* Option F() for Bridge(), Dial(), and Queue() */
+			goto_failed = ast_goto_if_exists(chan, after_bridge->context,
+				after_bridge->exten, after_bridge->priority + 1);
+		}
+		if (!goto_failed) {
+			ast_debug(1, "Setup after bridge goto location to %s,%s,%d.\n",
+				ast_channel_context(chan),
+				ast_channel_exten(chan),
+				ast_channel_priority(chan));
+		}
+	}
+
+	/* Discard after bridge goto datastore. */
+	ast_datastore_free(datastore);
+
+	return goto_failed;
+}
+
+void ast_after_bridge_goto_run(struct ast_channel *chan)
+{
+	int goto_failed;
+
+	goto_failed = ast_after_bridge_goto_setup(chan);
+	if (goto_failed || ast_pbx_run(chan)) {
+		ast_hangup(chan);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Set after bridge goto location of channel.
+ * \since 12.0.0
+ *
+ * \param chan Channel to setup after bridge goto location.
+ * \param run_h_exten TRUE if the h exten should be run.
+ * \param specific TRUE if the context/exten/priority is exactly specified.
+ * \param context Context to goto after bridge.
+ * \param exten Exten to goto after bridge. (Could be NULL if run_h_exten)
+ * \param priority Priority to goto after bridge.
+ * \param parseable_goto User specified goto string. (Could be NULL)
+ *
+ * \details Add a channel datastore to setup the goto location
+ * when the channel leaves the bridge and run a PBX from there.
+ *
+ * If run_h_exten then execute the h exten found in the given context.
+ * Else if specific then goto the given context/exten/priority.
+ * Else if parseable_goto then use the given context/exten/priority
+ *   as the relative position for the parseable_goto.
+ * Else goto the given context/exten/priority+1.
+ *
+ * \return Nothing
+ */
+static void __after_bridge_set_goto(struct ast_channel *chan, int run_h_exten, int specific, const char *context, const char *exten, int priority, const char *parseable_goto)
+{
+	struct ast_datastore *datastore;
+	struct after_bridge_goto_ds *after_bridge;
+
+	/* Sanity checks. */
+	ast_assert(chan != NULL);
+	if (!chan) {
+		return;
+	}
+	if (run_h_exten) {
+		ast_assert(run_h_exten && context);
+		if (!context) {
+			return;
+		}
+	} else {
+		ast_assert(context && exten && 0 < priority);
+		if (!context || !exten || priority < 1) {
+			return;
+		}
+	}
+
+	/* Create a new datastore. */
+	datastore = ast_datastore_alloc(&after_bridge_goto_info, NULL);
+	if (!datastore) {
+		return;
+	}
+	after_bridge = ast_calloc(1, sizeof(*after_bridge));
+	if (!after_bridge) {
+		ast_datastore_free(datastore);
+		return;
+	}
+
+	/* Initialize it. */
+	after_bridge->parseable_goto = ast_strdup(parseable_goto);
+	after_bridge->context = ast_strdup(context);
+	after_bridge->exten = ast_strdup(exten);
+	after_bridge->priority = priority;
+	after_bridge->run_h_exten = run_h_exten ? 1 : 0;
+	after_bridge->specific = specific ? 1 : 0;
+	datastore->data = after_bridge;
+	if ((parseable_goto && !after_bridge->parseable_goto)
+		|| (context && !after_bridge->context)
+		|| (exten && !after_bridge->exten)) {
+		ast_datastore_free(datastore);
+		return;
+	}
+
+	/* Put it on the channel replacing any existing one. */
+	ast_channel_lock(chan);
+	ast_after_bridge_goto_discard(chan);
+	ast_channel_datastore_add(chan, datastore);
+	ast_channel_unlock(chan);
+}
+
+void ast_after_bridge_set_goto(struct ast_channel *chan, const char *context, const char *exten, int priority)
+{
+	__after_bridge_set_goto(chan, 0, 1, context, exten, priority, NULL);
+}
+
+void ast_after_bridge_set_h(struct ast_channel *chan, const char *context)
+{
+	__after_bridge_set_goto(chan, 1, 0, context, NULL, 1, NULL);
+}
+
+void ast_after_bridge_set_go_on(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *parseable_goto)
+{
+	char *p_goto;
+
+	if (!ast_strlen_zero(parseable_goto)) {
+		p_goto = ast_strdupa(parseable_goto);
+		ast_replace_subargument_delimiter(p_goto);
+	} else {
+		p_goto = NULL;
+	}
+	__after_bridge_set_goto(chan, 0, 0, context, exten, priority, p_goto);
+}
+
 enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *chan,
 	struct ast_channel *swap,
@@ -1519,7 +1800,8 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 		ao2_ref(bridge, -1);
 	}
 	if (!bridge_channel) {
-		return AST_BRIDGE_CHANNEL_STATE_HANGUP;
+		state = AST_BRIDGE_CHANNEL_STATE_HANGUP;
+		goto join_exit;
 	}
 	if (tech_args) {
 		bridge_channel->tech_args = *tech_args;
@@ -1540,6 +1822,15 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	bridge_channel->features = NULL;
 
 	ao2_ref(bridge_channel, -1);
+
+join_exit:;
+	if (!(ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO)
+		&& !ast_after_bridge_goto_setup(chan)) {
+		/* Claim the after bridge goto is an async goto destination. */
+		ast_channel_lock(chan);
+		ast_softhangup_nolock(chan, AST_SOFTHANGUP_ASYNCGOTO);
+		ast_channel_unlock(chan);
+	}
 	return state;
 }
 
@@ -1558,6 +1849,8 @@ static void *bridge_channel_depart_thread(void *data)
 	bridge_channel->swap = NULL;
 	ast_bridge_features_destroy(bridge_channel->features);
 	bridge_channel->features = NULL;
+
+	ast_after_bridge_goto_discard(bridge_channel->chan);
 
 	return NULL;
 }
@@ -1585,9 +1878,6 @@ static void *bridge_channel_ind_thread(void *data)
 
 	ao2_ref(bridge_channel, -1);
 
-/* BUGBUG need to run a PBX on this channel or hangup. */
-/* BUGBUG need to start the PBX at the appropriate location. */
-/* BUGBUG need to determine where to execute in the dialplan. */
 	switch (state) {
 	case AST_BRIDGE_CHANNEL_STATE_DEPART:
 	case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
@@ -1598,10 +1888,10 @@ static void *bridge_channel_ind_thread(void *data)
 	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
 	case AST_BRIDGE_CHANNEL_STATE_END:
 	default:
-		ast_hangup(chan);
 		break;
 	}
 
+	ast_after_bridge_goto_run(chan);
 	return NULL;
 }
 
@@ -1625,9 +1915,15 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 
 	/* Actually create the thread that will handle the channel */
 	if (independent) {
+		/* Independently imparted channels cannot have a PBX. */
+		ast_assert(!ast_channel_pbx(chan));
+
 		res = ast_pthread_create_detached(&bridge_channel->thread, NULL,
 			bridge_channel_ind_thread, bridge_channel);
 	} else {
+		/* Imparted channels to be departed should not have a PBX either. */
+		ast_assert(!ast_channel_pbx(chan));
+
 		res = ast_pthread_create(&bridge_channel->thread, NULL,
 			bridge_channel_depart_thread, bridge_channel);
 	}

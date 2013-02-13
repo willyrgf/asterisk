@@ -640,6 +640,100 @@ int ast_bridge_is_video_src(struct ast_bridge *bridge, struct ast_channel *chan)
  */
 void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *chan);
 
+/*!
+ * \brief Set channel to goto specific location after the bridge.
+ * \since 12.0.0
+ *
+ * \param chan Channel to setup after bridge goto location.
+ * \param context Context to goto after bridge.
+ * \param exten Exten to goto after bridge.
+ * \param priority Priority to goto after bridge.
+ *
+ * \details Add a channel datastore to setup the goto location
+ * when the channel leaves the bridge and run a PBX from there.
+ *
+ * \return Nothing
+ */
+void ast_after_bridge_set_goto(struct ast_channel *chan, const char *context, const char *exten, int priority);
+
+/*!
+ * \brief Set channel to run the h exten after the bridge.
+ * \since 12.0.0
+ *
+ * \param chan Channel to setup after bridge goto location.
+ * \param context Context to goto after bridge.
+ *
+ * \details Add a channel datastore to setup the goto location
+ * when the channel leaves the bridge and run a PBX from there.
+ *
+ * \return Nothing
+ */
+void ast_after_bridge_set_h(struct ast_channel *chan, const char *context);
+
+/*!
+ * \brief Set channel to go on in the dialplan after the bridge.
+ * \since 12.0.0
+ *
+ * \param chan Channel to setup after bridge goto location.
+ * \param context Current context of the caller channel.
+ * \param exten Current exten of the caller channel.
+ * \param priority Current priority of the caller channel
+ * \param parseable_goto User specified goto string from dialplan.
+ *
+ * \details Add a channel datastore to setup the goto location
+ * when the channel leaves the bridge and run a PBX from there.
+ *
+ * If parseable_goto then use the given context/exten/priority
+ *   as the relative position for the parseable_goto.
+ * Else goto the given context/exten/priority+1.
+ *
+ * \return Nothing
+ */
+void ast_after_bridge_set_go_on(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *parseable_goto);
+
+/*!
+ * \brief Setup any after bridge goto location to begin execution.
+ * \since 12.0.0
+ *
+ * \param chan Channel to setup after bridge goto location.
+ *
+ * \details Pull off any after bridge goto location datastore and
+ * setup for dialplan execution there.
+ *
+ * \retval 0 on success.  The goto location is set for a PBX to run it.
+ * \retval non-zero on error or no goto location.
+ *
+ * \note If the after bridge goto is set to run an h exten it is
+ * run here immediately.
+ */
+int ast_after_bridge_goto_setup(struct ast_channel *chan);
+
+/*!
+ * \brief Run a PBX on any after bridge goto location.
+ * \since 12.0.0
+ *
+ * \param chan Channel to execute after bridge goto location.
+ *
+ * \details Pull off any after bridge goto location datastore
+ * and run a PBX at that location.
+ *
+ * \note On return, the chan pointer is no longer valid because
+ * the channel has hung up.
+ *
+ * \return Nothing
+ */
+void ast_after_bridge_goto_run(struct ast_channel *chan);
+
+/*!
+ * \brief Discard channel after bridge goto location.
+ * \since 12.0.0
+ *
+ * \param chan Channel to discard after bridge goto location.
+ *
+ * \return Nothing
+ */
+void ast_after_bridge_goto_discard(struct ast_channel *chan);
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
