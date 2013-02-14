@@ -4472,16 +4472,14 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	if (config->timelimit) {
 		struct ast_bridge_features_limits call_duration_limits_chan;
 		struct ast_bridge_features_limits call_duration_limits_peer;
-		int abandon_call = 0; /* Flag raised if set limits fails so we can abandon the call. */
+		int abandon_call = 0; /* TRUE if set limits fails so we can abandon the call. */
 
 		if (ast_bridge_features_limits_construct(&call_duration_limits_chan)) {
 			ast_log(LOG_ERROR, "Could not construct caller duration limits. Bridge canceled.\n");
 
 			ast_bridge_features_destroy(peer_features);
 			ast_bridge_features_cleanup(&chan_features);
-			if (bridge_cdr) {
-				ast_cdr_discard(bridge_cdr);
-			}
+			ast_autoservice_chan_hangup_peer(chan, peer);
 			return -1;
 		}
 
@@ -4491,9 +4489,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 
 			ast_bridge_features_destroy(peer_features);
 			ast_bridge_features_cleanup(&chan_features);
-			if (bridge_cdr) {
-				ast_cdr_discard(bridge_cdr);
-			}
+			ast_autoservice_chan_hangup_peer(chan, peer);
 			return -1;
 		}
 
@@ -4514,9 +4510,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 			ast_log(LOG_ERROR, "Could not set duration limits on one or more sides of the call. Bridge canceled.\n");
 			ast_bridge_features_destroy(peer_features);
 			ast_bridge_features_cleanup(&chan_features);
-			if (bridge_cdr) {
-				ast_cdr_discard(bridge_cdr);
-			}
+			ast_autoservice_chan_hangup_peer(chan, peer);
 			return -1;
 		}
 	}
