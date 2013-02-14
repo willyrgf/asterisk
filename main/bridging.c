@@ -53,6 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/timing.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/musiconhold.h"
+#include "asterisk/features.h"
 
 static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
 
@@ -1432,8 +1433,6 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		ao2_unlock(bridge_channel);
 	}
 
-	ast_channel_internal_bridge_set(bridge_channel->chan, NULL);
-
 	/* See if we need to dissolve the bridge itself if they hung up */
 	switch (bridge_channel->state) {
 	case AST_BRIDGE_CHANNEL_STATE_END:
@@ -1483,6 +1482,25 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		ast_frfree(action);
 	}
 	ao2_unlock(bridge_channel);
+
+/* BUGBUG Revisit in regards to moving channels between bridges and local channel optimization. */
+	/* Complete any partial DTMF digit before exiting the bridge. */
+	if (ast_channel_sending_dtmf_digit(bridge_channel->chan)) {
+		ast_bridge_end_dtmf(bridge_channel->chan,
+			ast_channel_sending_dtmf_digit(bridge_channel->chan),
+			ast_channel_sending_dtmf_tv(bridge_channel->chan), "bridge end");
+	}
+
+	/*
+	 * Wait for any dual redirect to complete.
+	 *
+	 * Must be done while "still in the bridge" for ast_async_goto()
+	 * to work right.
+	 */
+	while (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT)) {
+		sched_yield();
+	}
+	ast_channel_internal_bridge_set(bridge_channel->chan, NULL);
 
 	/* Restore original formats of the channel as they came in */
 	if (ast_format_cmp(ast_channel_readformat(bridge_channel->chan), &formats[0]) == AST_FORMAT_CMP_NOT_EQUAL) {

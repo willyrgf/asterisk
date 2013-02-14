@@ -3806,7 +3806,6 @@ static int action_redirect(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-/* BUGBUG The use of AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT will need to be reexamined. */
 	/* Dual channel redirect in progress. */
 	if (ast_channel_pbx(chan)) {
 		ast_channel_lock(chan);
