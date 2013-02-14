@@ -566,7 +566,13 @@ static int generic_thread_loop(struct ast_bridge *bridge)
 	}
 }
 
-/*! \brief Bridge thread function */
+/*!
+ * \brief Bridge thread function
+ *
+ * \note The thread does not have its own reference to the
+ * bridge.  The bridge ao2 object destructor will stop the
+ * thread if it is running.
+ */
 static void *bridge_thread(void *data)
 {
 	struct ast_bridge *bridge = data;
@@ -658,6 +664,16 @@ static void destroy_bridge(void *obj)
 	/* There should not be any channels left in the bridge. */
 	ast_assert(AST_LIST_EMPTY(&bridge->channels));
 	ast_assert(AST_LIST_EMPTY(&bridge->depart_wait));
+
+	ao2_lock(bridge);
+	if (bridge->thread != AST_PTHREADT_NULL) {
+		bridge_stop(bridge);
+	}
+	ao2_unlock(bridge);
+
+	if (bridge->callid) {
+		bridge->callid = ast_callid_unref(bridge->callid);
+	}
 
 	/* Pass off the bridge to the technology to destroy if needed */
 	if (bridge->technology->destroy) {
@@ -757,23 +773,9 @@ int ast_bridge_check(uint32_t capabilities)
 
 int ast_bridge_destroy(struct ast_bridge *bridge)
 {
-	ao2_lock(bridge);
-
-	if (bridge->callid) {
-/* BUGBUG the bridge callid needs to be verified.  Move to the bridge destructor. */
-		bridge->callid = ast_callid_unref(bridge->callid);
-	}
-
-	if (bridge->thread != AST_PTHREADT_NULL) {
-/* BUGBUG this needs to be moved to the bridge ao2 destructor. */
-		bridge_stop(bridge);
-	}
-
 	ast_debug(1, "Telling all channels in bridge %p to leave the party\n", bridge);
-
-	/* Drop every bridged channel, the last one will cause the bridge thread (if it exists) to exit */
+	ao2_lock(bridge);
 	bridge_force_out_all(bridge);
-
 	ao2_unlock(bridge);
 
 	ao2_ref(bridge, -1);
@@ -1386,10 +1388,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		if (bridge_channel->bridge->thread == AST_PTHREADT_NULL
 			&& (bridge_channel->bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_THREAD)) {
 			ast_debug(1, "Starting a bridge thread for bridge %p\n", bridge_channel->bridge);
-			ao2_ref(bridge_channel->bridge, +1);
 			if (ast_pthread_create(&bridge_channel->bridge->thread, NULL, bridge_thread, bridge_channel->bridge)) {
 				ast_debug(1, "Failed to create a bridge thread for bridge %p, giving it another go.\n", bridge_channel->bridge);
-				ao2_ref(bridge_channel->bridge, -1);
 				continue;
 			}
 		}
