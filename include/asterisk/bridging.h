@@ -548,6 +548,17 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan);
 int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
 
 /*!
+ * \brief Change the state of a bridged channel without taking and releasing the bridge channel lock
+ *
+ * \param bridge_channel Channel to change the state on
+ * \param new_state The new state to place the channel into
+ *
+ * \note Do not use this call outside the context of either interval hook callbacks or bridging core.
+ *       This function assumes the bridge_channel is locked.
+ */
+void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state);
+
+/*!
  * \brief Change the state of a bridged channel
  *
  * \param bridge_channel Channel to change the state on

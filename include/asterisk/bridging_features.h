@@ -79,6 +79,14 @@ enum ast_bridge_builtin_feature {
 	AST_BRIDGE_BUILTIN_END
 };
 
+enum ast_bridge_builtin_interval {
+	/*! Apply Call Duration Limits */
+	AST_BRIDGE_BUILTIN_INTERVAL_LIMITS,
+
+	/*! End terminator for list of built in interval features. Must remain last. */
+	AST_BRIDGE_BUILTIN_INTERVAL_END
+};
+
 struct ast_bridge;
 struct ast_bridge_channel;
 
@@ -142,12 +150,12 @@ struct ast_bridge_features_hook {
 	ast_bridge_features_hook_pvt_destructor destructor;
 	/*! Unique data that was passed into us */
 	void *hook_pvt;
+	/*! Sequence number for the hook if it is an interval hook */
+	unsigned int seqno;
 	/*! Linked list information */
 	AST_LIST_ENTRY(ast_bridge_features_hook) entry;
 	/*! Heap index for interval hooks */
 	ssize_t __heap_index;
-	/*! TRUE if we should take into account the time spent executing the callback when rescheduling the interval hook */
-	unsigned int interval_strict:1;
 };
 
 #define BRIDGE_FEATURES_INTERVAL_RATE 10
@@ -170,6 +178,10 @@ struct ast_bridge_features {
 	void *talker_pvt_data;
 	/*! Feature flags that are enabled */
 	struct ast_flags feature_flags;
+	/*! Limits feature data */
+	struct ast_bridge_features_limits *limits;
+	/*! Used to assign the sequence number to the next interval hook added. */
+	unsigned int interval_sequence;
 	/*! Bit to indicate that the feature_flags and hook list is setup */
 	unsigned int usable:1;
 	/*! Bit to indicate whether the channel/bridge is muted or not */
@@ -212,10 +224,17 @@ struct ast_bridge_features_limits {
 	unsigned int warning;
 	/*! Interval between the warnings (specified in milliseconds or 0 to disable) */
 	unsigned int frequency;
-	/*! Sound file to play when the maximum duration is reached (if empty, then nothing will be played) */
-	char duration_sound[256];
-	/*! Sound file to play when the warning time is reached (if empty, then the remaining time will be played) */
-	char warning_sound[256];
+
+	AST_DECLARE_STRING_FIELDS(
+		/*! Sound file to play when the maximum duration is reached (if empty, then nothing will be played) */
+		AST_STRING_FIELD(duration_sound);
+		/*! Sound file to play when the warning time is reached (if empty, then the remaining time will be played) */
+		AST_STRING_FIELD(warning_sound);
+		/*! Sound file to play when the call is first entered (if empty, then the remaining time will be played) */
+		AST_STRING_FIELD(connect_sound);
+	);
+	/*! Time when the bridge will be terminated by the limits feature */
+	struct timeval quitting_time;
 };
 
 /*!
@@ -256,6 +275,44 @@ int ast_bridge_features_register(enum ast_bridge_builtin_feature feature, ast_br
  * This unregisters the function that is handling the built in attended transfer feature.
  */
 int ast_bridge_features_unregister(enum ast_bridge_builtin_feature feature);
+
+/*!
+ * \brief Register a handler for a built in interval feature
+ *
+ * \param interval The interval feature that the handler will be responsible for
+ * \param callback the Callback function that will handle it
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_bridge_interval_register(AST_BRIDGE_BUILTIN_INTERVAL_LIMITS, bridge_builtin_set_limits);
+ * \endcode
+ *
+ * This registers the function bridge_builtin_set_limits as the function responsible for the built in
+ * duration limit feature.
+ */
+int ast_bridge_interval_register(enum ast_bridge_builtin_interval interval, void *callback);
+
+/*!
+ * \brief Unregisters a handler for a built in interval feature
+ *
+ * \param interval the interval feature to unregister
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_bridge_interval_unregister(AST_BRIDGE_BULTIN_INTERVAL_LIMITS)
+ * /endcode
+ *
+ * This unregisters the function that is handling the built in duration limit feature.
+ */
+int ast_bridge_interval_unregister(enum ast_bridge_builtin_interval interval);
 
 /*!
  * \brief Attach a custom hook to a bridge features structure
@@ -311,7 +368,6 @@ int ast_bridge_features_hook(struct ast_bridge_features *features,
  */
 int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	unsigned int interval,
-	unsigned int strict,
 	ast_bridge_features_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_features_hook_pvt_destructor destructor);
@@ -379,18 +435,43 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
 int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config);
 
 /*!
+ * \brief Constructor function for ast_bridge_features_limits
+ *
+ * \param limits pointer to a ast_bridge_features_limits struct that has been allocted, but not initialized
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+int ast_bridge_features_limits_construct(struct ast_bridge_features_limits *limits);
+
+/*!
+ * \brief Destructor function for ast_bridge_features_limits
+ *
+ * \param limits pointer to an ast_bridge_features_limits struct that needs to be destroyed
+ *
+ * This function does not free memory allocated to the ast_bridge_features_limits struct, it only frees elements within the struct.
+ * You must still call ast_free on the the struct if you allocated it with malloc.
+ */
+void ast_bridge_features_limits_destroy(struct ast_bridge_features_limits *limits);
+
+/*!
  * \brief Limit the amount of time a channel may stay in the bridge and optionally play warning messages as time runs out
  *
  * \param features Bridge features structure
  * \param limits Configured limits applicable to the channel
  *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
  * Example usage:
  *
  * \code
  * struct ast_bridge_features features;
- * struct ast_bridge_features_limits limits = { .duration = 10000, };
+ * struct ast_bridge_features_limits limits;
  * ast_bridge_features_init(&features);
+ * ast_bridge_features_limits_construct(&limits);
  * ast_bridge_features_set_limits(&features, &limits);
+ * ast_bridge_features_limits_destroy(&limits);
  * \endcode
  *
  * This sets the maximum time the channel can be in the bridge to 10 seconds and does not play any warnings.
@@ -398,7 +479,7 @@ int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_br
  * \note This API call can only be used on a features structure that will be used in association with a bridge channel.
  * \note The ast_bridge_features_limits structure must remain accessible for the lifetime of the features structure.
  */
-void ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits);
+int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits);
 
 /*!
  * \brief Set a flag on a bridge features structure

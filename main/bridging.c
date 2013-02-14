@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/heap.h"
 #include "asterisk/say.h"
 #include "asterisk/timing.h"
+#include "asterisk/stringfields.h"
 #include "asterisk/musiconhold.h"
 
 static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
@@ -68,6 +69,9 @@ static char builtin_features_dtmf[AST_BRIDGE_BUILTIN_END][MAXIMUM_DTMF_FEATURE_S
 
 /*! Function handlers for the built in features */
 static void *builtin_features_handlers[AST_BRIDGE_BUILTIN_END];
+
+/*! Function handlers for built in interval features */
+static void *builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_END];
 
 int __ast_bridge_technology_register(struct ast_bridge_technology *technology, struct ast_module *module)
 {
@@ -132,8 +136,7 @@ static void bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
 	ao2_unlock(bridge_channel);
 }
 
-/*! \note This function assumes the bridge_channel is locked. */
-static void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
+void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
 /* BUGBUG need cause code for the bridge_channel leaving the bridge. */
 	ast_debug(1, "BUGBUG Setting bridge channel %p state from:%d to:%d\n",
@@ -1096,9 +1099,7 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 
 		ast_debug(1, "Updating hook '%p' and adding it back to '%p'\n", hook, bridge_channel);
 
-		if (hook->interval_strict) {
-			execution_time = ast_tvdiff_ms(ast_tvnow(), start);
-		}
+		execution_time = ast_tvdiff_ms(ast_tvnow(), start);
 
 		/* resetting start */
 		start = ast_tvnow();
@@ -1106,6 +1107,8 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 		hook->interval_trip_time = ast_tvadd(start, ast_samp2tv(hook->interval - execution_time, 1000));
 
 		ast_debug(1, "Sticking hook '%p' in heap on '%p'\n", hook, bridge_channel->features);
+
+		hook->seqno = ast_atomic_fetchadd_int((int *)&bridge_channel->features->interval_sequence, +1);
 		ast_heap_push(bridge_channel->features->interval_hooks, hook);
 	}
 }
@@ -2212,6 +2215,31 @@ int ast_bridge_features_unregister(enum ast_bridge_builtin_feature feature)
 	return 0;
 }
 
+int ast_bridge_interval_register(enum ast_bridge_builtin_interval interval, void *callback)
+{
+	if (ARRAY_LEN(builtin_interval_handlers) <= interval
+		|| builtin_interval_handlers[interval]) {
+		return -1;
+	}
+
+	builtin_interval_handlers[interval] = callback;
+
+	return 0;
+}
+
+int ast_bridge_interval_unregister(enum ast_bridge_builtin_interval interval)
+{
+	if (ARRAY_LEN(builtin_interval_handlers) <= interval
+		|| !builtin_interval_handlers[interval]) {
+		return -1;
+	}
+
+	builtin_interval_handlers[interval] = NULL;
+
+	return 0;
+
+}
+
 int ast_bridge_features_hook(struct ast_bridge_features *features,
 	const char *dtmf,
 	ast_bridge_features_hook_callback callback,
@@ -2250,7 +2278,6 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
 
 int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	unsigned int interval,
-	unsigned int strict,
 	ast_bridge_features_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_features_hook_pvt_destructor destructor)
@@ -2275,11 +2302,11 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	hook->callback = callback;
 	hook->destructor = destructor;
 	hook->hook_pvt = hook_pvt;
-	hook->interval_strict = strict ? 1 : 0;
 
 	ast_debug(1, "Putting interval hook '%p' in the interval hooks heap on features '%p'\n",
 		hook, features);
 	hook->interval_trip_time = ast_tvadd(ast_tvnow(), ast_samp2tv(hook->interval, 1000));
+	hook->seqno = ast_atomic_fetchadd_int((int *)&features->interval_sequence, +1);
 	ast_heap_push(features->interval_hooks, hook);
 	features->usable = 1;
 
@@ -2326,125 +2353,33 @@ int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_br
 	return ast_bridge_features_hook(features, dtmf, builtin_features_handlers[feature], config, NULL);
 }
 
-static int bridge_features_duration_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+int ast_bridge_features_limits_construct(struct ast_bridge_features_limits *limits)
 {
-	struct ast_bridge_features_limits *limits = hook_pvt;
+	memset(limits, 0, sizeof(*limits));
 
-	if (!ast_strlen_zero(limits->duration_sound)) {
-		ast_stream_and_wait(bridge_channel->chan, limits->duration_sound, AST_DIGIT_NONE);
+	if (ast_string_field_init(limits, 256)) {
+		ast_free(limits);
+		return -1;
 	}
 
-	ao2_lock(bridge_channel);
-	switch (bridge_channel->state) {
-	case AST_BRIDGE_CHANNEL_STATE_WAIT:
-		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
-		break;
-	default:
-		break;
-	}
-	ao2_unlock(bridge_channel);
+	return 0;
+}
 
+void ast_bridge_features_limits_destroy(struct ast_bridge_features_limits *limits)
+{
+	ast_string_field_free_memory(limits);
+}
+
+int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits)
+{
+	if (builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_LIMITS]) {
+		int (*bridge_features_set_limits_callback)(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits);
+		bridge_features_set_limits_callback = builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_LIMITS];
+		return bridge_features_set_limits_callback(features, limits);
+	}
+
+	ast_log(LOG_ERROR, "Attempted to set limits without an AST_BRIDGE_BUILTIN_INTERVAL_LIMITS callback registered.\n");
 	return -1;
-}
-
-static int bridge_features_warning_sound_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
-{
-	struct ast_bridge_features_limits *limits = hook_pvt;
-
-	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ast_debug(1, "Skipping warning, the channel state is already set to leave bridge.\n");
-		return -1;
-	}
-
-	ast_stream_and_wait(bridge_channel->chan, limits->warning_sound, AST_DIGIT_NONE);
-
-	/* It may be necessary to resume music on hold after we play the sound file. */
-	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
-		ast_moh_start(bridge_channel->chan, NULL, NULL);
-	}
-
-	if (limits->frequency) {
-		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
-	}
-
-	return !limits->frequency ? -1 : 0;
-}
-
-static int bridge_features_warning_time_left_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
-{
-	struct ast_bridge_features_limits *limits = hook_pvt;
-	struct ast_bridge_features_hook *interval_hook;
-	unsigned int remaining = 0;
-	int heap_traversal_index;
-	int heap_size;
-
-	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ast_debug(1, "Skipping warning, the channel state is already set to leave bridge.\n");
-		return -1;
-	}
-
-	heap_size = ast_heap_size(bridge_channel->features->interval_hooks);
-	for (heap_traversal_index = 0; heap_traversal_index < heap_size; heap_traversal_index++) {
-		interval_hook = ast_heap_peek(bridge_channel->features->interval_hooks, heap_traversal_index + 1);
-		if (interval_hook->callback == bridge_features_duration_callback) {
-			remaining = ast_tvdiff_ms(interval_hook->interval_trip_time, ast_tvnow()) / 1000;
-			break;
-		}
-	}
-
-	if (remaining > 0) {
-		unsigned int min;
-		unsigned int sec;
-
-		if ((remaining / 60) > 1) {
-			min = remaining / 60;
-			sec = remaining % 60;
-		} else {
-			min = 0;
-			sec = remaining;
-		}
-
-		ast_stream_and_wait(bridge_channel->chan, "vm-youhave", AST_DIGIT_NONE);
-		if (min) {
-			ast_say_number(bridge_channel->chan, min, AST_DIGIT_NONE,
-				ast_channel_language(bridge_channel->chan), NULL);
-			ast_stream_and_wait(bridge_channel->chan, "queue-minutes", AST_DIGIT_NONE);
-		}
-		if (sec) {
-			ast_say_number(bridge_channel->chan, sec, AST_DIGIT_NONE,
-				ast_channel_language(bridge_channel->chan), NULL);
-			ast_stream_and_wait(bridge_channel->chan, "queue-seconds", AST_DIGIT_NONE);
-		}
-
-		/* It may be necessary to resume music on hold after we finish playing the announcment. */
-		if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
-			ast_moh_start(bridge_channel->chan, NULL, NULL);
-		}
-	}
-
-	if (limits->frequency) {
-		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
-	}
-
-	return !limits->frequency ? -1 : 0;
-}
-
-void ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits)
-{
-	if (!limits->duration) {
-		return;
-	}
-
-	ast_bridge_features_interval_hook(features, limits->duration, 0,
-		bridge_features_duration_callback, limits, NULL);
-
-	if (limits->warning && limits->warning < limits->duration) {
-		ast_bridge_features_interval_hook(features, limits->warning, 1,
-			!ast_strlen_zero(limits->warning_sound)
-				? bridge_features_warning_sound_callback
-				: bridge_features_warning_time_left_callback,
-			limits, NULL);
-	}
 }
 
 void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast_bridge_feature_flags flag)
@@ -2457,8 +2392,14 @@ static int interval_hook_time_cmp(void *a, void *b)
 {
 	struct ast_bridge_features_hook *hook_a = a;
 	struct ast_bridge_features_hook *hook_b = b;
+	int cmp = ast_tvcmp(hook_b->interval_trip_time, hook_a->interval_trip_time);
 
-	return ast_tvcmp(hook_b->interval_trip_time, hook_a->interval_trip_time);
+	if (cmp) {
+		return cmp;
+	}
+
+	cmp = hook_b->seqno - hook_a->seqno;
+	return cmp;
 }
 
 int ast_bridge_features_init(struct ast_bridge_features *features)
@@ -2494,6 +2435,13 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 	if (features->interval_timer) {
 		ast_timer_close(features->interval_timer);
 		features->interval_timer = NULL;
+	}
+
+	/* If the features contains a limits pvt, destroy that as well. */
+	if (features->limits) {
+		ast_bridge_features_limits_destroy(features->limits);
+		ast_free(features->limits);
+		features->limits = NULL;
 	}
 
 	/* Destroy each DTMF feature hook. */

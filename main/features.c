@@ -4302,11 +4302,16 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 
 static void bridge_config_set_limits_warning_values(struct ast_bridge_config *config, struct ast_bridge_features_limits *limits)
 {
-	ast_copy_string(limits->duration_sound, config->end_sound, sizeof(limits->duration_sound));
+	if (config->end_sound) {
+		ast_string_field_set(limits, duration_sound, config->end_sound);
+	}
 
-/* BUGBUG 'timeleft' is a hard-coded value that is set when the argument isn't provided. This should probably be changed. */
-	if (strcmp("timeleft", config->warning_sound)) {
-		ast_copy_string(limits->warning_sound, config->warning_sound, sizeof(limits->warning_sound));
+	if (config->warning_sound) {
+		ast_string_field_set(limits, warning_sound, config->warning_sound);
+	}
+
+	if (config->start_sound) {
+		ast_string_field_set(limits, connect_sound, config->start_sound);
 	}
 
 	limits->frequency = config->warning_freq;
@@ -4400,10 +4405,6 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	struct ast_bridge_features chan_features;
 	struct ast_bridge_features *peer_features;
 
-	/* These are used for the 'L' option of Dial/Bridge */
-	struct ast_bridge_features_limits call_duration_limits_chan = {0};
-	struct ast_bridge_features_limits call_duration_limits_peer = {0};
-
 /* BUGBUG these channel vars may need to be made dynamic so they update when transfers happen. */
 	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", ast_channel_name(peer));
 	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", ast_channel_name(chan));
@@ -4469,9 +4470,55 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	}
 
 	if (config->timelimit) {
+		struct ast_bridge_features_limits call_duration_limits_chan;
+		struct ast_bridge_features_limits call_duration_limits_peer;
+		int abandon_call = 0; /* Flag raised if set limits fails so we can abandon the call. */
+
+		if (ast_bridge_features_limits_construct(&call_duration_limits_chan)) {
+			ast_log(LOG_ERROR, "Could not construct caller duration limits. Bridge canceled.\n");
+
+			ast_bridge_features_destroy(peer_features);
+			ast_bridge_features_cleanup(&chan_features);
+			if (bridge_cdr) {
+				ast_cdr_discard(bridge_cdr);
+			}
+			return -1;
+		}
+
+		if (ast_bridge_features_limits_construct(&call_duration_limits_peer)) {
+			ast_log(LOG_ERROR, "Could not construct callee duration limits. Bridge canceled.\n");
+			ast_bridge_features_limits_destroy(&call_duration_limits_chan);
+
+			ast_bridge_features_destroy(peer_features);
+			ast_bridge_features_cleanup(&chan_features);
+			if (bridge_cdr) {
+				ast_cdr_discard(bridge_cdr);
+			}
+			return -1;
+		}
+
 		bridge_config_set_limits(config, &call_duration_limits_chan, &call_duration_limits_peer);
-		ast_bridge_features_set_limits(&chan_features, &call_duration_limits_chan);
-		ast_bridge_features_set_limits(peer_features, &call_duration_limits_peer);
+
+		if (ast_bridge_features_set_limits(&chan_features, &call_duration_limits_chan)) {
+			abandon_call = 1;
+		}
+		if (ast_bridge_features_set_limits(peer_features, &call_duration_limits_peer)) {
+			abandon_call = 1;
+		}
+
+		/* At this point we are done with the limits structs since they have been copied to the individual feature sets. */
+		ast_bridge_features_limits_destroy(&call_duration_limits_chan);
+		ast_bridge_features_limits_destroy(&call_duration_limits_peer);
+
+		if (abandon_call) {
+			ast_log(LOG_ERROR, "Could not set duration limits on one or more sides of the call. Bridge canceled.\n");
+			ast_bridge_features_destroy(peer_features);
+			ast_bridge_features_cleanup(&chan_features);
+			if (bridge_cdr) {
+				ast_cdr_discard(bridge_cdr);
+			}
+			return -1;
+		}
 	}
 
 	/* Create bridge */
