@@ -9528,6 +9528,7 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 		struct ast_format writeformat;
 	} tmpvars = { 0, };
 
+/* BUGBUG need to add bridge check code to also do an ast_explicit_goto() as a blind transfer. */
 	ast_channel_lock(chan);
 	if (ast_channel_pbx(chan)) { /* This channel is currently in the PBX */
 		ast_explicit_goto(chan, context, exten, priority + 1);

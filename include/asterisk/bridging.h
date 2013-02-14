@@ -230,11 +230,11 @@ struct ast_bridge {
 	 * for bridge technologies that mix audio. When set to 0, the bridge tech must choose a
 	 * default interval for itself. */
 	unsigned int internal_mixing_interval;
-	/*! Bit to indicate that the bridge thread is waiting on channels in the bridge array */
+	/*! TRUE if the bridge thread is waiting on channels in the bridge array */
 	unsigned int waiting:1;
-	/*! Bit to indicate the bridge thread should stop */
+	/*! TRUE if the bridge thread should stop */
 	unsigned int stop:1;
-	/*! Bit to indicate the bridge thread should refresh itself */
+	/*! TRUE if the bridge thread should refresh itself */
 	unsigned int refresh:1;
 	/*! Bridge flags to tweak behavior */
 	struct ast_flags feature_flags;

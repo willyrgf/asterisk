@@ -135,6 +135,7 @@ static void bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
 /*! \note This function assumes the bridge_channel is locked. */
 static void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
+/* BUGBUG need cause code for the bridge_channel leaving the bridge. */
 	ast_debug(1, "BUGBUG Setting bridge channel %p state from:%d to:%d\n",
 		bridge_channel, bridge_channel->state, new_state);
 
@@ -307,6 +308,7 @@ static void bridge_force_out_all(struct ast_bridge *bridge)
 {
 	struct ast_bridge_channel *bridge_channel;
 
+/* BUGBUG need a cause code on the bridge for the later ejected channels. */
 	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
 		ao2_lock(bridge_channel);
 		switch (bridge_channel->state) {
@@ -320,7 +322,18 @@ static void bridge_force_out_all(struct ast_bridge *bridge)
 	}
 }
 
-/*! \brief Internal function to see whether a bridge should dissolve, and if so do it */
+/*!
+ * \internal
+ * \brief Check if a bridge should dissolve and then do it.
+ * \since 12.0.0
+ *
+ * \param bridge Bridge to check.
+ * \param bridge_channel Channel causing the check.
+ *
+ * \note On entry, bridge is already locked.
+ *
+ * \return Nothing
+ */
 static void bridge_check_dissolve(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	if (!ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_HANGUP)
@@ -554,13 +567,13 @@ static void *bridge_thread(void *data)
 	struct ast_bridge *bridge = data;
 	int res = 0;
 
+	ast_debug(1, "Started bridge thread for %p\n", bridge);
+
 	ao2_lock(bridge);
 
 	if (bridge->callid) {
 		ast_callid_threadassoc_add(bridge->callid);
 	}
-
-	ast_debug(1, "Started bridge thread for %p\n", bridge);
 
 	/* Loop around until we are told to stop */
 	while (!bridge->stop) {
@@ -572,10 +585,6 @@ static void *bridge_thread(void *data)
 
 		/* In case the refresh bit was set simply set it back to off */
 		bridge->refresh = 0;
-
-		ast_debug(1, "Launching bridge thread function %p for bridge %p\n",
-			bridge->technology->thread ? bridge->technology->thread : generic_thread_loop,
-			bridge);
 
 		/*
 		 * Execute the appropriate thread function.  If the technology
@@ -595,10 +604,9 @@ static void *bridge_thread(void *data)
 		}
 	}
 
-	ast_debug(1, "Ending bridge thread for %p\n", bridge);
-
 	ao2_unlock(bridge);
-	ao2_ref(bridge, -1);
+
+	ast_debug(1, "Ending bridge thread for %p\n", bridge);
 
 	return NULL;
 }
@@ -994,7 +1002,7 @@ static void bridge_channel_join_multithreaded(struct ast_bridge_channel *bridge_
 		ao2_unlock(bridge_channel);
 		ao2_lock(bridge_channel->bridge);
 	} else if (bridge_channel->suspended) {
-		ast_debug(10, "Going into a multithreaded signal wait for bridge channel %p of bridge %p\n",
+		ast_debug(1, "Going into a multithreaded signal wait for bridge channel %p of bridge %p\n",
 			bridge_channel, bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 		ao2_unlock(bridge_channel);
@@ -1017,7 +1025,8 @@ static void bridge_channel_join_singlethreaded(struct ast_bridge_channel *bridge
 	ao2_unlock(bridge_channel->bridge);
 	ao2_lock(bridge_channel);
 	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ast_debug(1, "Going into a single threaded signal wait for bridge channel %p of bridge %p\n", bridge_channel, bridge_channel->bridge);
+		ast_debug(1, "Going into a single threaded signal wait for bridge channel %p of bridge %p\n",
+			bridge_channel, bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 	}
 	ao2_unlock(bridge_channel);
@@ -1824,6 +1833,7 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	ao2_ref(bridge_channel, -1);
 
 join_exit:;
+/* BUGBUG this is going to cause problems for DTMF atxfer attended bridge between B & C.  Maybe an ast_bridge_join_internal() that does not do the after bridge goto for this case. */
 	if (!(ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO)
 		&& !ast_after_bridge_goto_setup(chan)) {
 		/* Claim the after bridge goto is an async goto destination. */
@@ -1931,6 +1941,7 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 		/* cleanup */
 		bridge_channel->chan = NULL;
 		bridge_channel->swap = NULL;
+		ast_bridge_features_destroy(bridge_channel->features);
 		bridge_channel->features = NULL;
 
 		ao2_ref(bridge_channel, -1);

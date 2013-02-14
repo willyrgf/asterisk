@@ -73,7 +73,7 @@ struct ast_bridge_technology {
 	int (*poke)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Formats that the bridge technology supports */
 	struct ast_format_cap *format_capabilities;
-	/*! Bit to indicate whether the bridge technology is currently suspended or not */
+	/*! TRUE if the bridge technology is currently suspended. */
 	unsigned int suspended:1;
 	/*! Module this bridge technology belongs to. Is used for reference counting when creating/destroying a bridge. */
 	struct ast_module *mod;
