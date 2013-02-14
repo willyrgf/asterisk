@@ -4385,7 +4385,24 @@ static void bridge_check_monitor(struct ast_channel *chan, struct ast_channel *p
 	}
 }
 
-/* BUGBUG Change callers of ast_bridge_call() to not expect the peer back. */
+/*!
+ * \internal
+ * \brief Send the peer channel on its way on bridge start failure.
+ * \since 12.0.0
+ *
+ * \param chan Chan to put into autoservice.
+ * \param peer Chan to send to after bridge goto or run hangup handlers and hangup.
+ *
+ * \return Nothing
+ */
+static void bridge_failed_peer_goto(struct ast_channel *chan, struct ast_channel *peer)
+{
+	if (ast_after_bridge_goto_setup(peer)
+		|| ast_pbx_start(peer)) {
+		ast_autoservice_chan_hangup_peer(chan, peer);
+	}
+}
+
 /*!
  * \brief bridge the call and set CDR
  *
@@ -4435,7 +4452,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	/* Answer if need be */
 	if (ast_channel_state(chan) != AST_STATE_UP) {
 		if (ast_raw_answer(chan, 1)) {
-			ast_autoservice_chan_hangup_peer(chan, peer);
+			bridge_failed_peer_goto(chan, peer);
 			return -1;
 		}
 	}
@@ -4465,7 +4482,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 		|| setup_bridge_channel_features(&chan_features, &config->features_caller)) {
 		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);
-		ast_autoservice_chan_hangup_peer(chan, peer);
+		bridge_failed_peer_goto(chan, peer);
 		return -1;
 	}
 
@@ -4479,7 +4496,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 
 			ast_bridge_features_destroy(peer_features);
 			ast_bridge_features_cleanup(&chan_features);
-			ast_autoservice_chan_hangup_peer(chan, peer);
+			bridge_failed_peer_goto(chan, peer);
 			return -1;
 		}
 
@@ -4489,7 +4506,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 
 			ast_bridge_features_destroy(peer_features);
 			ast_bridge_features_cleanup(&chan_features);
-			ast_autoservice_chan_hangup_peer(chan, peer);
+			bridge_failed_peer_goto(chan, peer);
 			return -1;
 		}
 
@@ -4510,7 +4527,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 			ast_log(LOG_ERROR, "Could not set duration limits on one or more sides of the call. Bridge canceled.\n");
 			ast_bridge_features_destroy(peer_features);
 			ast_bridge_features_cleanup(&chan_features);
-			ast_autoservice_chan_hangup_peer(chan, peer);
+			bridge_failed_peer_goto(chan, peer);
 			return -1;
 		}
 	}
@@ -4521,7 +4538,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	if (!bridge) {
 		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);
-		ast_autoservice_chan_hangup_peer(chan, peer);
+		bridge_failed_peer_goto(chan, peer);
 		return -1;
 	}
 
@@ -4530,7 +4547,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 		ast_bridge_destroy(bridge);
 		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);
-		ast_autoservice_chan_hangup_peer(chan, peer);
+		bridge_failed_peer_goto(chan, peer);
 		return -1;
 	}
 
@@ -5329,7 +5346,7 @@ static int parked_call_exec(struct ast_channel *chan, const char *data)
 				break;
 			}
 			if (res) {
-				ast_autoservice_chan_hangup_peer(chan, peer);
+				bridge_failed_peer_goto(chan, peer);
 				parkinglot_unref(parkinglot);
 				return -1;
 			}
@@ -5338,7 +5355,7 @@ static int parked_call_exec(struct ast_channel *chan, const char *data)
 		res = ast_channel_make_compatible(chan, peer);
 		if (res < 0) {
 			ast_log(LOG_WARNING, "Could not make channels %s and %s compatible for bridge\n", ast_channel_name(chan), ast_channel_name(peer));
-			ast_autoservice_chan_hangup_peer(chan, peer);
+			bridge_failed_peer_goto(chan, peer);
 			parkinglot_unref(parkinglot);
 			return -1;
 		}
@@ -7921,8 +7938,7 @@ static int bridge_exec(struct ast_channel *chan, const char *data)
 			"Channel1: %s\r\n"
 			"Channel2: %s\r\n", ast_channel_name(chan), ast_channel_name(final_dest_chan));
 
-		/* Maybe we should return this channel to the PBX? */
-		ast_autoservice_chan_hangup_peer(chan, final_dest_chan);
+		bridge_failed_peer_goto(chan, final_dest_chan);
 
 		pbx_builtin_setvar_helper(chan, "BRIDGERESULT", "INCOMPATIBLE");
 		current_dest_chan = ast_channel_unref(current_dest_chan);
