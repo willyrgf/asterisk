@@ -236,6 +236,8 @@ struct ast_bridge {
 	unsigned int stop:1;
 	/*! TRUE if the bridge thread should refresh itself */
 	unsigned int refresh:1;
+	/*! TRUE if the bridge has been dissolved.  Any channel that now tries to join is immediately ejected. */
+	unsigned int dissolved:1;
 	/*! Bridge flags to tweak behavior */
 	struct ast_flags feature_flags;
 	/*! Bridge technology that is handling the bridge */
@@ -352,7 +354,6 @@ int ast_bridge_destroy(struct ast_bridge *bridge);
  * \param swap Channel to swap out if swapping
  * \param features Bridge features structure
  * \param tech_args Optional Bridging tech optimization parameters for this channel.
- * \param join_on_empty TRUE to join the bridge even if the bridge is empty.
  * \param pass_reference TRUE if the bridge reference is being passed by the caller.
  *
  * \retval state that channel exited the bridge with
@@ -360,7 +361,7 @@ int ast_bridge_destroy(struct ast_bridge *bridge);
  * Example usage:
  *
  * \code
- * ast_bridge_join(bridge, chan, NULL, NULL, NULL, 0, 0);
+ * ast_bridge_join(bridge, chan, NULL, NULL, NULL, 0);
  * \endcode
  *
  * This adds a channel pointed to by the chan pointer to the bridge pointed to by
@@ -379,7 +380,6 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *swap,
 	struct ast_bridge_features *features,
 	struct ast_bridge_tech_optimizations *tech_args,
-	int join_on_empty,
 	int pass_reference);
 
 /*!

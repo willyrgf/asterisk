@@ -4535,7 +4535,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	}
 
 	/* Join bridge */
-	ast_bridge_join(bridge, chan, NULL, &chan_features, NULL, 0, 1);
+	ast_bridge_join(bridge, chan, NULL, &chan_features, NULL, 1);
 
 	/*
 	 * If the bridge was broken for a hangup that isn't real, then

@@ -311,6 +311,8 @@ static void bridge_force_out_all(struct ast_bridge *bridge)
 {
 	struct ast_bridge_channel *bridge_channel;
 
+	bridge->dissolved = 1;
+
 /* BUGBUG need a cause code on the bridge for the later ejected channels. */
 	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
 		ao2_lock(bridge_channel);
@@ -1355,6 +1357,19 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		}
 	}
 
+	if (bridge_channel->bridge->dissolved) {
+		/* Force out channel trying to join a dissolved bridge. */
+		ao2_lock(bridge_channel);
+		switch (bridge_channel->state) {
+		case AST_BRIDGE_CHANNEL_STATE_WAIT:
+			ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+			break;
+		default:
+			break;
+		}
+		ao2_unlock(bridge_channel);
+	}
+
 	/* Actually execute the respective threading model, and keep our bridge thread alive */
 	while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 		/* Update bridge pointer on channel */
@@ -1801,7 +1816,6 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *swap,
 	struct ast_bridge_features *features,
 	struct ast_bridge_tech_optimizations *tech_args,
-	int join_on_empty,
 	int pass_reference)
 {
 	struct ast_bridge_channel *bridge_channel;
@@ -1824,7 +1838,6 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
 
-/* BUGBUG need to deal with join_on_empty */
 	bridge_channel_join(bridge_channel);
 	state = bridge_channel->state;
 

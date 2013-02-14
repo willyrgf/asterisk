@@ -279,7 +279,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		attended_threeway_transfer, NULL, NULL);
 
 	/* But for the caller we want to join the bridge in a blocking fashion so we don't spin around in this function doing nothing while waiting */
-	attended_bridge_result = ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL, 0, 0);
+	attended_bridge_result = ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL, 0);
 
 	/* Wait for peer thread to exit bridge and die. */
 	if (!ast_autoservice_start(bridge_channel->chan)) {
