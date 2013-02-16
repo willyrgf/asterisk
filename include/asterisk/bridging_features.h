@@ -34,7 +34,7 @@ enum ast_bridge_feature_flags {
 	AST_BRIDGE_FLAG_DISSOLVE_HANGUP = (1 << 0),
 	/*! Move between bridging technologies as needed. */
 	AST_BRIDGE_FLAG_SMART = (1 << 1),
-	/*! This channel leaves the bridge if the only other participants have this flag set. */
+	/*! This channel leaves the bridge if all participants have this flag set. */
 	AST_BRIDGE_FLAG_LONELY = (1 << 2),
 };
 
