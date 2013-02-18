@@ -772,7 +772,7 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 	ast_timer_set_rate(timer, (1000 / softmix_data->internal_mixing_interval));
 
 	/* Give the mixing array room to grow, memory is cheap but allocations are expensive. */
-	if (softmix_mixing_array_init(&mixing_array, bridge->num + 10)) {
+	if (softmix_mixing_array_init(&mixing_array, bridge->num_channels + 10)) {
 		goto softmix_cleanup;
 	}
 
@@ -793,8 +793,8 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 		}
 
 		/* Grow the mixing array buffer as participants are added. */
-		if (mixing_array.max_num_entries < bridge->num
-			&& softmix_mixing_array_grow(&mixing_array, bridge->num + 5)) {
+		if (mixing_array.max_num_entries < bridge->num_channels
+			&& softmix_mixing_array_grow(&mixing_array, bridge->num_channels + 5)) {
 			goto softmix_cleanup;
 		}
 

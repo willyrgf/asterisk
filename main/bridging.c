@@ -1317,7 +1317,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 	/* Add channel into the bridge */
 	AST_LIST_INSERT_TAIL(&bridge_channel->bridge->channels, bridge_channel, entry);
-	bridge_channel->bridge->num++;
+	++bridge_channel->bridge->num_channels;
 
 	bridge_array_add(bridge_channel->bridge, bridge_channel->chan);
 
@@ -1346,7 +1346,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		}
 	} else if (ast_test_flag(&bridge_channel->bridge->feature_flags, AST_BRIDGE_FLAG_SMART)) {
 		/* Perform the smart bridge operation, basically see if we need to move around between technologies */
-		smart_bridge_operation(bridge_channel->bridge, bridge_channel, bridge_channel->bridge->num);
+		smart_bridge_operation(bridge_channel->bridge, bridge_channel, bridge_channel->bridge->num_channels);
 	}
 
 	/* Make the channel compatible with the bridge */
@@ -1452,7 +1452,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	}
 
 	/* Remove channel from the bridge */
-	bridge_channel->bridge->num--;
+	--bridge_channel->bridge->num_channels;
 	AST_LIST_REMOVE(&bridge_channel->bridge->channels, bridge_channel, entry);
 
 	if (bridge_channel->depart_wait) {
@@ -1471,7 +1471,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 	/* Perform the smart bridge operation if needed since a channel has left */
 	if (ast_test_flag(&bridge_channel->bridge->feature_flags, AST_BRIDGE_FLAG_SMART)) {
-		smart_bridge_operation(bridge_channel->bridge, NULL, bridge_channel->bridge->num);
+		smart_bridge_operation(bridge_channel->bridge, NULL, bridge_channel->bridge->num_channels);
 	}
 
 	ao2_unlock(bridge_channel->bridge);
@@ -2087,7 +2087,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 	ao2_lock(bridge1);
 
 	/* If the first bridge currently has 2 channels and is not capable of becoming a multimixing bridge we can not merge */
-	if (bridge0->num + bridge1->num > 2
+	if (bridge0->num_channels + bridge1->num_channels > 2
 		&& !(bridge0->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
 		&& !ast_test_flag(&bridge0->feature_flags, AST_BRIDGE_FLAG_SMART)) {
 		ao2_unlock(bridge1);
@@ -2099,7 +2099,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 	ast_debug(1, "Merging channels from bridge %p into bridge %p\n", bridge1, bridge0);
 
 	/* Perform smart bridge operation on bridge we are merging into so it can change bridge technology if needed */
-	if (smart_bridge_operation(bridge0, NULL, bridge0->num + bridge1->num)) {
+	if (smart_bridge_operation(bridge0, NULL, bridge0->num_channels + bridge1->num_channels)) {
 		ao2_unlock(bridge1);
 		ao2_unlock(bridge0);
 		ast_debug(1, "Can't merge bridge %p into bridge %p, tried to perform smart bridge operation and failed.\n", bridge1, bridge0);
@@ -2127,7 +2127,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 		}
 
 		/* Drop channel count and reference count on the bridge they are leaving */
-		bridge1->num--;
+		--bridge1->num_channels;
 		ao2_ref(bridge1, -1);
 
 		bridge_array_remove(bridge1, bridge_channel->chan);
@@ -2135,7 +2135,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 		/* Now add them into the bridge they are joining, increase channel count, and bump up reference count */
 		bridge_channel->bridge = bridge0;
 		AST_LIST_INSERT_TAIL(&bridge0->channels, bridge_channel, entry);
-		bridge0->num++;
+		++bridge0->num_channels;
 		ao2_ref(bridge0, +1);
 
 		bridge_array_add(bridge0, bridge_channel->chan);

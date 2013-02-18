@@ -220,7 +220,7 @@ struct ast_bridge {
 	/*! Condition, used if we want to wake up the bridge thread. */
 	ast_cond_t cond;
 	/*! Number of channels participating in the bridge */
-	int num;
+	int num_channels;
 	/*! The video mode this bridge is using */
 	struct ast_bridge_video_mode video_mode;
 	/*! The internal sample rate this bridge is mixed at when multiple channels are being mixed.
