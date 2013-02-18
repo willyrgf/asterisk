@@ -527,9 +527,9 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 		return;
 	}
 
-	/* If all else fails just poke the bridge */
-	if (bridge->technology->poke && bridge_channel) {
-		bridge->technology->poke(bridge, bridge_channel);
+	/* If all else fails just poke the bridge channel */
+	if (bridge->technology->poke_channel && bridge_channel) {
+		bridge->technology->poke_channel(bridge, bridge_channel);
 		return;
 	}
 }

@@ -598,7 +598,7 @@ bridge_write_cleanup:
 }
 
 /*! \brief Function called when the channel's thread is poked */
-static int softmix_bridge_poke(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
+static int softmix_bridge_poke_channel(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct softmix_channel *sc = bridge_channel->bridge_pvt;
 
@@ -926,7 +926,7 @@ static struct ast_bridge_technology softmix_bridge = {
 	.leave = softmix_bridge_leave,
 	.write = softmix_bridge_write,
 	.thread = softmix_bridge_thread,
-	.poke = softmix_bridge_poke,
+	.poke_channel = softmix_bridge_poke_channel,
 };
 
 static int unload_module(void)

@@ -69,8 +69,8 @@ struct ast_bridge_technology {
 	int (*fd)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, int fd);
 	/*! Callback for replacement thread function */
 	int (*thread)(struct ast_bridge *bridge);
-	/*! Callback for poking a bridge thread */
-	int (*poke)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
+	/*! Callback for poking a bridge channel thread */
+	int (*poke_channel)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Formats that the bridge technology supports */
 	struct ast_format_cap *format_capabilities;
 	/*! TRUE if the bridge technology is currently suspended. */
