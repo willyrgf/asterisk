@@ -672,8 +672,9 @@ static void destroy_bridge(void *obj)
 	}
 
 	/* Pass off the bridge to the technology to destroy if needed */
+	ast_debug(1, "Giving bridge technology %s the bridge structure %p to destroy\n",
+		bridge->technology->name, bridge);
 	if (bridge->technology->destroy) {
-		ast_debug(1, "Giving bridge technology %s the bridge structure %p to destroy\n", bridge->technology->name, bridge);
 		bridge->technology->destroy(bridge);
 	}
 
@@ -739,13 +740,13 @@ struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags)
 	ast_set_flag(&bridge->feature_flags, flags);
 
 	/* Pass off the bridge to the technology to manipulate if needed */
-	if (bridge->technology->create) {
-		ast_debug(1, "Giving bridge technology %s the bridge structure %p to setup\n", bridge->technology->name, bridge);
-		if (bridge->technology->create(bridge)) {
-			ast_debug(1, "Bridge technology %s failed to setup bridge structure %p\n", bridge->technology->name, bridge);
-			ao2_ref(bridge, -1);
-			return NULL;
-		}
+	ast_debug(1, "Giving bridge technology %s the bridge structure %p to setup\n",
+		bridge->technology->name, bridge);
+	if (bridge->technology->create && bridge->technology->create(bridge)) {
+		ast_debug(1, "Bridge technology %s failed to setup bridge structure %p\n",
+			bridge->technology->name, bridge);
+		ao2_ref(bridge, -1);
+		return NULL;
 	}
 
 	return bridge;
@@ -892,14 +893,12 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 	bridge->technology = new_technology;
 
 	/* Pass the bridge to the new bridge technology so it can set it up */
-	if (new_technology->create) {
-		ast_debug(1, "Giving bridge technology %s the bridge structure %p to setup\n",
+	ast_debug(1, "Giving bridge technology %s the bridge structure %p to setup\n",
+		new_technology->name, bridge);
+	if (new_technology->create && new_technology->create(bridge)) {
+		ast_debug(1, "Bridge technology %s failed to setup bridge structure %p\n",
 			new_technology->name, bridge);
-		if (new_technology->create(bridge)) {
-			ast_debug(1, "Bridge technology %s failed to setup bridge structure %p\n",
-				new_technology->name, bridge);
 /* BUGBUG we should dissolve the bridge since the technology could not be setup. */
-		}
 	}
 
 	/* Move existing channels over to the new technology, while taking them away from the old one */
@@ -910,9 +909,9 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 		}
 
 		/* First we part them from the old technology */
+		ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p (really %p)\n",
+			old_technology->name, bridge_channel2, &temp_bridge, bridge);
 		if (old_technology->leave) {
-			ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p (really %p)\n",
-				old_technology->name, bridge_channel2, &temp_bridge, bridge);
 			old_technology->leave(&temp_bridge, bridge_channel2);
 		}
 
@@ -920,13 +919,11 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 		bridge_make_compatible(bridge, bridge_channel2);
 
 		/* Third we join them to the new technology */
-		if (new_technology->join) {
-			ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
+		ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
+			new_technology->name, bridge_channel2, bridge);
+		if (new_technology->join && new_technology->join(bridge, bridge_channel2)) {
+			ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
 				new_technology->name, bridge_channel2, bridge);
-			if (new_technology->join(bridge, bridge_channel2)) {
-				ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
-					new_technology->name, bridge_channel2, bridge);
-			}
 		}
 
 		/* Fourth we tell them to wake up so they become aware that the above has happened */
@@ -934,9 +931,9 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 	}
 
 	/* Now that all the channels have been moved over we need to get rid of all the information the old technology may have left around */
+	ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy\n",
+		old_technology->name, &temp_bridge, bridge);
 	if (old_technology->destroy) {
-		ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy\n",
-			old_technology->name, &temp_bridge, bridge);
 		old_technology->destroy(&temp_bridge);
 	}
 
@@ -1316,13 +1313,12 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	bridge_make_compatible(bridge_channel->bridge, bridge_channel);
 
 	/* Tell the bridge technology we are joining so they set us up */
-	if (bridge_channel->bridge->technology->join) {
-		ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
+	ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
+		bridge_channel->bridge->technology->name, bridge_channel, bridge_channel->bridge);
+	if (bridge_channel->bridge->technology->join
+		&& bridge_channel->bridge->technology->join(bridge_channel->bridge, bridge_channel)) {
+		ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
 			bridge_channel->bridge->technology->name, bridge_channel, bridge_channel->bridge);
-		if (bridge_channel->bridge->technology->join(bridge_channel->bridge, bridge_channel)) {
-			ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
-				bridge_channel->bridge->technology->name, bridge_channel, bridge_channel->bridge);
-		}
 	}
 
 	if (bridge_channel->bridge->dissolved) {
@@ -1401,9 +1397,9 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	}
 
 	/* Tell the bridge technology we are leaving so they tear us down */
+	ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p\n",
+		bridge_channel->bridge->technology->name, bridge_channel, bridge_channel->bridge);
 	if (bridge_channel->bridge->technology->leave) {
-		ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p\n",
-			bridge_channel->bridge->technology->name, bridge_channel, bridge_channel->bridge);
 		bridge_channel->bridge->technology->leave(bridge_channel->bridge, bridge_channel);
 	}
 
@@ -2068,9 +2064,9 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 	/* Move channels from bridge1 over to bridge0 */
 	while ((bridge_channel = AST_LIST_REMOVE_HEAD(&bridge1->channels, entry))) {
 		/* Tell the technology handling bridge1 that the bridge channel is leaving */
+		ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p\n",
+			bridge1->technology->name, bridge_channel, bridge1);
 		if (bridge1->technology->leave) {
-			ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p\n",
-				bridge1->technology->name, bridge_channel, bridge1);
 			bridge1->technology->leave(bridge1, bridge_channel);
 		}
 
@@ -2078,7 +2074,9 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 		--bridge1->num_channels;
 		ao2_ref(bridge1, -1);
 
-		bridge_array_remove(bridge1, bridge_channel->chan);
+		if (!bridge_channel->suspended) {
+			bridge_array_remove(bridge1, bridge_channel->chan);
+		}
 
 		/* Now add them into the bridge they are joining, increase channel count, and bump up reference count */
 		bridge_channel->bridge = bridge0;
@@ -2086,19 +2084,20 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 		++bridge0->num_channels;
 		ao2_ref(bridge0, +1);
 
-		bridge_array_add(bridge0, bridge_channel->chan);
+		if (!bridge_channel->suspended) {
+			bridge_array_add(bridge0, bridge_channel->chan);
+		}
 
 		/* Make the channel compatible with the new bridge it is joining or else formats would go amuck */
 		bridge_make_compatible(bridge0, bridge_channel);
 
 		/* Tell the technology handling bridge0 that the bridge channel is joining */
-		if (bridge0->technology->join) {
-			ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
+		ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
+			bridge0->technology->name, bridge_channel, bridge0);
+		if (bridge0->technology->join
+			&& bridge0->technology->join(bridge0, bridge_channel)) {
+			ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
 				bridge0->technology->name, bridge_channel, bridge0);
-			if (bridge0->technology->join(bridge0, bridge_channel)) {
-				ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
-					bridge0->technology->name, bridge_channel, bridge0);
-			}
 		}
 
 		/* Poke the bridge channel, this will cause it to wake up and execute the proper threading model for the new bridge it is in */
