@@ -67,8 +67,8 @@ struct ast_bridge_technology {
 	enum ast_bridge_write_result (*write)(struct ast_bridge *bridge, struct ast_bridge_channel *bridged_channel, struct ast_frame *frame);
 	/*! Callback for when a file descriptor trips */
 	int (*fd)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, int fd);
-	/*! Callback for replacement thread function */
-	int (*thread)(struct ast_bridge *bridge);
+	/*! Callback for bridge thread loop */
+	int (*thread_loop)(struct ast_bridge *bridge);
 	/*! Callback for poking a bridge channel thread */
 	void (*poke_channel)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Formats that the bridge technology supports */
@@ -124,6 +124,41 @@ int __ast_bridge_technology_register(struct ast_bridge_technology *technology, s
  * considered when creating a new bridge.
  */
 int ast_bridge_technology_unregister(struct ast_bridge_technology *technology);
+
+/*!
+ * \brief Generic bridge thread loop.
+ * \since 12.0.0
+ *
+ * \param bridge Handle this bridge thread's loop.
+ *
+ * \retval 0 on success.
+ * \retval non-zero on error.
+ */
+int ast_bridge_thread_generic(struct ast_bridge *bridge);
+
+/*!
+ * \brief Poke the bridge thread if it is not us.
+ * \since 12.0.0
+ *
+ * \param bridge What to poke.
+ *
+ * \note This function assumes the bridge is locked.
+ *
+ * \return Nothing
+ */
+void ast_bridge_poke(struct ast_bridge *bridge);
+
+/*!
+ * \brief Poke the bridge channel thread if it is not us.
+ * \since 12.0.0
+ *
+ * \param bridge_channel What to poke.
+ *
+ * \note This function assumes the bridge_channel is locked.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_poke(struct ast_bridge_channel *bridge_channel);
 
 /*!
  * \brief Feed notification that a frame is waiting on a channel into the bridging core

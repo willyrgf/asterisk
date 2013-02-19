@@ -76,8 +76,9 @@ static enum ast_bridge_write_result simple_bridge_write(struct ast_bridge *bridg
 	}
 
 	/* Find the channel we actually want to write to */
-	if (!(other = (AST_LIST_FIRST(&bridge->channels) == bridge_channel ? AST_LIST_LAST(&bridge->channels) : AST_LIST_FIRST(&bridge->channels)))) {
-		return AST_BRIDGE_WRITE_FAILED;
+	other = AST_LIST_FIRST(&bridge->channels);
+	if (other == bridge_channel) {
+		other = AST_LIST_LAST(&bridge->channels);
 	}
 
 	/* The bridging core takes care of freeing the passed in frame. */
@@ -96,6 +97,7 @@ static struct ast_bridge_technology simple_bridge = {
 	.capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_THREAD,
 	.preference = AST_BRIDGE_PREFERENCE_MEDIUM,
 	.join = simple_bridge_join,
+	.thread_loop = ast_bridge_thread_generic,
 	.write = simple_bridge_write,
 };
 

@@ -459,8 +459,9 @@ static enum ast_bridge_write_result multiplexed_bridge_write(struct ast_bridge *
 	}
 
 	/* Find the channel we actually want to write to */
-	if (!(other = (AST_LIST_FIRST(&bridge->channels) == bridge_channel ? AST_LIST_LAST(&bridge->channels) : AST_LIST_FIRST(&bridge->channels)))) {
-		return AST_BRIDGE_WRITE_FAILED;
+	other = AST_LIST_FIRST(&bridge->channels);
+	if (other == bridge_channel) {
+		other = AST_LIST_LAST(&bridge->channels);
 	}
 
 	/* The bridging core takes care of freeing the passed in frame. */

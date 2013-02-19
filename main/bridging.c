@@ -76,10 +76,12 @@ static void *builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_END];
 
 int __ast_bridge_technology_register(struct ast_bridge_technology *technology, struct ast_module *module)
 {
-	struct ast_bridge_technology *current = NULL;
+	struct ast_bridge_technology *current;
 
 	/* Perform a sanity check to make sure the bridge technology conforms to our needed requirements */
-	if (ast_strlen_zero(technology->name) || !technology->capabilities || !technology->write) {
+	if (ast_strlen_zero(technology->name)
+		|| !technology->capabilities
+		|| !technology->write) {
 		ast_log(LOG_WARNING, "Bridge technology %s failed registration sanity check.\n", technology->name);
 		return -1;
 	}
@@ -110,7 +112,7 @@ int __ast_bridge_technology_register(struct ast_bridge_technology *technology, s
 
 int ast_bridge_technology_unregister(struct ast_bridge_technology *technology)
 {
-	struct ast_bridge_technology *current = NULL;
+	struct ast_bridge_technology *current;
 
 	AST_RWLIST_WRLOCK(&bridge_technologies);
 
@@ -129,11 +131,18 @@ int ast_bridge_technology_unregister(struct ast_bridge_technology *technology)
 	return current ? 0 : -1;
 }
 
-static void bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
+void ast_bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
+{
+	if (!pthread_equal(pthread_self(), bridge_channel->thread)) {
+		pthread_kill(bridge_channel->thread, SIGURG);
+		ast_cond_signal(&bridge_channel->cond);
+	}
+}
+
+static void bridge_channel_poke_locked(struct ast_bridge_channel *bridge_channel)
 {
 	ao2_lock(bridge_channel);
-	pthread_kill(bridge_channel->thread, SIGURG);
-	ast_cond_signal(&bridge_channel->cond);
+	ast_bridge_channel_poke(bridge_channel);
 	ao2_unlock(bridge_channel);
 }
 
@@ -146,11 +155,7 @@ void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, e
 	/* Change the state on the bridge channel */
 	bridge_channel->state = new_state;
 
-	/* Only poke the channel's thread if it is not us */
-	if (!pthread_equal(pthread_self(), bridge_channel->thread)) {
-		pthread_kill(bridge_channel->thread, SIGURG);
-		ast_cond_signal(&bridge_channel->cond);
-	}
+	ast_bridge_channel_poke(bridge_channel);
 }
 
 void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
@@ -174,22 +179,12 @@ int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, s
 
 	ao2_lock(bridge_channel);
 	AST_LIST_INSERT_TAIL(&bridge_channel->action_queue, dup, frame_list);
-
-	/* Only poke the channel's thread if it is not us */
-	if (!pthread_equal(pthread_self(), bridge_channel->thread)) {
-		pthread_kill(bridge_channel->thread, SIGURG);
-		ast_cond_signal(&bridge_channel->cond);
-	}
+	ast_bridge_channel_poke(bridge_channel);
 	ao2_unlock(bridge_channel);
 	return 0;
 }
 
-/*!
- * \brief Helper function to poke the bridge thread
- *
- * \note This function assumes the bridge is locked.
- */
-static void bridge_poke(struct ast_bridge *bridge)
+void ast_bridge_poke(struct ast_bridge *bridge)
 {
 	/* Poke the thread just in case */
 	if (bridge->thread != AST_PTHREADT_NULL) {
@@ -212,7 +207,7 @@ static void bridge_stop(struct ast_bridge *bridge)
 	pthread_t thread;
 
 	bridge->stop = 1;
-	bridge_poke(bridge);
+	ast_bridge_poke(bridge);
 	thread = bridge->thread;
 	bridge->thread = AST_PTHREADT_NULL;
 	ao2_unlock(bridge);
@@ -230,7 +225,7 @@ static void bridge_array_add(struct ast_bridge *bridge, struct ast_channel *chan
 {
 	/* We have to make sure the bridge thread is not using the bridge array before messing with it */
 	while (bridge->waiting) {
-		bridge_poke(bridge);
+		ast_bridge_poke(bridge);
 		sched_yield();
 	}
 
@@ -254,7 +249,7 @@ static void bridge_array_add(struct ast_bridge *bridge, struct ast_channel *chan
 		bridge->array_size += BRIDGE_ARRAY_GROW;
 	}
 
-	bridge_poke(bridge);
+	ast_bridge_poke(bridge);
 }
 
 /*!
@@ -268,7 +263,7 @@ static void bridge_array_remove(struct ast_bridge *bridge, struct ast_channel *c
 
 	/* We have to make sure the bridge thread is not using the bridge array before messing with it */
 	while (bridge->waiting) {
-		bridge_poke(bridge);
+		ast_bridge_poke(bridge);
 		sched_yield();
 	}
 
@@ -534,8 +529,7 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 	}
 }
 
-/*! \brief Generic thread loop, TODO: Rethink this/improve it */
-static int generic_thread_loop(struct ast_bridge *bridge)
+int ast_bridge_thread_generic(struct ast_bridge *bridge)
 {
 	if (bridge->stop || bridge->refresh || !bridge->array_num) {
 		return 0;
@@ -590,21 +584,22 @@ static void *bridge_thread(void *data)
 	/* Loop around until we are told to stop */
 	while (!bridge->stop) {
 		if (!bridge->array_num) {
-			/* Wait for a channel to be added to the bridge. */
+			/* Wait for an active channel on the bridge. */
 			ast_cond_wait(&bridge->cond, ao2_object_get_lockaddr(bridge));
 			continue;
 		}
+/* BUGBUG this is where we are going to move the smart bridge checking. */
 
 		/* In case the refresh bit was set simply set it back to off */
 		bridge->refresh = 0;
 
-		/*
-		 * Execute the appropriate thread function.  If the technology
-		 * does not provide one we use the generic one.
-		 */
-		res = bridge->technology->thread
-			? bridge->technology->thread(bridge)
-			: generic_thread_loop(bridge);
+		if (!bridge->technology->thread_loop) {
+			/* Just wait until something happens */
+			ast_cond_wait(&bridge->cond, ao2_object_get_lockaddr(bridge));
+			continue;
+		}
+
+		res = bridge->technology->thread_loop(bridge);
 		if (res) {
 			/*
 			 * A bridge error occurred.  Sleep and try again later so we
@@ -893,11 +888,11 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 		if (new_technology->capabilities & AST_BRIDGE_CAPABILITY_THREAD) {
 			ast_debug(1, "Telling current bridge thread for bridge %p to refresh\n", bridge);
 			bridge->refresh = 1;
-			bridge_poke(bridge);
+			ast_bridge_poke(bridge);
 		} else {
 			ast_debug(1, "Telling current bridge thread for bridge %p to stop\n", bridge);
 			bridge->stop = 1;
-			bridge_poke(bridge);
+			ast_bridge_poke(bridge);
 			thread = bridge->thread;
 			bridge->thread = AST_PTHREADT_NULL;
 		}
@@ -919,6 +914,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 		if (new_technology->create(bridge)) {
 			ast_debug(1, "Bridge technology %s failed to setup bridge structure %p\n",
 				new_technology->name, bridge);
+/* BUGBUG we should dissolve the bridge since the technology could not be setup. */
 		}
 	}
 
@@ -950,7 +946,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 		}
 
 		/* Fourth we tell them to wake up so they become aware that the above has happened */
-		bridge_channel_poke(bridge_channel2);
+		bridge_channel_poke_locked(bridge_channel2);
 	}
 
 	if (thread != AST_PTHREADT_NULL) {
@@ -2103,7 +2099,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 	if (bridge1->thread != AST_PTHREADT_NULL) {
 		ast_debug(1, "Telling bridge thread on bridge %p to stop as it is being merged into %p\n", bridge1, bridge0);
 		bridge1->stop = 1;
-		bridge_poke(bridge1);
+		ast_bridge_poke(bridge1);
 		thread = bridge1->thread;
 		bridge1->thread = AST_PTHREADT_NULL;
 	}
@@ -2145,7 +2141,7 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 		}
 
 		/* Poke the bridge channel, this will cause it to wake up and execute the proper threading model for the new bridge it is in */
-		bridge_channel_poke(bridge_channel);
+		bridge_channel_poke_locked(bridge_channel);
 	}
 
 	ast_debug(1, "Merged channels from bridge %p into bridge %p\n", bridge1, bridge0);

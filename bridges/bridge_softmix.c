@@ -920,7 +920,7 @@ static struct ast_bridge_technology softmix_bridge = {
 	.join = softmix_bridge_join,
 	.leave = softmix_bridge_leave,
 	.write = softmix_bridge_write,
-	.thread = softmix_bridge_thread,
+	.thread_loop = softmix_bridge_thread,
 	.poke_channel = softmix_bridge_poke_channel,
 };
 
