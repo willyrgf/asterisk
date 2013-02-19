@@ -327,17 +327,16 @@ static int softmix_bridge_create(struct ast_bridge *bridge)
 }
 
 /*! \brief Function called when a bridge is destroyed */
-static int softmix_bridge_destroy(struct ast_bridge *bridge)
+static void softmix_bridge_destroy(struct ast_bridge *bridge)
 {
 	struct softmix_bridge_data *softmix_data;
 
 	softmix_data = bridge->bridge_pvt;
 	if (!softmix_data) {
-		return -1;
+		return;
 	}
 	ao2_ref(softmix_data, -1);
 	bridge->bridge_pvt = NULL;
-	return 0;
 }
 
 static void set_softmix_bridge_data(int rate, int interval, struct ast_bridge_channel *bridge_channel, int reset)
@@ -407,12 +406,12 @@ static int softmix_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chan
 }
 
 /*! \brief Function called when a channel leaves the bridge */
-static int softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
+static void softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct softmix_channel *sc = bridge_channel->bridge_pvt;
 
 	if (!(bridge_channel->bridge_pvt)) {
-		return 0;
+		return;
 	}
 	bridge_channel->bridge_pvt = NULL;
 
@@ -427,8 +426,6 @@ static int softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_cha
 
 	/* Eep! drop ourselves */
 	ast_free(sc);
-
-	return 0;
 }
 
 /*!
@@ -598,7 +595,7 @@ bridge_write_cleanup:
 }
 
 /*! \brief Function called when the channel's thread is poked */
-static int softmix_bridge_poke_channel(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
+static void softmix_bridge_poke_channel(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct softmix_channel *sc = bridge_channel->bridge_pvt;
 
@@ -610,8 +607,6 @@ static int softmix_bridge_poke_channel(struct ast_bridge *bridge, struct ast_bri
 	}
 
 	ast_mutex_unlock(&sc->lock);
-
-	return 0;
 }
 
 static void gather_softmix_stats(struct softmix_stats *stats,

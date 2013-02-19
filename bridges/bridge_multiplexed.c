@@ -188,14 +188,14 @@ static void multiplexed_nudge(struct multiplexed_thread *muxed_thread)
 }
 
 /*! \brief Destroy function which unreserves/unreferences/removes a multiplexed thread structure */
-static int multiplexed_bridge_destroy(struct ast_bridge *bridge)
+static void multiplexed_bridge_destroy(struct ast_bridge *bridge)
 {
 	struct multiplexed_thread *muxed_thread;
 	pthread_t thread;
 
 	muxed_thread = bridge->bridge_pvt;
 	if (!muxed_thread) {
-		return -1;
+		return;
 	}
 	bridge->bridge_pvt = NULL;
 
@@ -224,7 +224,6 @@ static int multiplexed_bridge_destroy(struct ast_bridge *bridge)
 	}
 
 	ao2_ref(muxed_thread, -1);
-	return 0;
 }
 
 /*! \brief Thread function that executes for multiplexed threads */
@@ -420,15 +419,13 @@ static int multiplexed_bridge_join(struct ast_bridge *bridge, struct ast_bridge_
 }
 
 /*! \brief Leave function which actually removes the channel from the array */
-static int multiplexed_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
+static void multiplexed_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct multiplexed_thread *muxed_thread = bridge->bridge_pvt;
 
 	ast_debug(1, "Removing channel '%s' from multiplexed thread '%p'\n", ast_channel_name(bridge_channel->chan), muxed_thread);
 
 	multiplexed_chan_remove(muxed_thread, bridge_channel->chan);
-
-	return 0;
 }
 
 /*! \brief Suspend function which means control of the channel is going elsewhere */

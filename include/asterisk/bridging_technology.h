@@ -52,11 +52,11 @@ struct ast_bridge_technology {
 	/*! Callback for when a bridge is being created */
 	int (*create)(struct ast_bridge *bridge);
 	/*! Callback for when a bridge is being destroyed */
-	int (*destroy)(struct ast_bridge *bridge);
+	void (*destroy)(struct ast_bridge *bridge);
 	/*! Callback for when a channel is being added to a bridge */
 	int (*join)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Callback for when a channel is leaving a bridge */
-	int (*leave)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
+	void (*leave)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Callback for when a channel is suspended from the bridge */
 	void (*suspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Callback for when a channel is unsuspended from the bridge */
@@ -70,7 +70,7 @@ struct ast_bridge_technology {
 	/*! Callback for replacement thread function */
 	int (*thread)(struct ast_bridge *bridge);
 	/*! Callback for poking a bridge channel thread */
-	int (*poke_channel)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
+	void (*poke_channel)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Formats that the bridge technology supports */
 	struct ast_format_cap *format_capabilities;
 	/*! TRUE if the bridge technology is currently suspended. */
