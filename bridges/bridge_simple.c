@@ -94,7 +94,7 @@ static enum ast_bridge_write_result simple_bridge_write(struct ast_bridge *bridg
 
 static struct ast_bridge_technology simple_bridge = {
 	.name = "simple_bridge",
-	.capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_THREAD,
+	.capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX,
 	.preference = AST_BRIDGE_PREFERENCE_MEDIUM,
 	.join = simple_bridge_join,
 	.thread_loop = ast_bridge_thread_generic,

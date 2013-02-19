@@ -913,7 +913,7 @@ softmix_cleanup:
 
 static struct ast_bridge_technology softmix_bridge = {
 	.name = "softmix",
-	.capabilities = AST_BRIDGE_CAPABILITY_MULTIMIX | AST_BRIDGE_CAPABILITY_THREAD | AST_BRIDGE_CAPABILITY_MULTITHREADED | AST_BRIDGE_CAPABILITY_OPTIMIZE | AST_BRIDGE_CAPABILITY_VIDEO,
+	.capabilities = AST_BRIDGE_CAPABILITY_MULTIMIX | AST_BRIDGE_CAPABILITY_MULTITHREADED | AST_BRIDGE_CAPABILITY_OPTIMIZE | AST_BRIDGE_CAPABILITY_VIDEO,
 	.preference = AST_BRIDGE_PREFERENCE_LOW,
 	.create = softmix_bridge_create,
 	.destroy = softmix_bridge_destroy,

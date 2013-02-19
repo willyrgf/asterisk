@@ -839,7 +839,6 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 		.bridge_pvt = bridge->bridge_pvt,
 	};
 	struct ast_bridge_channel *bridge_channel2;
-	pthread_t thread;
 
 	/* Based on current feature determine whether we want to change bridge technologies or not */
 	if (bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX) {
@@ -876,26 +875,11 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 	ast_debug(1, "Performing smart bridge operation on bridge %p, moving from bridge technology %s to %s\n",
 		bridge, old_technology->name, new_technology->name);
 
-	/* If a thread is currently executing for the current technology tell it to stop */
-	thread = AST_PTHREADT_NULL;
+	/* If the bridge thread is currently executing tell it to refresh */
 	if (bridge->thread != AST_PTHREADT_NULL) {
-		/*
-		 * If the new bridge technology also needs a thread simply tell
-		 * the bridge thread to refresh itself.  This has the benefit of
-		 * not incurring the cost/time of tearing down and bringing up a
-		 * new thread.
-		 */
-		if (new_technology->capabilities & AST_BRIDGE_CAPABILITY_THREAD) {
-			ast_debug(1, "Telling current bridge thread for bridge %p to refresh\n", bridge);
-			bridge->refresh = 1;
-			ast_bridge_poke(bridge);
-		} else {
-			ast_debug(1, "Telling current bridge thread for bridge %p to stop\n", bridge);
-			bridge->stop = 1;
-			ast_bridge_poke(bridge);
-			thread = bridge->thread;
-			bridge->thread = AST_PTHREADT_NULL;
-		}
+		ast_debug(1, "Telling current bridge thread for bridge %p to refresh\n", bridge);
+		bridge->refresh = 1;
+		ast_bridge_poke(bridge);
 	}
 
 	/*
@@ -947,14 +931,6 @@ static int smart_bridge_operation(struct ast_bridge *bridge, struct ast_bridge_c
 
 		/* Fourth we tell them to wake up so they become aware that the above has happened */
 		bridge_channel_poke_locked(bridge_channel2);
-	}
-
-	if (thread != AST_PTHREADT_NULL) {
-		/* Wait for the old bridge thread to die. */
-		ao2_unlock(bridge);
-		pthread_join(thread, NULL);
-		ao2_lock(bridge);
-		bridge->stop = 0;
 	}
 
 	/* Now that all the channels have been moved over we need to get rid of all the information the old technology may have left around */
@@ -1367,16 +1343,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		/* Update bridge pointer on channel */
 		ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
 
-		/* Wait for an old bridge thread to die. */
-		while (bridge_channel->bridge->stop) {
-			ao2_unlock(bridge_channel->bridge);
-			sched_yield();
-			ao2_lock(bridge_channel->bridge);
-		}
-
-		/* If the technology requires a thread and one is not running, start it up */
-		if (bridge_channel->bridge->thread == AST_PTHREADT_NULL
-			&& (bridge_channel->bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_THREAD)) {
+		/* If the bridge does not have a thread yet, start it up */
+		if (bridge_channel->bridge->thread == AST_PTHREADT_NULL) {
 			ast_debug(1, "Starting a bridge thread for bridge %p\n", bridge_channel->bridge);
 			if (ast_pthread_create(&bridge_channel->bridge->thread, NULL, bridge_thread, bridge_channel->bridge)) {
 				ast_debug(1, "Failed to create a bridge thread for bridge %p, giving it another go.\n", bridge_channel->bridge);
@@ -2069,7 +2037,6 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan)
 int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 {
 	struct ast_bridge_channel *bridge_channel;
-	pthread_t thread;
 
 	ao2_lock(bridge0);
 	ao2_lock(bridge1);
@@ -2094,15 +2061,9 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 		return -1;
 	}
 
-	/* If a thread is currently executing on bridge1 tell it to stop */
-	thread = AST_PTHREADT_NULL;
-	if (bridge1->thread != AST_PTHREADT_NULL) {
-		ast_debug(1, "Telling bridge thread on bridge %p to stop as it is being merged into %p\n", bridge1, bridge0);
-		bridge1->stop = 1;
-		ast_bridge_poke(bridge1);
-		thread = bridge1->thread;
-		bridge1->thread = AST_PTHREADT_NULL;
-	}
+	/* bridge1 is being dissolved because of the merge. */
+	bridge1->dissolved = 1;
+	ast_bridge_poke(bridge1);
 
 	/* Move channels from bridge1 over to bridge0 */
 	while ((bridge_channel = AST_LIST_REMOVE_HEAD(&bridge1->channels, entry))) {
@@ -2148,12 +2109,6 @@ int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1)
 
 	ao2_unlock(bridge0);
 	ao2_unlock(bridge1);
-	if (thread != AST_PTHREADT_NULL) {
-		pthread_join(thread, NULL);
-		ao2_lock(bridge1);
-		bridge1->stop = 0;
-		ao2_unlock(bridge1);
-	}
 
 	return 0;
 }

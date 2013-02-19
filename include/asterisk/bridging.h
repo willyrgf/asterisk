@@ -75,8 +75,6 @@ enum ast_bridge_capability {
 	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 3),
 	/*! Bridge should run using the multithreaded model */
 	AST_BRIDGE_CAPABILITY_MULTITHREADED = (1 << 4),
-	/*! Bridge should run a central bridge thread */
-	AST_BRIDGE_CAPABILITY_THREAD = (1 << 5),
 	/*! Bridge technology can do video mixing (or something along those lines) */
 	AST_BRIDGE_CAPABILITY_VIDEO = (1 << 6),
 	/*! Bridge technology can optimize things based on who is talking */
