@@ -402,7 +402,9 @@ static int multiplexed_bridge_join(struct ast_bridge *bridge, struct ast_bridge_
 
 	ast_debug(1, "Adding channel '%s' to multiplexed thread '%p' for monitoring\n", ast_channel_name(bridge_channel->chan), muxed_thread);
 
-	multiplexed_chan_add(muxed_thread, bridge_channel->chan);
+	if (!bridge_channel->suspended) {
+		multiplexed_chan_add(muxed_thread, bridge_channel->chan);
+	}
 
 	/* If the second channel has not yet joined do not make things compatible */
 	if (c0 == c1) {
@@ -425,7 +427,9 @@ static void multiplexed_bridge_leave(struct ast_bridge *bridge, struct ast_bridg
 
 	ast_debug(1, "Removing channel '%s' from multiplexed thread '%p'\n", ast_channel_name(bridge_channel->chan), muxed_thread);
 
-	multiplexed_chan_remove(muxed_thread, bridge_channel->chan);
+	if (!bridge_channel->suspended) {
+		multiplexed_chan_remove(muxed_thread, bridge_channel->chan);
+	}
 }
 
 /*! \brief Suspend function which means control of the channel is going elsewhere */
