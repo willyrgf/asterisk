@@ -1358,7 +1358,11 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		/* Run any queued actions on the channel. */
 		ao2_lock(bridge_channel);
 		while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT
-			&& (action = AST_LIST_REMOVE_HEAD(&bridge_channel->action_queue, frame_list))) {
+			&& !bridge_channel->suspended) {
+			action = AST_LIST_REMOVE_HEAD(&bridge_channel->action_queue, frame_list);
+			if (!action) {
+				break;
+			}
 			ao2_unlock(bridge_channel);
 			switch (action->frametype) {
 			case AST_FRAME_BRIDGE_ACTION:
