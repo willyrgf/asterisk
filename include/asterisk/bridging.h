@@ -264,6 +264,8 @@ struct ast_bridge {
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
 	/*! Linked list of channels removed from the bridge and waiting to be departed. */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) depart_wait;
+	/*! Queue of actions to perform on the bridge. */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) action_queue;
 };
 
 /*!
@@ -583,6 +585,21 @@ void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, e
  *       request the channel exit the bridge.
  */
 void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state);
+
+/*!
+ * \brief Put an action onto the specified bridge.
+ * \since 12.0.0
+ *
+ * \param bridge What to queue the action on.
+ * \param action What to do.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ *
+ * \note This API call is meant for internal bridging operations.
+ * \note BUGBUG This may get moved.
+ */
+int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action);
 
 /*!
  * \brief Put an action onto the specified bridge_channel.

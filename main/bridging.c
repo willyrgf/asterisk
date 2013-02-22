@@ -167,6 +167,26 @@ void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast
 	ao2_unlock(bridge_channel);
 }
 
+int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
+{
+	struct ast_frame *dup;
+
+	dup = ast_frdup(action);
+	if (!dup) {
+		return -1;
+	}
+
+	ast_debug(1, "BUGBUG Queueing action type:%d sub:%d on bridge %p\n",
+		action->frametype, action->subclass.integer, bridge);
+
+	ao2_lock(bridge);
+	AST_LIST_INSERT_TAIL(&bridge->action_queue, dup, frame_list);
+	bridge->interrupt = 1;
+	ast_bridge_poke(bridge);
+	ao2_unlock(bridge);
+	return 0;
+}
+
 int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, struct ast_frame *action)
 {
 	struct ast_frame *dup;
@@ -763,6 +783,23 @@ static void bridge_complete_join(struct ast_bridge *bridge)
 }
 
 /*!
+ * \internal
+ * \brief Handle bridge action frame.
+ * \since 12.0.0
+ *
+ * \param bridge What to execute the action on.
+ * \param action What to do.
+ *
+ * \note This function assumes the bridge is locked.
+ *
+ * \return Nothing
+ */
+static void bridge_action_bridge(struct ast_bridge *bridge, struct ast_frame *action)
+{
+	/*! \todo BUGBUG bridge_action() not written */
+}
+
+/*!
  * \brief Bridge thread function
  *
  * \note The thread does not have its own reference to the
@@ -772,6 +809,7 @@ static void bridge_complete_join(struct ast_bridge *bridge)
 static void *bridge_thread(void *data)
 {
 	struct ast_bridge *bridge = data;
+	struct ast_frame *action;
 	int res = 0;
 
 	if (bridge->callid) {
@@ -797,7 +835,21 @@ static void *bridge_thread(void *data)
 			bridge_complete_join(bridge);
 		}
 
-/* BUGBUG process the bridge action queue here. */
+		/* Run a pending bridge action. */
+		action = AST_LIST_REMOVE_HEAD(&bridge->action_queue, frame_list);
+		if (action) {
+			switch (action->frametype) {
+			case AST_FRAME_BRIDGE_ACTION:
+				bridge_action_bridge(bridge, action);
+				break;
+			default:
+				/* Unexpected deferred frame type.  Should never happen. */
+				ast_assert(0);
+				break;
+			}
+			ast_frfree(action);
+			continue;
+		}
 
 		if (!bridge->array_num || !bridge->technology->thread_loop) {
 			/* Wait for something to happen to the bridge. */
@@ -864,6 +916,7 @@ static struct ast_bridge_technology *find_best_technology(uint32_t capabilities)
 static void destroy_bridge(void *obj)
 {
 	struct ast_bridge *bridge = obj;
+	struct ast_frame *action;
 
 	ast_debug(1, "Actually destroying bridge %p, nobody wants it anymore\n", bridge);
 
@@ -879,6 +932,11 @@ static void destroy_bridge(void *obj)
 
 	if (bridge->callid) {
 		bridge->callid = ast_callid_unref(bridge->callid);
+	}
+
+	/* Flush any unhandled actions. */
+	while ((action = AST_LIST_REMOVE_HEAD(&bridge->action_queue, frame_list))) {
+		ast_frfree(action);
 	}
 
 	cleanup_video_mode(bridge);
@@ -1451,7 +1509,7 @@ static void bridge_channel_dtmf_stream(struct ast_bridge_channel *bridge_channel
 
 /*!
  * \internal
- * \brief Handle bridge action.
+ * \brief Handle bridge channel bridge action frame.
  * \since 12.0.0
  *
  * \param bridge_channel Channel to execute the action on.
@@ -1499,7 +1557,7 @@ static void bridge_channel_action_bridge(struct ast_bridge_channel *bridge_chann
 
 /*!
  * \internal
- * \brief Handle control frame action.
+ * \brief Handle bridge channel control frame action.
  * \since 12.0.0
  *
  * \param bridge_channel Channel to execute the control frame action on.
@@ -1596,7 +1654,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 				ao2_lock(bridge_channel->bridge);
 				break;
 			default:
-				/* Unexpected deferred frame type.  Sould never happen. */
+				/* Unexpected deferred frame type.  Should never happen. */
 				ast_assert(0);
 				break;
 			}
