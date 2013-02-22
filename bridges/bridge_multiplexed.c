@@ -282,6 +282,7 @@ static void *multiplexed_thread_function(void *data)
 				}
 			}
 			if (!stop && bridge) {
+/* BUGBUG need to update thread callid for each bridge trip. */
 				ast_bridge_handle_trip(bridge, NULL, winner, -1);
 				ao2_unlock(bridge);
 			}

@@ -144,7 +144,11 @@ struct ast_bridge_channel {
 	pthread_t thread;
 	/*! Additional file descriptors to look at */
 	int fds[4];
-	/*! Bit to indicate whether the channel is suspended from the bridge or not */
+	/*! TRUE if the channel is in a bridge. */
+	unsigned int in_bridge:1;
+	/*! TRUE if the channel just joined the bridge. */
+	unsigned int just_joined:1;
+	/*! TRUE if the channel is suspended from the bridge. */
 	unsigned int suspended:1;
 	/*! TRUE if the imparted channel must wait for an explicit depart from the bridge to reclaim the channel. */
 	unsigned int depart_wait:1;
@@ -232,8 +236,10 @@ struct ast_bridge {
 	unsigned int waiting:1;
 	/*! TRUE if the bridge thread should stop */
 	unsigned int stop:1;
-	/*! TRUE if the bridge thread should refresh itself */
-	unsigned int refresh:1;
+	/*! TRUE if the bridge was reconfigured. */
+	unsigned int reconfigured:1;
+	/*! TRUE if the bridge thread loop should break.  Reconfig, stop, action-queue. */
+	unsigned int interrupt:1;
 	/*! TRUE if the bridge has been dissolved.  Any channel that now tries to join is immediately ejected. */
 	unsigned int dissolved:1;
 	/*! Bridge flags to tweak behavior */
@@ -248,10 +254,10 @@ struct ast_bridge {
 	struct ast_bridge_features features;
 	/*! Array of channels that the bridge thread is currently handling */
 	struct ast_channel **array;
-	/*! Number of channels in the above array */
-	size_t array_num;
+	/*! Number of channels in the above array (Number of active channels) */
+	unsigned int array_num;
 	/*! Number of channels the array can handle */
-	size_t array_size;
+	unsigned int array_size;
 	/*! Call ID associated with the bridge */
 	struct ast_callid *callid;
 	/*! Linked list of channels participating in the bridge */
@@ -478,8 +484,8 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
 /*!
  * \brief Merge two bridges together
  *
- * \param bridge0 First bridge
- * \param bridge1 Second bridge
+ * \param bridge1 First bridge
+ * \param bridge2 Second bridge
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -487,16 +493,18 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
  * Example usage:
  *
  * \code
- * ast_bridge_merge(bridge0, bridge1);
+ * ast_bridge_merge(bridge1, bridge2);
  * \endcode
  *
- * This merges the bridge pointed to by bridge1 with the bridge pointed to by bridge0.
- * In reality all of the channels in bridge1 are simply moved to bridge0.
+ * This merges the bridge pointed to by bridge2 into the bridge
+ * pointed to by bridge1.  In reality all of the channels in
+ * bridge2 are moved to bridge1.
  *
- * \note The second bridge specified is not destroyed when this operation is
- *       completed.
+ * \note The second bridge has no active channels in it when
+ * this operation is completed.  The caller must explicitly call
+ * ast_bridge_destroy().
  */
-int ast_bridge_merge(struct ast_bridge *bridge0, struct ast_bridge *bridge1);
+int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2);
 
 /*!
  * \brief Suspend a channel temporarily from a bridge

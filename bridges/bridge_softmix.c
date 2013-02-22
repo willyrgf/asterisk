@@ -771,7 +771,7 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 		goto softmix_cleanup;
 	}
 
-	while (!bridge->stop && !bridge->refresh && bridge->array_num) {
+	while (!bridge->interrupt && bridge->array_num) {
 		struct ast_bridge_channel *bridge_channel;
 		int timeout = -1;
 		enum ast_format_id cur_slin_id = ast_format_slin_by_rate(softmix_data->internal_rate);

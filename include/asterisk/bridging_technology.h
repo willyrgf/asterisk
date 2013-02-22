@@ -61,8 +61,8 @@ struct ast_bridge_technology {
 	void (*suspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Callback for when a channel is unsuspended from the bridge */
 	void (*unsuspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
-	/*! Callback to see if a channel is compatible with the bridging technology */
-	int (*compatible)(struct ast_bridge_channel *bridge_channel);
+	/*! Callback to see if the bridge is compatible with the bridging technology */
+	int (*compatible)(struct ast_bridge *bridge);
 	/*! Callback for writing a frame into the bridging technology */
 	enum ast_bridge_write_result (*write)(struct ast_bridge *bridge, struct ast_bridge_channel *bridged_channel, struct ast_frame *frame);
 	/*! Callback for when a file descriptor trips */
