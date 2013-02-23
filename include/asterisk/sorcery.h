@@ -197,6 +197,9 @@ struct ast_sorcery_wizard {
 	/*! \brief Callback for retrieving an object using an id */
 	void *(*retrieve_id)(const struct ast_sorcery *sorcery, void *data, const char *type, const char *id);
 
+	/*! \brief Callback for retrieving multiple objects using a regex on their id */
+	void (*retrieve_regex)(const struct ast_sorcery *sorcery, void *data, const char *type, struct ao2_container *objects, const char *regex);
+
 	/*! \brief Optional callback for retrieving an object using fields */
 	void *(*retrieve_fields)(const struct ast_sorcery *sorcery, void *data, const char *type, const struct ast_variable *fields);
 
@@ -275,17 +278,22 @@ struct ast_sorcery *ast_sorcery_open(void);
  *
  * \param sorcery Pointer to a sorcery structure
  * \param name Name of the category to use within the configuration file, normally the module name
+ * \param module The module name (AST_MODULE)
  *
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name);
+int __ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name, const char *module);
+
+#define ast_sorcery_apply_config(sorcery, name) \
+	__ast_sorcery_apply_config((sorcery), (name), AST_MODULE)
 
 /*!
  * \brief Apply default object wizard mappings
  *
  * \param sorcery Pointer to a sorcery structure
  * \param type Type of object to apply to
+ * \param module The name of the module, typically AST_MODULE
  * \param name Name of the wizard to use
  * \param data Data to be passed to wizard
  *
@@ -296,7 +304,10 @@ int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name);
  *
  * \note Only a single default can exist per object type
  */
-int ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *name, const char *data);
+int __ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *module, const char *name, const char *data);
+
+#define ast_sorcery_apply_default(sorcery, type, name, data) \
+	__ast_sorcery_apply_default((sorcery), (type), AST_MODULE, (name), (data))
 
 /*!
  * \brief Register an object type
@@ -539,6 +550,20 @@ void *ast_sorcery_retrieve_by_id(const struct ast_sorcery *sorcery, const char *
  *       of the given type.
  */
 void *ast_sorcery_retrieve_by_fields(const struct ast_sorcery *sorcery, const char *type, unsigned int flags, struct ast_variable *fields);
+
+/*!
+ * \brief Retrieve multiple objects using a regular expression on their id
+ *
+ * \param sorcery Pointer to a sorcery structure
+ * \param type Type of object to retrieve
+ * \param regex Regular expression
+ *
+ * \retval non-NULL if error occurs
+ * \retval NULL success
+ *
+ * \note The provided regex is treated as extended case sensitive.
+ */
+struct ao2_container *ast_sorcery_retrieve_by_regex(const struct ast_sorcery *sorcery, const char *type, const char *regex);
 
 /*!
  * \brief Update an object

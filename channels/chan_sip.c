@@ -13216,7 +13216,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		if (needvideo) {
 			get_crypto_attrib(p, p->vsrtp, &v_a_crypto);
 			ast_str_append(&m_video, 0, "m=video %d %s", ast_sockaddr_port(&vdest),
-				       get_sdp_rtp_profile(p, a_crypto ? 1 : 0, p->vrtp));
+				       get_sdp_rtp_profile(p, v_a_crypto ? 1 : 0, p->vrtp));
 
 			/* Build max bitrate string */
 			if (p->maxcallbitrate)
@@ -13241,7 +13241,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 				ast_verbose("Lets set up the text sdp\n");
 			get_crypto_attrib(p, p->tsrtp, &t_a_crypto);
 			ast_str_append(&m_text, 0, "m=text %d %s", ast_sockaddr_port(&tdest),
-				       get_sdp_rtp_profile(p, a_crypto ? 1 : 0, p->trtp));
+				       get_sdp_rtp_profile(p, t_a_crypto ? 1 : 0, p->trtp));
 			if (debug) {  /* XXX should I use tdest below ? */
 				ast_verbose("Text is at %s\n", ast_sockaddr_stringify(&taddr));
 			}
@@ -14582,7 +14582,8 @@ static void state_notify_build_xml(struct state_notify_data *data, int full, con
 		else
 			ast_str_append(tmp, 0, "<status><basic>%s</basic></status>\n", (local_state != NOTIFY_CLOSED) ? "open" : "closed");
 
-		if (allow_notify_user_presence(p) && (data->presence_state > 0)) {
+		if (allow_notify_user_presence(p) && (data->presence_state != AST_PRESENCE_INVALID)
+				&& (data->presence_state != AST_PRESENCE_NOT_SET)) {
 			ast_str_append(tmp, 0, "</tuple>\n");
 			ast_str_append(tmp, 0, "<tuple id=\"digium-presence\">\n");
 			ast_str_append(tmp, 0, "<status>\n");
@@ -25025,9 +25026,6 @@ static int handle_invite_replaces(struct sip_pvt *p, struct sip_request *req, st
 	}
 	ast_setstate(c, AST_STATE_DOWN);
 	ast_channel_unlock(c);
-
-	/* The call should be down with no ast_channel, so hang it up */
-	ast_channel_tech_pvt_set(c, dialog_unref(ast_channel_tech_pvt(c), "unref dialog c->tech_pvt"));
 
 	/* c and c's tech pvt must be unlocked at this point for ast_hangup */
 	ast_hangup(c);

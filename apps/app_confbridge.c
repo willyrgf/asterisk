@@ -596,6 +596,37 @@ static struct ast_channel *rec_request(const char *type, struct ast_format_cap *
 	return tmp;
 }
 
+static void set_rec_filename(struct conference_bridge *bridge, struct ast_str **filename)
+{
+	char *rec_file = bridge->b_profile.rec_file;
+	time_t now;
+	char *ext;
+
+	if (ast_str_strlen(*filename) && ast_test_flag(&bridge->b_profile, BRIDGE_OPT_RECORD_FILE_APPEND)) {
+		    return;
+	}
+
+	time(&now);
+
+	ast_str_reset(*filename);
+	if (ast_strlen_zero(rec_file)) {
+		ast_str_set(filename, 0, "confbridge-%s-%u.wav", bridge->name, (unsigned int)now);
+	} else {
+		/* insert time before file extension */
+		ext = strrchr(rec_file, '.');
+		if (ext) {
+			ast_str_set_substr(filename, 0, rec_file, ext - rec_file);
+			ast_str_append(filename, 0, "-%u%s", (unsigned int)now, ext);
+		} else {
+			ast_str_set(filename, 0, "%s-%u", rec_file, (unsigned int)now);
+		}
+	}
+
+	if (ast_test_flag(&bridge->b_profile, BRIDGE_OPT_RECORD_FILE_APPEND)) {
+		ast_str_append(filename, 0, ",a");
+	}
+}
+
 static void *record_thread(void *obj)
 {
 	struct conference_bridge *conference_bridge = obj;
@@ -614,16 +645,7 @@ static void *record_thread(void *obj)
 
 	/* XXX If we get an EXIT right here, START will essentially be a no-op */
 	while (conference_bridge->record_state != CONF_RECORD_EXIT) {
-		if (!(ast_strlen_zero(conference_bridge->b_profile.rec_file))) {
-			ast_str_append(&filename, 0, "%s", conference_bridge->b_profile.rec_file);
-		} else {
-			time_t now;
-			time(&now);
-			ast_str_append(&filename, 0, "confbridge-%s-%u.wav",
-				conference_bridge->name,
-				(unsigned int) now);
-		}
-
+		set_rec_filename(conference_bridge, &filename);
 		chan = ast_channel_ref(conference_bridge->record_chan);
 		ast_answer(chan);
 		pbx_exec(chan, mixmonapp, ast_str_buffer(filename));
@@ -753,9 +775,16 @@ static int conf_start_record(struct conference_bridge *conference_bridge)
  */
 static int start_conf_record_thread(struct conference_bridge *conference_bridge)
 {
-	ao2_ref(conference_bridge, +1); /* give the record thread a ref */
-
 	conf_start_record(conference_bridge);
+
+	/*
+	 * if the thread has already been started, don't start another
+	 */
+	if (conference_bridge->record_thread != AST_PTHREADT_NULL) {
+		return 0;
+	}
+
+	ao2_ref(conference_bridge, +1); /* give the record thread a ref */
 
 	if (ast_pthread_create_background(&conference_bridge->record_thread, NULL, record_thread, conference_bridge)) {
 		ast_log(LOG_WARNING, "Failed to create recording channel for conference %s\n", conference_bridge->name);
@@ -2157,10 +2186,10 @@ static char *complete_confbridge_name(const char *line, const char *word, int po
 	struct conference_bridge *bridge = NULL;
 	char *res = NULL;
 	int wordlen = strlen(word);
-	struct ao2_iterator i;
+	struct ao2_iterator iter;
 
-	i = ao2_iterator_init(conference_bridges, 0);
-	while ((bridge = ao2_iterator_next(&i))) {
+	iter = ao2_iterator_init(conference_bridges, 0);
+	while ((bridge = ao2_iterator_next(&iter))) {
 		if (!strncasecmp(bridge->name, word, wordlen) && ++which > state) {
 			res = ast_strdup(bridge->name);
 			ao2_ref(bridge, -1);
@@ -2168,7 +2197,7 @@ static char *complete_confbridge_name(const char *line, const char *word, int po
 		}
 		ao2_ref(bridge, -1);
 	}
-	ao2_iterator_destroy(&i);
+	ao2_iterator_destroy(&iter);
 
 	return res;
 }
@@ -2224,9 +2253,31 @@ static char *handle_cli_confbridge_kick(struct ast_cli_entry *e, int cmd, struct
 	return CLI_SUCCESS;
 }
 
-static void handle_cli_confbridge_list_item(struct ast_cli_args *a, struct conference_bridge_user *participant)
+static void handle_cli_confbridge_list_item(struct ast_cli_args *a, struct conference_bridge_user *participant, int waiting)
 {
+	char flag_str[5 + 1];/* Max flags + terminator */
+	int pos = 0;
+
+	/* Build flags column string. */
+	if (ast_test_flag(&participant->u_profile, USER_OPT_ADMIN)) {
+		flag_str[pos++] = 'A';
+	}
+	if (ast_test_flag(&participant->u_profile, USER_OPT_MARKEDUSER)) {
+		flag_str[pos++] = 'M';
+	}
+	if (ast_test_flag(&participant->u_profile, USER_OPT_WAITMARKED)) {
+		flag_str[pos++] = 'W';
+	}
+	if (ast_test_flag(&participant->u_profile, USER_OPT_ENDMARKED)) {
+		flag_str[pos++] = 'E';
+	}
+	if (waiting) {
+		flag_str[pos++] = 'w';
+	}
+	flag_str[pos] = '\0';
+
 	ast_cli(a->fd, "%-29s ", ast_channel_name(participant->chan));
+	ast_cli(a->fd, "%-5s ", flag_str);
 	ast_cli(a->fd, "%-17s", participant->u_profile.name);
 	ast_cli(a->fd, "%-17s", participant->b_profile.name);
 	ast_cli(a->fd, "%-17s", participant->menu_name);
@@ -2236,17 +2287,24 @@ static void handle_cli_confbridge_list_item(struct ast_cli_args *a, struct confe
 
 static char *handle_cli_confbridge_list(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ao2_iterator i;
-	struct conference_bridge *bridge = NULL;
-	struct conference_bridge tmp;
-	struct conference_bridge_user *participant = NULL;
+	struct conference_bridge *bridge;
 
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "confbridge list";
 		e->usage =
 			"Usage: confbridge list [<name>]\n"
-			"       Lists all currently active conference bridges.\n";
+			"       Lists all currently active conference bridges or a specific conference bridge.\n"
+			"\n"
+			"       When a conference bridge name is provided, flags may be shown for users. Below\n"
+			"       are the flags and what they represent.\n" 
+			"\n"
+			"       Flags:\n"
+			"         A - The user is an admin\n"
+			"         M - The user is a marked user\n"
+			"         W - The user must wait for a marked user to join\n"
+			"         E - The user will be kicked after the last marked user leaves the conference\n"
+			"         w - The user is waiting for a marked user to join\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
@@ -2256,32 +2314,37 @@ static char *handle_cli_confbridge_list(struct ast_cli_entry *e, int cmd, struct
 	}
 
 	if (a->argc == 2) {
+		struct ao2_iterator iter;
+
 		ast_cli(a->fd, "Conference Bridge Name           Users  Marked Locked?\n");
 		ast_cli(a->fd, "================================ ====== ====== ========\n");
-		i = ao2_iterator_init(conference_bridges, 0);
-		while ((bridge = ao2_iterator_next(&i))) {
+		iter = ao2_iterator_init(conference_bridges, 0);
+		while ((bridge = ao2_iterator_next(&iter))) {
 			ast_cli(a->fd, "%-32s %6i %6i %s\n", bridge->name, bridge->activeusers + bridge->waitingusers, bridge->markedusers, (bridge->locked ? "locked" : "unlocked"));
 			ao2_ref(bridge, -1);
 		}
-		ao2_iterator_destroy(&i);
+		ao2_iterator_destroy(&iter);
 		return CLI_SUCCESS;
 	}
 
 	if (a->argc == 3) {
+		struct conference_bridge_user *participant;
+		struct conference_bridge tmp;
+
 		ast_copy_string(tmp.name, a->argv[2], sizeof(tmp.name));
 		bridge = ao2_find(conference_bridges, &tmp, OBJ_POINTER);
 		if (!bridge) {
 			ast_cli(a->fd, "No conference bridge named '%s' found!\n", a->argv[2]);
 			return CLI_SUCCESS;
 		}
-		ast_cli(a->fd, "Channel                       User Profile     Bridge Profile   Menu             CallerID\n");
-		ast_cli(a->fd, "============================= ================ ================ ================ ================\n");
+		ast_cli(a->fd, "Channel                       Flags User Profile     Bridge Profile   Menu             CallerID\n");
+		ast_cli(a->fd, "============================= ===== ================ ================ ================ ================\n");
 		ao2_lock(bridge);
 		AST_LIST_TRAVERSE(&bridge->active_list, participant, list) {
-			handle_cli_confbridge_list_item(a, participant);
+			handle_cli_confbridge_list_item(a, participant, 0);
 		}
 		AST_LIST_TRAVERSE(&bridge->waiting_list, participant, list) {
-			handle_cli_confbridge_list_item(a, participant);
+			handle_cli_confbridge_list_item(a, participant, 1);
 		}
 		ao2_unlock(bridge);
 		ao2_ref(bridge, -1);
@@ -2580,7 +2643,7 @@ static struct ast_custom_function confbridge_info_function = {
 	.read = func_confbridge_info,
 };
 
-static void action_confbridgelist_item(struct mansession *s, const char *id_text, struct conference_bridge *bridge, struct conference_bridge_user *participant)
+static void action_confbridgelist_item(struct mansession *s, const char *id_text, struct conference_bridge *bridge, struct conference_bridge_user *participant, int waiting)
 {
 	astman_append(s,
 		"Event: ConfbridgeList\r\n"
@@ -2591,6 +2654,9 @@ static void action_confbridgelist_item(struct mansession *s, const char *id_text
 		"Channel: %s\r\n"
 		"Admin: %s\r\n"
 		"MarkedUser: %s\r\n"
+		"WaitMarked: %s\r\n"
+		"EndMarked: %s\r\n"
+		"Waiting: %s\r\n"
 		"\r\n",
 		id_text,
 		bridge->name,
@@ -2598,19 +2664,23 @@ static void action_confbridgelist_item(struct mansession *s, const char *id_text
 		S_COR(ast_channel_caller(participant->chan)->id.name.valid, ast_channel_caller(participant->chan)->id.name.str, "<no name>"),
 		ast_channel_name(participant->chan),
 		ast_test_flag(&participant->u_profile, USER_OPT_ADMIN) ? "Yes" : "No",
-		ast_test_flag(&participant->u_profile, USER_OPT_MARKEDUSER) ? "Yes" : "No");
+		ast_test_flag(&participant->u_profile, USER_OPT_MARKEDUSER) ? "Yes" : "No",
+		ast_test_flag(&participant->u_profile, USER_OPT_WAITMARKED) ? "Yes" : "No",
+		ast_test_flag(&participant->u_profile, USER_OPT_ENDMARKED) ? "Yes" : "No",
+		waiting ? "Yes" : "No");
 }
 
 static int action_confbridgelist(struct mansession *s, const struct message *m)
 {
 	const char *actionid = astman_get_header(m, "ActionID");
 	const char *conference = astman_get_header(m, "Conference");
-	struct conference_bridge_user *participant = NULL;
-	struct conference_bridge *bridge = NULL;
+	struct conference_bridge_user *participant;
+	struct conference_bridge *bridge;
 	struct conference_bridge tmp;
-	char id_text[80] = "";
+	char id_text[80];
 	int total = 0;
 
+	id_text[0] = '\0';
 	if (!ast_strlen_zero(actionid)) {
 		snprintf(id_text, sizeof(id_text), "ActionID: %s\r\n", actionid);
 	}
@@ -2634,11 +2704,11 @@ static int action_confbridgelist(struct mansession *s, const struct message *m)
 	ao2_lock(bridge);
 	AST_LIST_TRAVERSE(&bridge->active_list, participant, list) {
 		total++;
-		action_confbridgelist_item(s, id_text, bridge, participant);
+		action_confbridgelist_item(s, id_text, bridge, participant, 0);
 	}
 	AST_LIST_TRAVERSE(&bridge->waiting_list, participant, list) {
 		total++;
-		action_confbridgelist_item(s, id_text, bridge, participant);
+		action_confbridgelist_item(s, id_text, bridge, participant, 1);
 	}
 	ao2_unlock(bridge);
 	ao2_ref(bridge, -1);
@@ -2657,7 +2727,7 @@ static int action_confbridgelistrooms(struct mansession *s, const struct message
 {
 	const char *actionid = astman_get_header(m, "ActionID");
 	struct conference_bridge *bridge = NULL;
-	struct ao2_iterator i;
+	struct ao2_iterator iter;
 	char id_text[512] = "";
 	int totalitems = 0;
 
@@ -2673,8 +2743,8 @@ static int action_confbridgelistrooms(struct mansession *s, const struct message
 	astman_send_listack(s, m, "Confbridge conferences will follow", "start");
 
 	/* Traverse the conference list */
-	i = ao2_iterator_init(conference_bridges, 0);
-	while ((bridge = ao2_iterator_next(&i))) {
+	iter = ao2_iterator_init(conference_bridges, 0);
+	while ((bridge = ao2_iterator_next(&iter))) {
 		totalitems++;
 
 		ao2_lock(bridge);
@@ -2695,7 +2765,7 @@ static int action_confbridgelistrooms(struct mansession *s, const struct message
 
 		ao2_ref(bridge, -1);
 	}
-	ao2_iterator_destroy(&i);
+	ao2_iterator_destroy(&iter);
 
 	/* Send final confirmation */
 	astman_append(s,
