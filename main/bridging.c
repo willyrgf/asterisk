@@ -2296,41 +2296,29 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan)
 	return 0;
 }
 
-int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
+/*!
+ * \internal
+ * \brief Do the merge of two bridges.
+ * \since 12.0.0
+ *
+ * \param bridge1 First bridge
+ * \param bridge2 Second bridge
+ *
+ * \return Nothing
+ *
+ * \note The two bridges are assumed already locked.
+ *
+ * This merges the bridge pointed to by bridge2 into the bridge
+ * pointed to by bridge1.  In reality all of the channels in
+ * bridge2 are moved to bridge1.
+ *
+ * \note The second bridge has no active channels in it when
+ * this operation is completed.  The caller must explicitly call
+ * ast_bridge_destroy().
+ */
+static void ast_bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
 {
 	struct ast_bridge_channel *bridge_channel;
-
-	/* Deadlock avoidance. */
-	for (;;) {
-		ao2_lock(bridge1);
-		if (!ao2_trylock(bridge2)) {
-			break;
-		}
-		ao2_unlock(bridge1);
-		sched_yield();
-	}
-
-	if (bridge1->dissolved) {
-		ast_debug(1, "Can't merge bridge %p into bridge %p, destination bridge is dissolved.\n",
-			bridge2, bridge1);
-		ao2_unlock(bridge2);
-		ao2_unlock(bridge1);
-		return -1;
-	}
-
-	/*
-	 * If the first bridge will have more than 2 channels and is not
-	 * capable of becoming a multimixing bridge we cannot merge.
-	 */
-	if (2 < bridge1->num_channels + bridge2->num_channels
-		&& !(bridge1->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
-		&& !ast_test_flag(&bridge1->feature_flags, AST_BRIDGE_FLAG_SMART)) {
-		ao2_unlock(bridge2);
-		ao2_unlock(bridge1);
-		ast_debug(1, "Can't merge bridge %p into bridge %p, multimix is needed and it cannot be acquired.\n",
-			bridge2, bridge1);
-		return -1;
-	}
 
 	ast_debug(1, "Merging channels from bridge %p into bridge %p\n", bridge2, bridge1);
 
@@ -2347,11 +2335,61 @@ int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
 	}
 
 	ast_debug(1, "Merged channels from bridge %p into bridge %p\n", bridge2, bridge1);
+}
+
+int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
+{
+	int res = -1;
+
+	/* Deadlock avoidance. */
+	for (;;) {
+		ao2_lock(bridge1);
+		if (!ao2_trylock(bridge2)) {
+			break;
+		}
+		ao2_unlock(bridge1);
+		sched_yield();
+	}
+
+	if (bridge1->dissolved) {
+		ast_debug(1, "Can't merge bridge %p into bridge %p, destination bridge is dissolved.\n",
+			bridge2, bridge1);
+	} else if (bridge1->inhibit_merge || bridge2->inhibit_merge
+		|| ast_test_flag(&bridge1->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY | AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
+		|| ast_test_flag(&bridge2->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
+		/* Merging is inhibited by either bridge. */
+		ast_debug(1, "Can't merge bridge %p into bridge %p, merging inhibited.\n",
+			bridge2, bridge1);
+	} else if (2 < bridge1->num_channels + bridge2->num_channels
+		&& !(bridge1->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
+		&& !ast_test_flag(&bridge1->feature_flags, AST_BRIDGE_FLAG_SMART)) {
+		ast_debug(1, "Can't merge bridge %p into bridge %p, multimix is needed and it cannot be acquired.\n",
+			bridge2, bridge1);
+	} else {
+		++bridge1->inhibit_merge;
+		++bridge2->inhibit_merge;
+		ast_bridge_merge_do(bridge1, bridge2);
+		--bridge2->inhibit_merge;
+		--bridge1->inhibit_merge;
+		res = 0;
+	}
 
 	ao2_unlock(bridge2);
 	ao2_unlock(bridge1);
+	return res;
+}
 
-	return 0;
+void ast_bridge_merge_inhibit(struct ast_bridge *bridge, int request)
+{
+	int new_request;
+
+	ao2_lock(bridge);
+	new_request = bridge->inhibit_merge + request;
+	if (new_request < 0) {
+		new_request = 0;
+	}
+	bridge->inhibit_merge = new_request;
+	ao2_unlock(bridge);
 }
 
 int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan)

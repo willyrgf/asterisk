@@ -36,6 +36,12 @@ enum ast_bridge_feature_flags {
 	AST_BRIDGE_FLAG_SMART = (1 << 1),
 	/*! This channel leaves the bridge if all participants have this flag set. */
 	AST_BRIDGE_FLAG_LONELY = (1 << 2),
+	/*! Bridge channels cannot be merged from this bridge. */
+	AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM = (1 << 3),
+	/*! Bridge channels cannot be merged to this bridge. */
+	AST_BRIDGE_FLAG_MERGE_INHIBIT_TO = (1 << 4),
+	/*! Bridge channels can be moved to another bridge only by masquerade (ConfBridge) */
+	AST_BRIDGE_FLAG_MASQUERADE_ONLY = (1 << 5),
 };
 
 /*! \brief Built in DTMF features */

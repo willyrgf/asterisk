@@ -225,6 +225,13 @@ struct ast_bridge {
 	int num_channels;
 	/*! The video mode this bridge is using */
 	struct ast_bridge_video_mode video_mode;
+	/*!
+	 * \brief Count of the active temporary requests to inhibit bridge merges.
+	 * Zero if merges are allowed.
+	 *
+	 * \note Temporary as in try again in a moment.
+	 */
+	unsigned int inhibit_merge;
 	/*! The internal sample rate this bridge is mixed at when multiple channels are being mixed.
 	 *  If this value is 0, the bridge technology may auto adjust the internal mixing rate. */
 	unsigned int internal_sample_rate;
@@ -507,6 +514,19 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
  * ast_bridge_destroy().
  */
 int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2);
+
+/*!
+ * \brief Adjust the bridge merge inhibit request count.
+ * \since 12.0.0
+ *
+ * \param bridge What to operate on.
+ * \param request Inhibit request increment.
+ *     (Positive to add requests.  Negative to remove requests.)
+ *
+ * \return Nothing
+ */
+
+void ast_bridge_merge_inhibit(struct ast_bridge *bridge, int request);
 
 /*!
  * \brief Suspend a channel temporarily from a bridge
