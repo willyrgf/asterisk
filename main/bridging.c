@@ -153,7 +153,7 @@ static void bridge_channel_poke_locked(struct ast_bridge_channel *bridge_channel
 void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
 /* BUGBUG need cause code for the bridge_channel leaving the bridge. */
-	ast_debug(1, "BUGBUG Setting bridge channel %p(%s) state from:%d to:%d\n",
+	ast_debug(1, "Setting bridge channel %p(%s) state from:%d to:%d\n",
 		bridge_channel, ast_channel_name(bridge_channel->chan), bridge_channel->state,
 		new_state);
 
@@ -179,7 +179,7 @@ int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
 		return -1;
 	}
 
-	ast_debug(1, "BUGBUG Queueing action type:%d sub:%d on bridge %p\n",
+	ast_debug(1, "Queueing action type:%d sub:%d on bridge %p\n",
 		action->frametype, action->subclass.integer, bridge);
 
 	ao2_lock(bridge);
@@ -199,7 +199,7 @@ int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, s
 		return -1;
 	}
 
-	ast_debug(1, "BUGBUG Queueing action type:%d sub:%d on bridge channel %p(%s)\n",
+	ast_debug(1, "Queueing action type:%d sub:%d on bridge channel %p(%s)\n",
 		action->frametype, action->subclass.integer, bridge_channel,
 		ast_channel_name(bridge_channel->chan));
 
