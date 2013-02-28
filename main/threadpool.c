@@ -94,7 +94,7 @@ struct ast_threadpool {
 	 * that the threadpool had its state change.
 	 */
 	struct ast_taskprocessor *control_tps;
-	/*! True if the threadpool is in the processof shutting down */
+	/*! True if the threadpool is in the process of shutting down */
 	int shutting_down;
 	/*! Threadpool-specific options */
 	struct ast_threadpool_options options;
@@ -898,7 +898,7 @@ int ast_threadpool_push(struct ast_threadpool *pool, int (*task)(void *data), vo
 	if (!pool->shutting_down) {
 		return ast_taskprocessor_push(pool->tps, task, data);
 	}
-	return 0;
+	return -1;
 }
 
 void ast_threadpool_shutdown(struct ast_threadpool *pool)
@@ -1127,28 +1127,32 @@ static struct serializer *serializer_create(struct ast_threadpool *pool)
 
 static int execute_tasks(void *data)
 {
-       struct ast_taskprocessor *tps = data;
+	struct ast_taskprocessor *tps = data;
 
-       while (ast_taskprocessor_execute(tps)) {
-	       /* No-op */
-       }
+	while (ast_taskprocessor_execute(tps)) {
+		/* No-op */
+	}
 
-       ast_taskprocessor_unreference(tps);
-       return 0;
+	ast_taskprocessor_unreference(tps);
+	return 0;
 }
 
-static void serializer_task_pushed(struct ast_taskprocessor_listener *listener, int was_empty) {
-       if (was_empty) {
-	       struct serializer *ser = ast_taskprocessor_listener_get_user_data(listener);
-	       struct ast_taskprocessor *tps = ast_taskprocessor_listener_get_tps(listener);
-	       ast_threadpool_push(ser->pool, execute_tasks, tps);
-       }
-};
+static void serializer_task_pushed(struct ast_taskprocessor_listener *listener, int was_empty)
+{
+	if (was_empty) {
+		struct serializer *ser = ast_taskprocessor_listener_get_user_data(listener);
+		struct ast_taskprocessor *tps = ast_taskprocessor_listener_get_tps(listener);
+
+		if (ast_threadpool_push(ser->pool, execute_tasks, tps)) {
+			ast_taskprocessor_unreference(tps);
+		}
+	}
+}
 
 static int serializer_start(struct ast_taskprocessor_listener *listener)
 {
-       /* No-op */
-       return 0;
+	/* No-op */
+	return 0;
 }
 
 static void serializer_shutdown(struct ast_taskprocessor_listener *listener)
@@ -1158,9 +1162,9 @@ static void serializer_shutdown(struct ast_taskprocessor_listener *listener)
 }
 
 static struct ast_taskprocessor_listener_callbacks serializer_tps_listener_callbacks = {
-       .task_pushed = serializer_task_pushed,
-       .start = serializer_start,
-       .shutdown = serializer_shutdown,
+	.task_pushed = serializer_task_pushed,
+	.start = serializer_start,
+	.shutdown = serializer_shutdown,
 };
 
 struct ast_taskprocessor *ast_threadpool_serializer(const char *name, struct ast_threadpool *pool)

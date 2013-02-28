@@ -46,10 +46,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <openssl/bio.h>
 #endif
 
-/* Asterisk discourages the use of bzero in favor of memset, in fact if you try to use bzero it will tell you to use memset. As a result bzero has to be undefined
- * here since it is used internally by pjlib. The only other option would be to modify pjlib... which won't happen. */
-#undef bzero
-#define bzero bzero
 #include "pjlib.h"
 #include "pjlib-util.h"
 #include "pjnath.h"
@@ -540,6 +536,7 @@ static void ast_rtp_ice_start(struct ast_rtp_instance *instance)
 		pj_ice_sess_start_check(rtp->ice);
 		pj_timer_heap_poll(timerheap, NULL);
 		rtp->ice_started = 1;
+		rtp->strict_rtp_state = STRICT_RTP_OPEN;
 	}
 }
 
@@ -1024,6 +1021,20 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 #endif
 };
 
+static void rtp_learning_seq_init(struct ast_rtp *rtp, uint16_t seq);
+
+static void ast_rtp_on_ice_complete(pj_ice_sess *ice, pj_status_t status)
+{
+	struct ast_rtp *rtp = ice->user_data;
+
+	if (!strictrtp) {
+		return;
+	}
+
+	rtp->strict_rtp_state = STRICT_RTP_LEARN;
+	rtp_learning_seq_init(rtp, (uint16_t)rtp->seqno);
+}
+
 static void ast_rtp_on_ice_rx_data(pj_ice_sess *ice, unsigned comp_id, unsigned transport_id, void *pkt, pj_size_t size, const pj_sockaddr_t *src_addr, unsigned src_addr_len)
 {
 	struct ast_rtp *rtp = ice->user_data;
@@ -1070,6 +1081,7 @@ static pj_status_t ast_rtp_on_ice_tx_pkt(pj_ice_sess *ice, unsigned comp_id, uns
 
 /* ICE Session interface declaration */
 static pj_ice_sess_cb ast_rtp_ice_sess_cb = {
+	.on_ice_complete = ast_rtp_on_ice_complete,
 	.on_rx_data = ast_rtp_on_ice_rx_data,
 	.on_tx_pkt = ast_rtp_on_ice_tx_pkt,
 };
@@ -3944,7 +3956,7 @@ static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct
 
 	rtp->rxseqno = 0;
 
-	if (strictrtp) {
+	if (strictrtp && rtp->strict_rtp_state != STRICT_RTP_OPEN) {
 		rtp->strict_rtp_state = STRICT_RTP_LEARN;
 		rtp_learning_seq_init(rtp, rtp->seqno);
 	}
