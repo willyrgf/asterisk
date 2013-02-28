@@ -84,7 +84,8 @@ int __ast_bridge_technology_register(struct ast_bridge_technology *technology, s
 	if (ast_strlen_zero(technology->name)
 		|| !technology->capabilities
 		|| !technology->write) {
-		ast_log(LOG_WARNING, "Bridge technology %s failed registration sanity check.\n", technology->name);
+		ast_log(LOG_WARNING, "Bridge technology %s failed registration sanity check.\n",
+			technology->name);
 		return -1;
 	}
 
@@ -93,7 +94,8 @@ int __ast_bridge_technology_register(struct ast_bridge_technology *technology, s
 	/* Look for duplicate bridge technology already using this name, or already registered */
 	AST_RWLIST_TRAVERSE(&bridge_technologies, current, entry) {
 		if ((!strcasecmp(current->name, technology->name)) || (current == technology)) {
-			ast_log(LOG_WARNING, "A bridge technology of %s already claims to exist in our world.\n", technology->name);
+			ast_log(LOG_WARNING, "A bridge technology of %s already claims to exist in our world.\n",
+				technology->name);
 			AST_RWLIST_UNLOCK(&bridge_technologies);
 			return -1;
 		}
@@ -151,8 +153,9 @@ static void bridge_channel_poke_locked(struct ast_bridge_channel *bridge_channel
 void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
 /* BUGBUG need cause code for the bridge_channel leaving the bridge. */
-	ast_debug(1, "BUGBUG Setting bridge channel %p state from:%d to:%d\n",
-		bridge_channel, bridge_channel->state, new_state);
+	ast_debug(1, "BUGBUG Setting bridge channel %p(%s) state from:%d to:%d\n",
+		bridge_channel, ast_channel_name(bridge_channel->chan), bridge_channel->state,
+		new_state);
 
 	/* Change the state on the bridge channel */
 	bridge_channel->state = new_state;
@@ -196,8 +199,9 @@ int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, s
 		return -1;
 	}
 
-	ast_debug(1, "BUGBUG Queueing action type:%d sub:%d on bridge channel %p\n",
-		action->frametype, action->subclass.integer, bridge_channel);
+	ast_debug(1, "BUGBUG Queueing action type:%d sub:%d on bridge channel %p(%s)\n",
+		action->frametype, action->subclass.integer, bridge_channel,
+		ast_channel_name(bridge_channel->chan));
 
 	ao2_lock(bridge_channel);
 	AST_LIST_INSERT_TAIL(&bridge_channel->action_queue, dup, frame_list);
@@ -358,12 +362,14 @@ static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	bridge_channel->in_bridge = 0;
 	ao2_unlock(bridge_channel);
 
-	ast_debug(1, "Pulling bridge channel %p from bridge %p\n", bridge_channel, bridge);
+	ast_debug(1, "Pulling bridge channel %p(%s) from bridge %p\n",
+		bridge_channel, ast_channel_name(bridge_channel->chan), bridge);
 
 	if (!bridge_channel->just_joined) {
 		/* Tell the bridge technology we are leaving so they tear us down */
-		ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p\n",
-			bridge->technology->name, bridge_channel, bridge);
+		ast_debug(1, "Giving bridge technology %s notification that %p(%s) is leaving bridge %p\n",
+			bridge->technology->name, bridge_channel,
+			ast_channel_name(bridge_channel->chan), bridge);
 		if (bridge->technology->leave) {
 			bridge->technology->leave(bridge, bridge_channel);
 		}
@@ -428,8 +434,9 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 
 		bridge_channel2 = find_bridge_channel(bridge, swap);
 		if (bridge_channel2) {
-			ast_debug(1, "Swapping bridge channel %p out from bridge %p so bridge channel %p can slip in\n",
-				bridge_channel2, bridge, bridge_channel);
+			ast_debug(1, "Swapping bridge channel %p(%s) out from bridge %p so bridge channel %p(%s) can slip in\n",
+				bridge_channel2, ast_channel_name(bridge_channel2->chan), bridge,
+				bridge_channel, ast_channel_name(bridge_channel->chan));
 			ao2_lock(bridge_channel2);
 			switch (bridge_channel2->state) {
 			case AST_BRIDGE_CHANNEL_STATE_WAIT:
@@ -444,7 +451,8 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 		}
 	}
 
-	ast_debug(1, "Pushing bridge channel %p into bridge %p\n", bridge_channel, bridge);
+	ast_debug(1, "Pushing bridge channel %p(%s) into bridge %p\n",
+		bridge_channel, ast_channel_name(bridge_channel->chan), bridge);
 
 	/* Add channel to the bridge */
 	AST_LIST_INSERT_TAIL(&bridge->channels, bridge_channel, entry);
@@ -651,8 +659,9 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 			}
 			ao2_unlock(bridge_channel);
 		} else if (frame->frametype == AST_FRAME_CONTROL && bridge_drop_control_frame(frame->subclass.integer)) {
-			ast_debug(1, "Dropping control frame %d from bridge channel %p\n",
-				frame->subclass.integer, bridge_channel);
+			ast_debug(1, "Dropping control frame %d from bridge channel %p(%s)\n",
+				frame->subclass.integer, bridge_channel,
+				ast_channel_name(bridge_channel->chan));
 		} else if (frame->frametype == AST_FRAME_DTMF_BEGIN || frame->frametype == AST_FRAME_DTMF_END) {
 			int dtmf_passthrough = bridge_channel->features ?
 				bridge_channel->features->dtmf_passthrough :
@@ -763,12 +772,14 @@ static void bridge_complete_join(struct ast_bridge *bridge)
 		bridge_make_compatible(bridge, bridge_channel);
 
 		/* Tell the bridge technology we are joining so they set us up */
-		ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
-			bridge->technology->name, bridge_channel, bridge);
+		ast_debug(1, "Giving bridge technology %s notification that %p(%s) is joining bridge %p\n",
+			bridge->technology->name, bridge_channel,
+			ast_channel_name(bridge_channel->chan), bridge);
 		if (bridge->technology->join
 			&& bridge->technology->join(bridge, bridge_channel)) {
-			ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
-				bridge->technology->name, bridge_channel, bridge);
+			ast_debug(1, "Bridge technology %s failed to join %p(%s) to bridge %p\n",
+				bridge->technology->name, bridge_channel,
+				ast_channel_name(bridge_channel->chan), bridge);
 		}
 
 		/*
@@ -1057,18 +1068,22 @@ static int bridge_make_compatible(struct ast_bridge *bridge, struct ast_bridge_c
 		/* Read format is a no go... */
 		if (option_debug) {
 			char codec_buf[512];
-			ast_debug(1, "Bridge technology %s wants to read any of formats %s but channel has %s\n", bridge->technology->name,
+			ast_debug(1, "Bridge technology %s wants to read any of formats %s but channel has %s\n",
+				bridge->technology->name,
 				ast_getformatname_multiple(codec_buf, sizeof(codec_buf), bridge->technology->format_capabilities),
 				ast_getformatname(&formats[0]));
 		}
 		/* Switch read format to the best one chosen */
 		if (ast_set_read_format(bridge_channel->chan, &best_format)) {
-			ast_log(LOG_WARNING, "Failed to set channel %s to read format %s\n", ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
+			ast_log(LOG_WARNING, "Failed to set channel %s to read format %s\n",
+				ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
 			return -1;
 		}
-		ast_debug(1, "Bridge %p put channel %s into read format %s\n", bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
+		ast_debug(1, "Bridge %p put channel %s into read format %s\n",
+			bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
 	} else {
-		ast_debug(1, "Bridge %p is happy that channel %s already has read format %s\n", bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&formats[0]));
+		ast_debug(1, "Bridge %p is happy that channel %s already has read format %s\n",
+			bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&formats[0]));
 	}
 
 	if (!ast_format_cap_iscompatible(bridge->technology->format_capabilities, &formats[1])) {
@@ -1078,18 +1093,22 @@ static int bridge_make_compatible(struct ast_bridge *bridge, struct ast_bridge_c
 		/* Write format is a no go... */
 		if (option_debug) {
 			char codec_buf[512];
-			ast_debug(1, "Bridge technology %s wants to write any of formats %s but channel has %s\n", bridge->technology->name,
+			ast_debug(1, "Bridge technology %s wants to write any of formats %s but channel has %s\n",
+				bridge->technology->name,
 				ast_getformatname_multiple(codec_buf, sizeof(codec_buf), bridge->technology->format_capabilities),
 				ast_getformatname(&formats[1]));
 		}
 		/* Switch write format to the best one chosen */
 		if (ast_set_write_format(bridge_channel->chan, &best_format)) {
-			ast_log(LOG_WARNING, "Failed to set channel %s to write format %s\n", ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
+			ast_log(LOG_WARNING, "Failed to set channel %s to write format %s\n",
+				ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
 			return -1;
 		}
-		ast_debug(1, "Bridge %p put channel %s into write format %s\n", bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
+		ast_debug(1, "Bridge %p put channel %s into write format %s\n",
+			bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&best_format));
 	} else {
-		ast_debug(1, "Bridge %p is happy that channel %s already has write format %s\n", bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&formats[1]));
+		ast_debug(1, "Bridge %p is happy that channel %s already has write format %s\n",
+			bridge, ast_channel_name(bridge_channel->chan), ast_getformatname(&formats[1]));
 	}
 
 	return 0;
@@ -1123,7 +1142,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	struct ast_bridge_channel *bridge_channel;
 
 	if (bridge->dissolved) {
-		ast_debug(1, "Bridge '%p' is dissolved, not performing smart bridge operation.\n",
+		ast_debug(1, "Bridge %p is dissolved, not performing smart bridge operation.\n",
 			bridge);
 		return 0;
 	}
@@ -1150,7 +1169,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	}
 
 	if (!new_capabilities) {
-		ast_debug(1, "Bridge '%p' has no new capabilities, not performing smart bridge operation.\n",
+		ast_debug(1, "Bridge %p has no new capabilities, not performing smart bridge operation.\n",
 			bridge);
 		return 0;
 	}
@@ -1205,8 +1224,9 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 		}
 
 		/* First we part them from the old technology */
-		ast_debug(1, "Giving bridge technology %s notification that %p is leaving bridge %p (really %p)\n",
-			old_technology->name, bridge_channel, &temp_bridge, bridge);
+		ast_debug(1, "Giving bridge technology %s notification that %p(%s) is leaving bridge %p (really %p)\n",
+			old_technology->name, bridge_channel, ast_channel_name(bridge_channel->chan),
+			&temp_bridge, bridge);
 		if (old_technology->leave) {
 			old_technology->leave(&temp_bridge, bridge_channel);
 		}
@@ -1215,11 +1235,13 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 		bridge_make_compatible(bridge, bridge_channel);
 
 		/* Third we join them to the new technology */
-		ast_debug(1, "Giving bridge technology %s notification that %p is joining bridge %p\n",
-			new_technology->name, bridge_channel, bridge);
+		ast_debug(1, "Giving bridge technology %s notification that %p(%s) is joining bridge %p\n",
+			new_technology->name, bridge_channel, ast_channel_name(bridge_channel->chan),
+			bridge);
 		if (new_technology->join && new_technology->join(bridge, bridge_channel)) {
-			ast_debug(1, "Bridge technology %s failed to join %p to bridge %p\n",
-				new_technology->name, bridge_channel, bridge);
+			ast_debug(1, "Bridge technology %s failed to join %p(%s) to bridge %p\n",
+				new_technology->name, bridge_channel,
+				ast_channel_name(bridge_channel->chan), bridge);
 		}
 
 		/* Fourth we tell them to wake up so they become aware that the above has happened */
@@ -1268,15 +1290,17 @@ static void bridge_channel_join_multithreaded(struct ast_bridge_channel *bridge_
 		ao2_unlock(bridge_channel);
 		ao2_lock(bridge_channel->bridge);
 	} else if (bridge_channel->suspended) {
-		ast_debug(1, "Going into a multithreaded signal wait for bridge channel %p of bridge %p\n",
-			bridge_channel, bridge_channel->bridge);
+		ast_debug(1, "Going into a multithreaded signal wait for bridge channel %p(%s) of bridge %p\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 		ao2_unlock(bridge_channel);
 		ao2_lock(bridge_channel->bridge);
 	} else {
 		ao2_unlock(bridge_channel);
-		ast_debug(10, "Going into a multithreaded waitfor for bridge channel %p of bridge %p\n",
-			bridge_channel, bridge_channel->bridge);
+		ast_debug(10, "Going into a multithreaded waitfor for bridge channel %p(%s) of bridge %p\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			bridge_channel->bridge);
 		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1, fds, nfds, NULL, &outfd, &ms);
 		ao2_lock(bridge_channel->bridge);
 		if (!bridge_channel->suspended) {
@@ -1291,8 +1315,9 @@ static void bridge_channel_join_singlethreaded(struct ast_bridge_channel *bridge
 	ao2_unlock(bridge_channel->bridge);
 	ao2_lock(bridge_channel);
 	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ast_debug(1, "Going into a single threaded signal wait for bridge channel %p of bridge %p\n",
-			bridge_channel, bridge_channel->bridge);
+		ast_debug(1, "Going into a single threaded signal wait for bridge channel %p(%s) of bridge %p\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 	}
 	ao2_unlock(bridge_channel);
@@ -1362,12 +1387,13 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 		int execution_time = 0;
 
 		if (ast_tvdiff_ms(hook->interval_trip_time, start) > 0) {
-			ast_debug(1, "Hook '%p' on '%p' wants to happen in the future, stopping our traversal\n",
-				hook, bridge_channel);
+			ast_debug(1, "Hook %p on bridge channel %p(%s) wants to happen in the future, stopping our traversal\n",
+				hook, bridge_channel, ast_channel_name(bridge_channel->chan));
 			break;
 		}
 
-		ast_debug(1, "Executing hook '%p' on channel '%p'\n", hook, bridge_channel);
+		ast_debug(1, "Executing hook %p on bridge channel %p(%s)\n",
+			hook, bridge_channel, ast_channel_name(bridge_channel->chan));
 		res = hook->callback(bridge, bridge_channel, hook->hook_pvt);
 
 		/*
@@ -1377,7 +1403,8 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 		ast_heap_pop(bridge_channel->features->interval_hooks);
 
 		if (res || !hook->interval) {
-			ast_debug(1, "Hook '%p' is being removed from '%p'\n", hook, bridge_channel);
+			ast_debug(1, "Hook %p is being removed from bridge channel %p(%s)\n",
+				hook, bridge_channel, ast_channel_name(bridge_channel->chan));
 			if (hook->destructor) {
 				hook->destructor(hook->hook_pvt);
 			}
@@ -1385,7 +1412,8 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 			continue;
 		}
 
-		ast_debug(1, "Updating hook '%p' and adding it back to '%p'\n", hook, bridge_channel);
+		ast_debug(1, "Updating hook %p and adding it back to bridge channel %p(%s)\n",
+			hook, bridge_channel, ast_channel_name(bridge_channel->chan));
 
 		execution_time = ast_tvdiff_ms(ast_tvnow(), start);
 
@@ -1393,8 +1421,6 @@ static void bridge_channel_interval(struct ast_bridge *bridge, struct ast_bridge
 		start = ast_tvnow();
 
 		hook->interval_trip_time = ast_tvadd(start, ast_samp2tv(hook->interval - execution_time, 1000));
-
-		ast_debug(1, "Sticking hook '%p' in heap on '%p'\n", hook, bridge_channel->features);
 
 		hook->seqno = ast_atomic_fetchadd_int((int *)&bridge_channel->features->interval_sequence, +1);
 		ast_heap_push(bridge_channel->features->interval_hooks, hook);
@@ -1422,10 +1448,12 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 
 		/* If the above timed out simply exit */
 		if (!res) {
-			ast_debug(1, "DTMF feature string collection on bridge channel %p timed out\n", bridge_channel);
+			ast_debug(1, "DTMF feature string collection on bridge channel %p(%s) timed out\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan));
 			break;
 		} else if (res < 0) {
-			ast_debug(1, "DTMF feature string collection failed on bridge channel %p for some reason\n", bridge_channel);
+			ast_debug(1, "DTMF feature string collection failed on bridge channel %p(%s) for some reason\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan));
 			break;
 		}
 
@@ -1433,7 +1461,8 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 		/* Add the above DTMF into the DTMF string so we can do our matching */
 		dtmf[dtmf_len++] = res;
 
-		ast_debug(1, "DTMF feature string on bridge channel %p is now '%s'\n", bridge_channel, dtmf);
+		ast_debug(1, "DTMF feature string on bridge channel %p(%s) is now '%s'\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan), dtmf);
 
 		/* Assume that we do not want to look for DTMF any longer */
 		look_for_dtmf = 0;
@@ -1442,14 +1471,17 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 		AST_LIST_TRAVERSE(&features->hooks, hook, entry) {
 			/* If this hook matches just break out now */
 			if (!strcmp(hook->dtmf, dtmf)) {
-				ast_debug(1, "DTMF feature hook %p matched DTMF string '%s' on bridge channel %p\n", hook, dtmf, bridge_channel);
+				ast_debug(1, "DTMF feature hook %p matched DTMF string '%s' on bridge channel %p(%s)\n",
+					hook, dtmf, bridge_channel, ast_channel_name(bridge_channel->chan));
 				look_for_dtmf = 0;
 				break;
 			} else if (!strncmp(hook->dtmf, dtmf, dtmf_len)) {
-				ast_debug(1, "DTMF feature hook %p can match DTMF string '%s', it wants '%s', on bridge channel %p\n", hook, dtmf, hook->dtmf, bridge_channel);
+				ast_debug(1, "DTMF feature hook %p can match DTMF string '%s', it wants '%s', on bridge channel %p(%s)\n",
+					hook, dtmf, hook->dtmf, bridge_channel, ast_channel_name(bridge_channel->chan));
 				look_for_dtmf = 1;
 			} else {
-				ast_debug(1, "DTMF feature hook %p does not match DTMF string '%s', it wants '%s', on bridge channel %p\n", hook, dtmf, hook->dtmf, bridge_channel);
+				ast_debug(1, "DTMF feature hook %p does not match DTMF string '%s', it wants '%s', on bridge channel %p(%s)\n",
+					hook, dtmf, hook->dtmf, bridge_channel, ast_channel_name(bridge_channel->chan));
 			}
 		}
 
@@ -1503,7 +1535,8 @@ static void bridge_channel_talking(struct ast_bridge_channel *bridge_channel, in
 /*! \brief Internal function that plays back DTMF on a bridge channel */
 static void bridge_channel_dtmf_stream(struct ast_bridge_channel *bridge_channel, const char *dtmf)
 {
-	ast_debug(1, "Playing DTMF stream '%s' out to bridge channel %p\n", dtmf, bridge_channel);
+	ast_debug(1, "Playing DTMF stream '%s' out to bridge channel %p(%s)\n",
+		dtmf, bridge_channel, ast_channel_name(bridge_channel->chan));
 	ast_dtmf_stream(bridge_channel->chan, NULL, dtmf, 0, 0);
 }
 
@@ -1590,8 +1623,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	/* Record the thread that will be the owner of us */
 	bridge_channel->thread = pthread_self();
 
-	ast_debug(1, "Joining bridge channel %p to bridge %p\n",
-		bridge_channel, bridge_channel->bridge);
+	ast_debug(1, "Joining bridge channel %p(%s) to bridge %p\n",
+		bridge_channel, ast_channel_name(bridge_channel->chan), bridge_channel->bridge);
 
 	ao2_lock(bridge_channel->bridge);
 
@@ -1718,19 +1751,23 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 	/* Restore original formats of the channel as they came in */
 	if (ast_format_cmp(ast_channel_readformat(bridge_channel->chan), &formats[0]) == AST_FORMAT_CMP_NOT_EQUAL) {
-		ast_debug(1, "Bridge is returning %p to read format %s(%d)\n",
-			bridge_channel, ast_getformatname(&formats[0]), formats[0].id);
+		ast_debug(1, "Bridge is returning bridge channel %p(%s) to read format %s(%d)\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			ast_getformatname(&formats[0]), formats[0].id);
 		if (ast_set_read_format(bridge_channel->chan, &formats[0])) {
-			ast_debug(1, "Bridge failed to return channel %p to read format %s(%d)\n",
-				bridge_channel, ast_getformatname(&formats[0]), formats[0].id);
+			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to read format %s(%d)\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan),
+				ast_getformatname(&formats[0]), formats[0].id);
 		}
 	}
 	if (ast_format_cmp(ast_channel_writeformat(bridge_channel->chan), &formats[1]) == AST_FORMAT_CMP_NOT_EQUAL) {
-		ast_debug(1, "Bridge is returning %p to write format %s(%d)\n",
-			bridge_channel, ast_getformatname(&formats[1]), formats[1].id);
+		ast_debug(1, "Bridge is returning bridge channel %p(%s) to write format %s(%d)\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			ast_getformatname(&formats[1]), formats[1].id);
 		if (ast_set_write_format(bridge_channel->chan, &formats[1])) {
-			ast_debug(1, "Bridge failed to return channel %p to write format %s(%d)\n",
-				bridge_channel, ast_getformatname(&formats[1]), formats[1].id);
+			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to write format %s(%d)\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan),
+				ast_getformatname(&formats[1]), formats[1].id);
 		}
 	}
 }
@@ -2557,7 +2594,7 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
 	hook->destructor = destructor;
 	hook->hook_pvt = hook_pvt;
 
-	ast_debug(1, "Putting interval hook '%p' in the interval hooks heap on features '%p'\n",
+	ast_debug(1, "Putting interval hook %p in the interval hooks heap on features %p\n",
 		hook, features);
 	hook->interval_trip_time = ast_tvadd(ast_tvnow(), ast_samp2tv(hook->interval, 1000));
 	hook->seqno = ast_atomic_fetchadd_int((int *)&features->interval_sequence, +1);
@@ -2598,7 +2635,8 @@ int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_br
 		dtmf = builtin_features_dtmf[feature];
 		/* If no DTMF is still available (ie: it has been disabled) then error out now */
 		if (ast_strlen_zero(dtmf)) {
-			ast_debug(1, "Failed to enable built in feature %d on %p, no DTMF string is available for it.\n", feature, features);
+			ast_debug(1, "Failed to enable built in feature %d on %p, no DTMF string is available for it.\n",
+				feature, features);
 			return -1;
 		}
 	}
