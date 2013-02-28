@@ -1057,6 +1057,7 @@ int ast_bridge_destroy(struct ast_bridge *bridge)
 static int bridge_make_compatible(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_format formats[2];
+
 	ast_format_copy(&formats[0], ast_channel_readformat(bridge_channel->chan));
 	ast_format_copy(&formats[1], ast_channel_writeformat(bridge_channel->chan));
 
@@ -1751,23 +1752,23 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 	/* Restore original formats of the channel as they came in */
 	if (ast_format_cmp(ast_channel_readformat(bridge_channel->chan), &formats[0]) == AST_FORMAT_CMP_NOT_EQUAL) {
-		ast_debug(1, "Bridge is returning bridge channel %p(%s) to read format %s(%d)\n",
+		ast_debug(1, "Bridge is returning bridge channel %p(%s) to read format %s\n",
 			bridge_channel, ast_channel_name(bridge_channel->chan),
-			ast_getformatname(&formats[0]), formats[0].id);
+			ast_getformatname(&formats[0]));
 		if (ast_set_read_format(bridge_channel->chan, &formats[0])) {
-			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to read format %s(%d)\n",
+			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to read format %s\n",
 				bridge_channel, ast_channel_name(bridge_channel->chan),
-				ast_getformatname(&formats[0]), formats[0].id);
+				ast_getformatname(&formats[0]));
 		}
 	}
 	if (ast_format_cmp(ast_channel_writeformat(bridge_channel->chan), &formats[1]) == AST_FORMAT_CMP_NOT_EQUAL) {
-		ast_debug(1, "Bridge is returning bridge channel %p(%s) to write format %s(%d)\n",
+		ast_debug(1, "Bridge is returning bridge channel %p(%s) to write format %s\n",
 			bridge_channel, ast_channel_name(bridge_channel->chan),
-			ast_getformatname(&formats[1]), formats[1].id);
+			ast_getformatname(&formats[1]));
 		if (ast_set_write_format(bridge_channel->chan, &formats[1])) {
-			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to write format %s(%d)\n",
+			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to write format %s\n",
 				bridge_channel, ast_channel_name(bridge_channel->chan),
-				ast_getformatname(&formats[1]), formats[1].id);
+				ast_getformatname(&formats[1]));
 		}
 	}
 }
