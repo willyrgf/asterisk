@@ -144,6 +144,8 @@ struct ast_bridge_channel {
 	pthread_t thread;
 	/*! Additional file descriptors to look at */
 	int fds[4];
+	/*! TRUE if the channel has been poked. */
+	unsigned int poked;
 	/*! TRUE if the channel is in a bridge. */
 	unsigned int in_bridge:1;
 	/*! TRUE if the channel just joined the bridge. */

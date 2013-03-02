@@ -138,6 +138,7 @@ int ast_bridge_technology_unregister(struct ast_bridge_technology *technology)
 void ast_bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
 {
 	if (!pthread_equal(pthread_self(), bridge_channel->thread)) {
+		bridge_channel->poked = 1;
 		pthread_kill(bridge_channel->thread, SIGURG);
 		ast_cond_signal(&bridge_channel->cond);
 	}
@@ -1287,27 +1288,31 @@ static void bridge_channel_join_multithreaded(struct ast_bridge_channel *bridge_
 
 	/* Wait for data to either come from the channel or us to be signaled */
 	ao2_lock(bridge_channel);
-	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ao2_unlock(bridge_channel);
-		ao2_lock(bridge_channel->bridge);
+	if (bridge_channel->poked
+		|| bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
 	} else if (bridge_channel->suspended) {
 		ast_debug(1, "Going into a multithreaded signal wait for bridge channel %p(%s) of bridge %p\n",
 			bridge_channel, ast_channel_name(bridge_channel->chan),
 			bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
-		ao2_unlock(bridge_channel);
-		ao2_lock(bridge_channel->bridge);
 	} else {
-		ao2_unlock(bridge_channel);
 		ast_debug(10, "Going into a multithreaded waitfor for bridge channel %p(%s) of bridge %p\n",
 			bridge_channel, ast_channel_name(bridge_channel->chan),
 			bridge_channel->bridge);
+		ao2_unlock(bridge_channel);
 		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1, fds, nfds, NULL, &outfd, &ms);
 		ao2_lock(bridge_channel->bridge);
 		if (!bridge_channel->suspended) {
 			ast_bridge_handle_trip(bridge_channel->bridge, bridge_channel, chan, outfd);
 		}
+		ao2_lock(bridge_channel);
+		bridge_channel->poked = 0;
+		ao2_unlock(bridge_channel);
+		return;
 	}
+	bridge_channel->poked = 0;
+	ao2_unlock(bridge_channel);
+	ao2_lock(bridge_channel->bridge);
 }
 
 /*! \brief Run in a singlethreaded model. Each joined channel yields itself to the main bridge thread. TODO: Improve */
@@ -1315,12 +1320,14 @@ static void bridge_channel_join_singlethreaded(struct ast_bridge_channel *bridge
 {
 	ao2_unlock(bridge_channel->bridge);
 	ao2_lock(bridge_channel);
-	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+	if (!bridge_channel->poked
+		&& bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 		ast_debug(1, "Going into a single threaded signal wait for bridge channel %p(%s) of bridge %p\n",
 			bridge_channel, ast_channel_name(bridge_channel->chan),
 			bridge_channel->bridge);
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 	}
+	bridge_channel->poked = 0;
 	ao2_unlock(bridge_channel);
 	ao2_lock(bridge_channel->bridge);
 }
