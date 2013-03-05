@@ -91,8 +91,6 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 	/*! Bridged channel was ast_bridge_depart() from the bridge without being hung up */
 	AST_BRIDGE_CHANNEL_STATE_DEPART,
-	/*! Bridged channel was ast_bridge_depart() from the bridge during AST_BRIDGE_CHANNEL_STATE_END */
-	AST_BRIDGE_CHANNEL_STATE_DEPART_END,
 };
 
 /*! \brief Return values for bridge technology write function */
@@ -152,7 +150,7 @@ struct ast_bridge_channel {
 	unsigned int just_joined:1;
 	/*! TRUE if the channel is suspended from the bridge. */
 	unsigned int suspended:1;
-	/*! TRUE if the imparted channel must wait for an explicit depart from the bridge to reclaim the channel. */
+	/*! TRUE if the channel must wait for an ast_bridge_depart to reclaim the channel. */
 	unsigned int depart_wait:1;
 	/*! Features structure for features that are specific to this channel */
 	struct ast_bridge_features *features;
@@ -271,8 +269,6 @@ struct ast_bridge {
 	struct ast_callid *callid;
 	/*! Linked list of channels participating in the bridge */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
-	/*! Linked list of channels removed from the bridge and waiting to be departed. */
-	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) depart_wait;
 	/*! Queue of actions to perform on the bridge. */
 	AST_LIST_HEAD_NOLOCK(, ast_frame) action_queue;
 };
@@ -447,7 +443,6 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 /*!
  * \brief Depart a channel from a bridge
  *
- * \param bridge Bridge to depart from
  * \param chan Channel to depart
  *
  * \retval 0 on success
@@ -456,17 +451,17 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
  * Example usage:
  *
  * \code
- * ast_bridge_depart(bridge, chan);
+ * ast_bridge_depart(chan);
  * \endcode
  *
- * This removes the channel pointed to by the chan pointer from the bridge
- * pointed to by the bridge pointer and gives control to the calling thread.
+ * This removes the channel pointed to by the chan pointer from any bridge
+ * it may be in and gives control to the calling thread.
  * This does not hang up the channel.
  *
  * \note This API call can only be used on channels that were added to the bridge
  *       using the ast_bridge_impart API call with the independent flag FALSE.
  */
-int ast_bridge_depart(struct ast_bridge *bridge, struct ast_channel *chan);
+int ast_bridge_depart(struct ast_channel *chan);
 
 /*!
  * \brief Remove a channel from a bridge

@@ -1490,7 +1490,7 @@ static int play_sound_helper(struct conference_bridge *conference_bridge, const 
 	}
 
 	ast_debug(1, "Departing underlying channel '%s' from bridge '%p'\n", ast_channel_name(underlying_channel), conference_bridge->bridge);
-	ast_bridge_depart(conference_bridge->bridge, underlying_channel);
+	ast_bridge_depart(underlying_channel);
 
 	ast_mutex_unlock(&conference_bridge->playback_lock);
 

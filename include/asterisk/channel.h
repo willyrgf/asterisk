@@ -4032,6 +4032,9 @@ void ast_channel_timingfunc_set(struct ast_channel *chan, ast_timing_func_t valu
 struct ast_bridge *ast_channel_internal_bridge(const struct ast_channel *chan);
 void ast_channel_internal_bridge_set(struct ast_channel *chan, struct ast_bridge *value);
 
+struct ast_bridge_channel *ast_channel_internal_bridge_channel(const struct ast_channel *chan);
+void ast_channel_internal_bridge_channel_set(struct ast_channel *chan, struct ast_bridge_channel *value);
+
 struct ast_channel *ast_channel_internal_bridged_channel(const struct ast_channel *chan);
 void ast_channel_internal_bridged_channel_set(struct ast_channel *chan, struct ast_channel *value);
 

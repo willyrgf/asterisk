@@ -283,10 +283,10 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 
 	/* Wait for peer thread to exit bridge and die. */
 	if (!ast_autoservice_start(bridge_channel->chan)) {
-		ast_bridge_depart(attended_bridge, peer);
+		ast_bridge_depart(peer);
 		ast_autoservice_stop(bridge_channel->chan);
 	} else {
-		ast_bridge_depart(attended_bridge, peer);
+		ast_bridge_depart(peer);
 	}
 
 	/* Now that all channels are out of it we can destroy the bridge and the feature structures */

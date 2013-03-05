@@ -934,7 +934,6 @@ static void destroy_bridge(void *obj)
 
 	/* There should not be any channels left in the bridge. */
 	ast_assert(AST_LIST_EMPTY(&bridge->channels));
-	ast_assert(AST_LIST_EMPTY(&bridge->depart_wait));
 
 	ao2_lock(bridge);
 	if (bridge->thread != AST_PTHREADT_NULL) {
@@ -1630,9 +1629,6 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	ast_format_copy(&formats[0], ast_channel_readformat(bridge_channel->chan));
 	ast_format_copy(&formats[1], ast_channel_writeformat(bridge_channel->chan));
 
-	/* Record the thread that will be the owner of us */
-	bridge_channel->thread = pthread_self();
-
 	ast_debug(1, "Joining bridge channel %p(%s) to bridge %p\n",
 		bridge_channel, ast_channel_name(bridge_channel->chan), bridge_channel->bridge);
 
@@ -1712,23 +1708,10 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	/* See if we need to dissolve the bridge itself if they hung up */
 	switch (bridge_channel->state) {
 	case AST_BRIDGE_CHANNEL_STATE_END:
-	case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
 		bridge_check_dissolve(bridge_channel->bridge, bridge_channel);
 		break;
 	default:
 		break;
-	}
-
-	if (bridge_channel->depart_wait) {
-		switch (bridge_channel->state) {
-		case AST_BRIDGE_CHANNEL_STATE_DEPART:
-		case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
-			break;
-		default:
-			/* Put the channel into the ast_bridge_depart wait list. */
-			AST_LIST_INSERT_TAIL(&bridge_channel->bridge->depart_wait, bridge_channel, entry);
-			break;
-		}
 	}
 
 	ao2_unlock(bridge_channel->bridge);
@@ -2117,6 +2100,8 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	}
 
 	/* Initialize various other elements of the bridge channel structure that we can't do above */
+	ast_channel_internal_bridge_channel_set(chan, bridge_channel);
+	bridge_channel->thread = pthread_self();
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
@@ -2125,6 +2110,7 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	state = bridge_channel->state;
 
 	/* Cleanup all the data in the bridge channel after it leaves the bridge. */
+	ast_channel_internal_bridge_channel_set(chan, NULL);
 	bridge_channel->chan = NULL;
 	bridge_channel->swap = NULL;
 	bridge_channel->features = NULL;
@@ -2180,25 +2166,13 @@ static void *bridge_channel_ind_thread(void *data)
 	chan = bridge_channel->chan;
 
 	/* cleanup */
+	ast_channel_internal_bridge_channel_set(bridge_channel->chan, NULL);
 	bridge_channel->chan = NULL;
 	bridge_channel->swap = NULL;
 	ast_bridge_features_destroy(bridge_channel->features);
 	bridge_channel->features = NULL;
 
 	ao2_ref(bridge_channel, -1);
-
-	switch (state) {
-	case AST_BRIDGE_CHANNEL_STATE_DEPART:
-	case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
-		ast_log(LOG_ERROR, "Independently imparted channel was departed: %s\n",
-			ast_channel_name(chan));
-		ast_assert(0);
-		/* fallthrough */
-	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
-	case AST_BRIDGE_CHANNEL_STATE_END:
-	default:
-		break;
-	}
 
 	ast_after_bridge_goto_run(chan);
 	return NULL;
@@ -2216,6 +2190,7 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	}
 
 	/* Setup various parameters */
+	ast_channel_internal_bridge_channel_set(chan, bridge_channel);
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
@@ -2238,6 +2213,7 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	}
 	if (res) {
 		/* cleanup */
+		ast_channel_internal_bridge_channel_set(chan, NULL);
 		bridge_channel->chan = NULL;
 		bridge_channel->swap = NULL;
 		ast_bridge_features_destroy(bridge_channel->features);
@@ -2250,66 +2226,41 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	return 0;
 }
 
-int ast_bridge_depart(struct ast_bridge *bridge, struct ast_channel *chan)
+int ast_bridge_depart(struct ast_channel *chan)
 {
 	struct ast_bridge_channel *bridge_channel;
-	pthread_t thread;
 
-	ao2_lock(bridge);
+	bridge_channel = ast_channel_internal_bridge_channel(chan);
+	if (!bridge_channel || !bridge_channel->depart_wait) {
+		ast_log(LOG_ERROR, "Channel %s cannot be departed.\n",
+			ast_channel_name(chan));
+		/*
+		 * Should never happen.  It likely means that
+		 * ast_bridge_depart() is called by two threads for the same
+		 * channel, the channel was never imparted to be departed, or it
+		 * has already been departed.
+		 */
+		ast_assert(0);
+		return -1;
+	}
 
-	do {
-		/* Try to find the channel that we want to depart */
-		bridge_channel = find_bridge_channel(bridge, chan);
-		if (bridge_channel) {
-			/* Channel is still in the bridge. */
-			if (!bridge_channel->depart_wait) {
-				ast_log(LOG_ERROR, "Bridged channel cannot be departed: %s\n",
-					ast_channel_name(bridge_channel->chan));
-				ao2_unlock(bridge);
-				return -1;
-			}
-			ao2_lock(bridge_channel);
-			switch (bridge_channel->state) {
-			case AST_BRIDGE_CHANNEL_STATE_END:
-				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART_END);
-				break;
-			case AST_BRIDGE_CHANNEL_STATE_DEPART:
-			case AST_BRIDGE_CHANNEL_STATE_DEPART_END:
-				/*
-				 * Should never happen.  It likely means that
-				 * ast_bridge_depart() is called by two threads for the same
-				 * channel.
-				 */
-				ast_assert(0);
-				break;
-			default:
-				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
-				break;
-			}
-			ao2_unlock(bridge_channel);
-			break;
-		}
+	/* We are claiming the reference held by the depart thread. */
 
-		/* Was the channel already removed from the bridge? */
-		AST_LIST_TRAVERSE_SAFE_BEGIN(&bridge->depart_wait, bridge_channel, entry) {
-			if (bridge_channel->chan == chan) {
-				AST_LIST_REMOVE_CURRENT(entry);
-				break;
-			}
-		}
-		AST_LIST_TRAVERSE_SAFE_END;
-		if (!bridge_channel) {
-			/* Channel does not exist. */
-			ao2_unlock(bridge);
-			return -1;
-		}
-	} while (0);
-	thread = bridge_channel->thread;
-
-	ao2_unlock(bridge);
+	ao2_lock(bridge_channel);
+	switch (bridge_channel->state) {
+	case AST_BRIDGE_CHANNEL_STATE_WAIT:
+		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+		break;
+	default:
+		/* The channel is already leaving the bridge. */
+		break;
+	}
+	ao2_unlock(bridge_channel);
 
 	/* Wait for the depart thread to die */
-	pthread_join(thread, NULL);
+	pthread_join(bridge_channel->thread, NULL);
+
+	ast_channel_internal_bridge_channel_set(chan, NULL);
 
 	/* We can get rid of the bridge_channel after the depart thread has died. */
 	ao2_ref(bridge_channel, -1);

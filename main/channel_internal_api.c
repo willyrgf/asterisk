@@ -188,6 +188,7 @@ struct ast_channel {
 
 /* BUGBUG the bridge pointer must change to an ast_channel_bridge pointer because it will never change while the channel is in the bridging system whereas the bridge could change. */
 	struct ast_bridge *bridge;                      /*!< Bridge this channel is participating in */
+	struct ast_bridge_channel *bridge_channel;/*!< The bridge_channel this channel is linked with. */
 	struct ast_timer *timer;			/*!< timer object that provided timingfd */
 
 	char context[AST_MAX_CONTEXT];			/*!< Dialplan: Current extension context */
@@ -1265,6 +1266,15 @@ struct ast_bridge *ast_channel_internal_bridge(const struct ast_channel *chan)
 void ast_channel_internal_bridge_set(struct ast_channel *chan, struct ast_bridge *value)
 {
 	chan->bridge = value;
+}
+
+struct ast_bridge_channel *ast_channel_internal_bridge_channel(const struct ast_channel *chan)
+{
+	return chan->bridge_channel;
+}
+void ast_channel_internal_bridge_channel_set(struct ast_channel *chan, struct ast_bridge_channel *value)
+{
+	chan->bridge_channel = value;
 }
 
 struct ast_channel *ast_channel_internal_bridged_channel(const struct ast_channel *chan)
