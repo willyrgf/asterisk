@@ -108,7 +108,7 @@ static int rtpstart = DEFAULT_RTP_START;			/*!< First port for RTP sessions (set
 static int rtpend = DEFAULT_RTP_END;			/*!< Last port for RTP sessions (set in rtp.conf) */
 static int rtpdebug;			/*!< Are we debugging? */
 static int rtcpdebug;			/*!< Are we debugging RTCP? */
-static int rtcpstats;			/*!< Are we debugging RTCP? */
+static int rtcpstats;			/*!< Are we gathering stats? */
 static int rtcpinterval = RTCP_DEFAULT_INTERVALMS; /*!< Time between rtcp reports in millisecs */
 static struct ast_sockaddr rtpdebugaddr;	/*!< Debug packets to/from this host */
 static struct ast_sockaddr rtcpdebugaddr;	/*!< Debug RTCP packets to/from this host */

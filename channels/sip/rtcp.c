@@ -98,6 +98,10 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 		/* Houston, we got a problem */
 		return;
 	}
+	if (!qual) {
+		ast_log(LOG_ERROR, "--- Got not CQR data from RTP. \n");
+		return;
+	}
 	
 	if (dialog->sip_cfg->rtcpevents) {
 		/* 
@@ -200,6 +204,11 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	char buf_remoteip[25];
 	char buf_inpacketloss[25], buf_outpacketloss[25];
 	char buf_outpackets[25], buf_inpackets[25];
+
+	if (!qual) {
+		ast_log(LOG_ERROR, "No CQR data provided \n");
+		return;
+	}
 
 	/* Since the CDR is already gone, we need to calculate our own duration.
 	   The CDR duration is the definitive resource for billing, this is
