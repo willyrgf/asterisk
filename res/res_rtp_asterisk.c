@@ -183,6 +183,7 @@ struct ast_rtp {
 	struct timeval rxcore;
 	struct timeval txcore;
 	double drxcore;                 /*!< The double representation of the first received packet */
+	struct timeval start;           /*!< When the stream started (we can't depend on CDRs) */
 	struct timeval lastrx;          /*!< timeval when we last received a packet */
 	struct timeval dtmfmute;
 	struct ast_smoother *smoother;
@@ -481,6 +482,7 @@ static void ast_rtcp_schedule(struct ast_rtp_instance *instance)
 	/* Do not schedule RR if RTCP isn't run */
 	if (rtp->rtcp && !ast_sockaddr_isnull(&rtp->rtcp->them)  && rtp->rtcp->schedid < 1) {
 		/* Schedule transmission of Receiver Report */
+		ast_rtcp_write_empty(instance);
 		ao2_ref(instance, +1);
 		rtp->rtcp->schedid = ast_sched_add(rtp->sched, ast_rtcp_calc_interval(rtp), ast_rtcp_write, instance);
 		if (rtp->rtcp->schedid < 0) {
@@ -648,6 +650,9 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 
 	/* Associate the RTP structure with the RTP instance and be done */
 	ast_rtp_instance_set_data(instance, rtp);
+
+	gettimeofday(&rtp->start, NULL);
+	rtp->isactive = 1;
 
 	return 0;
 }
@@ -3003,6 +3008,30 @@ static int ast_rtp_get_stat(struct ast_rtp_instance *instance, struct ast_rtp_in
 	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_LOCAL_SSRC, -1, stats->local_ssrc, rtp->ssrc);
 	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_REMOTE_SSRC, -1, stats->remote_ssrc, rtp->themssrc);
 
+	AST_RTP_STAT_SET(AST_RTP_INSTANCE_STAT_START, -1, stats->start, rtp->start);
+	if (stat == AST_RTP_INSTANCE_STAT_IP || stat == AST_RTP_INSTANCE_STAT_ALL) {
+		memcpy(&stats->them, &rtp->rtcp->them, sizeof(stats->them));
+	}
+	if (stat == AST_RTP_INSTANCE_STAT_LOCAL_CNAME || stat == AST_RTP_INSTANCE_STAT_ALL) {
+		memcpy(&stats->ourcname, &rtp->rtcp->ourcname, rtp->rtcp->ourcnamelength);	/* UTF8 safe */
+		stats->ourcnamelength = rtp->rtcp->ourcnamelength;
+	}
+	if (stat == AST_RTP_INSTANCE_STAT_REMOTE_CNAME || stat == AST_RTP_INSTANCE_STAT_ALL) {
+		memcpy(&stats->theircname, &rtp->rtcp->theircname, rtp->rtcp->theircnamelength);	/* UTF8 safe */
+		stats->theircnamelength = rtp->rtcp->theircnamelength;
+	}
+
+	/* To fix */
+	stats->readcost = rtp->rtcp->readcost;
+        stats->writecost = rtp->rtcp->writecost;
+	stats->lasttxformat = rtp->lasttxformat;
+	stats->lastrxformat = rtp->lastrxformat;
+	if (!ast_strlen_zero(rtp->rtcp->readtranslator)) {
+		ast_copy_string(stats->readtranslator, rtp->rtcp->readtranslator, sizeof(stats->readtranslator));
+	}
+	if (!ast_strlen_zero(rtp->rtcp->writetranslator)) {
+		ast_copy_string(stats->writetranslator, rtp->rtcp->writetranslator, sizeof(stats->writetranslator));
+	}
 	return 0;
 }
 
@@ -3037,12 +3066,20 @@ static void ast_rtp_stop(struct ast_rtp_instance *instance)
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr addr = { {0,} };
 
+	ast_debug(1, "##### Stopping RTP, Sending good bye \n");
+
+	/* Send RTCP goodbye packet */
+	if (rtp->isactive && rtp->rtcp) {
+		ast_rtcp_write_sr(instance, 1);
+		ast_debug(1, "##### Stopping RTCP, Sent good bye \n");
+	}
 	if (rtp->rtcp && rtp->rtcp->schedid > 0) {
 		if (!ast_sched_del(rtp->sched, rtp->rtcp->schedid)) {
 			/* successfully cancelled scheduler entry. */
 			ao2_ref(instance, -1);
 		}
 		rtp->rtcp->schedid = -1;
+		ast_debug(1, "##### Stopping RTCP, Removing scheduler \n");
 	}
 
 	if (rtp->red) {
@@ -3057,6 +3094,7 @@ static void ast_rtp_stop(struct ast_rtp_instance *instance)
 	}
 
 	ast_set_flag(rtp, FLAG_NEED_MARKER_BIT);
+	rtp->isactive = 0;
 }
 
 static int ast_rtp_qos_set(struct ast_rtp_instance *instance, int tos, int cos, const char *desc)
@@ -3187,7 +3225,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 static int ast_rtp_isactive(struct ast_rtp_instance *instance)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
-	return rtp->isactive;
+	return rtp->isactive ? 0 : 1;
 }
 
 /*! \brief Basically add SSRC */
@@ -3248,6 +3286,7 @@ static int ast_rtcp_write_empty_frame(struct ast_rtp_instance *instance)
 	if (!rtp || !rtp->rtcp) {
 		return 0;
 	} 
+	ast_debug(1,  "************ ---- About to send empty RTCP packet\n");
 	fd = rtp->rtcp->s;
 	
 	if (fd == -1) {

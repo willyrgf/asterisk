@@ -174,6 +174,7 @@ static char *levels[NUMLOGLEVELS] = {
 	"ERROR",
 	"VERBOSE",
 	"DTMF",
+	"CQR",
 };
 
 /*! \brief Colors used in the console for logging */

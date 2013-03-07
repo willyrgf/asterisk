@@ -33,6 +33,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "asterisk/logger.h"
 #include "asterisk/translate.h"
+#include "asterisk/rtp_engine.h"
 #include "include/sip.h"
 #include "include/rtcp.h"
 
@@ -49,6 +50,7 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 	//int qosrealtime = ast_check_realtime("rtpqos");
 	unsigned int duration;	/* Duration in secs */
  	int readtrans = FALSE, writetrans = FALSE;
+	memset(&qual, 0, sizeof(qual));
 	
 
 	if (dialog && dialog->owner) {
@@ -91,15 +93,8 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 
 	}
 
-	//rtpqstring =  ast_rtp_get_quality(instance);
 	if (ast_rtp_instance_get_stats(instance, &qual, AST_RTP_INSTANCE_STAT_ALL)) {
-	//qual = ast_rtp_get_qualdata(instance);
-	//if (!qual) {
 		/* Houston, we got a problem */
-		return;
-	}
-	if (!qual) {
-		ast_log(LOG_ERROR, "--- Got not CQR data from RTP. \n");
 		return;
 	}
 	
@@ -178,16 +173,15 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 	   monitor thread instead.
 	 */
 	if (reporttype == 1) {
+		ast_log(LOG_DEBUG, "---- Activation qual structure in dialog \n");
+		qual.end = ast_tvnow();
+ 		qual.mediatype = type;
 		if (type == SDP_AUDIO) {  /* Audio */
-			dialog->audioqual = ast_calloc(sizeof(struct ast_rtp_instance_stats), 1);
+			dialog->audioqual = ast_calloc(1, sizeof(struct ast_rtp_instance_stats));
 			(* dialog->audioqual) = qual;
-			dialog->audioqual->end = ast_tvnow();
- 			dialog->audioqual->mediatype = type;
 		} else if (type == SDP_VIDEO) {  /* Video */
-			dialog->videoqual = ast_calloc(sizeof(struct ast_rtp_instance_stats), 1);
+			dialog->videoqual = ast_calloc(1,sizeof(struct ast_rtp_instance_stats));
 			(* dialog->videoqual) = qual;
- 			dialog->videoqual->mediatype = type;
-			dialog->videoqual->end = ast_tvnow();
 		}
 	}
 }
@@ -204,6 +198,9 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	char buf_remoteip[25];
 	char buf_inpacketloss[25], buf_outpacketloss[25];
 	char buf_outpackets[25], buf_inpackets[25];
+	int qosrealtime = ast_check_realtime("rtpqos");
+
+	ast_log(LOG_DEBUG, "************* QOS END REPORTS: The final countdown!!!!! Yeah. \n");
 
 	if (!qual) {
 		ast_log(LOG_ERROR, "No CQR data provided \n");
@@ -215,9 +212,10 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	   the RTP stream duration which may include early media (ringing and
 	   provider messages). Only useful for measurements.
 	 */
-	if (!ast_tvzero(qual->end)) {
+	if (!ast_tvzero(qual->end) && !ast_tvzero(qual->start)) {
 		duration = (unsigned int)(ast_tvdiff_ms(qual->end, qual->start) / 1000);
 	} else {
+		ast_log(LOG_DEBUG, "**** WTF? No duration? What type of call is THAT? \n");
 		duration = 0;
 	}
 
@@ -241,7 +239,8 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	//sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
 	//sprintf(buf_outpackets, "%d", qual->local_count);
 
-	ast_log(LOG_CQR, "RTPQOS Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
+	ast_log(LOG_DEBUG, "************* QOS END REPORTS: Probing new logging channel LOG_CQR!!!!! Yeah. \n");
+	ast_log(LOG_DEBUG, "RTPQOS Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
 		qual->channel[0] ? qual->channel : "",
 		qual->uniqueid[0] ? qual->uniqueid : "",
 		qual->bridgedchan[0] ? qual->bridgedchan : "" ,
@@ -260,6 +259,10 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 		buf_outpacketloss,
 		buf_inpackets,
 		buf_inpacketloss);
+
+	if (!qosrealtime) {
+		return;
+	}
 
 	ast_store_realtime("rtpqos", 
 		"channel", qual->channel[0] ? qual->channel : "--no channel--",
@@ -295,6 +298,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 int send_rtcp_events(const void *data)
 {
 	struct sip_pvt *dialog = (struct sip_pvt *) data;
+	ast_log(LOG_DEBUG, "***** SENDING RTCP EVENT \n");
 
 	if (dialog->rtp && ast_rtp_instance_isactive(dialog->rtp)) {
 		sip_rtcp_report(dialog, dialog->rtp, SDP_AUDIO, FALSE);
@@ -308,6 +312,7 @@ int send_rtcp_events(const void *data)
 /*! \brief Activate RTCP events at start of call */
 void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched)
 {
+	ast_log(LOG_DEBUG, "***** STARTING SENDING RTCP EVENT \n");
 	if (!dialog->sip_cfg->rtcpevents || !dialog->sip_cfg->rtcptimer) {
 		return;
 	}

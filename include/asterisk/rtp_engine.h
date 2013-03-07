@@ -212,6 +212,14 @@ enum ast_rtp_instance_stat {
 	AST_RTP_INSTANCE_STAT_LOCAL_SSRC,
 	/*! Retrieve remote SSRC */
 	AST_RTP_INSTANCE_STAT_REMOTE_SSRC,
+	/*! Retrieve local CNAME */
+	AST_RTP_INSTANCE_STAT_LOCAL_CNAME,
+	/*! Retrieve remote SDES */
+	AST_RTP_INSTANCE_STAT_REMOTE_CNAME,
+	/*! Retrieve start time */
+	AST_RTP_INSTANCE_STAT_START,
+	/*! Retrieve IP Address */
+	AST_RTP_INSTANCE_STAT_IP,
 };
 
 /* Codes for RTP-specific data - not defined by our AST_FORMAT codes */
@@ -309,6 +317,10 @@ struct ast_rtp_instance_stats {
 	int lastrxformat;		  /*!< Last used codec on received stream */
 	struct sockaddr_in them;	  /*!< The IP address used for media by remote end */
 	struct sockaddr_in us;	  	  /*!< The IP address used for media by our end */
+	char ourcname[255];		/*!< Our SDES RTP session name (CNAME) */
+	size_t ourcnamelength;		/*!< Length of CNAME (utf8) */
+	char theircname[255];		/*!< Their SDES RTP session name (CNAME) */
+	size_t theircnamelength;	/*!< Length of CNAME (utf8) */
 	struct timeval start;		  /*!< When the stream started */
 	struct timeval end;		  /*!< When the stream ended */
 	char writetranslator[80];	  /*!< Translator used when writing */
