@@ -211,6 +211,31 @@ int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, s
 	return 0;
 }
 
+void ast_bridge_channel_restore_formats(struct ast_bridge_channel *bridge_channel)
+{
+	/* Restore original formats of the channel as they came in */
+	if (ast_format_cmp(ast_channel_readformat(bridge_channel->chan), &bridge_channel->read_format) == AST_FORMAT_CMP_NOT_EQUAL) {
+		ast_debug(1, "Bridge is returning bridge channel %p(%s) to read format %s\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			ast_getformatname(&bridge_channel->read_format));
+		if (ast_set_read_format(bridge_channel->chan, &bridge_channel->read_format)) {
+			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to read format %s\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan),
+				ast_getformatname(&bridge_channel->read_format));
+		}
+	}
+	if (ast_format_cmp(ast_channel_writeformat(bridge_channel->chan), &bridge_channel->write_format) == AST_FORMAT_CMP_NOT_EQUAL) {
+		ast_debug(1, "Bridge is returning bridge channel %p(%s) to write format %s\n",
+			bridge_channel, ast_channel_name(bridge_channel->chan),
+			ast_getformatname(&bridge_channel->write_format));
+		if (ast_set_write_format(bridge_channel->chan, &bridge_channel->write_format)) {
+			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to write format %s\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan),
+				ast_getformatname(&bridge_channel->write_format));
+		}
+	}
+}
+
 void ast_bridge_poke(struct ast_bridge *bridge)
 {
 	/* Poke the thread just in case */
@@ -1624,10 +1649,9 @@ static void bridge_channel_action_control(struct ast_bridge_channel *bridge_chan
 static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_frame *action;
-	struct ast_format formats[2];
 
-	ast_format_copy(&formats[0], ast_channel_readformat(bridge_channel->chan));
-	ast_format_copy(&formats[1], ast_channel_writeformat(bridge_channel->chan));
+	ast_format_copy(&bridge_channel->read_format, ast_channel_readformat(bridge_channel->chan));
+	ast_format_copy(&bridge_channel->write_format, ast_channel_writeformat(bridge_channel->chan));
 
 	ast_debug(1, "Joining bridge channel %p(%s) to bridge %p\n",
 		bridge_channel, ast_channel_name(bridge_channel->chan), bridge_channel->bridge);
@@ -1742,32 +1766,14 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	}
 	ast_channel_internal_bridge_set(bridge_channel->chan, NULL);
 
-	/* Restore original formats of the channel as they came in */
-	if (ast_format_cmp(ast_channel_readformat(bridge_channel->chan), &formats[0]) == AST_FORMAT_CMP_NOT_EQUAL) {
-		ast_debug(1, "Bridge is returning bridge channel %p(%s) to read format %s\n",
-			bridge_channel, ast_channel_name(bridge_channel->chan),
-			ast_getformatname(&formats[0]));
-		if (ast_set_read_format(bridge_channel->chan, &formats[0])) {
-			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to read format %s\n",
-				bridge_channel, ast_channel_name(bridge_channel->chan),
-				ast_getformatname(&formats[0]));
-		}
-	}
-	if (ast_format_cmp(ast_channel_writeformat(bridge_channel->chan), &formats[1]) == AST_FORMAT_CMP_NOT_EQUAL) {
-		ast_debug(1, "Bridge is returning bridge channel %p(%s) to write format %s\n",
-			bridge_channel, ast_channel_name(bridge_channel->chan),
-			ast_getformatname(&formats[1]));
-		if (ast_set_write_format(bridge_channel->chan, &formats[1])) {
-			ast_debug(1, "Bridge failed to return bridge channel %p(%s) to write format %s\n",
-				bridge_channel, ast_channel_name(bridge_channel->chan),
-				ast_getformatname(&formats[1]));
-		}
-	}
+	ast_bridge_channel_restore_formats(bridge_channel);
 }
 
 static void bridge_channel_destroy(void *obj)
 {
 	struct ast_bridge_channel *bridge_channel = obj;
+
+	ast_bridge_channel_clear_roles(bridge_channel);
 
 	if (bridge_channel->callid) {
 		bridge_channel->callid = ast_callid_unref(bridge_channel->callid);
@@ -1777,6 +1783,7 @@ static void bridge_channel_destroy(void *obj)
 		ao2_ref(bridge_channel->bridge, -1);
 		bridge_channel->bridge = NULL;
 	}
+
 	/* Destroy elements of the bridge channel structure and the bridge channel structure itself */
 	ast_cond_destroy(&bridge_channel->cond);
 }
@@ -2106,6 +2113,14 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
 
+	if (ast_bridge_channel_establish_roles(bridge_channel)) {
+		/* A bridge channel should not be allowed to join if its roles couldn't be copied properly. */
+		state = AST_BRIDGE_CHANNEL_STATE_HANGUP;
+		ast_channel_internal_bridge_channel_set(chan, NULL);
+		ao2_ref(bridge_channel, -1);
+		goto join_exit;
+	}
+
 	bridge_channel_join(bridge_channel);
 	state = bridge_channel->state;
 
@@ -2197,6 +2212,11 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	bridge_channel->depart_wait = independent ? 0 : 1;
 	bridge_channel->callid = ast_read_threadstorage_callid();
 
+	if (ast_bridge_channel_establish_roles(bridge_channel)) {
+		res = -1;
+		goto bridge_impart_cleanup;
+	}
+
 	/* Actually create the thread that will handle the channel */
 	if (independent) {
 		/* Independently imparted channels cannot have a PBX. */
@@ -2211,6 +2231,8 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 		res = ast_pthread_create(&bridge_channel->thread, NULL,
 			bridge_channel_depart_thread, bridge_channel);
 	}
+
+bridge_impart_cleanup:
 	if (res) {
 		/* cleanup */
 		ast_channel_internal_bridge_channel_set(chan, NULL);

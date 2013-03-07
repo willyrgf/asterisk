@@ -63,10 +63,13 @@ extern "C" {
 #endif
 
 #include "asterisk/bridging_features.h"
+#include "asterisk/bridging_roles.h"
 #include "asterisk/dsp.h"
 
 /*! \brief Capabilities for a bridge technology */
 enum ast_bridge_capability {
+	/*! Bridge technology can service calls on hold */
+	AST_BRIDGE_CAPABILITY_HOLDING = (1 << 0),
 	/*! Bridge should natively bridge two channels if possible */
 	AST_BRIDGE_CAPABILITY_NATIVE = (1 << 1),
 	/*! Bridge is only capable of mixing 2 channels */
@@ -157,8 +160,14 @@ struct ast_bridge_channel {
 	/*! Technology optimization parameters used by bridging technologies capable of
 	 *  optimizing based upon talk detection. */
 	struct ast_bridge_tech_optimizations tech_args;
+	/*! Copy of read format used by chan before join */
+	struct ast_format read_format;
+	/*! Copy of write format used by chan before join */
+	struct ast_format write_format;
 	/*! Call ID associated with bridge channel */
 	struct ast_callid *callid;
+	/*! A clone of the roles living on chan when the bridge channel joins the bridge. This may require some opacification */
+	struct bridge_roles_datastore *bridge_roles;
 	/*! Linked list information */
 	AST_LIST_ENTRY(ast_bridge_channel) entry;
 	/*! Queue of actions to perform on the channel. */
@@ -632,6 +641,14 @@ int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
  * \note BUGBUG This may get moved.
  */
 int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, struct ast_frame *action);
+
+/*!
+ * \brief Restore the formats of a bridge channel's channel to how they were before bridge_channel_join
+ * \since 12.0.0
+ *
+ * \param bridge_channel Channel to restore
+ */
+void ast_bridge_channel_restore_formats(struct ast_bridge_channel *bridge_channel);
 
 /*!
  * \brief Adjust the internal mixing sample rate of a bridge
