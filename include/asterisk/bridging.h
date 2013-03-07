@@ -579,18 +579,21 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan);
 int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
 
 /*!
- * \brief Change the state of a bridged channel without taking and releasing the bridge channel lock
+ * \brief Set bridge channel state to leave bridge (if not leaving already) with no lock.
  *
  * \param bridge_channel Channel to change the state on
  * \param new_state The new state to place the channel into
  *
- * \note Do not use this call outside the context of either interval hook callbacks or bridging core.
- *       This function assumes the bridge_channel is locked.
+ * \note This API call is only meant to be used within the
+ * bridging module and hook callbacks to request the channel
+ * exit the bridge.
+ *
+ * \note This function assumes the bridge_channel is locked.
  */
 void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state);
 
 /*!
- * \brief Change the state of a bridged channel
+ * \brief Set bridge channel state to leave bridge (if not leaving already).
  *
  * \param bridge_channel Channel to change the state on
  * \param new_state The new state to place the channel into
@@ -601,11 +604,13 @@ void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, e
  * ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
  * \endcode
  *
- * This places the channel pointed to by bridge_channel into the state
- * AST_BRIDGE_CHANNEL_STATE_HANGUP.
+ * This places the channel pointed to by bridge_channel into the
+ * state AST_BRIDGE_CHANNEL_STATE_HANGUP if it was
+ * AST_BRIDGE_CHANNEL_STATE_WAIT before.
  *
- * \note This API call is only meant to be used in feature hook callbacks to
- *       request the channel exit the bridge.
+ * \note This API call is only meant to be used within the
+ * bridging module and hook callbacks to request the channel
+ * exit the bridge.
  */
 void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state);
 

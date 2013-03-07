@@ -58,15 +58,7 @@ static int bridge_features_duration_callback(struct ast_bridge *bridge, struct a
 		ast_stream_and_wait(bridge_channel->chan, limits->duration_sound, AST_DIGIT_NONE);
 	}
 
-	ao2_lock(bridge_channel);
-	switch (bridge_channel->state) {
-	case AST_BRIDGE_CHANNEL_STATE_WAIT:
-		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
-		break;
-	default:
-		break;
-	}
-	ao2_unlock(bridge_channel);
+	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 
 	ast_test_suite_event_notify("BRIDGE_TIMELIMIT", "Channel1: %s", ast_channel_name(bridge_channel->chan));
 	return -1;
