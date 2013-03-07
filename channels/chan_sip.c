@@ -671,14 +671,6 @@ static const struct sip_reasons {
 	{ AST_REDIRECTING_REASON_CALL_FWD_DTE, "unknown"}
 };
 
-/*! Media types for declaration of RTP streams */
-enum media_type {
-	SDP_AUDIO,	/* AUDIO class */
-	SDP_VIDEO,
-	SDP_IMAGE,
-/* For later versions that 1.4 we need to add SDP_TEXT for T.140 */
-};
-
 /*! \name DefaultSettings
 	Default setttings are used as a channel setting and as a default when
 	configuring devices
@@ -6904,7 +6896,7 @@ static int sip_answer(struct ast_channel *ast)
 		ast_rtp_instance_update_source(p->rtp);
 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL, FALSE, TRUE);
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
-		start_rtcp_events(p);
+		start_rtcp_events(p, sched);
 	}
 	sip_pvt_unlock(p);
 	return res;
@@ -8130,6 +8122,7 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 		set_socket_transport(&p->socket, SIP_TRANSPORT_UDP);
 	}
 
+	p->sip_cfg = &sip_cfg;
 	p->socket.fd = -1;
 	p->method = intended_method;
 	p->rtcpeventid = -1;
@@ -8196,10 +8189,10 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 		ast_string_field_set(p, callid, callid);
 	/* Assign default music on hold class */
 	if (p->rtp) {
-		ast_rtcp_setcname(p->rtp, p->callid, strlen(p->callid));
+		ast_rtp_instance_setcname(p->rtp, p->callid, strlen(p->callid));
 	}
 	if (p->vrtp) {
-		ast_rtcp_setcname(p->vrtp, p->callid, strlen(p->callid));
+		ast_rtp_instance_setcname(p->vrtp, p->callid, strlen(p->callid));
 	}
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
@@ -18660,9 +18653,11 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 {
 	int realtimepeers;
 	int realtimeregs;
+	int realtimertpqos;
 	char codec_buf[SIPBUFSIZE];
 	const char *msg;	/* temporary msg pointer */
 	struct sip_auth_container *credentials;
+
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -18680,6 +18675,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 
 	realtimepeers = ast_check_realtime("sippeers");
 	realtimeregs = ast_check_realtime("sipregs");
+	realtimertpqos = ast_check_realtime("rtpqos");
 
 	ast_mutex_lock(&authl_lock);
 	credentials = authl;
@@ -20702,7 +20698,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		if (!req->ignore && p->invitestate != INV_CANCELLED && sip_cancel_destroy(p))
 			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
 		check_pendings(p);
-		start_rtcp_events(p);
+		start_rtcp_events(p, sched);
 		break;
 
 	case 180:	/* 180 Ringing */
@@ -21616,20 +21612,21 @@ static void handle_response_message(struct sip_pvt *p, int resp, const char *res
 	}
 }
 
-/*! \brief Immediately stop RTP, VRTP and UDPTL as applicable */
+/*! \brief Immediately stop RTP, VRTP, TEXT and UDPTL as applicable */
 static void stop_media_flows(struct sip_pvt *p)
 {
 	/* Immediately stop RTP, VRTP and UDPTL as applicable */
-	if (p->rtp && ast_rtp_isactive(p->rtp)) {
+	if (p->rtp && !ast_rtp_instance_isactive(p->rtp)) {
 		ast_rtp_instance_stop(p->rtp);
 		sip_rtcp_report(p, p->rtp, SDP_AUDIO, TRUE);
 	}
-	if (p->vrtp && ast_rtp_isactive(p->vrtp)) {
+	if (p->vrtp && !ast_rtp_instance_isactive(p->vrtp)) {
 		ast_rtp_instance_stop(p->vrtp);
 		sip_rtcp_report(p, p->vrtp, SDP_VIDEO, TRUE);
 	}
-	if (p->trtp)
+	if (p->trtp && !ast_rtp_instance_isactive(p->trtp)) {
 		ast_rtp_instance_stop(p->trtp);
+	}
 	if (p->udptl)
 		ast_udptl_stop(p->udptl);
 }
@@ -29311,11 +29308,11 @@ static int reload_config(enum channelreloadreason reason)
 				global_qualifyfreq = DEFAULT_QUALIFYFREQ;
 			}
 		} else if (!strcasecmp(v->name, "rtcpevents")) {
-			global_rtcpevents = ast_true(v->value);
+			sip_cfg.rtcpevents = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "rtcpeventtimer")) {
-			if (sscanf(v->value, "%30d", &global_rtcptimer) != 1) {
+			if (sscanf(v->value, "%30d", &sip_cfg.rtcptimer) != 1) {
 				ast_log(LOG_WARNING, "RTCP event timer needs to be value (seconds between reports) at line %d of sip.conf\n", v->lineno);
-				global_rtcptimer = 0;
+				sip_cfg.rtcptimer = 0;
 			}
 		} else if (!strcasecmp(v->name, "callevents")) {
 			sip_cfg.callevents = ast_true(v->value);

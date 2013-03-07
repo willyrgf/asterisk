@@ -1139,8 +1139,12 @@ struct sip_pvt {
 	 * The large-scale changes would be a good idea for implementing during an SDP rewrite.
 	 */
 	struct offered_media offered_media[OFFERED_MEDIA_COUNT];
-	struct ast_rtp_quality *audioqual;              /*!< Audio: The latest quality report, for realtime storage */
-	 struct ast_rtp_quality *videoqual;              /*!< Video: The latest quality report, for realtime storage */
+	//struct ast_rtp_quality *audioqual;              /*!< Audio: The latest quality report, for realtime storage */
+	//struct ast_rtp_quality *videoqual;              /*!< Video: The latest quality report, for realtime storage */
+	struct ast_rtp_instance_stats *audioqual;              /*!< Audio: The latest quality report, for realtime storage */
+	struct ast_rtp_instance_stats *videoqual;              /*!< Video: The latest quality report, for realtime storage */
+	struct sip_settings *sip_cfg;			/*! Which sip_cfg is associated with this dialog */
+
 	struct ast_cc_config_params *cc_params;
 	struct sip_epa_entry *epa_entry;
 	int fromdomainport;                 /*!< Domain port to show in from field */

@@ -23,17 +23,23 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-
 #include "asterisk/utils.h"
+#include "asterisk/rtp_engine.h"
+#include "sip.h"
 
 #ifndef _SIP_RTCP_H
 #define _SIP_RTCP_H
 
-static int send_rtcp_events(const void *data);
-static void start_rtcp_events(struct sip_pvt *dialog);
-static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_type type, int reporttype);
-static void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual);
+int send_rtcp_events(const void *data);
+void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched);
+/*
+# For 1.4:
+# static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_type type, int reporttype);
+*/
+
+void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type type, int reporttype);
+//void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual);
+void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *qual);
 
 
 

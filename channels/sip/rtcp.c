@@ -30,6 +30,10 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/utils.h"
+#include "asterisk/manager.h"
+#include "asterisk/logger.h"
+#include "asterisk/translate.h"
+#include "include/sip.h"
 #include "include/rtcp.h"
 
 
@@ -38,62 +42,70 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	reporttype = 1  means endof-call (hangup) report
 	reporttype = 10  means report at end of call leg (like transfer)
 */
-static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_type type, int reporttype)
+void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type type, int reporttype)
 {
-	struct ast_rtp_quality *qual;
-	char *rtpqstring = NULL;
-	int qosrealtime = ast_check_realtime("rtpqos");
+	struct ast_rtp_instance_stats qual;
+	//char *rtpqstring = NULL;
+	//int qosrealtime = ast_check_realtime("rtpqos");
 	unsigned int duration;	/* Duration in secs */
  	int readtrans = FALSE, writetrans = FALSE;
+	
 
-	memset(&qual, sizeof(qual), 0);
-  
-	if (p && p->owner) {
-		struct ast_channel *bridgepeer = ast_bridged_channel(p->owner);
+	if (dialog && dialog->owner) {
+		struct ast_channel *bridgepeer = ast_bridged_channel(dialog->owner);
 		if (bridgepeer) {
 			/* Store the bridged peer data while we have it */
-			ast_rtcp_set_bridged(rtp, p->owner->name, p->owner->uniqueid, S_OR(bridgepeer->name,""), S_OR(bridgepeer->uniqueid,""));
+			ast_rtp_instance_set_bridged_chan(instance, dialog->owner->name, dialog->owner->uniqueid, S_OR(bridgepeer->name,""), S_OR(bridgepeer->uniqueid,""));
 			ast_log(LOG_DEBUG, "---- Setting bridged peer name to %s\n", bridgepeer->name);
 		} else {
-			ast_rtcp_set_bridged(rtp, p->owner->name, p->owner->uniqueid, NULL, NULL);
+			ast_rtp_instance_set_bridged_chan(instance, dialog->owner->name, dialog->owner->uniqueid, NULL, NULL);
 		}
 
  		/* Try to find out if there's active transcoding */
 		/* Currently, the only media stream that has translation is the audio stream. At some point
 		   we might have transcoding for other types of media. */
 		if (type == SDP_AUDIO) {
+			struct ast_channel *chan = dialog->owner;
+			const char *rtname = NULL, *wtname = NULL;
 			/* if we have a translator, the bridge delay is increased, which affects the QoS of the call.  */
- 			readtrans = p->owner->readtrans != NULL;
- 			writetrans = p->owner->writetrans != NULL;
-			ast_rtcp_settranslator(rtp, readtrans ? p->owner->readtrans->t->name : NULL, readtrans ? p->owner->readtrans->t->cost : 0,
-					writetrans ? p->owner->writetrans->t->name : NULL, writetrans ? p->owner->writetrans->t->cost : 0);
+ 			readtrans = (chan->readtrans != NULL);
+ 			writetrans = (chan->writetrans != NULL);
+			if (readtrans) {
+				rtname = chan->readtrans->t->name;
+			}
+			if (writetrans) {
+				wtname = chan->writetrans->t->name;
+			}
+			ast_rtp_instance_set_translator(instance, rtname, readtrans ? chan->readtrans->t->cost : (const int) 0,
+					wtname, writetrans ? chan->writetrans->t->cost : (const int) 0);
 		
 			if (option_debug > 1) {
- 				if (readtrans && p->owner->readtrans->t) {
- 					ast_log(LOG_DEBUG, "--- Audio Read translator: %s Cost %d\n", p->owner->readtrans->t->name, p->owner->readtrans->t->cost);
+ 				if (readtrans && dialog->owner->readtrans->t) {
+ 					ast_log(LOG_DEBUG, "--- Audio Read translator: %s Cost %d\n", dialog->owner->readtrans->t->name, dialog->owner->readtrans->t->cost);
  				}
- 				if (writetrans && p->owner->writetrans->t) {
- 					ast_log(LOG_DEBUG, "--- Audio Write translator: %s Cost %d\n", p->owner->writetrans->t->name, p->owner->writetrans->t->cost);
+ 				if (writetrans && dialog->owner->writetrans->t) {
+ 					ast_log(LOG_DEBUG, "--- Audio Write translator: %s Cost %d\n", dialog->owner->writetrans->t->name, dialog->owner->writetrans->t->cost);
  				}
 			}
 		}
 
 	}
 
-	rtpqstring =  ast_rtp_get_quality(rtp);
-	qual = ast_rtp_get_qualdata(rtp);
-	if (!qual) {
+	//rtpqstring =  ast_rtp_get_quality(instance);
+	if (ast_rtp_instance_get_stats(instance, &qual, AST_RTP_INSTANCE_STAT_ALL)) {
+	//qual = ast_rtp_get_qualdata(instance);
+	//if (!qual) {
 		/* Houston, we got a problem */
 		return;
 	}
 	
-	if (global_rtcpevents) {
+	if (dialog->sip_cfg->rtcpevents) {
 		/* 
 		   If numberofreports == 0 we have no incoming RTCP active, thus we can't
 		   get any reliable data to handle packet loss or any RTT timing.
 		*/
 
-		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual->start) / 1000);
+		duration = (unsigned int)(ast_tvdiff_ms(ast_tvnow(), qual.start) / 1000);
 		manager_event(EVENT_FLAG_CALL, "RTPQuality", 
 			"Channel: %s\r\n"			/* AST_CHANNEL for this call */
 			"Uniqueid: %s\r\n"			/* AST_CHANNEL for this call */
@@ -123,35 +135,35 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 			"TranslateWrite: %s\r\n"
 			"TranslateWriteCost: %d\r\n"
 			"\r\n", 
-			p->owner ? p->owner->name : "",
-			p->owner ? p->owner->uniqueid : "",
-			qual->bridgedchan[0] ? qual->bridgedchan : "" ,
-			qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
+			dialog->owner ? dialog->owner->name : "",
+			dialog->owner ? dialog->owner->uniqueid : "",
+			qual.bridgedchan[0] ? qual.bridgedchan : "" ,
+			qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
 			reporttype == 1 ? "Final" : "Update",
-			qual->numberofreports == 0 ? "Inactive" : "Active",
+			qual.numberofreports == 0 ? "Inactive" : "Active",
 			duration,
-			p->callid, 
-			ast_inet_ntoa(qual->them.sin_addr), 	
+			dialog->callid, 
+			ast_inet_ntoa(qual.them.sin_addr), 	
 			type == SDP_AUDIO ? "audio" : (type == SDP_VIDEO ? "video" : "fax") ,
-			ast_getformatname(qual->lasttxformat),
-			ast_getformatname(qual->lastrxformat),
-			qual->local_ssrc, 
-			qual->remote_ssrc,
-			qual->rtt,
-			qual->rttmax,
-			qual->rttmin,
-			qual->local_jitter,
-			qual->remote_jitter,
-			qual->local_lostpackets,
+			ast_getformatname(qual.lasttxformat),
+			ast_getformatname(qual.lastrxformat),
+			qual.local_ssrc, 
+			qual.remote_ssrc,
+			qual.rtt,
+			qual.maxrtt,
+			qual.minrtt,
+			qual.rxjitter,
+			qual.txjitter,
+			qual.rxploss,
 			/* The local counter of lost packets in inbound stream divided with received packets plus lost packets */
-			(qual->remote_count + qual->local_lostpackets) > 0 ? (double) qual->local_lostpackets / (qual->remote_count + qual->local_lostpackets) * 100 : 0,
-			qual->remote_lostpackets,
+			(qual.remote_txcount + qual.rxploss) > 0 ? (double) qual.rxploss / (qual.remote_txcount + qual.rxploss) * 100 : 0,
+			qual.txploss,
 			/* The remote counter of lost packets (if we got the reports)
 			   divided with our counter of sent packets
 			 */
-			(qual->local_count + qual->remote_lostpackets) > 0 ? (double) qual->remote_lostpackets / qual->local_count  * 100 : 0,
-			qual->readtranslator, qual->readcost,
-			qual->writetranslator, qual->writecost
+			(qual.rxcount + qual.txploss) > 0 ? (double) qual.txploss / qual.rxcount  * 100 : 0,
+			qual.readtranslator, qual.readcost,
+			qual.writetranslator, qual.writecost
 		);
 	}
 
@@ -161,23 +173,23 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 	   the quality report structure in the PVT and let the function that kills the pvt store the stuff in the
 	   monitor thread instead.
 	 */
-	if (reporttype == 1 {
+	if (reporttype == 1) {
 		if (type == SDP_AUDIO) {  /* Audio */
-			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
-			(* p->audioqual) = *qual;
-			p->audioqual->end = ast_tvnow();
- 			p->audioqual->mediatype = type;
+			dialog->audioqual = ast_calloc(sizeof(struct ast_rtp_instance_stats), 1);
+			(* dialog->audioqual) = qual;
+			dialog->audioqual->end = ast_tvnow();
+ 			dialog->audioqual->mediatype = type;
 		} else if (type == SDP_VIDEO) {  /* Video */
-			p->videoqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
-			(* p->videoqual) = *qual;
- 			p->videoqual->mediatype = type;
-			p->videoqual->end = ast_tvnow();
+			dialog->videoqual = ast_calloc(sizeof(struct ast_rtp_instance_stats), 1);
+			(* dialog->videoqual) = qual;
+ 			dialog->videoqual->mediatype = type;
+			dialog->videoqual->end = ast_tvnow();
 		}
 	}
 }
 
 /*! \brief Write quality report to realtime storage */
-void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
+void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *qual)
 {
 	unsigned int duration;	/* Duration in secs */
 	char buf_duration[10], buf_lssrc[30], buf_rssrc[30];
@@ -201,24 +213,26 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 	}
 
 	/* Realtime is based on strings, so let's make strings */
-	sprintf(localjitter, "%f", qual->local_jitter);
-	sprintf(remotejitter, "%f", qual->remote_jitter);
+	sprintf(localjitter, "%f", qual->rxjitter);
+	sprintf(remotejitter, "%f", qual->txjitter);
 	sprintf(buf_lssrc, "%u", qual->local_ssrc);
 	sprintf(buf_rssrc, "%u", qual->remote_ssrc);
 	sprintf(buf_rtt, "%.0f", qual->rtt);
-	sprintf(buf_rttmax, "%.0f", qual->rttmax);
-	sprintf(buf_rttmin, "%.0f", qual->rttmin);
+	sprintf(buf_rttmax, "%.0f", qual->maxrtt);
+	sprintf(buf_rttmin, "%.0f", qual->minrtt);
 	sprintf(buf_duration, "%u", duration);
 	sprintf(buf_readcost, "%d", qual->readcost);
 	sprintf(buf_writecost, "%d", qual->writecost);
 	sprintf(buf_mediatype,"%s", qual->mediatype == SDP_AUDIO ? "audio" : (qual->mediatype == SDP_VIDEO ? "video" : "fax") );
 	sprintf(buf_remoteip,"%s", ast_inet_ntoa(qual->them.sin_addr));
-	sprintf(buf_inpacketloss, "%d", qual->local_lostpackets);
-	sprintf(buf_outpacketloss, "%d", qual->remote_lostpackets);
-	sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
-	sprintf(buf_outpackets, "%d", qual->local_count);
+	sprintf(buf_inpacketloss, "%d", qual->rxploss);
+	sprintf(buf_outpacketloss, "%d", qual->txploss);
+	sprintf(buf_inpackets, "%d", 42);		/* Silly value. Need to check this */
+	sprintf(buf_outpackets, "%d", 42);
+	//sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
+	//sprintf(buf_outpackets, "%d", qual->local_count);
 
-	ast_log(LOG_NOTICE,"RTPQOS Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
+	ast_log(LOG_CQR, "RTPQOS Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
 		qual->channel[0] ? qual->channel : "",
 		qual->uniqueid[0] ? qual->uniqueid : "",
 		qual->bridgedchan[0] ? qual->bridgedchan : "" ,
@@ -238,7 +252,6 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 		buf_inpackets,
 		buf_inpacketloss);
 
-#ifdef REALTIME2
 	ast_store_realtime("rtpqos", 
 		"channel", qual->channel[0] ? qual->channel : "--no channel--",
 		"uniqueid", qual->uniqueid[0] ? qual->uniqueid : "--no uniqueid --",
@@ -267,27 +280,26 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_quality *qual)
 		"packetsent", buf_outpackets,
 		"packetreceived", buf_inpackets,
 		NULL);
-#endif
 }
 
 /*! \brief Send RTCP manager events */
-static int send_rtcp_events(const void *data)
+int send_rtcp_events(const void *data)
 {
 	struct sip_pvt *dialog = (struct sip_pvt *) data;
 
-	if (dialog->rtp && ast_rtp_isactive(dialog->rtp)) {
+	if (dialog->rtp && ast_rtp_instance_isactive(dialog->rtp)) {
 		sip_rtcp_report(dialog, dialog->rtp, SDP_AUDIO, FALSE);
 	}
-	if (dialog->vrtp && ast_rtp_isactive(dialog->vrtp)) {
+	if (dialog->vrtp && ast_rtp_instance_isactive(dialog->vrtp)) {
 		sip_rtcp_report(dialog, dialog->vrtp, SDP_VIDEO, FALSE);
 	}
-	return global_rtcptimer;
+	return (dialog->sip_cfg ? dialog->sip_cfg->rtcptimer : 0);
 }
 
 /*! \brief Activate RTCP events at start of call */
-static void start_rtcp_events(struct sip_pvt *dialog)
+void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched)
 {
-	if (!global_rtcpevents || !global_rtcptimer) {
+	if (!dialog->sip_cfg->rtcpevents || !dialog->sip_cfg->rtcptimer) {
 		return;
 	}
 	/* Check if it's already active */
@@ -296,5 +308,5 @@ static void start_rtcp_events(struct sip_pvt *dialog)
 	}
 
 	/*! \brief Schedule events */
-	dialog->rtcpeventid = ast_sched_add(sched, global_rtcptimer * 1000, send_rtcp_events, dialog);
+	dialog->rtcpeventid = ast_sched_add(sched, dialog->sip_cfg->rtcptimer * 1000, send_rtcp_events, dialog);
 }
