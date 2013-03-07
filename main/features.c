@@ -4256,12 +4256,12 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 		dtmf = ast_find_call_feature("blindxfer");
 		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
 /* BUGBUG need to supply a blind transfer structure and destructor to use other than defaults */
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_BLINDTRANSFER, dtmf->exten, NULL);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_BLINDTRANSFER, dtmf->exten, NULL, NULL);
 		}
 		dtmf = ast_find_call_feature("atxfer");
 		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
 /* BUGBUG need to supply an attended transfer structure and destructor to use other than defaults */
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, dtmf->exten, NULL);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, dtmf->exten, NULL, NULL);
 		}
 		ast_rwlock_unlock(&features_lock);
 	}
@@ -4269,7 +4269,7 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 		ast_rwlock_rdlock(&features_lock);
 		dtmf = ast_find_call_feature("disconnect");
 		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_HANGUP, dtmf->exten, NULL);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_HANGUP, dtmf->exten, NULL, NULL);
 		}
 		ast_rwlock_unlock(&features_lock);
 	}
@@ -4277,7 +4277,7 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 		ast_rwlock_rdlock(&features_lock);
 		dtmf = ast_find_call_feature("parkcall");
 		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_PARKCALL, dtmf->exten, NULL);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_PARKCALL, dtmf->exten, NULL, NULL);
 		}
 		ast_rwlock_unlock(&features_lock);
 	}
@@ -4285,7 +4285,7 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 		ast_rwlock_rdlock(&features_lock);
 		dtmf = ast_find_call_feature("automon");
 		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMON, dtmf->exten, NULL);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMON, dtmf->exten, NULL, NULL);
 		}
 		ast_rwlock_unlock(&features_lock);
 	}
@@ -4293,7 +4293,7 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 		ast_rwlock_rdlock(&features_lock);
 		dtmf = ast_find_call_feature("automixmon");
 		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMIXMON, dtmf->exten, NULL);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMIXMON, dtmf->exten, NULL, NULL);
 		}
 		ast_rwlock_unlock(&features_lock);
 	}
@@ -4333,10 +4333,6 @@ static void bridge_config_set_limits_warning_values(struct ast_bridge_config *co
  */
 static void bridge_config_set_limits(struct ast_bridge_config *config, struct ast_bridge_features_limits *caller_limits, struct ast_bridge_features_limits *callee_limits)
 {
-/* BUGBUG remove test code here when cleaning up. */
-	//ast_set_flag(&(config->features_callee), AST_FEATURE_PLAY_WARNING);
-	/* = {.duration = 20000, .duration_sound = "tt-weasels", .warning = 9800, .frequency = 10000}; */
-
 	if (ast_test_flag(&config->features_caller, AST_FEATURE_PLAY_WARNING)) {
 		bridge_config_set_limits_warning_values(config, caller_limits);
 	}

@@ -201,15 +201,45 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	return 0;
 }
 
-/*! \brief Attended transfer feature to turn it into a threeway call */
-static int attended_threeway_transfer(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+/*! Attended transfer code */
+enum atxfer_code {
+	/*! Party C hungup or other reason to abandon the transfer. */
+	ATXFER_INCOMPLETE,
+	/*! Transfer party C to party A. */
+	ATXFER_COMPLETE,
+	/*! Turn the transfer into a threeway call. */
+	ATXFER_THREEWAY,
+	/*! Hangup party C and return party B to the bridge. */
+	ATXFER_ABORT,
+};
+
+/*! \brief Attended transfer feature to complete transfer */
+static int attended_transfer_complete(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-	/*
-	 * This is sort of abusing the depart state but in this instance
-	 * it is only going to be handled by feature_attended_transfer()
-	 * so it is okay.
-	 */
-	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_DEPART);
+	enum atxfer_code *transfer_code = hook_pvt;
+
+	*transfer_code = ATXFER_COMPLETE;
+	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+	return 0;
+}
+
+/*! \brief Attended transfer feature to turn it into a threeway call */
+static int attended_transfer_threeway(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	enum atxfer_code *transfer_code = hook_pvt;
+
+	*transfer_code = ATXFER_THREEWAY;
+	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+	return 0;
+}
+
+/*! \brief Attended transfer feature to abort transfer */
+static int attended_transfer_abort(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	enum atxfer_code *transfer_code = hook_pvt;
+
+	*transfer_code = ATXFER_ABORT;
+	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 	return 0;
 }
 
@@ -220,10 +250,10 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	struct ast_channel *peer;
 	struct ast_bridge *attended_bridge;
 	struct ast_bridge_features caller_features;
-	enum ast_bridge_channel_state attended_bridge_result;
 	int xfer_failed;
 	struct ast_bridge_features_attended_transfer *attended_transfer = hook_pvt;
 	const char *context;
+	enum atxfer_code transfer_code = ATXFER_INCOMPLETE;
 
 /* BUGBUG the peer needs to be put on hold for the transfer. */
 	ast_channel_lock(bridge_channel->chan);
@@ -264,22 +294,31 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		return 0;
 	}
 
-	/* Before we join setup a features structure with the hangup option, just in case they want to use DTMF */
+	/* Setup a DTMF menu to control the transfer. */
 	ast_bridge_features_init(&caller_features);
 /* BUGBUG bridging API features does not support features.conf featuremap */
 /* BUGBUG bridging API features does not support the features.conf atxfer bounce between C & B channels */
-/* BUGBUG The atxfer feature hooks need to be passed a pointer to where to mark which hook happened.  Rather than relying on the bridge join return value. */
-	ast_bridge_features_enable(&caller_features, AST_BRIDGE_BUILTIN_HANGUP,
+	ast_bridge_hangup_hook(&caller_features,
+		attended_transfer_complete, &transfer_code, NULL);
+	ast_bridge_dtmf_hook(&caller_features,
+		attended_transfer && !ast_strlen_zero(attended_transfer->abort)
+			? attended_transfer->abort : "*1",
+		attended_transfer_abort, &transfer_code, NULL);
+	ast_bridge_dtmf_hook(&caller_features,
 		attended_transfer && !ast_strlen_zero(attended_transfer->complete)
-			? attended_transfer->complete : "*1",
-		NULL);
-	ast_bridge_features_hook(&caller_features,
+			? attended_transfer->complete : "*2",
+		attended_transfer_complete, &transfer_code, NULL);
+	ast_bridge_dtmf_hook(&caller_features,
 		attended_transfer && !ast_strlen_zero(attended_transfer->threeway)
-			? attended_transfer->threeway : "*2",
-		attended_threeway_transfer, NULL, NULL);
+			? attended_transfer->threeway : "*3",
+		attended_transfer_threeway, &transfer_code, NULL);
 
-	/* But for the caller we want to join the bridge in a blocking fashion so we don't spin around in this function doing nothing while waiting */
-	attended_bridge_result = ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL, 0);
+	/*
+	 * For the caller we want to join the bridge in a blocking
+	 * fashion so we don't spin around in this function doing
+	 * nothing while waiting.
+	 */
+	ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL, 0);
 
 	/* Wait for peer thread to exit bridge and die. */
 	if (!ast_autoservice_start(bridge_channel->chan)) {
@@ -294,21 +333,16 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	ast_bridge_destroy(attended_bridge);
 
 	xfer_failed = -1;
-	switch (attended_bridge_result) {
-	case AST_BRIDGE_CHANNEL_STATE_END:
-		if (!ast_check_hangup_locked(bridge_channel->chan)) {
-			/* Transferer aborted the transfer. */
-			break;
-		}
-
+	switch (transfer_code) {
+	case ATXFER_INCOMPLETE:
+		/* Peer hungup */
+		break;
+	case ATXFER_COMPLETE:
 		/* The peer takes our place in the bridge. */
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 		xfer_failed = ast_bridge_impart(bridge, peer, bridge_channel->chan, NULL, 1);
 		break;
-	case AST_BRIDGE_CHANNEL_STATE_HANGUP:
-		/* Peer hungup */
-		break;
-	case AST_BRIDGE_CHANNEL_STATE_DEPART:
+	case ATXFER_THREEWAY:
 		/*
 		 * Transferer wants to convert to a threeway call.
 		 *
@@ -317,7 +351,8 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		 */
 		xfer_failed = ast_bridge_impart(bridge, peer, NULL, NULL, 1);
 		break;
-	default:
+	case ATXFER_ABORT:
+		/* Transferer decided not to transfer the call after all. */
 		break;
 	}
 	if (xfer_failed) {

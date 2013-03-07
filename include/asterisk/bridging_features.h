@@ -97,23 +97,23 @@ struct ast_bridge;
 struct ast_bridge_channel;
 
 /*!
- * \brief Features hook callback type
+ * \brief Hook callback type
  *
  * \param bridge The bridge that the channel is part of
  * \param bridge_channel Channel executing the feature
  * \param hook_pvt Private data passed in when the hook was created
  *
- * \retval 0 success
- * \retval -1 failure The callback hook is removed.
+ * \retval 0 Keep the callback hook.
+ * \retval -1 Remove the callback hook.
  */
-typedef int (*ast_bridge_features_hook_callback)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt);
+typedef int (*ast_bridge_hook_callback)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt);
 
 /*!
- * \brief Features hook pvt destructor callback
+ * \brief Hook pvt destructor callback
  *
- * \param hook_pvt Private data passed in when the hook was create to destroy
+ * \param hook_pvt Private data passed in when the hook was created to destroy
  */
-typedef void (*ast_bridge_features_hook_pvt_destructor)(void *hook_pvt);
+typedef void (*ast_bridge_hook_pvt_destructor)(void *hook_pvt);
 
 /*!
  * \brief Talking indicator callback
@@ -138,30 +138,43 @@ typedef void (*ast_bridge_talking_indicate_destructor)(void *pvt_data);
  */
 #define MAXIMUM_DTMF_FEATURE_STRING 8
 
+/*! Extra parameters for a DTMF feature hook. */
+struct ast_bridge_hook_dtmf {
+	/*! DTMF String that is examined during a feature hook lookup */
+	char code[MAXIMUM_DTMF_FEATURE_STRING];
+};
+
+/*! Extra parameters for an interval timer hook. */
+struct ast_bridge_hook_timer {
+	/*! Time at which the hook should actually trip */
+	struct timeval trip_time;
+	/*! Heap index for interval hook */
+	ssize_t __heap_index;
+	/*! Interval that the hook should execute at in milliseconds */
+	unsigned int interval;
+	/*! Sequence number for the hook to ensure expiration ordering */
+	unsigned int seqno;
+};
+
 /*!
- * \brief Structure that is the essence of a features hook
+ * \brief Structure that is the essence of a feature hook.
  */
-struct ast_bridge_features_hook {
-	union {
-		/*! DTMF String that is examined during a feature hook lookup */
-		char dtmf[MAXIMUM_DTMF_FEATURE_STRING];
-		/*! Interval that the feature hook should execute at in milliseconds */
-		unsigned int interval;
-	};
-	/*! Time at which the interval should actually trip */
-	struct timeval interval_trip_time;
-	/*! Callback that is called when DTMF string is matched */
-	ast_bridge_features_hook_callback callback;
+struct ast_bridge_hook {
+	/*! Linked list information */
+	AST_LIST_ENTRY(ast_bridge_hook) entry;
+	/*! Callback that is called when hook is tripped */
+	ast_bridge_hook_callback callback;
 	/*! Callback to destroy hook_pvt data right before destruction. */
-	ast_bridge_features_hook_pvt_destructor destructor;
+	ast_bridge_hook_pvt_destructor destructor;
 	/*! Unique data that was passed into us */
 	void *hook_pvt;
-	/*! Sequence number for the hook if it is an interval hook */
-	unsigned int seqno;
-	/*! Linked list information */
-	AST_LIST_ENTRY(ast_bridge_features_hook) entry;
-	/*! Heap index for interval hooks */
-	ssize_t __heap_index;
+	/*! Extra hook parameters. */
+	union {
+		/*! Extra parameters for a DTMF feature hook. */
+		struct ast_bridge_hook_dtmf dtmf;
+		/*! Extra parameters for an interval timer hook. */
+		struct ast_bridge_hook_timer timer;
+	} parms;
 };
 
 #define BRIDGE_FEATURES_INTERVAL_RATE 10
@@ -170,22 +183,24 @@ struct ast_bridge_features_hook {
  * \brief Structure that contains features information
  */
 struct ast_bridge_features {
-	/*! Attached DTMF based feature hooks */
-	AST_LIST_HEAD_NOLOCK(, ast_bridge_features_hook) hooks;
-	/*! Attached interval based feature hooks */
+	/*! Attached DTMF feature hooks */
+	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) dtmf_hooks;
+	/*! Attached hangup interception hooks */
+	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) hangup_hooks;
+	/*! Attached interval hooks */
 	struct ast_heap *interval_hooks;
+	/*! Used to determine when interval based features should be checked */
+	struct ast_timer *interval_timer;
+	/*! Limits feature data */
+	struct ast_bridge_features_limits *limits;
 	/*! Callback to indicate when a bridge channel has started and stopped talking */
 	ast_bridge_talking_indicate_callback talker_cb;
 	/*! Callback to destroy any pvt data stored for the talker. */
 	ast_bridge_talking_indicate_destructor talker_destructor_cb;
-	/*! Used to determine when interval based features should be checked */
-	struct ast_timer *interval_timer;
 	/*! Talker callback pvt data */
 	void *talker_pvt_data;
 	/*! Feature flags that are enabled */
 	struct ast_flags feature_flags;
-	/*! Limits feature data */
-	struct ast_bridge_features_limits *limits;
 	/*! Used to assign the sequence number to the next interval hook added. */
 	unsigned int interval_sequence;
 	/*! Bit to indicate that the feature_flags and hook list is setup */
@@ -195,7 +210,6 @@ struct ast_bridge_features {
 /* BUGBUG why is dtmf_passthrough not a feature_flags bit? */
 	/*! Bit to indicate whether DTMF should be passed into the bridge tech or not.  */
 	unsigned int dtmf_passthrough:1;
-
 };
 
 /*!
@@ -214,6 +228,8 @@ struct ast_bridge_features_attended_transfer {
 /* BUGBUG the context should be figured out based upon TRANSFER_CONTEXT channel variable of A/B or current context of A/B. More appropriate for when channel moved to other bridges. */
 	/*! Context to use for transfers */
 	char context[AST_MAX_CONTEXT];
+	/*! DTMF string used to abort the transfer */
+	char abort[MAXIMUM_DTMF_FEATURE_STRING];
 	/*! DTMF string used to turn the transfer into a three way conference */
 	char threeway[MAXIMUM_DTMF_FEATURE_STRING];
 	/*! DTMF string used to complete the transfer */
@@ -262,7 +278,7 @@ struct ast_bridge_features_limits {
  * This registers the function bridge_builtin_attended_transfer as the function responsible for the built in
  * attended transfer feature.
  */
-int ast_bridge_features_register(enum ast_bridge_builtin_feature feature, ast_bridge_features_hook_callback callback, const char *dtmf);
+int ast_bridge_features_register(enum ast_bridge_builtin_feature feature, ast_bridge_hook_callback callback, const char *dtmf);
 
 /*!
  * \brief Unregister a handler for a built in feature
@@ -321,7 +337,35 @@ int ast_bridge_interval_register(enum ast_bridge_builtin_interval interval, void
 int ast_bridge_interval_unregister(enum ast_bridge_builtin_interval interval);
 
 /*!
- * \brief Attach a custom hook to a bridge features structure
+ * \brief Attach a hangup hook to a bridge features structure
+ *
+ * \param features Bridge features structure
+ * \param callback Function to execute upon activation
+ * \param hook_pvt Unique data
+ * \param destructor Optional destructor callback for hook_pvt data
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge_features features;
+ * ast_bridge_features_init(&features);
+ * ast_bridge_hangup_hook(&features, hangup_callback, NULL, NULL);
+ * \endcode
+ *
+ * This makes the bridging core call hangup_callback if a
+ * channel that has this hook hangs up.  A pointer to useful
+ * data may be provided to the hook_pvt parameter.
+ */
+int ast_bridge_hangup_hook(struct ast_bridge_features *features,
+	ast_bridge_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_hook_pvt_destructor destructor);
+
+/*!
+ * \brief Attach a DTMF hook to a bridge features structure
  *
  * \param features Bridge features structure
  * \param dtmf DTMF string to be activated upon
@@ -337,25 +381,24 @@ int ast_bridge_interval_unregister(enum ast_bridge_builtin_interval interval);
  * \code
  * struct ast_bridge_features features;
  * ast_bridge_features_init(&features);
- * ast_bridge_features_hook(&features, "#", pound_callback, NULL, NULL);
+ * ast_bridge_dtmf_hook(&features, "#", pound_callback, NULL, NULL);
  * \endcode
  *
  * This makes the bridging core call pound_callback if a channel that has this
  * feature structure inputs the DTMF string '#'. A pointer to useful data may be
  * provided to the hook_pvt parameter.
  */
-int ast_bridge_features_hook(struct ast_bridge_features *features,
+int ast_bridge_dtmf_hook(struct ast_bridge_features *features,
 	const char *dtmf,
-	ast_bridge_features_hook_callback callback,
+	ast_bridge_hook_callback callback,
 	void *hook_pvt,
-	ast_bridge_features_hook_pvt_destructor destructor);
+	ast_bridge_hook_pvt_destructor destructor);
 
 /*!
- * \brief attach a custom interval hook to a bridge features structure
+ * \brief attach an interval hook to a bridge features structure
  *
  * \param features Bridge features structure
  * \param interval The interval that the hook should execute at in milliseconds
- * \param strict If set this takes into account the time spent executing the callback when rescheduling the interval hook
  * \param callback Function to execute upon activation
  * \param hook_pvt Unique data
  * \param destructor Optional destructor callback for hook_pvt data
@@ -366,17 +409,17 @@ int ast_bridge_features_hook(struct ast_bridge_features *features,
  * \code
  * struct ast_bridge_features features;
  * ast_bridge_features_init(&features);
- * ast_bridge_features_interval_hook(&features, 1000, 0, playback_callback, NULL, NULL);
+ * ast_bridge_interval_hook(&features, 1000, playback_callback, NULL, NULL);
  * \endcode
  *
  * This makes the bridging core call playback_callback every second. A pointer to useful
  * data may be provided to the hook_pvt parameter.
  */
-int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
+int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	unsigned int interval,
-	ast_bridge_features_hook_callback callback,
+	ast_bridge_hook_callback callback,
 	void *hook_pvt,
-	ast_bridge_features_hook_pvt_destructor destructor);
+	ast_bridge_hook_pvt_destructor destructor);
 
 /*!
  * \brief Update the interval on an interval hook that is currently executing a callback
@@ -390,7 +433,7 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
  * Example usage:
  *
  * \code
- * ast_bridge_features_interval_update(bridge_channel, 10000);
+ * ast_bridge_interval_hook_update(bridge_channel, 10000);
  * \endcode
  *
  * This updates the executing interval hook so that it will be triggered next in 10 seconds.
@@ -398,7 +441,7 @@ int ast_bridge_features_interval_hook(struct ast_bridge_features *features,
  * \note This can only be called from the context of the interval hook callback itself. If this
  *       is called outside the callback then behavior is undefined.
  */
-int ast_bridge_features_interval_update(struct ast_bridge_channel *bridge_channel, unsigned int interval);
+int ast_bridge_interval_hook_update(struct ast_bridge_channel *bridge_channel, unsigned int interval);
 
 /*!
  * \brief Set a callback on the features structure to receive talking notifications on.
@@ -422,6 +465,7 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
  * \param feature Feature to enable
  * \param dtmf Optionally the DTMF stream to trigger the feature, if not specified it will be the default
  * \param config Configuration structure unique to the built in type
+ * \param destructor Optional destructor callback for config data
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -431,14 +475,14 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
  * \code
  * struct ast_bridge_features features;
  * ast_bridge_features_init(&features);
- * ast_bridge_features_enable(&features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, NULL);
+ * ast_bridge_features_enable(&features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, NULL, NULL);
  * \endcode
  *
  * This enables the attended transfer DTMF option using the default DTMF string. An alternate
  * string may be provided using the dtmf parameter. Internally this is simply setting up a hook
  * to a built in feature callback function.
  */
-int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config);
+int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config, ast_bridge_hook_pvt_destructor destructor);
 
 /*!
  * \brief Constructor function for ast_bridge_features_limits

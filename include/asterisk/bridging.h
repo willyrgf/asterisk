@@ -92,8 +92,6 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_END,
 	/*! Bridged channel was forced out and should be hung up */
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
-	/*! Bridged channel was ast_bridge_depart() from the bridge without being hung up */
-	AST_BRIDGE_CHANNEL_STATE_DEPART,
 };
 
 /*! \brief Return values for bridge technology write function */
@@ -531,7 +529,6 @@ int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2);
  *
  * \return Nothing
  */
-
 void ast_bridge_merge_inhibit(struct ast_bridge *bridge, int request);
 
 /*!

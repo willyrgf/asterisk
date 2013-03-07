@@ -134,7 +134,7 @@ static int bridge_features_warning_callback(struct ast_bridge *bridge, struct as
 	}
 
 	if (limits->frequency) {
-		ast_bridge_features_interval_update(bridge_channel, limits->frequency);
+		ast_bridge_interval_hook_update(bridge_channel, limits->frequency);
 	}
 
 	return !limits->frequency ? -1 : 0;
@@ -177,7 +177,7 @@ static int bridge_builtin_set_limits(struct ast_bridge_features *features, struc
 	copy_bridge_features_limits(feature_limits, limits);
 	features->limits = feature_limits;
 
-	if (ast_bridge_features_interval_hook(features, feature_limits->duration,
+	if (ast_bridge_interval_hook(features, feature_limits->duration,
 		bridge_features_duration_callback, feature_limits, NULL)) {
 		ast_log(LOG_ERROR, "Failed to schedule the duration limiter to the bridge channel.\n");
 		return -1;
@@ -186,15 +186,15 @@ static int bridge_builtin_set_limits(struct ast_bridge_features *features, struc
 	feature_limits->quitting_time = ast_tvadd(ast_tvnow(), ast_samp2tv(feature_limits->duration, 1000));
 
 	if (!ast_strlen_zero(feature_limits->connect_sound)) {
-		if (ast_bridge_features_interval_hook(features, 1, bridge_features_connect_callback, feature_limits, NULL)) {
+		if (ast_bridge_interval_hook(features, 1,
+			bridge_features_connect_callback, feature_limits, NULL)) {
 			ast_log(LOG_WARNING, "Failed to schedule connect sound to the bridge channel.\n");
 		}
 	}
 
 	if (feature_limits->warning && feature_limits->warning < feature_limits->duration) {
-		if (ast_bridge_features_interval_hook(features, feature_limits->duration - feature_limits->warning,
-			bridge_features_warning_callback,
-			feature_limits, NULL)) {
+		if (ast_bridge_interval_hook(features, feature_limits->duration - feature_limits->warning,
+			bridge_features_warning_callback, feature_limits, NULL)) {
 			ast_log(LOG_WARNING, "Failed to schedule warning sound playback to the bridge channel.\n");
 		}
 	}
