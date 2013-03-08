@@ -304,10 +304,10 @@ int send_rtcp_events(const void *data)
 	ast_log(LOG_DEBUG, "***** SENDING RTCP EVENT \n");
 
 	if (dialog->rtp && !ast_rtp_instance_isactive(dialog->rtp)) {
-		ast_log(LOG_DEBUG, "          ***** Activating RTCP report \n");
+		ast_debug(1, "          ***** Activating RTCP report \n");
 		sip_rtcp_report(dialog, dialog->rtp, SDP_AUDIO, FALSE);
 	} else {
-		ast_log(LOG_DEBUG, "          ***** NOT Activating RTCP report \n");
+		ast_debug(1, "          ***** NOT Activating RTCP report \n");
 	}
 	if (dialog->vrtp && !ast_rtp_instance_isactive(dialog->vrtp)) {
 		sip_rtcp_report(dialog, dialog->vrtp, SDP_VIDEO, FALSE);
@@ -318,8 +318,9 @@ int send_rtcp_events(const void *data)
 /*! \brief Activate RTCP events at start of call */
 void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched)
 {
-	ast_log(LOG_DEBUG, "***** STARTING SENDING RTCP EVENT \n");
+	ast_debug(2, "***** STARTING SENDING RTCP EVENT \n");
 	if (!dialog->sip_cfg->rtcpevents || !dialog->sip_cfg->rtcptimer) {
+		ast_debug(2, "***** NOT SENDING RTCP EVENTS \n");
 		return;
 	}
 	/* Check if it's already active */

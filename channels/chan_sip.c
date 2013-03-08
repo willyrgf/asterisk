@@ -21621,12 +21621,12 @@ static void stop_media_flows(struct sip_pvt *p)
 {
 	/* Immediately stop RTP, VRTP and UDPTL as applicable */
 	if (p->rtp && !ast_rtp_instance_isactive(p->rtp)) {
-		ast_rtp_instance_stop(p->rtp);
 		sip_rtcp_report(p, p->rtp, SDP_AUDIO, TRUE);
+		ast_rtp_instance_stop(p->rtp);
 	}
 	if (p->vrtp && !ast_rtp_instance_isactive(p->vrtp)) {
-		ast_rtp_instance_stop(p->vrtp);
 		sip_rtcp_report(p, p->vrtp, SDP_VIDEO, TRUE);
+		ast_rtp_instance_stop(p->vrtp);
 	}
 	if (p->trtp && !ast_rtp_instance_isactive(p->trtp)) {
 		ast_rtp_instance_stop(p->trtp);
