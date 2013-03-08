@@ -9884,11 +9884,12 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		ast_queue_control_data(p->owner, AST_CONTROL_HOLD,
 				       S_OR(p->mohsuggest, NULL),
 				       !ast_strlen_zero(p->mohsuggest) ? strlen(p->mohsuggest) + 1 : 0);
-		if (sendonly) {
-			ast_rtp_instance_stop(p->rtp);
-			/* RTCP needs to go ahead, even if we're on hold!!! */
-			/* OEJ this is a BUG to fix. Now. */
-		}
+		//
+		// We should only stop at port = 0 or BYE /End of call or stream (like a transfer)
+		//if (sendonly == 2) {
+			//ast_rtp_instance_stop(p->rtp);
+			///* RTCP needs to go ahead, even if we're on hold!!! */
+		//}
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
 		change_hold_state(p, req, TRUE, sendonly);
