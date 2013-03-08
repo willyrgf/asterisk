@@ -132,6 +132,7 @@ enum strict_rtp_state {
 #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
 #define FLAG_NEED_MARKER_BIT            (1 << 3)
 #define FLAG_DTMF_COMPENSATE            (1 << 4)
+#define FLAG_HOLD	        	(1 << 4)	/* This RTP stream is put on hold by someone else, a:sendonly */
 
 /*! \brief RTP session description */
 struct ast_rtp {
@@ -173,10 +174,11 @@ struct ast_rtp {
 	unsigned int dtmf_timeout;        /*!< When this timestamp is reached we consider END frame lost and forcibly abort digit */
 	unsigned int dtmfsamples;
 	enum ast_rtp_dtmf_mode dtmfmode;  /*!< The current DTMF mode of the RTP stream */
+
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
-	char sending_digit;	/*!< boolean - are we sending digits */
-	char send_digit;	/*!< digit we are sending */
+	char sending_digit;		  /*!< boolean - are we sending digits */
+	char send_digit;		  /*!< digit we are sending */
 	int send_payload;
 	int send_duration;
 	unsigned int flags;
@@ -186,6 +188,7 @@ struct ast_rtp {
 	struct timeval start;           /*!< When the stream started (we can't depend on CDRs) */
 	struct timeval lastrx;          /*!< timeval when we last received a packet */
 	struct timeval dtmfmute;
+	struct timeval holdstart;       /*!< When the stream was put on hold */
 	struct ast_smoother *smoother;
 	int *ioid;
 	int *ioidrtcp;
@@ -193,7 +196,6 @@ struct ast_rtp {
 	unsigned short rxseqno;
 	struct sched_context *sched;
 	struct io_context *io;
-	struct io_context *iortcp;      /*!< for RTCP callback */
 	void *data;
 	struct ast_rtcp *rtcp;
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
@@ -330,6 +332,7 @@ static int ast_rtp_local_bridge(struct ast_rtp_instance *instance0, struct ast_r
 static int ast_rtp_get_stat(struct ast_rtp_instance *instance, struct ast_rtp_instance_stats *stats, enum ast_rtp_instance_stat stat);
 static int ast_rtp_dtmf_compatible(struct ast_channel *chan0, struct ast_rtp_instance *instance0, struct ast_channel *chan1, struct ast_rtp_instance *instance1);
 static void ast_rtp_stun_request(struct ast_rtp_instance *instance, struct ast_sockaddr *suggestion, const char *username);
+static void ast_rtp_hold(struct ast_rtp_instance *instance, int status);
 static void ast_rtp_stop(struct ast_rtp_instance *instance);
 static int ast_rtp_qos_set(struct ast_rtp_instance *instance, int tos, int cos, const char* desc);
 static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level);
@@ -366,6 +369,7 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.get_stat = ast_rtp_get_stat,
 	.dtmf_compatible = ast_rtp_dtmf_compatible,
 	.stun_request = ast_rtp_stun_request,
+	.hold = ast_rtp_hold,
 	.stop = ast_rtp_stop,
 	.qos = ast_rtp_qos_set,
 	.sendcng = ast_rtp_sendcng,
@@ -1397,6 +1401,12 @@ static int ast_rtp_write(struct ast_rtp_instance *instance, struct ast_frame *fr
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr remote_address = { {0,} };
 	format_t codec, subclass;
+
+	if (ast_test_flag(rtp, FLAG_HOLD)) {
+		/* This stream is on hold, just keep on happily and don't do anything */
+		ast_debug(1, "** Frame muted since we're on hold. \n");
+		return 0;
+	}
 
 	ast_rtp_instance_get_remote_address(instance, &remote_address);
 
@@ -3059,6 +3069,20 @@ static void ast_rtp_stun_request(struct ast_rtp_instance *instance, struct ast_s
 	ast_sockaddr_to_sin(suggestion, &suggestion_tmp);
 	ast_stun_request(rtp->s, &suggestion_tmp, username, NULL);
 	ast_sockaddr_from_sin(suggestion, &suggestion_tmp);
+}
+
+/* \brief Put stream on/off hold, mute outbound RTP but keep
+	RTP keepalives and RTCP going
+ */
+static void ast_rtp_hold(struct ast_rtp_instance *instance, int status)
+{
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	if (status) {
+		ast_set_flag(rtp, FLAG_HOLD);
+	} else {
+		/* CLEAR */
+		ast_clear_flag(rtp, FLAG_HOLD);
+	}
 }
 
 static void ast_rtp_stop(struct ast_rtp_instance *instance)

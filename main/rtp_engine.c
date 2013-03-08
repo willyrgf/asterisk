@@ -21,6 +21,9 @@
  * \brief Pluggable RTP Architecture
  *
  * \author Joshua Colp <jcolp@digium.com>
+ *
+ * Improved RTCP support by
+ * \author Olle E. Johansson  <oej@edvina.net>
  */
 
 /*** MODULEINFO
@@ -774,6 +777,13 @@ void ast_rtp_instance_change_source(struct ast_rtp_instance *instance)
 int ast_rtp_instance_set_qos(struct ast_rtp_instance *instance, int tos, int cos, const char *desc)
 {
 	return instance->engine->qos ? instance->engine->qos(instance, tos, cos, desc) : -1;
+}
+
+void ast_rtp_instance_hold(struct ast_rtp_instance *instance, int status)
+{
+	if (instance->engine->hold) {
+		instance->engine->hold(instance, status);
+	}
 }
 
 void ast_rtp_instance_stop(struct ast_rtp_instance *instance)

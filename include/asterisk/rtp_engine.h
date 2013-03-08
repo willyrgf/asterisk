@@ -355,6 +355,9 @@ struct ast_rtp_engine {
 	int (*destroy)(struct ast_rtp_instance *instance);
 	/*! Callback for writing out a frame */
 	int (*write)(struct ast_rtp_instance *instance, struct ast_frame *frame);
+	/*! Callback for stopping the outbound RTP media for an instance,
+	    but keeping the RTCP flow (and the RTP keepalives if needed) */
+	void (*hold)(struct ast_rtp_instance *instance, int status);
 	/*! Callback for stopping the RTP instance */
 	void (*stop)(struct ast_rtp_instance *instance);
 	/*! Callback for starting RFC2833 DTMF transmission */
@@ -1355,6 +1358,26 @@ void ast_rtp_instance_change_source(struct ast_rtp_instance *instance);
  * \since 1.8
  */
 int ast_rtp_instance_set_qos(struct ast_rtp_instance *instance, int tos, int cos, const char *desc);
+
+/*!
+ * \brief Stop the RTP outbound media in a stream, but keep the RTCP flow going
+ * 	  And propably RTP keepalives too.
+ *
+ * \param instance Instance that media is no longer going to at this time
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_rtp_instance_stop(instance);
+ * \endcode
+ *
+ * This tells the RTP engine being used for the instance pointed to by instance
+ * that media is no longer going to it at this time, but may in the future.
+ * Keep the RTCP flow happy
+ *
+ * \since 1.42
+ */
+void ast_rtp_instance_hold(struct ast_rtp_instance *instance, int status);
 
 /*!
  * \brief Stop an RTP instance
