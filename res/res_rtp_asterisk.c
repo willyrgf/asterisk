@@ -3078,9 +3078,11 @@ static void ast_rtp_hold(struct ast_rtp_instance *instance, int status)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	if (status) {
+		ast_debug(1, "##### HOLDING RTCP, Have a nice day \n");
 		ast_set_flag(rtp, FLAG_HOLD);
 	} else {
 		/* CLEAR */
+		ast_debug(1, "##### UNHOLDING RTCP, You will get audio now. \n");
 		ast_clear_flag(rtp, FLAG_HOLD);
 	}
 }
