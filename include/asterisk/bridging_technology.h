@@ -49,11 +49,21 @@ struct ast_bridge_technology {
 	uint32_t capabilities;
 	/*! Preference level that should be used when determining whether to use this bridge technology or not */
 	enum ast_bridge_preference preference;
-	/*! Callback for when a bridge is being created */
+	/*!
+	 * \brief Callback for when a bridge is being created.
+	 *
+	 * \retval 0 on success
+	 * \retval -1 on failure
+	 */
 	int (*create)(struct ast_bridge *bridge);
 	/*! Callback for when a bridge is being destroyed */
 	void (*destroy)(struct ast_bridge *bridge);
-	/*! Callback for when a channel is being added to a bridge */
+	/*!
+	 * \brief Callback for when a channel is being added to a bridge.
+	 *
+	 * \retval 0 on success
+	 * \retval -1 on failure
+	 */
 	int (*join)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Callback for when a channel is leaving a bridge */
 	void (*leave)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
@@ -61,13 +71,26 @@ struct ast_bridge_technology {
 	void (*suspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Callback for when a channel is unsuspended from the bridge */
 	void (*unsuspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
-	/*! Callback to see if the bridge is compatible with the bridging technology */
+	/*!
+	 * \brief Callback to see if the bridge is compatible with the bridging technology.
+	 *
+	 * \retval 0 if not compatible
+	 * \retval non-zero if compatible
+	 */
 	int (*compatible)(struct ast_bridge *bridge);
-	/*! Callback for writing a frame into the bridging technology */
-	enum ast_bridge_write_result (*write)(struct ast_bridge *bridge, struct ast_bridge_channel *bridged_channel, struct ast_frame *frame);
-	/*! Callback for when a file descriptor trips */
-	int (*fd)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, int fd);
-	/*! Callback for bridge thread loop */
+	/*!
+	 * \brief Callback for writing a frame into the bridging technology.
+	 *
+	 * \retval 0 on success
+	 * \retval -1 on failure
+	 */
+	int (*write)(struct ast_bridge *bridge, struct ast_bridge_channel *bridged_channel, struct ast_frame *frame);
+	/*!
+	 * \brief Callback for bridge thread loop.
+	 *
+	 * \retval 0 on success
+	 * \retval -1 on failure
+	 */
 	int (*thread_loop)(struct ast_bridge *bridge);
 	/*! Callback for poking a bridge channel thread */
 	void (*poke_channel)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
@@ -166,12 +189,11 @@ void ast_bridge_channel_poke(struct ast_bridge_channel *bridge_channel);
  * \param bridge The bridge that the notification should influence
  * \param bridge_channel Bridge channel the notification was received on (if known)
  * \param chan Channel the notification was received on (if known)
- * \param outfd File descriptor that the notification was received on (if known)
  *
  * Example usage:
  *
  * \code
- * ast_bridge_handle_trip(bridge, NULL, chan, -1);
+ * ast_bridge_handle_trip(bridge, NULL, chan);
  * \endcode
  *
  * This tells the bridging core that a frame has been received on
@@ -179,7 +201,7 @@ void ast_bridge_channel_poke(struct ast_bridge_channel *bridge_channel);
  *
  * \note This should only be used by bridging technologies.
  */
-void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan, int outfd);
+void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan);
 
 /*!
  * \brief Lets the bridging indicate when a bridge channel has stopped or started talking.

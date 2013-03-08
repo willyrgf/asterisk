@@ -472,7 +472,7 @@ static void softmix_pass_video_all(struct ast_bridge *bridge, struct ast_bridge_
 }
 
 /*! \brief Function called when a channel writes a frame into the bridge */
-static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	struct softmix_channel *sc = bridge_channel->bridge_pvt;
 	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
@@ -482,14 +482,15 @@ static enum ast_bridge_write_result softmix_bridge_write(struct ast_bridge *brid
 		bridge_channel->tech_args.silence_threshold :
 		DEFAULT_SOFTMIX_SILENCE_THRESHOLD;
 	char update_talking = -1;  /* if this is set to 0 or 1, tell the bridge that the channel has started or stopped talking. */
-	int res = AST_BRIDGE_WRITE_SUCCESS;
+	int res = 0;
 
 	/* Only accept audio frames, all others are unsupported */
 	if (frame->frametype == AST_FRAME_DTMF_END || frame->frametype == AST_FRAME_DTMF_BEGIN) {
 		softmix_pass_dtmf(bridge, bridge_channel, frame);
 		goto bridge_write_cleanup;
 	} else if (frame->frametype != AST_FRAME_VOICE && frame->frametype != AST_FRAME_VIDEO) {
-		res = AST_BRIDGE_WRITE_UNSUPPORTED;
+		/* Frame type unsupported. */
+		res = -1;
 		goto bridge_write_cleanup;
 	} else if (frame->datalen == 0) {
 		goto bridge_write_cleanup;

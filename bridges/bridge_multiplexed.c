@@ -291,7 +291,7 @@ static void *multiplexed_thread_function(void *data)
 			}
 			if (!stop && bridge) {
 /* BUGBUG need to update thread callid for each bridge trip. */
-				ast_bridge_handle_trip(bridge, NULL, winner, -1);
+				ast_bridge_handle_trip(bridge, NULL, winner);
 				ao2_unlock(bridge);
 			}
 			ao2_lock(muxed_thread);
@@ -466,13 +466,13 @@ static void multiplexed_bridge_unsuspend(struct ast_bridge *bridge, struct ast_b
 }
 
 /*! \brief Write function for writing frames into the bridge */
-static enum ast_bridge_write_result multiplexed_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+static int multiplexed_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	struct ast_bridge_channel *other;
 
 	/* If this is the only channel in this bridge then immediately exit */
 	if (AST_LIST_FIRST(&bridge->channels) == AST_LIST_LAST(&bridge->channels)) {
-		return AST_BRIDGE_WRITE_FAILED;
+		return -1;
 	}
 
 	/* Find the channel we actually want to write to */
@@ -489,7 +489,7 @@ static enum ast_bridge_write_result multiplexed_bridge_write(struct ast_bridge *
 		}
 	}
 
-	return AST_BRIDGE_WRITE_SUCCESS;
+	return 0;
 }
 
 static struct ast_bridge_technology multiplexed_bridge = {

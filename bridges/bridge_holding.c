@@ -250,19 +250,19 @@ static void holding_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_ch
 	bridge_channel->bridge_pvt = NULL;
 }
 
-static enum ast_bridge_write_result holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	struct ast_bridge_channel *other;
 	struct holding_channel *hc = bridge_channel->bridge_pvt;
 
 	/* If there is no bridge_pvt, then the channel failed to allocate one when it joined and is borked. Don't listen to him. */
 	if (!hc) {
-		return AST_BRIDGE_WRITE_FAILED;
+		return -1;
 	}
 
 	/* If we aren't an announcer, we never have any business writing anything. */
 	if (!ast_test_flag(&hc->holding_roles, HOLDING_ROLE_ANNOUNCER)) {
-		return AST_BRIDGE_WRITE_FAILED;
+		return -1;
 	}
 
 	/* Ok, so we are the announcer and there are one or more people available to receive our writes. Let's do it. */
@@ -280,7 +280,7 @@ static enum ast_bridge_write_result holding_bridge_write(struct ast_bridge *brid
 		}
 	}
 
-	return AST_BRIDGE_WRITE_SUCCESS;
+	return 0;
 }
 
 static struct ast_bridge_technology holding_bridge = {

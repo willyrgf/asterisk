@@ -664,7 +664,7 @@ void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int st
 	ast_bridge_channel_queue_action(bridge_channel, &action);
 }
 
-void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan, int outfd)
+void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan)
 {
 	struct ast_timer *interval_timer;
 
@@ -735,12 +735,6 @@ void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel
 		return;
 	}
 
-	/* If a file descriptor actually tripped pass it off to the bridge technology */
-	if (outfd > -1 && bridge->technology->fd) {
-		bridge->technology->fd(bridge, bridge_channel, outfd);
-		return;
-	}
-
 	/* If all else fails just poke the bridge channel */
 	if (bridge->technology->poke_channel && bridge_channel) {
 		bridge->technology->poke_channel(bridge, bridge_channel);
@@ -776,7 +770,7 @@ int ast_bridge_thread_generic(struct ast_bridge *bridge)
 		}
 
 		/* Process whatever they did */
-		ast_bridge_handle_trip(bridge, NULL, winner, -1);
+		ast_bridge_handle_trip(bridge, NULL, winner);
 	}
 }
 
@@ -1311,21 +1305,8 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 /*! \brief Run in a multithreaded model. Each joined channel does writing/reading in their own thread. TODO: Improve */
 static void bridge_channel_join_multithreaded(struct ast_bridge_channel *bridge_channel)
 {
-	int fds[4] = { -1, };
-	int nfds = 0;
-	int outfd = -1;
 	int ms = -1;
-	int i;
 	struct ast_channel *chan;
-
-	/* Add any file descriptors we may want to monitor */
-	if (bridge_channel->bridge->technology->fd) {
-		for (i = 0; i < 4; ++i) {
-			if (bridge_channel->fds[i] >= 0) {
-				fds[nfds++] = bridge_channel->fds[i];
-			}
-		}
-	}
 
 	ao2_unlock(bridge_channel->bridge);
 
@@ -1343,10 +1324,10 @@ static void bridge_channel_join_multithreaded(struct ast_bridge_channel *bridge_
 			bridge_channel, ast_channel_name(bridge_channel->chan),
 			bridge_channel->bridge);
 		ao2_unlock(bridge_channel);
-		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1, fds, nfds, NULL, &outfd, &ms);
+		chan = ast_waitfor_n(&bridge_channel->chan, 1, &ms);
 		ao2_lock(bridge_channel->bridge);
 		if (!bridge_channel->suspended) {
-			ast_bridge_handle_trip(bridge_channel->bridge, bridge_channel, chan, outfd);
+			ast_bridge_handle_trip(bridge_channel->bridge, bridge_channel, chan);
 		}
 		ao2_lock(bridge_channel);
 		bridge_channel->poked = 0;

@@ -94,16 +94,6 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 };
 
-/*! \brief Return values for bridge technology write function */
-enum ast_bridge_write_result {
-	/*! Bridge technology wrote out frame fine */
-	AST_BRIDGE_WRITE_SUCCESS = 0,
-	/*! Bridge technology attempted to write out the frame but failed */
-	AST_BRIDGE_WRITE_FAILED,
-	/*! Bridge technology does not support writing out a frame of this type */
-	AST_BRIDGE_WRITE_UNSUPPORTED,
-};
-
 struct ast_bridge_technology;
 struct ast_bridge;
 
@@ -141,8 +131,6 @@ struct ast_bridge_channel {
 	void *bridge_pvt;
 	/*! Thread handling the bridged channel */
 	pthread_t thread;
-	/*! Additional file descriptors to look at */
-	int fds[4];
 	/*! TRUE if the channel has been poked. */
 	unsigned int poked;
 	/*! TRUE if the channel is in a bridge. */
