@@ -91,9 +91,12 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 			}
 		}
 
+	} else {
+ 		ast_debug(1, "######## Not setting rtcp media data. Dialog %s Dialog owner %s \n", dialog ? "set" : "unset",  dialog->owner ? "set" : "unset");
 	}
 
 	if (ast_rtp_instance_get_stats(instance, &qual, AST_RTP_INSTANCE_STAT_ALL)) {
+ 		ast_debug(1, "######## Did not get any statistics... bad, bad, RTP instance\n");
 		/* Houston, we got a problem */
 		return;
 	}
@@ -300,10 +303,13 @@ int send_rtcp_events(const void *data)
 	struct sip_pvt *dialog = (struct sip_pvt *) data;
 	ast_log(LOG_DEBUG, "***** SENDING RTCP EVENT \n");
 
-	if (dialog->rtp && ast_rtp_instance_isactive(dialog->rtp)) {
+	if (dialog->rtp && !ast_rtp_instance_isactive(dialog->rtp)) {
+		ast_log(LOG_DEBUG, "          ***** Activating RTCP report \n");
 		sip_rtcp_report(dialog, dialog->rtp, SDP_AUDIO, FALSE);
+	} else {
+		ast_log(LOG_DEBUG, "          ***** NOT Activating RTCP report \n");
 	}
-	if (dialog->vrtp && ast_rtp_instance_isactive(dialog->vrtp)) {
+	if (dialog->vrtp && !ast_rtp_instance_isactive(dialog->vrtp)) {
 		sip_rtcp_report(dialog, dialog->vrtp, SDP_VIDEO, FALSE);
 	}
 	return (dialog->sip_cfg ? dialog->sip_cfg->rtcptimer : 0);
