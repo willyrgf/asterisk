@@ -9116,6 +9116,7 @@ static void change_hold_state(struct sip_pvt *dialog, struct sip_request *req, i
 			      dialog->owner->uniqueid);
 	append_history(dialog, holdstate ? "Hold" : "Unhold", "%s", ast_str_buffer(req->data));
 	if (!holdstate) {	/* Put off remote hold */
+		ast_rtp_instance_hold(dialog->rtp, 0);	/* Turn off RTP hold */
 		ast_clear_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD);	/* Clear both flags */
 		return;
 	}
@@ -9884,12 +9885,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		ast_queue_control_data(p->owner, AST_CONTROL_HOLD,
 				       S_OR(p->mohsuggest, NULL),
 				       !ast_strlen_zero(p->mohsuggest) ? strlen(p->mohsuggest) + 1 : 0);
-		//
-		// We should only stop at port = 0 or BYE /End of call or stream (like a transfer)
-		//if (sendonly == 2) {
-			//ast_rtp_instance_stop(p->rtp);
-			///* RTCP needs to go ahead, even if we're on hold!!! */
-		//}
+		if (sendonly == 1 || sendonly == 2) {	/* sendonly (from the other side) or inactive */
+			ast_rtp_instance_hold(p->rtp, 1);
+		}
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
 		change_hold_state(p, req, TRUE, sendonly);
