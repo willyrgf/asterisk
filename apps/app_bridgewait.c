@@ -85,6 +85,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</description>
 	</application>
  ***/
+/* BUGBUG Add bridge name/id parameter to specify which holding bridge to join (required) */
+/* BUGBUG Add h(moh-class) option to put channel on hold using AST_CONTROL_HOLD/AST_CONTROL_UNHOLD while in bridge */
+/* BUGBUG Add s option to send silence media frames to channel while in bridge (uses a silence generator) */
+/* BUGBUG Add n option to send no media to channel while in bridge (Channel should not be answered yet) */
+/* BUGBUG The channel may or may not be answered with the r option. */
+/* BUGBUG You should not place an announcer into a holding bridge with unanswered channels. */
+/* BUGBUG Not supplying any option flags will assume the m option with the default music class. */
 
 static char *app = "BridgeWait";
 static struct ast_bridge *holding_bridge;

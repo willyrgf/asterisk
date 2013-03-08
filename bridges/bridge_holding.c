@@ -54,6 +54,9 @@ enum role_flags {
 	HOLDING_ROLE_ANNOUNCER = (1 << 1),
 };
 
+/* BUGBUG Add IDLE_MODE_HOLD option to put channel on hold using AST_CONTROL_HOLD/AST_CONTROL_UNHOLD while in bridge */
+/* BUGBUG Add IDLE_MODE_SILENCE to send silence media frames to channel while in bridge (uses a silence generator) */
+/* BUGBUG A channel without the holding_participant role will assume IDLE_MODE_MOH with the default music class. */
 enum idle_modes {
 	IDLE_MODE_NONE = 0,
 	IDLE_MODE_MOH,
