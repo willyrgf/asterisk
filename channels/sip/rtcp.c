@@ -58,7 +58,7 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 		if (bridgepeer) {
 			/* Store the bridged peer data while we have it */
 			ast_rtp_instance_set_bridged_chan(instance, dialog->owner->name, dialog->owner->uniqueid, S_OR(bridgepeer->name,""), S_OR(bridgepeer->uniqueid,""));
-			ast_log(LOG_DEBUG, "---- Setting bridged peer name to %s\n", bridgepeer->name);
+			ast_debug(1, "---- Setting bridged peer name to %s\n", bridgepeer->name);
 		} else {
 			ast_rtp_instance_set_bridged_chan(instance, dialog->owner->name, dialog->owner->uniqueid, NULL, NULL);
 		}
@@ -83,10 +83,10 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 		
 			if (option_debug > 1) {
  				if (readtrans && dialog->owner->readtrans->t) {
- 					ast_log(LOG_DEBUG, "--- Audio Read translator: %s Cost %d\n", dialog->owner->readtrans->t->name, dialog->owner->readtrans->t->cost);
+ 					ast_debug(1, "--- Audio Read translator: %s Cost %d\n", dialog->owner->readtrans->t->name, dialog->owner->readtrans->t->cost);
  				}
  				if (writetrans && dialog->owner->writetrans->t) {
- 					ast_log(LOG_DEBUG, "--- Audio Write translator: %s Cost %d\n", dialog->owner->writetrans->t->name, dialog->owner->writetrans->t->cost);
+ 					ast_debug(1, "--- Audio Write translator: %s Cost %d\n", dialog->owner->writetrans->t->name, dialog->owner->writetrans->t->cost);
  				}
 			}
 		}

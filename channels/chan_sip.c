@@ -8187,13 +8187,15 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 		build_callid_pvt(p);
 	else
 		ast_string_field_set(p, callid, callid);
-	/* Assign default music on hold class */
+
+	/* Set cnames for the RTCP SDES */
 	if (p->rtp) {
 		ast_rtp_instance_setcname(p->rtp, p->callid, strlen(p->callid));
 	}
 	if (p->vrtp) {
 		ast_rtp_instance_setcname(p->vrtp, p->callid, strlen(p->callid));
 	}
+	/* Assign default music on hold class */
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
 	p->capability = sip_cfg.capability;
@@ -20964,6 +20966,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, TRUE);
 		check_pendings(p);
+		start_rtcp_events(p, sched);
 		break;
 
 	case 407: /* Proxy authentication */

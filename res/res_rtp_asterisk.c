@@ -190,8 +190,6 @@ struct ast_rtp {
 	struct timeval dtmfmute;
 	struct timeval holdstart;       /*!< When the stream was put on hold */
 	struct ast_smoother *smoother;
-	int *ioid;
-	int *ioidrtcp;
 	unsigned short seqno;		/*!< Sequence number, RFC 3550, page 13. */
 	unsigned short rxseqno;
 	struct sched_context *sched;
@@ -3161,28 +3159,36 @@ void ast_rtcp_set_bridged(struct ast_rtp_instance *instance, const char *channel
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 
 	if (!rtp) {		/* For some reason, there's no RTP */
+		ast_debug(1, "??????????????? NO RTP \n");
 		return;
 	}
 	if (!rtp->rtcp) {	/* No RTCP? Strange */
+		ast_debug(1, "??????????????? NO RTCP \n");
 		return;
 	}
 	/* If we already have data, don't replace it. 
 		NOTE: Should we replace it at a masquerade or something? Hmm.
 	*/
 	if (channel && !rtp->rtcp->channel[0]) {
+		ast_debug(1, "!!!!!! Setting channel name \n");
 		ast_copy_string(rtp->rtcp->channel, channel, sizeof(rtp->rtcp->channel));
 	}
 	if (uniqueid && !rtp->rtcp->uniqueid[0]) {
+		ast_debug(1, "!!!!!! Setting unique id \n");
 		ast_copy_string(rtp->rtcp->uniqueid, uniqueid, sizeof(rtp->rtcp->uniqueid));
 	}
 	if (bridgedchan) {
+		ast_debug(1, "!!!!!! Setting bridged channel name \n");
 		ast_copy_string(rtp->rtcp->bridgedchan, bridgedchan, sizeof(rtp->rtcp->bridgedchan));
 	} else {
+		ast_debug(1, "!!!!!! REmoving bridged channel name \n");
 		rtp->rtcp->bridgedchan[0] = '\0';
 	}
 	if (bridgeduniqueid) {
+		ast_debug(1, "!!!!!! Setting bridged unique id \n");
 		ast_copy_string(rtp->rtcp->bridgeduniqueid, bridgeduniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
 	} else {
+		ast_debug(1, "!!!!!! Removing bridged unique id \n");
 		rtp->rtcp->bridgeduniqueid[0] = '\0';
 	}
 }
