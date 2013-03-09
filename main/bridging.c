@@ -1562,6 +1562,7 @@ static void bridge_channel_feature(struct ast_bridge *bridge, struct ast_bridge_
 			bridge_handle_hangup(bridge, bridge_channel);
 		}
 	} else {
+/* BUGBUG Check the features.dtmf_passthrough flag just like ast_bridge_handle_trip() before passing on the collected digits. */
 		ast_bridge_dtmf_stream(bridge, dtmf, bridge_channel->chan);
 	}
 }
@@ -2463,6 +2464,7 @@ void ast_bridge_technology_suspend(struct ast_bridge_technology *technology)
 
 void ast_bridge_technology_unsuspend(struct ast_bridge_technology *technology)
 {
+/* BUGBUG unsuspending a bridge technology probably needs to prod all existing bridges to see if they should start using it. */
 	technology->suspended = 0;
 }
 

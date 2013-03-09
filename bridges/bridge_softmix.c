@@ -756,7 +756,8 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 	unsigned int stat_iteration_counter = 0; /* counts down, gather stats at zero and reset. */
 	int timingfd;
 	int update_all_rates = 0; /* set this when the internal sample rate has changed */
-	int i, x;
+	int i;
+	int x;
 	int res = -1;
 
 	softmix_data = bridge->bridge_pvt;
@@ -867,6 +868,7 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 
 			/* process the softmix channel's new write audio */
 			softmix_process_write_audio(&trans_helper, ast_channel_rawwriteformat(bridge_channel->chan), sc);
+/* BUGBUG need to put the frame on the bridge_channel write queue. */
 
 			/* The frame is now ready for use... */
 			sc->have_frame = 1;
@@ -923,6 +925,7 @@ static struct ast_bridge_technology softmix_bridge = {
 	.destroy = softmix_bridge_destroy,
 	.join = softmix_bridge_join,
 	.leave = softmix_bridge_leave,
+/* BUGBUG need suspend/unsuspend to keep track of num active channels in bridge.  Then softmix mixing thread can wake up when there are channels in the bridge. */
 	.write = softmix_bridge_write,
 	.thread_loop = softmix_bridge_thread,
 	.poke_channel = softmix_bridge_poke_channel,
