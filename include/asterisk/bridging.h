@@ -394,8 +394,12 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  * \param bridge Bridge to impart on
  * \param chan Channel to impart
  * \param swap Channel to swap out if swapping.  NULL if not swapping.
- * \param features Bridge features structure. Must be NULL or obtained by ast_bridge_features_new().
+ * \param features Bridge features structure.
  * \param independent TRUE if caller does not want to reclaim the channel using ast_bridge_depart().
+ *
+ * \note The features parameter must be NULL or obtained by
+ * ast_bridge_features_new().  You must not dereference features
+ * after calling.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -424,7 +428,7 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  * \note If you impart a channel as not independent you MUST
  * ast_bridge_depart() the channel.  The bridge channel thread
  * is created join-able.  The implication is that the channel is
- * special and is not intended to be moved to another bridge.
+ * special and will not behave like a normal channel.
  *
  * \note If you impart a channel as independent you must not
  * ast_bridge_depart() the channel.  The bridge channel thread

@@ -2097,6 +2097,17 @@ void ast_after_bridge_set_go_on(struct ast_channel *chan, const char *context, c
 	__after_bridge_set_goto(chan, 0, 0, context, exten, priority, p_goto);
 }
 
+/*
+ * BUGBUG make ast_bridge_join() require features to be allocated just like ast_bridge_impart() and not expect the struct back.
+ *
+ * This change is really going to break ConfBridge.  All other
+ * users are easily changed.  However, it is needed so the
+ * bridging code can manipulate features on all channels
+ * consistently no matter how they joined.
+ *
+ * Need to update the features parameter doxygen when this
+ * change is made to be like ast_bridge_impart().
+ */
 enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *chan,
 	struct ast_channel *swap,
@@ -2699,6 +2710,7 @@ static int interval_hook_time_cmp(void *a, void *b)
 	return cmp;
 }
 
+/* BUGBUG make ast_bridge_features_init() static when make ast_bridge_join() requires features to be allocated. */
 int ast_bridge_features_init(struct ast_bridge_features *features)
 {
 	/* Zero out the structure */
@@ -2717,6 +2729,7 @@ int ast_bridge_features_init(struct ast_bridge_features *features)
 	return 0;
 }
 
+/* BUGBUG make ast_bridge_features_cleanup() static when make ast_bridge_join() requires features to be allocated. */
 void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 {
 	struct ast_bridge_hook *hook;
