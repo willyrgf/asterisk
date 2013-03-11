@@ -18041,7 +18041,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 	int realtimertpqos = FALSE;
 
 	realtimepeers = ast_check_realtime("sippeers");
-	realtimertpqos = ast_check_realtime("rtpqos");
+	realtimertpqos = ast_check_realtime("rtpcqr");
 
 	if (argc < 4)
 		return CLI_SHOWUSAGE;
@@ -18678,7 +18678,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 
 	realtimepeers = ast_check_realtime("sippeers");
 	realtimeregs = ast_check_realtime("sipregs");
-	realtimertpqos = ast_check_realtime("rtpqos");
+	realtimertpqos = ast_check_realtime("rtpcqr");
 
 	ast_mutex_lock(&authl_lock);
 	credentials = authl;
@@ -18759,7 +18759,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(a->fd, "  SIP realtime:           Disabled\n" );
 	else
 		ast_cli(a->fd, "  SIP realtime:           Enabled\n" );
-	ast_cli(a->fd, "  QOS realtime reports:   %s\n", realtimertpqos ? "Enabled" : "Disabled" );
+	ast_cli(a->fd, "  QoS realtime reports:   %s\n", realtimertpqos ? "Enabled" : "Disabled" );
 	ast_cli(a->fd, "  Qualify Freq :          %d ms\n", global_qualifyfreq);
 	ast_cli(a->fd, "  Q.850 Reason header:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_Q850_REASON)));
 	ast_cli(a->fd, "  Store SIP_CAUSE:        %s\n", AST_CLI_YESNO(global_store_sip_cause));

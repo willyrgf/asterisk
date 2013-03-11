@@ -3183,15 +3183,18 @@ void ast_rtcp_set_bridged(struct ast_rtp_instance *instance, const char *channel
 		ast_debug(1, "!!!!!! Setting bridged channel name \n");
 		ast_copy_string(rtp->rtcp->bridgedchan, bridgedchan, sizeof(rtp->rtcp->bridgedchan));
 	} else {
-		ast_debug(1, "!!!!!! REmoving bridged channel name \n");
-		rtp->rtcp->bridgedchan[0] = '\0';
+		if(rtp->rtcp->bridgedchan[0] != '\0') {
+			ast_debug(1, "!!!!!! Keeping bridged channel name \n");
+		}
+		//rtp->rtcp->bridgedchan[0] = '\0';
 	}
 	if (bridgeduniqueid) {
 		ast_debug(1, "!!!!!! Setting bridged unique id \n");
 		ast_copy_string(rtp->rtcp->bridgeduniqueid, bridgeduniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
 	} else {
-		ast_debug(1, "!!!!!! Removing bridged unique id \n");
-		rtp->rtcp->bridgeduniqueid[0] = '\0';
+		if(rtp->rtcp->bridgeduniqueid[0] != '\0') {
+			ast_debug(1, "!!!!!! Keeping bridged unique id \n");
+		}
 	}
 }
 

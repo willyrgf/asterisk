@@ -192,7 +192,7 @@ void ast_console_toggle_loglevel(int fd, int level, int state);
 #endif
 #define AST_LOG_CQR    __LOG_CQR, _A_
 
-#define NUMLOGLEVELS 32
+#define NUMLOGLEVELS 64		/* Highest bit */
 
 /*!
  * \brief Get the debug level for a module

@@ -47,7 +47,7 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 {
 	struct ast_rtp_instance_stats qual;
 	//char *rtpqstring = NULL;
-	//int qosrealtime = ast_check_realtime("rtpqos");
+	//int qosrealtime = ast_check_realtime("rtpcqr");
 	unsigned int duration;	/* Duration in secs */
  	int readtrans = FALSE, writetrans = FALSE;
 	memset(&qual, 0, sizeof(qual));
@@ -201,7 +201,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	char buf_remoteip[25];
 	char buf_inpacketloss[25], buf_outpacketloss[25];
 	char buf_outpackets[25], buf_inpackets[25];
-	int qosrealtime = ast_check_realtime("rtpqos");
+	int qosrealtime = ast_check_realtime("rtpcqr");
 
 	ast_log(LOG_DEBUG, "************* QOS END REPORTS: The final countdown!!!!! Yeah. \n");
 
@@ -243,7 +243,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	//sprintf(buf_outpackets, "%d", qual->local_count);
 
 	ast_log(LOG_DEBUG, "************* QOS END REPORTS: Probing new logging channel LOG_CQR!!!!! Yeah. \n");
-	ast_log(LOG_DEBUG, "RTPQOS Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
+	ast_log(LOG_CQR, "CQR Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
 		qual->channel[0] ? qual->channel : "",
 		qual->uniqueid[0] ? qual->uniqueid : "",
 		qual->bridgedchan[0] ? qual->bridgedchan : "" ,
@@ -266,8 +266,39 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	if (!qosrealtime) {
 		return;
 	}
+/* Example database schema for MySQL:
+CREATE TABLE `astcqr` (
+  `channel` varchar(50) NOT NULL,
+  `uniqueid` varchar(35) NOT NULL,
+  `bridgedchan` varchar(50) NOT NULL,
+  `bridgeduniqueid` varchar(35) NOT NULL,
+  `pvtcallid` varchar(80) NOT NULL,
+  `rtpmedia` varchar(50) NOT NULL,
+  `localssrc` varchar(50) NOT NULL,
+  `remotessrc` varchar(50) NOT NULL,
+  `rtt` varchar(10) NOT NULL,
+  `localjitter` varchar(10) NOT NULL,
+  `remotejitter` varchar(10) NOT NULL,
+  `sendformat` varchar(10) NOT NULL,
+  `receiveformat` varchar(10) NOT NULL,
+  `rtcpstatus` varchar(10) NOT NULL,
+  `duration` varchar(10) NOT NULL,
+  `packetsent` varchar(30) NOT NULL,
+  `packetreceived` varchar(30) NOT NULL,
+  `packetlossin` varchar(30) NOT NULL,
+  `packetlossout` varchar(30) NOT NULL,
+  `rttmax` varchar(12) NOT NULL,
+  `rttmin` varchar(12) NOT NULL,
+  `writetranslator` varchar(15) NOT NULL,
+  `readtranslator` varchar(15) NOT NULL,
+  `writecost` varchar(10) NOT NULL,
+  `readcost` varchar(10) NOT NULL,
+  `remoteip` varchar(25) NOT NULL,
+  KEY `ChannelUnique` (`channel`,`uniqueid`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COMMENT='FOr pinefrog stats'
+*/
 
-	ast_store_realtime("rtpqos", 
+	ast_store_realtime("rtpcqr", 
 		"channel", qual->channel[0] ? qual->channel : "--no channel--",
 		"uniqueid", qual->uniqueid[0] ? qual->uniqueid : "--no uniqueid --",
 		"bridgedchan", qual->bridgedchan[0] ? qual->bridgedchan : "" ,
