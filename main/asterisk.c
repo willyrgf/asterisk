@@ -241,6 +241,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/uuid.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/stasis.h"
+#include "asterisk/bridging.h"
 
 #include "../defaults.h"
 
@@ -4262,6 +4263,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (ast_features_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
+	if (ast_bridge_init()) {
 		printf("%s", term_quit());
 		exit(1);
 	}

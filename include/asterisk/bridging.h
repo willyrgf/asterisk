@@ -269,6 +269,15 @@ struct ast_bridge {
 };
 
 /*!
+ * \brief Initialize the bridging system.
+ * \since 12.0.0
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int ast_bridge_init(void);
+
+/*!
  * \brief Create a new bridge
  *
  * \param capabilities The capabilities that we require to be used on the bridge

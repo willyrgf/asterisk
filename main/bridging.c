@@ -76,6 +76,63 @@ static void *builtin_features_handlers[AST_BRIDGE_BUILTIN_END];
 /*! Function handlers for built in interval features */
 static void *builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_END];
 
+/*! Bridge manager service request */
+struct bridge_manager_request {
+	/*! List of bridge service requests. */
+	AST_LIST_ENTRY(bridge_manager_request) node;
+	/*! Refed bridge requesting service. */
+	struct ast_bridge *bridge;
+};
+
+struct bridge_manager_controller {
+	/*! Condition, used to wake up the bridge manager thread. */
+	ast_cond_t cond;
+	/*! Queue of bridge service requests. */
+	AST_LIST_HEAD_NOLOCK(, bridge_manager_request) service_requests;
+	/*! Manager thread */
+	pthread_t thread;
+	/*! TRUE if the manager needs to stop. */
+	unsigned int stop:1;
+};
+
+/*! Bridge manager controller. */
+static struct bridge_manager_controller *bridge_manager;
+
+/*!
+ * \brief Request service for a bridge from the bridge manager.
+ * \since 12.0.0
+ *
+ * \param bridge Requesting service.
+ *
+ * \return Nothing
+ */
+void ast_bridge_manager_service_req(struct ast_bridge *bridge);//BUGBUG not used yet
+void ast_bridge_manager_service_req(struct ast_bridge *bridge)
+{
+	struct bridge_manager_request *request;
+
+	ao2_lock(bridge_manager);
+	if (bridge_manager->stop) {
+		ao2_unlock(bridge_manager);
+		return;
+	}
+
+	/* Create the service request. */
+	request = ast_calloc(1, sizeof(*request));
+	if (!request) {
+		/* Well. This isn't good. */
+		ao2_unlock(bridge_manager);
+		return;
+	}
+	ao2_ref(bridge, +1);
+	request->bridge = bridge;
+
+	/* Put request into the queue and wake the bridge manager. */
+	AST_LIST_INSERT_TAIL(&bridge_manager->service_requests, request, node);
+	ast_cond_signal(&bridge_manager->cond);
+	ao2_unlock(bridge_manager);
+}
+
 int __ast_bridge_technology_register(struct ast_bridge_technology *technology, struct ast_module *module)
 {
 	struct ast_bridge_technology *current;
@@ -854,7 +911,8 @@ static void bridge_action_bridge(struct ast_bridge *bridge, struct ast_frame *ac
  * bridge.  The bridge ao2 object destructor will stop the
  * thread if it is running.
  */
-static void *bridge_thread(void *data)
+void *bridge_thread(void *data);//BUGBUG not used
+void *bridge_thread(void *data)
 {
 	struct ast_bridge *bridge = data;
 	struct ast_frame *action;
@@ -1302,6 +1360,38 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	return 0;
 }
 
+/*!
+ * \internal
+ * \brief Notify the bridge that it has been reconfigured.
+ * \since 12.0.0
+ *
+ * \param bridge Reconfigured bridge.
+ *
+ * \details
+ * After a series of ast_bridge_channel_push and
+ * ast_bridge_channel_pull calls, you need to call this function
+ * to cause the bridge to complete restruturing for the change
+ * in the channel makeup of the bridge.
+ *
+ * \note On entry, the bridge is already locked.
+ *
+ * \return Nothing
+ */
+static void ast_bridge_reconfigured(struct ast_bridge *bridge)
+{
+	if (!bridge->reconfigured) {
+		return;
+	}
+	bridge->reconfigured = 0;
+	if (ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_SMART)
+		&& smart_bridge_operation(bridge)) {
+		/* Smart bridge failed.  Dissolve the bridge. */
+		bridge_force_out_all(bridge);
+		return;
+	}
+	bridge_complete_join(bridge);
+}
+
 /*! \brief Run in a multithreaded model. Each joined channel does writing/reading in their own thread. TODO: Improve */
 static void bridge_channel_join_multithreaded(struct ast_bridge_channel *bridge_channel)
 {
@@ -1676,22 +1766,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		bridge_channel->bridge->callid = ast_read_threadstorage_callid();
 	}
 
-	/* If the bridge does not have a thread yet, start it up */
-	if (bridge_channel->bridge->thread == AST_PTHREADT_NULL
-		&& !bridge_channel->bridge->dissolved) {
-		ast_debug(1, "Starting a bridge thread for bridge %p\n", bridge_channel->bridge);
-		if (ast_pthread_create(&bridge_channel->bridge->thread, NULL, bridge_thread, bridge_channel->bridge)) {
-/* BUGBUG need to output the bridge id for tracking why. */
-			ast_log(LOG_WARNING, "Failed to create a bridge thread for bridge %p.\n",
-				bridge_channel->bridge);
-
-			/* Mark the bridge as dissolved because the bridge failed. */
-			bridge_channel->bridge->thread = AST_PTHREADT_NULL;
-			bridge_channel->bridge->dissolved = 1;
-		}
-	}
-
 	ast_bridge_channel_push(bridge_channel);
+	ast_bridge_reconfigured(bridge_channel->bridge);
 
 	/* Actually execute the respective threading model, and keep our bridge thread alive */
 	while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
@@ -1742,6 +1818,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	}
 
 	ast_bridge_channel_pull(bridge_channel);
+	ast_bridge_reconfigured(bridge_channel->bridge);
 
 	/* See if we need to dissolve the bridge itself if they hung up */
 	switch (bridge_channel->state) {
@@ -2359,6 +2436,8 @@ static void ast_bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *b
 
 		ast_bridge_channel_push(bridge_channel);
 	}
+	ast_bridge_reconfigured(bridge1);
+	ast_bridge_reconfigured(bridge2);
 
 	ast_debug(1, "Merged channels from bridge %p into bridge %p\n", bridge2, bridge1);
 }
@@ -3001,4 +3080,159 @@ void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *
 		}
 	}
 	ao2_unlock(bridge);
+}
+
+/*!
+ * \internal
+ * \brief Service the bridge manager request.
+ * \since 12.0.0
+ *
+ * \param bridge requesting service.
+ *
+ * \return Nothing
+ */
+static void bridge_manager_service(struct ast_bridge *bridge)
+{
+	struct ast_frame *action;
+
+	ao2_lock(bridge);
+	if (bridge->callid) {
+		ast_callid_threadassoc_change(bridge->callid);
+	}
+
+	/* Run a pending bridge action. */
+	action = AST_LIST_REMOVE_HEAD(&bridge->action_queue, frame_list);
+	if (action) {
+		switch (action->frametype) {
+		case AST_FRAME_BRIDGE_ACTION:
+			bridge_action_bridge(bridge, action);
+			break;
+		default:
+			/* Unexpected deferred frame type.  Should never happen. */
+			ast_assert(0);
+			break;
+		}
+		ast_frfree(action);
+	}
+	ao2_unlock(bridge);
+}
+
+/*!
+ * \internal
+ * \brief Bridge manager service thread.
+ * \since 12.0.0
+ *
+ * \return Nothing
+ */
+static void *bridge_manager_thread(void *data)
+{
+	struct bridge_manager_controller *manager = data;
+	struct bridge_manager_request *request;
+
+	ao2_lock(manager);
+	while (!manager->stop) {
+		request = AST_LIST_REMOVE_HEAD(&manager->service_requests, node);
+		if (!request) {
+			ast_cond_wait(&manager->cond, ao2_object_get_lockaddr(manager));
+			continue;
+		}
+		ao2_unlock(manager);
+
+		/* Service the bridge. */
+		bridge_manager_service(request->bridge);
+		ao2_ref(request->bridge, -1);
+		ast_free(request);
+
+		ao2_lock(manager);
+	}
+	ao2_unlock(manager);
+
+	return NULL;
+}
+
+/*!
+ * \internal
+ * \brief Destroy the bridge manager controller.
+ * \since 12.0.0
+ *
+ * \param obj Bridge manager to destroy.
+ *
+ * \return Nothing
+ */
+static void bridge_manager_destroy(void *obj)
+{
+	struct bridge_manager_controller *manager = obj;
+	struct bridge_manager_request *request;
+
+	if (manager->thread != AST_PTHREADT_NULL) {
+		/* Stop the manager thread. */
+		ao2_lock(manager);
+		manager->stop = 1;
+		ast_cond_signal(&manager->cond);
+		ao2_unlock(manager);
+		pthread_join(manager->thread, NULL);
+	}
+
+	/* Destroy the service request queue. */
+	while ((request = AST_LIST_REMOVE_HEAD(&manager->service_requests, node))) {
+		ao2_ref(request->bridge, -1);
+		ast_free(request);
+	}
+
+	ast_cond_destroy(&manager->cond);
+}
+
+/*!
+ * \internal
+ * \brief Create the bridge manager controller.
+ * \since 12.0.0
+ *
+ * \retval manager on success.
+ * \retval NULL on error.
+ */
+static struct bridge_manager_controller *bridge_manager_create(void)
+{
+	struct bridge_manager_controller *manager;
+
+	manager = ao2_alloc(sizeof(*manager), bridge_manager_destroy);
+	if (!manager) {
+		/* Well. This isn't good. */
+		return NULL;
+	}
+	ast_cond_init(&manager->cond, NULL);
+	AST_LIST_HEAD_INIT_NOLOCK(&manager->service_requests);
+
+	/* Create the bridge manager thread. */
+	if (ast_pthread_create(&manager->thread, NULL, bridge_manager_thread, manager)) {
+		/* Well. This isn't good either. */
+		manager->thread = AST_PTHREADT_NULL;
+		ao2_ref(manager, -1);
+		manager = NULL;
+	}
+
+	return manager;
+}
+
+/*!
+ * \internal
+ * \brief Shutdown the bridging system.
+ * \since 12.0.0
+ *
+ * \return Nothing
+ */
+static void bridge_shutdown(void)
+{
+	ao2_cleanup(bridge_manager);
+	bridge_manager = NULL;
+}
+
+int ast_bridge_init(void)
+{
+	bridge_manager = bridge_manager_create();
+	if (!bridge_manager) {
+		return -1;
+	}
+
+	ast_register_atexit(bridge_shutdown);
+	return 0;
 }
