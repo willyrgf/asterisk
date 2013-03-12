@@ -50,6 +50,13 @@ chan_mobile
 
  * Added ECAM command support for Sony Ericsson phones.
 
+chan_sip
+------------------
+ * Added support for RFC 3327 "Path" headers. This can be enabled in sip.conf
+   using the 'supportpath' setting, either on a global basis or on a peer basis.
+   This setting enables Asterisk to route outgoing out-of-dialog requests via a
+   set of proxies by using a pre-loaded route-set defined by the Path headers in
+   the REGISTER request. See Realtime updates for more configuration information.
 
 Features
 -------------------
@@ -73,6 +80,14 @@ Logging
  * Added the 'queue_log_realtime_use_gmt' option to have timestamps in GMT
    for realtime queue log entries.
 
+MeetMe
+-------------------
+* Added the 'n' option to MeetMe to prevent application of the DENOISE function
+  to a channel joining a conference. Some channel drivers that vary the number
+  of audio samples in a voice frame will experience significant quality problems
+  if a denoiser is attached to the channel; this option gives them the ability
+  to remove the denoiser without having to unload func_speex.
+
 Queue
 -------------------
  * Add queue available hint.  exten => 8501,hint,Queue:markq_avail
@@ -86,6 +101,15 @@ Core
    that the REDIRECTING dialplan function can be used to set the redirecting
    reason to any string. It also allows for custom strings to be read as the
    redirecting reason from SIP Diversion headers.
+
+Realtime
+------------------
+ * Dynamic realtime tables for SIP Users can now include a 'path' field. This
+   will store the path information for that peer when it registers. Realtime
+   tables can also use the 'supportpath' field to enable Path header support.
+
+ * LDAP realtime configurations for SIP Users now have the AstAccountPathSupport
+   objectIdentifier. This maps to the supportpath option in sip.conf. 
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 10 to Asterisk 11 --------------------
@@ -145,6 +169,9 @@ ConfBridge
  * Added announcement configuration option to user profile. If set the sound
    file will be played to the user, and only the user, upon joining the
    conference bridge.
+
+ * Added record_file_append option that defaults to "yes", but if set to no
+   will create a new file between each start/stop recording.
 
 
 Dial
@@ -387,6 +414,9 @@ chan_sip
    detects that an incoming SIP request crossed a NAT after being sent by
    the remote endpoint.
 
+ * The default global nat setting in sip.conf has been changed from force_rport
+   to auto_force_rport.
+
  * NAT settings are now a combinable list of options. The equivalent of the
    deprecated nat=yes is nat=force_rport,comedia. nat=no behaves as before.
 
@@ -442,6 +472,9 @@ chan_sip
    when using Transfer application. See refer_addheaders in sip.conf.sample.
 
  * Added support to use private party ID information with calls.
+
+ * Adds an option discard_remote_hold_retrieval that when set stops telling
+   the peer to start music on hold.
 
 
 chan_skinny

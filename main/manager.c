@@ -91,6 +91,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/aoc.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/presencestate.h"
+#include "asterisk/stasis.h"
 
 /*** DOCUMENTATION
 	<manager name="Ping" language="en_US">
@@ -963,6 +964,73 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
                         manager.conf will be present upon starting a new session.</para>
 		</description>
 	</manager>
+	<managerEvent language="en_US" name="Newchannel">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a new channel is created.</synopsis>
+			<syntax>
+				<parameter name="Channel">
+				</parameter>
+				<parameter name="ChannelState">
+					<para>A numeric code for the channel's current state, related to ChannelStateDesc</para>
+				</parameter>
+				<parameter name="ChannelStateDesc">
+					<enumlist>
+						<enum name="Down"/>
+						<enum name="Rsrvd"/>
+						<enum name="OffHook"/>
+						<enum name="Dialing"/>
+						<enum name="Ring"/>
+						<enum name="Ringing"/>
+						<enum name="Up"/>
+						<enum name="Busy"/>
+						<enum name="Dialing Offhook"/>
+						<enum name="Pre-ring"/>
+						<enum name="Unknown"/>
+					</enumlist>
+				</parameter>
+				<parameter name="CallerIDNum">
+				</parameter>
+				<parameter name="CallerIDName">
+				</parameter>
+				<parameter name="ConnectedLineNum">
+				</parameter>
+				<parameter name="ConnectedLineName">
+				</parameter>
+				<parameter name="AccountCode">
+				</parameter>
+				<parameter name="Context">
+				</parameter>
+				<parameter name="Exten">
+				</parameter>
+				<parameter name="Priority">
+				</parameter>
+				<parameter name="Uniqueid">
+				</parameter>
+				<parameter name="Cause">
+					<para>A numeric cause code for why the channel was hung up.</para>
+				</parameter>
+				<parameter name="Cause-txt">
+					<para>A description of why the channel was hung up.</para>
+				</parameter>
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="Newstate">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a channel's state changes.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="Hangup">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a channel is hung up.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
  ***/
 
 /*! \addtogroup Group_AMI AMI functions
@@ -1059,6 +1127,8 @@ static const struct {
 	{{ "module", "unload", NULL }},
 	{{ "restart", "gracefully", NULL }},
 };
+
+static struct stasis_subscription *channel_state_sub;
 
 static void acl_change_event_cb(const struct ast_event *event, void *userdata);
 
@@ -1357,7 +1427,30 @@ static int function_capable_string_allowed_with_auths(const char *evaluating, in
 	return 1;
 }
 
-/*! \brief Convert authority code to a list of options */
+/*! \brief Convert authority code to a list of options for a user. This will only
+ * display those authority codes that have an explicit match on authority */
+static const char *user_authority_to_str(int authority, struct ast_str **res)
+{
+	int i;
+	char *sep = "";
+
+	ast_str_reset(*res);
+	for (i = 0; i < ARRAY_LEN(perms) - 1; i++) {
+		if ((authority & perms[i].num) == perms[i].num) {
+			ast_str_append(res, 0, "%s%s", sep, perms[i].label);
+			sep = ",";
+		}
+	}
+
+	if (ast_str_strlen(*res) == 0)	/* replace empty string with something sensible */
+		ast_str_append(res, 0, "<none>");
+
+	return ast_str_buffer(*res);
+}
+
+
+/*! \brief Convert authority code to a list of options. Note that the EVENT_FLAG_ALL
+ * authority will always be returned. */
 static const char *authority_to_str(int authority, struct ast_str **res)
 {
 	int i;
@@ -1756,8 +1849,8 @@ static char *handle_showmanager(struct ast_cli_entry *e, int cmd, struct ast_cli
 		(user->username ? user->username : "(N/A)"),
 		(user->secret ? "<Set>" : "(N/A)"),
 		((user->acl && !ast_acl_list_is_empty(user->acl)) ? "yes" : "no"),
-		authority_to_str(user->readperm, &rauthority),
-		authority_to_str(user->writeperm, &wauthority),
+		user_authority_to_str(user->readperm, &rauthority),
+		user_authority_to_str(user->writeperm, &wauthority),
 		(user->displayconnects ? "yes" : "no"));
 	ast_cli(a->fd, "      Variables: \n");
 		for (v = user->chanvars ; v ; v = v->next) {
@@ -2280,6 +2373,7 @@ void astman_send_error_va(struct mansession *s, const struct message *m, const c
 {
 	va_list ap;
 	struct ast_str *buf;
+	char *msg;
 
 	if (!(buf = ast_str_thread_get(&astman_append_buf, ASTMAN_APPEND_BUF_INITSIZE))) {
 		return;
@@ -2289,8 +2383,13 @@ void astman_send_error_va(struct mansession *s, const struct message *m, const c
 	ast_str_set_va(&buf, 0, fmt, ap);
 	va_end(ap);
 
-	astman_send_response_full(s, m, "Error", ast_str_buffer(buf), NULL);
-	ast_free(buf);
+	/* astman_append will use the same underlying buffer, so copy the message out
+	 * before sending the response */
+	msg = ast_str_buffer(buf);
+	if (msg) {
+		msg = ast_strdupa(msg);
+	}
+	astman_send_response_full(s, m, "Error", msg, NULL);
 }
 
 void astman_send_ack(struct mansession *s, const struct message *m, char *msg)
@@ -3378,7 +3477,7 @@ static int action_hangup(struct mansession *s, const struct message *m)
 
 	/* if regex compilation fails, hangup fails */
 	if (regcomp(&regexbuf, ast_str_buffer(regex_string), REG_EXTENDED | REG_NOSUB)) {
-		astman_send_error_va(s, m, "Regex compile failed on: %s\n", name_or_regex);
+		astman_send_error_va(s, m, "Regex compile failed on: %s", name_or_regex);
 		ast_free(regex_string);
 		return 0;
 	}
@@ -4610,6 +4709,10 @@ static int action_presencestate(struct mansession *s, const struct message *m)
 	}
 
 	state = ast_presence_state(provider, &subtype, &message);
+	if (state == AST_PRESENCE_INVALID) {
+		astman_send_error_va(s, m, "Invalid provider %s or provider in invalid state", provider);
+		return 0;
+	}
 
 	if (!ast_strlen_zero(subtype)) {
 		snprintf(subtype_header, sizeof(subtype_header),
@@ -7343,6 +7446,127 @@ static void load_channelvars(struct ast_variable *var)
 	AST_RWLIST_UNLOCK(&channelvars);
 }
 
+/*!
+ * \brief Generate the AMI message body from a channel snapshot
+ * \internal
+ *
+ * \param snapshot the channel snapshot for which to generate an AMI message body
+ *
+ * \retval NULL on error
+ * \retval ast_str* on success (must be ast_freed by caller)
+ */
+static struct ast_str *manager_build_channel_state_string(const struct ast_channel_snapshot *snapshot)
+{
+	struct ast_str *out = ast_str_create(1024);
+	int res = 0;
+	if (!out) {
+		return NULL;
+	}
+	res = ast_str_set(&out, 0,
+		"Channel: %s\r\n"
+		"ChannelState: %d\r\n"
+		"ChannelStateDesc: %s\r\n"
+		"CallerIDNum: %s\r\n"
+		"CallerIDName: %s\r\n"
+		"ConnectedLineNum: %s\r\n"
+		"ConnectedLineName: %s\r\n"
+		"AccountCode: %s\r\n"
+		"Context: %s\r\n"
+		"Exten: %s\r\n"
+		"Priority: %d\r\n"
+		"Uniqueid: %s\r\n"
+		"Cause: %d\r\n"
+		"Cause-txt: %s\r\n",
+		snapshot->name,
+		snapshot->state,
+		ast_state2str(snapshot->state),
+		snapshot->caller_number,
+		snapshot->caller_name,
+		snapshot->connected_number,
+		snapshot->connected_name,
+		snapshot->accountcode,
+		snapshot->context,
+		snapshot->exten,
+		snapshot->priority,
+		snapshot->uniqueid,
+		snapshot->hangupcause,
+		ast_cause2str(snapshot->hangupcause));
+
+	if (!res) {
+		return NULL;
+	}
+
+	return out;
+}
+
+static void channel_snapshot_update(struct ast_channel_snapshot *old_snapshot, struct ast_channel_snapshot *new_snapshot)
+{
+	int is_hungup;
+	char *manager_event = NULL;
+
+	if (!new_snapshot) {
+		/* Ignore cache clearing events; we'll see the hangup first */
+		return;
+	}
+
+	is_hungup = ast_test_flag(&new_snapshot->flags, AST_FLAG_ZOMBIE) ? 1 : 0;
+
+	if (!old_snapshot) {
+		manager_event = "Newchannel";
+	}
+
+	if (old_snapshot && old_snapshot->state != new_snapshot->state) {
+		manager_event = "Newstate";
+	}
+
+	if (old_snapshot && is_hungup) {
+		manager_event = "Hangup";
+	}
+
+	if (manager_event) {
+		RAII_VAR(struct ast_str *, channel_event_string, NULL, ast_free);
+
+		channel_event_string = manager_build_channel_state_string(new_snapshot);
+		if (channel_event_string) {
+			manager_event(EVENT_FLAG_CALL, manager_event, "%s", ast_str_buffer(channel_event_string));
+		}
+	}
+}
+
+static void channel_varset(const char *channel_name, const char *uniqueid, const char *name, const char *value)
+{
+	/*** DOCUMENTATION
+		<managerEventInstance>
+			<synopsis>Raised when a variable is set to a particular value.</synopsis>
+		</managerEventInstance>
+	***/
+	manager_event(EVENT_FLAG_DIALPLAN, "VarSet",
+		      "Channel: %s\r\n"
+		      "Variable: %s\r\n"
+		      "Value: %s\r\n"
+		      "Uniqueid: %s\r\n",
+		      channel_name, name, value, uniqueid);
+}
+
+static void channel_event_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message)
+{
+	if (stasis_message_type(message) == stasis_cache_update()) {
+		struct stasis_cache_update *update = stasis_message_data(message);
+		if (ast_channel_snapshot() == update->type) {
+			struct ast_channel_snapshot *old_snapshot =
+				stasis_message_data(update->old_snapshot);
+			struct ast_channel_snapshot *new_snapshot =
+				stasis_message_data(update->new_snapshot);
+			channel_snapshot_update(old_snapshot, new_snapshot);
+		}
+	} else if (stasis_message_type(message) == ast_channel_varset()) {
+		struct ast_channel_varset *varset = stasis_message_data(message);
+		const char *name = varset->snapshot ? varset->snapshot->name : "none";
+		const char *uniqueid = varset->snapshot ? varset->snapshot->uniqueid : "none";
+		channel_varset(name, uniqueid, varset->variable, varset->value);
+	}
+}
+
 /*! \internal \brief Free a user record.  Should already be removed from the list */
 static void manager_free_user(struct ast_manager_user *user)
 {
@@ -7365,6 +7589,9 @@ static void manager_free_user(struct ast_manager_user *user)
 static void manager_shutdown(void)
 {
 	struct ast_manager_user *user;
+
+	stasis_unsubscribe(channel_state_sub);
+	channel_state_sub = NULL;
 
 	if (registered) {
 		ast_manager_unregister("Ping");
@@ -7456,6 +7683,12 @@ static int __init_manager(int reload, int by_external_config)
 	int acl_subscription_flag = 0;
 
 	manager_enabled = 0;
+
+	if (!channel_state_sub) {
+		channel_state_sub = stasis_subscribe(
+			stasis_caching_get_topic(ast_channel_topic_all_cached()),
+			channel_event_cb, NULL);
+	}
 
 	if (!registered) {
 		/* Register default actions */

@@ -90,8 +90,11 @@ struct ast_sorcery_object_field {
 	/*! \brief Name of the field */
 	char name[MAX_OBJECT_FIELD];
 
-	/*! \brief Callback function for translation */
+	/*! \brief Callback function for translation of a single value */
 	sorcery_field_handler handler;
+
+	/*! \brief Callback function for translation of multiple values */
+	sorcery_fields_handler multiple_handler;
 
 	/*! \brief Position of the field */
 	intptr_t args[];
@@ -330,7 +333,7 @@ static void sorcery_object_type_destructor(void *obj)
 }
 
 /*! \brief Internal function which allocates an object type structure */
-static struct ast_sorcery_object_type *sorcery_object_type_alloc(const char *type)
+static struct ast_sorcery_object_type *sorcery_object_type_alloc(const char *type, const char *module)
 {
 	struct ast_sorcery_object_type *object_type;
 
@@ -361,6 +364,7 @@ static struct ast_sorcery_object_type *sorcery_object_type_alloc(const char *typ
 
 	object_type->info->files[0] = object_type->file;
 	object_type->info->files[1] = NULL;
+	object_type->info->module = module;
 
 	ast_copy_string(object_type->name, type, sizeof(object_type->name));
 
@@ -382,7 +386,7 @@ static void sorcery_object_wizard_destructor(void *obj)
 }
 
 /*! \brief Internal function which creates an object type and adds a wizard mapping */
-static int sorcery_apply_wizard_mapping(struct ast_sorcery *sorcery, const char *type, const char *name, const char *data, unsigned int caching)
+static int sorcery_apply_wizard_mapping(struct ast_sorcery *sorcery, const char *type, const char *module, const char *name, const char *data, unsigned int caching)
 {
 	RAII_VAR(struct ast_sorcery_object_type *, object_type,  ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
 	RAII_VAR(struct ast_sorcery_wizard *, wizard, ao2_find(wizards, name, OBJ_KEY), ao2_cleanup);
@@ -394,7 +398,7 @@ static int sorcery_apply_wizard_mapping(struct ast_sorcery *sorcery, const char 
 	}
 
 	if (!object_type) {
-		if (!(object_type = sorcery_object_type_alloc(type))) {
+		if (!(object_type = sorcery_object_type_alloc(type, module))) {
 			return -1;
 		}
 		created = 1;
@@ -418,7 +422,7 @@ static int sorcery_apply_wizard_mapping(struct ast_sorcery *sorcery, const char 
 	return 0;
 }
 
-int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name)
+int __ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name, const char *module)
 {
 	struct ast_flags flags = { 0 };
 	struct ast_config *config = ast_config_load2("sorcery.conf", "sorcery", flags);
@@ -447,7 +451,7 @@ int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name)
 		}
 
 		/* Any error immediately causes us to stop */
-		if ((res = sorcery_apply_wizard_mapping(sorcery, name, wizard, data, caching))) {
+		if ((res = sorcery_apply_wizard_mapping(sorcery, name, module, wizard, data, caching))) {
 			break;
 		}
 	}
@@ -457,7 +461,7 @@ int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name)
 	return res;
 }
 
-int ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *name, const char *data)
+int __ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *module, const char *name, const char *data)
 {
 	RAII_VAR(struct ast_sorcery_object_type *, object_type,  ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
 
@@ -466,7 +470,7 @@ int ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, con
 		return -1;
 	}
 
-	return sorcery_apply_wizard_mapping(sorcery, type, name, data, 0);
+	return sorcery_apply_wizard_mapping(sorcery, type, module, name, data, 0);
 }
 
 int ast_sorcery_object_register(struct ast_sorcery *sorcery, const char *type, aco_type_item_alloc alloc, sorcery_transform_handler transform, sorcery_apply_handler apply)
@@ -513,6 +517,24 @@ void ast_sorcery_object_set_diff_handler(struct ast_sorcery *sorcery, const char
 	}
 
 	object_type->diff = diff;
+}
+
+int ast_sorcery_object_fields_register(struct ast_sorcery *sorcery, const char *type, const char *regex, aco_option_handler config_handler, sorcery_fields_handler sorcery_handler)
+{
+	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
+	RAII_VAR(struct ast_sorcery_object_field *, object_field, NULL, ao2_cleanup);
+
+	if (!object_type || !object_type->type.item_alloc || !config_handler || !(object_field = ao2_alloc(sizeof(*object_field), NULL))) {
+		return -1;
+	}
+
+	ast_copy_string(object_field->name, regex, sizeof(object_field->name));
+	object_field->multiple_handler = sorcery_handler;
+
+	ao2_link(object_type->fields, object_field);
+	__aco_option_register(object_type->info, regex, ACO_REGEX, object_type->file->types, "", OPT_CUSTOM_T, config_handler, 0, 0);
+
+	return 0;
 }
 
 int __ast_sorcery_object_field_register(struct ast_sorcery *sorcery, const char *type, const char *name, const char *default_val, enum aco_option_type opt_type,
@@ -661,24 +683,30 @@ struct ast_variable *ast_sorcery_objectset_create(const struct ast_sorcery *sorc
 
 	i = ao2_iterator_init(object_type->fields, 0);
 
-	for (; (object_field = ao2_iterator_next(&i)); ao2_ref(object_field, -1)) {
-		RAII_VAR(char *, buf, NULL, ast_free);
-		struct ast_variable *tmp;
+	for (; (object_field = ao2_iterator_next(&i)) && !res; ao2_ref(object_field, -1)) {
+		struct ast_variable *tmp = NULL;
 
-		/* Any fields with no handler just get skipped */
-		if (!object_field->handler) {
+		if (object_field->multiple_handler) {
+			if ((res = object_field->multiple_handler(object, &tmp))) {
+				ast_variables_destroy(tmp);
+			}
+		} else if (object_field->handler) {
+			char *buf = NULL;
+
+			if ((res = object_field->handler(object, object_field->args, &buf)) ||
+				!(tmp = ast_variable_new(object_field->name, S_OR(buf, ""), ""))) {
+				res = -1;
+			}
+
+			ast_free(buf);
+		} else {
 			continue;
 		}
 
-		if ((res = object_field->handler(object, object_field->args, &buf)) ||
-		    !(tmp = ast_variable_new(object_field->name, S_OR(buf, ""), ""))) {
-			res = -1;
-			ao2_ref(object_field, -1);
-			break;
+		if (!res) {
+			tmp->next = fields;
+			fields = tmp;
 		}
-
-		tmp->next = fields;
-		fields = tmp;
 	}
 
 	ao2_iterator_destroy(&i);
@@ -956,6 +984,30 @@ void *ast_sorcery_retrieve_by_fields(const struct ast_sorcery *sorcery, const ch
 	}
 
 	return object;
+}
+
+struct ao2_container *ast_sorcery_retrieve_by_regex(const struct ast_sorcery *sorcery, const char *type, const char *regex)
+{
+	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
+	struct ao2_container *objects;
+	struct ao2_iterator i;
+	struct ast_sorcery_object_wizard *wizard;
+
+	if (!object_type || !(objects = ao2_container_alloc_options(AO2_ALLOC_OPT_LOCK_NOLOCK, 1, NULL, NULL))) {
+		return NULL;
+	}
+
+	i = ao2_iterator_init(object_type->wizards, 0);
+	for (; (wizard = ao2_iterator_next(&i)); ao2_ref(wizard, -1)) {
+		if (!wizard->wizard->retrieve_regex) {
+			continue;
+		}
+
+		wizard->wizard->retrieve_regex(sorcery, wizard->data, object_type->name, objects, regex);
+	}
+	ao2_iterator_destroy(&i);
+
+	return objects;
 }
 
 /*! \brief Internal function which returns if the wizard has created the object */

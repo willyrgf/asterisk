@@ -71,7 +71,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="options" required="false">
 			  <optionlist>
 			    <option name="e">
-				  <para>Base-64 encode the data.</para>
+				  <para>On Write - Use this option when the subtype and message provided are Base64
+					encoded. On Read - Retrieves message/subtype in Base64 encoded form.</para>
 				</option>
 			  </optionlist>
 			</parameter>
@@ -85,6 +86,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			the dialplan.  The <literal>CustomPresence:</literal> prefix must be used. For example:</para>
 			<para>Set(PRESENCE_STATE(CustomPresence:lamp1)=away,temporary,Out to lunch)</para>
 			<para>Set(PRESENCE_STATE(CustomPresence:lamp2)=dnd,,Trying to get work done)</para>
+			<para>Set(PRESENCE_STATE(CustomPresence:lamp3)=xa,T24gdmFjYXRpb24=,,e)</para>
+			<para>Set(BASE64_LAMP3_PRESENCE=${PRESENCE_STATE(CustomPresence:lamp3,subtype,e)})</para>
 			<para>You can subscribe to the status of a custom presence state using a hint in
 			the dialplan:</para>
 			<para>exten => 1234,hint,CustomPresence:lamp1</para>
@@ -243,7 +246,7 @@ static enum ast_presence_state custom_presence_callback(const char *data, char *
 	ast_db_get(astdb_family, data, buf, sizeof(buf));
 
 	if (parse_data(buf, &state, &_subtype, &_message, &_options)) {
-		return -1;
+		return AST_PRESENCE_INVALID;
 	}
 
 	if ((strchr(_options, 'e'))) {
@@ -252,7 +255,6 @@ static enum ast_presence_state custom_presence_callback(const char *data, char *
 			*subtype = NULL;
 		} else {
 			memset(tmp, 0, sizeof(tmp));
-			ast_log(LOG_NOTICE, "Hey there, I'm doing some base64 decoding\n");
 			ast_base64decode((unsigned char *) tmp, _subtype, sizeof(tmp) - 1);
 			*subtype = ast_strdup(tmp);
 		}
@@ -261,12 +263,10 @@ static enum ast_presence_state custom_presence_callback(const char *data, char *
 			*message = NULL;
 		} else {
 			memset(tmp, 0, sizeof(tmp));
-			ast_log(LOG_NOTICE, "Hey there, I'm doing some more base64 decoding\n");
 			ast_base64decode((unsigned char *) tmp, _message, sizeof(tmp) - 1);
 			*message = ast_strdup(tmp);
 		}
 	} else {
-		ast_log(LOG_NOTICE, "Not doing any base64 decoding\n");
 		*subtype = ast_strlen_zero(_subtype) ? NULL : ast_strdup(_subtype);
 		*message = ast_strlen_zero(_message) ? NULL : ast_strdup(_message);
 	}

@@ -294,6 +294,7 @@
 #define SIP_PROG_INBAND_NO     (1 << 25)
 #define SIP_PROG_INBAND_YES    (2 << 25)
 
+#define SIP_USEPATH          (1 << 27) /*!< GDP: Trust and use incoming Path headers? */
 #define SIP_SENDRPID         (3 << 29) /*!< DP: Remote Party-ID Support */
 #define SIP_SENDRPID_NO      (0 << 29)
 #define SIP_SENDRPID_PAI     (1 << 29) /*!< Use "P-Asserted-Identity" for rpid */
@@ -304,7 +305,7 @@
 #define SIP_FLAGS_TO_COPY \
 	(SIP_PROMISCREDIR | SIP_TRUSTRPID | SIP_SENDRPID | SIP_DTMF | SIP_REINVITE | \
 	 SIP_PROG_INBAND | SIP_USECLIENTCODE | SIP_NAT_FORCE_RPORT | SIP_G726_NONSTANDARD | \
-	 SIP_USEREQPHONE | SIP_INSECURE)
+	 SIP_USEREQPHONE | SIP_INSECURE | SIP_USEPATH)
 /*@}*/
 
 /*! \name SIPflags2
@@ -375,10 +376,12 @@
 #define SIP_PAGE3_USE_AVPF               (1 << 5)  /*!< DGP: Support a minimal AVPF-compatible profile */
 #define SIP_PAGE3_ICE_SUPPORT            (1 << 6)  /*!< DGP: Enable ICE support */
 #define SIP_PAGE3_IGNORE_PREFCAPS        (1 << 7)  /*!< DP: Ignore prefcaps when setting up an outgoing call leg */
+#define SIP_PAGE3_DISCARD_REMOTE_HOLD_RETRIEVAL  (1 << 8)  /*!< DGP: Stop telling the peer to start music on hold */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
 	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_SRTP_TAG_32 | SIP_PAGE3_NAT_AUTO_RPORT | SIP_PAGE3_NAT_AUTO_COMEDIA | \
-	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT | SIP_PAGE3_IGNORE_PREFCAPS )
+	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT | SIP_PAGE3_IGNORE_PREFCAPS | \
+	 SIP_PAGE3_DISCARD_REMOTE_HOLD_RETRIEVAL)
 
 #define CHECK_AUTH_BUF_INITLEN   256
 
@@ -737,6 +740,7 @@ struct __show_chan_arg {
 struct sip_settings {
 	int peer_rtupdate;          /*!< G: Update database with registration data for peer? */
 	int rtsave_sysname;         /*!< G: Save system name at registration? */
+	int rtsave_path;            /*!< G: Save path header on registration */
 	int ignore_regexpire;       /*!< G: Ignore expiration of peer  */
 	int rtautoclear;            /*!< Realtime ?? */
 	int directrtpsetup;         /*!< Enable support for Direct RTP setup (no re-invites) */
@@ -1368,6 +1372,7 @@ struct sip_peer {
 	int timer_t1;                   /*!<  The maximum T1 value for the peer */
 	int timer_b;                    /*!<  The maximum timer B (transaction timeouts) */
 	int fromdomainport;             /*!<  The From: domain port */
+	struct sip_route *path;         /*!<  Head of linked list of out-of-dialog outgoing routing steps (fm Path headers) */
 
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */

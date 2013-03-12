@@ -132,6 +132,17 @@ struct ast_sorcery;
 typedef int (*sorcery_field_handler)(const void *obj, const intptr_t *args, char **buf);
 
 /*!
+ * \brief A callback function for translating multiple values into an ast_variable list
+ *
+ * \param obj Object to get values from
+ * \param fields Pointer to store the list of fields
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
+typedef int (*sorcery_fields_handler)(const void *obj, struct ast_variable **fields);
+
+/*!
  * \brief A callback function for performing a transformation on an object set
  *
  * \param set The existing object set
@@ -196,6 +207,9 @@ struct ast_sorcery_wizard {
 
 	/*! \brief Callback for retrieving an object using an id */
 	void *(*retrieve_id)(const struct ast_sorcery *sorcery, void *data, const char *type, const char *id);
+
+	/*! \brief Callback for retrieving multiple objects using a regex on their id */
+	void (*retrieve_regex)(const struct ast_sorcery *sorcery, void *data, const char *type, struct ao2_container *objects, const char *regex);
 
 	/*! \brief Optional callback for retrieving an object using fields */
 	void *(*retrieve_fields)(const struct ast_sorcery *sorcery, void *data, const char *type, const struct ast_variable *fields);
@@ -275,17 +289,22 @@ struct ast_sorcery *ast_sorcery_open(void);
  *
  * \param sorcery Pointer to a sorcery structure
  * \param name Name of the category to use within the configuration file, normally the module name
+ * \param module The module name (AST_MODULE)
  *
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name);
+int __ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name, const char *module);
+
+#define ast_sorcery_apply_config(sorcery, name) \
+	__ast_sorcery_apply_config((sorcery), (name), AST_MODULE)
 
 /*!
  * \brief Apply default object wizard mappings
  *
  * \param sorcery Pointer to a sorcery structure
  * \param type Type of object to apply to
+ * \param module The name of the module, typically AST_MODULE
  * \param name Name of the wizard to use
  * \param data Data to be passed to wizard
  *
@@ -296,7 +315,10 @@ int ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name);
  *
  * \note Only a single default can exist per object type
  */
-int ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *name, const char *data);
+int __ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *module, const char *name, const char *data);
+
+#define ast_sorcery_apply_default(sorcery, type, name, data) \
+	__ast_sorcery_apply_default((sorcery), (type), AST_MODULE, (name), (data))
 
 /*!
  * \brief Register an object type
@@ -329,6 +351,21 @@ void ast_sorcery_object_set_copy_handler(struct ast_sorcery *sorcery, const char
  * \param diff Diff handler
  */
 void ast_sorcery_object_set_diff_handler(struct ast_sorcery *sorcery, const char *type, sorcery_diff_handler diff);
+
+/*!
+ * \brief Register a regex for multiple fields within an object
+ *
+ * \param sorcery Pointer to a sorcery structure
+ * \param type Type of object
+ * \param regex A regular expression pattern for the fields
+ * \param config_handler A custom handler for translating the string representation of the fields
+ * \param sorcery_handler A custom handler for translating the native representation of the fields
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_sorcery_object_fields_register(struct ast_sorcery *sorcery, const char *type, const char *regex, aco_option_handler config_handler,
+									   sorcery_fields_handler sorcery_handler);
 
 /*!
  * \brief Register a field within an object
@@ -539,6 +576,20 @@ void *ast_sorcery_retrieve_by_id(const struct ast_sorcery *sorcery, const char *
  *       of the given type.
  */
 void *ast_sorcery_retrieve_by_fields(const struct ast_sorcery *sorcery, const char *type, unsigned int flags, struct ast_variable *fields);
+
+/*!
+ * \brief Retrieve multiple objects using a regular expression on their id
+ *
+ * \param sorcery Pointer to a sorcery structure
+ * \param type Type of object to retrieve
+ * \param regex Regular expression
+ *
+ * \retval non-NULL if error occurs
+ * \retval NULL success
+ *
+ * \note The provided regex is treated as extended case sensitive.
+ */
+struct ao2_container *ast_sorcery_retrieve_by_regex(const struct ast_sorcery *sorcery, const char *type, const char *regex);
 
 /*!
  * \brief Update an object
