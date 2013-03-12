@@ -37,21 +37,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "include/sip.h"
 #include "include/rtcp.h"
 
-
-/*! \brief send manager report of RTCP 
-	reporttype = 0  means report during call (if configured)
-	reporttype = 1  means endof-call (hangup) report
-	reporttype = 10  means report at end of call leg (like transfer)
-*/
-void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type type, int reporttype)
+/*! \brief Set various data items in the RTP structure, like channel identifier.
+ */
+void sip_rtcp_set_data(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type type)
 {
-	struct ast_rtp_instance_stats qual;
-	//char *rtpqstring = NULL;
-	//int qosrealtime = ast_check_realtime("rtpcqr");
-	unsigned int duration;	/* Duration in secs */
  	int readtrans = FALSE, writetrans = FALSE;
-	memset(&qual, 0, sizeof(qual));
-	
 
 	if (dialog && dialog->owner) {
 		struct ast_channel *bridgepeer = ast_bridged_channel(dialog->owner);
@@ -94,6 +84,22 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 	} else {
  		ast_debug(1, "######## Not setting rtcp media data. Dialog %s Dialog owner %s \n", dialog ? "set" : "unset",  dialog->owner ? "set" : "unset");
 	}
+}
+
+/*! \brief send manager report of RTCP 
+	reporttype = 0  means report during call (if configured)
+	reporttype = 1  means endof-call (hangup) report
+	reporttype = 10  means report at end of call leg (like transfer)
+*/
+void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type media, int reporttype)
+{
+	struct ast_rtp_instance_stats qual;
+	//char *rtpqstring = NULL;
+	//int qosrealtime = ast_check_realtime("rtpcqr");
+	unsigned int duration;	/* Duration in secs */
+	memset(&qual, 0, sizeof(qual));
+	
+	sip_rtcp_set_data(dialog, instance, media);
 
 	if (ast_rtp_instance_get_stats(instance, &qual, AST_RTP_INSTANCE_STAT_ALL)) {
  		ast_debug(1, "######## Did not get any statistics... bad, bad, RTP instance\n");
@@ -146,7 +152,7 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 			duration,
 			dialog->callid, 
 			ast_inet_ntoa(qual.them.sin_addr), 	
-			type == SDP_AUDIO ? "audio" : (type == SDP_VIDEO ? "video" : "fax") ,
+			media == SDP_AUDIO ? "audio" : (media == SDP_VIDEO ? "video" : "fax") ,
 			ast_getformatname(qual.lasttxformat),
 			ast_getformatname(qual.lastrxformat),
 			qual.local_ssrc, 
@@ -178,11 +184,11 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 	if (reporttype == 1) {
 		ast_log(LOG_DEBUG, "---- Activation qual structure in dialog \n");
 		qual.end = ast_tvnow();
- 		qual.mediatype = type;
-		if (type == SDP_AUDIO) {  /* Audio */
+ 		qual.mediatype = media;
+		if (media == SDP_AUDIO) {  /* Audio */
 			dialog->audioqual = ast_calloc(1, sizeof(struct ast_rtp_instance_stats));
 			(* dialog->audioqual) = qual;
-		} else if (type == SDP_VIDEO) {  /* Video */
+		} else if (media == SDP_VIDEO) {  /* Video */
 			dialog->videoqual = ast_calloc(1,sizeof(struct ast_rtp_instance_stats));
 			(* dialog->videoqual) = qual;
 		}
@@ -350,14 +356,24 @@ int send_rtcp_events(const void *data)
 void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched)
 {
 	ast_debug(2, "***** STARTING SENDING RTCP EVENT \n");
+	/* Check if it's already active */
+
+	if (dialog->rtp && !ast_rtp_instance_isactive(dialog->rtp)) {
+		sip_rtcp_set_data(dialog, dialog->rtp, SDP_AUDIO);
+	}
+	if (dialog->vrtp && !ast_rtp_instance_isactive(dialog->vrtp)) {
+		sip_rtcp_set_data(dialog, dialog->vrtp, SDP_VIDEO);
+	}
+
 	if (!dialog->sip_cfg->rtcpevents || !dialog->sip_cfg->rtcptimer) {
 		ast_debug(2, "***** NOT SENDING RTCP EVENTS \n");
 		return;
 	}
-	/* Check if it's already active */
+
 	if (dialog->rtcpeventid != -1) {
 		return;
 	}
+
 
 	/*! \brief Schedule events */
 	dialog->rtcpeventid = ast_sched_add(sched, dialog->sip_cfg->rtcptimer * 1000, send_rtcp_events, dialog);

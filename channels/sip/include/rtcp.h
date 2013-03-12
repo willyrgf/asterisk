@@ -30,6 +30,10 @@
 #ifndef _SIP_RTCP_H
 #define _SIP_RTCP_H
 
+/*! \brief Set various data items in the RTP structure, like channel identifier.
+ */
+void sip_rtcp_set_data(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type type);
+
 int send_rtcp_events(const void *data);
 void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched);
 /*
