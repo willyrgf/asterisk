@@ -24560,6 +24560,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 
 
 		if (p->rtp && (quality = ast_rtp_instance_get_quality(p->rtp, AST_RTP_INSTANCE_STAT_FIELD_QUALITY, quality_buf, sizeof(quality_buf)))) {
+			sip_rtcp_report(p, p->rtp, SDP_AUDIO, TRUE);
 			if (p->do_history) {
 				append_history(p, "RTCPaudio", "Quality:%s", quality);
 
@@ -24590,6 +24591,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		}
 
 		if (p->vrtp && (quality = ast_rtp_instance_get_quality(p->vrtp, AST_RTP_INSTANCE_STAT_FIELD_QUALITY, quality_buf, sizeof(quality_buf)))) {
+			sip_rtcp_report(p, p->rtp, SDP_VIDEO, TRUE);
 			if (p->do_history) {
 				append_history(p, "RTCPvideo", "Quality:%s", quality);
 			}

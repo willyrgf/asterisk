@@ -41,10 +41,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  */
 void sip_rtcp_set_data(struct sip_pvt *dialog, struct ast_rtp_instance *instance, enum media_type type)
 {
- 	int readtrans = FALSE, writetrans = FALSE;
 
 	if (dialog && dialog->owner) {
+ 		int readtrans = FALSE, writetrans = FALSE;
 		struct ast_channel *bridgepeer = ast_bridged_channel(dialog->owner);
+
 		if (bridgepeer) {
 			/* Store the bridged peer data while we have it */
 			ast_rtp_instance_set_bridged_chan(instance, dialog->owner->name, dialog->owner->uniqueid, S_OR(bridgepeer->name,""), S_OR(bridgepeer->uniqueid,""));
@@ -52,6 +53,7 @@ void sip_rtcp_set_data(struct sip_pvt *dialog, struct ast_rtp_instance *instance
 		} else {
 			ast_rtp_instance_set_bridged_chan(instance, dialog->owner->name, dialog->owner->uniqueid, NULL, NULL);
 		}
+		ast_debug(1, "---- Setting channel name to %s\n", dialog->owner->name);
 
  		/* Try to find out if there's active transcoding */
 		/* Currently, the only media stream that has translation is the audio stream. At some point
@@ -68,8 +70,10 @@ void sip_rtcp_set_data(struct sip_pvt *dialog, struct ast_rtp_instance *instance
 			if (writetrans) {
 				wtname = chan->writetrans->t->name;
 			}
-			ast_rtp_instance_set_translator(instance, rtname, readtrans ? chan->readtrans->t->cost : (const int) 0,
+			if (readtrans || writetrans) {
+				ast_rtp_instance_set_translator(instance, rtname, readtrans ? chan->readtrans->t->cost : (const int) 0,
 					wtname, writetrans ? chan->writetrans->t->cost : (const int) 0);
+			}
 		
 			if (option_debug > 1) {
  				if (readtrans && dialog->owner->readtrans->t) {
@@ -145,7 +149,7 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 			"\r\n", 
 			dialog->owner ? dialog->owner->name : "",
 			dialog->owner ? dialog->owner->uniqueid : "",
-			qual.bridgedchan[0] ? qual.bridgedchan : "" ,
+			qual.bridgedchannel[0] ? qual.bridgedchannel : "" ,
 			qual.bridgeduniqueid[0] ? qual.bridgeduniqueid : "",
 			reporttype == 1 ? "Final" : "Update",
 			qual.numberofreports == 0 ? "Inactive" : "Active",
@@ -243,8 +247,8 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	sprintf(buf_remoteip,"%s", ast_inet_ntoa(qual->them.sin_addr));
 	sprintf(buf_inpacketloss, "%d", qual->rxploss);
 	sprintf(buf_outpacketloss, "%d", qual->txploss);
-	sprintf(buf_inpackets, "%d", 42);		/* Silly value. Need to check this */
-	sprintf(buf_outpackets, "%d", 42);
+	sprintf(buf_inpackets, "%d", qual->rxcount);		/* Silly value. Need to check this */
+	sprintf(buf_outpackets, "%d", qual->txcount);
 	//sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
 	//sprintf(buf_outpackets, "%d", qual->local_count);
 
@@ -252,7 +256,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	ast_log(LOG_CQR, "CQR Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
 		qual->channel[0] ? qual->channel : "",
 		qual->uniqueid[0] ? qual->uniqueid : "",
-		qual->bridgedchan[0] ? qual->bridgedchan : "" ,
+		qual->bridgedchannel[0] ? qual->bridgedchannel : "" ,
 		qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
 		dialog->callid,
 		buf_mediatype,
@@ -276,7 +280,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 CREATE TABLE `astcqr` (
   `channel` varchar(50) NOT NULL,
   `uniqueid` varchar(35) NOT NULL,
-  `bridgedchan` varchar(50) NOT NULL,
+  `bridgedchannel` varchar(50) NOT NULL,
   `bridgeduniqueid` varchar(35) NOT NULL,
   `pvtcallid` varchar(80) NOT NULL,
   `rtpmedia` varchar(50) NOT NULL,
@@ -307,7 +311,7 @@ CREATE TABLE `astcqr` (
 	ast_store_realtime("rtpcqr", 
 		"channel", qual->channel[0] ? qual->channel : "--no channel--",
 		"uniqueid", qual->uniqueid[0] ? qual->uniqueid : "--no uniqueid --",
-		"bridgedchan", qual->bridgedchan[0] ? qual->bridgedchan : "" ,
+		"bridgedchannel", qual->bridgedchannel[0] ? qual->bridgedchannel : "" ,
 		"bridgeduniqueid", qual->bridgeduniqueid[0] ? qual->bridgeduniqueid : "",
 		"pvtcallid", dialog->callid, 
 		"rtpmedia", buf_mediatype, 

@@ -16,6 +16,9 @@ to Asterisk 1.8 and hopefully (with some help) to Asterisk trunk to be integrate
 The 1.4 code has been running in production for years in universities, call centers
 and service providers.
 
+The 1.8 port of Pinefrog is supported by Nordicom, Norway (http://www.nordicom.no). 
+The 1.4 work was sponsored by several companies, including ClearIT AB, Sweden.
+
 Status of 1.8 port
 ------------------
 2013-03-05	Started
@@ -121,3 +124,45 @@ Scenarios to test
 - Nat traversal - Asterisk outside of NAT and inside (as client to external service)
 - Call hold
 - Call with music-on-hold
+
+Database structure
+-------------------
+Example database schema for MySQL:
+
+CREATE TABLE `astcqr` (
+  `channel` varchar(50) NOT NULL,
+  `uniqueid` varchar(35) NOT NULL,
+  `bridgedchannel` varchar(50) NOT NULL,
+  `bridgeduniqueid` varchar(35) NOT NULL,
+  `pvtcallid` varchar(80) NOT NULL,
+  `rtpmedia` varchar(50) NOT NULL,
+  `localssrc` varchar(50) NOT NULL,
+  `remotessrc` varchar(50) NOT NULL,
+  `rtt` varchar(10) NOT NULL,
+  `localjitter` varchar(10) NOT NULL,
+  `remotejitter` varchar(10) NOT NULL,
+  `sendformat` varchar(10) NOT NULL,
+  `receiveformat` varchar(10) NOT NULL,
+  `rtcpstatus` varchar(10) NOT NULL,
+  `duration` varchar(10) NOT NULL,
+  `packetsent` varchar(30) NOT NULL,
+  `packetreceived` varchar(30) NOT NULL,
+  `packetlossin` varchar(30) NOT NULL,
+  `packetlossout` varchar(30) NOT NULL,
+  `rttmax` varchar(12) NOT NULL,
+  `rttmin` varchar(12) NOT NULL,
+  `writetranslator` varchar(15) NOT NULL,
+  `readtranslator` varchar(15) NOT NULL,
+  `writecost` varchar(10) NOT NULL,
+  `readcost` varchar(10) NOT NULL,
+  `remoteip` varchar(25) NOT NULL,
+  KEY `ChannelUnique` (`channel`,`uniqueid`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COMMENT='FOr pinefrog stats'
+
+Realtime configuration
+========================
+In extconfig.conf add
+
+rtpcqr => mysql,asterisk,astqos
+
+When you run "sip show settings"

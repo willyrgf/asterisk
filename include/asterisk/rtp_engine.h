@@ -310,7 +310,7 @@ struct ast_rtp_instance_stats {
 	unsigned int remote_rxcount;
 	char channel[AST_MAX_EXTENSION];	/*!< Name of channel */
 	char uniqueid[AST_MAX_EXTENSION];	/*!< uniqueid of channel */
-	char bridgedchan[AST_MAX_EXTENSION];	/*!< Name of bridged channel */
+	char bridgedchannel[AST_MAX_EXTENSION];	/*!< Name of bridged channel */
 	char bridgeduniqueid[AST_MAX_EXTENSION];	/*!< uniqueid of bridged channel */
 	unsigned int numberofreports;	  /*!< Number of reports received from remote end */
 	int lasttxformat;		  /*!< Last used codec on transmitted stream */

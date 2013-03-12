@@ -91,6 +91,7 @@ enum rtcp_sdes {
 	SDES_NOTE	= 7,		/*!< Notice about the source */
 	SDES_PRIV	= 8,		/*!< SDES Private extensions */
 	SDES_H323_CADDR	= 9,		/*!< H.323 Callable address */
+	SDES_APSI	= 10,		/*!< Application Specific Identifier (RFC 6776) */
 };
 
 #define RTP_MTU		1200
@@ -281,7 +282,7 @@ struct ast_rtcp {
 	double normdevrtt;
 	double stdevrtt;
 	unsigned int rtt_count;		/*! Number of reports received */
-	char bridgedchan[AST_MAX_EXTENSION];		/*!< Bridged channel name */
+	char bridgedchannel[AST_MAX_EXTENSION];		/*!< Bridged channel name */
 	char bridgeduniqueid[AST_MAX_EXTENSION];	/*!< Bridged channel uniqueid */
 	char channel[AST_MAX_EXTENSION];		/*!< Our channel name */
 	char uniqueid[AST_MAX_EXTENSION];	/*!< Our channel uniqueid */
@@ -2258,6 +2259,11 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 						ast_verbose(" --- SDES END \n");
 					}
 					break;
+				case SDES_APSI:
+					if (rtcp_debug_test_addr(&addr)) {
+						ast_verbose(" --- SDES APSI \n");
+					}
+					break;
 				}
 				j += 2 + sdeslength;	/* Header (1 byte) + length */
 				sdes += sdeslength;
@@ -3042,6 +3048,21 @@ static int ast_rtp_get_stat(struct ast_rtp_instance *instance, struct ast_rtp_in
 	if (!ast_strlen_zero(rtp->rtcp->writetranslator)) {
 		ast_copy_string(stats->writetranslator, rtp->rtcp->writetranslator, sizeof(stats->writetranslator));
 	}
+	if (!ast_strlen_zero(rtp->rtcp->readtranslator)) {
+		ast_copy_string(stats->readtranslator, rtp->rtcp->readtranslator, sizeof(stats->readtranslator));
+	}
+	if (!ast_strlen_zero(rtp->rtcp->channel)) {
+		ast_copy_string(stats->channel, rtp->rtcp->channel, sizeof(stats->channel));
+	}
+	if (!ast_strlen_zero(rtp->rtcp->bridgedchannel)) {
+		ast_copy_string(stats->bridgedchannel, rtp->rtcp->bridgedchannel, sizeof(stats->bridgedchannel));
+	}
+	if (!ast_strlen_zero(rtp->rtcp->uniqueid)) {
+		ast_copy_string(stats->uniqueid, rtp->rtcp->uniqueid, sizeof(stats->uniqueid));
+	}
+	if (!ast_strlen_zero(rtp->rtcp->bridgeduniqueid)) {
+		ast_copy_string(stats->bridgeduniqueid, rtp->rtcp->bridgeduniqueid, sizeof(stats->bridgeduniqueid));
+	}
 	return 0;
 }
 
@@ -3171,25 +3192,25 @@ void ast_rtcp_set_bridged(struct ast_rtp_instance *instance, const char *channel
 	/* If we already have data, don't replace it. 
 		NOTE: Should we replace it at a masquerade or something? Hmm.
 	*/
-	if (channel && !rtp->rtcp->channel[0]) {
-		ast_debug(1, "!!!!!! Setting channel name \n");
+	if (!ast_strlen_zero(channel) && !rtp->rtcp->channel[0]) {
+		ast_debug(1, "!!!!!! Setting channel name to %s\n", channel);
 		ast_copy_string(rtp->rtcp->channel, channel, sizeof(rtp->rtcp->channel));
 	}
-	if (uniqueid && !rtp->rtcp->uniqueid[0]) {
-		ast_debug(1, "!!!!!! Setting unique id \n");
+	if (!ast_strlen_zero(uniqueid) && !rtp->rtcp->uniqueid[0]) {
+		ast_debug(1, "!!!!!! Setting unique id to %s\n", uniqueid);
 		ast_copy_string(rtp->rtcp->uniqueid, uniqueid, sizeof(rtp->rtcp->uniqueid));
 	}
-	if (bridgedchan) {
-		ast_debug(1, "!!!!!! Setting bridged channel name \n");
-		ast_copy_string(rtp->rtcp->bridgedchan, bridgedchan, sizeof(rtp->rtcp->bridgedchan));
+	if (!ast_strlen_zero(bridgedchan)) {
+		ast_debug(1, "!!!!!! Setting bridged channel name to %s\n", bridgedchan);
+		ast_copy_string(rtp->rtcp->bridgedchannel, bridgedchan, sizeof(rtp->rtcp->bridgedchannel));
 	} else {
-		if(rtp->rtcp->bridgedchan[0] != '\0') {
-			ast_debug(1, "!!!!!! Keeping bridged channel name \n");
+		if(rtp->rtcp->bridgedchannel[0] != '\0') {
+			ast_debug(1, "!!!!!! Keeping bridged channel name %s\n", rtp->rtcp->bridgedchannel);
 		}
 		//rtp->rtcp->bridgedchan[0] = '\0';
 	}
-	if (bridgeduniqueid) {
-		ast_debug(1, "!!!!!! Setting bridged unique id \n");
+	if (!ast_strlen_zero(bridgeduniqueid)) {
+		ast_debug(1, "!!!!!! Setting bridged unique id to %s\n", bridgeduniqueid);
 		ast_copy_string(rtp->rtcp->bridgeduniqueid, bridgeduniqueid, sizeof(rtp->rtcp->bridgeduniqueid));
 	} else {
 		if(rtp->rtcp->bridgeduniqueid[0] != '\0') {
