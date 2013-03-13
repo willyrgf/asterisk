@@ -881,7 +881,6 @@ static const struct autopause {
 	{ QUEUE_AUTOPAUSE_ALL,"all" },
 };
 
-
 static struct ast_taskprocessor *devicestate_tps;
 
 #define DEFAULT_RETRY		5
@@ -927,6 +926,9 @@ static int montype_default = 0;
 
 /*! \brief queues.conf [general] option */
 static int shared_lastcall = 1;
+
+/*! \brief Play prompts without interrupts (foreground) */
+static int background_prompts = 0;
 
 /*! \brief Subscription to device state change events */
 static struct ast_event_sub *device_state_sub;
@@ -1190,6 +1192,7 @@ static struct ao2_container *queues;
 
 static void update_realtime_members(struct call_queue *q);
 static int set_member_paused(const char *queuename, const char *interface, const char *reason, int paused);
+static int play_file(struct ast_channel *chan, const char *filename, int ringing, char *moh);
 
 static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan); 
 /*! \brief sets the QUEUESTATUS channel variable */
@@ -2627,28 +2630,7 @@ static int join_queue(char *queuename, struct queue_ent *qe, enum queue_result *
 	return res;
 }
 
-static int play_file(struct ast_channel *chan, const char *filename)
-{
-	int res;
-
-	if (ast_strlen_zero(filename)) {
-		return 0;
-	}
-
-	if (!ast_fileexists(filename, NULL, chan->language)) {
-		return 0;
-	}
-
-	ast_stopstream(chan);
-
-	res = ast_streamfile(chan, filename, chan->language);
-	if (!res)
-		res = ast_waitstream(chan, AST_DIGIT_ANY);
-
-	ast_stopstream(chan);
-
-	return res;
-}
+void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
 
 /*!
  * \brief Check for valid exit from queue via goto
@@ -2681,7 +2663,7 @@ static int valid_exit(struct queue_ent *qe, char digit)
 
 	/* We have an exact match */
 	if (!ast_goto_if_exists(qe->chan, qe->context, qe->digits, 1)) {
-		qe->valid_digits = 1;
+		qe->valid_digits = 1; /* there it is, the only indication */
 		/* Return 1 on a successful goto */
 		return 1;
 	}
@@ -2704,11 +2686,12 @@ static int say_position(struct queue_ent *qe, int ringing)
 	if ((qe->last_pos_said == qe->pos) && ((now - qe->last_pos) < qe->parent->announcefrequency))
 		return 0;
 
-	if (ringing) {
-		ast_indicate(qe->chan,-1);
-	} else {
-		ast_moh_stop(qe->chan);
-	}
+	/* Commented out by old Olle patch */
+	/* if (ringing) { */
+	/* 	ast_indicate(qe->chan,-1); */
+	/* } else { */
+	/* 	ast_moh_stop(qe->chan); */
+	/* } */
 
 	if (qe->parent->announceposition == ANNOUNCEPOSITION_YES ||
 		qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN ||
@@ -2720,7 +2703,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 	if (announceposition == 1) {
 		/* Say we're next, if we are */
 		if (qe->pos == 1) {
-			res = play_file(qe->chan, qe->parent->sound_next);
+			res = play_file(qe->chan, qe->parent->sound_next, ringing, NULL);
 			if (res)
 				goto playout;
 			else
@@ -2728,7 +2711,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 		} else {
 			if (qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN && qe->pos > qe->parent->announcepositionlimit){
 				/* More than Case*/
-				res = play_file(qe->chan, qe->parent->queue_quantity1);
+				res = play_file(qe->chan, qe->parent->queue_quantity1, ringing, NULL);
 				if (res)
 					goto playout;
 				res = ast_say_number(qe->chan, qe->parent->announcepositionlimit, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
@@ -2736,7 +2719,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 					goto playout;
 			} else {
 				/* Normal Case */
-				res = play_file(qe->chan, qe->parent->sound_thereare);
+				res = play_file(qe->chan, qe->parent->sound_thereare, ringing, NULL);
 				if (res)
 					goto playout;
 				res = ast_say_number(qe->chan, qe->pos, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
@@ -2745,11 +2728,11 @@ static int say_position(struct queue_ent *qe, int ringing)
 			}
 			if (qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN && qe->pos > qe->parent->announcepositionlimit){
 				/* More than Case*/
-				res = play_file(qe->chan, qe->parent->queue_quantity2);
+				res = play_file(qe->chan, qe->parent->queue_quantity2, ringing, NULL);
 				if (res)
 					goto playout;
 			} else {
-				res = play_file(qe->chan, qe->parent->sound_calls);
+				res = play_file(qe->chan, qe->parent->sound_calls, ringing, NULL);
 				if (res)
 					goto playout;
 			}
@@ -2770,10 +2753,10 @@ static int say_position(struct queue_ent *qe, int ringing)
 
 	/* If the hold time is >1 min, if it's enabled, and if it's not
 	   supposed to be only once and we have already said it, say it */
-    if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
-        ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
-        !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
-		res = play_file(qe->chan, qe->parent->sound_holdtime);
+	if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
+       	 ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
+       	 !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
+		res = play_file(qe->chan, qe->parent->sound_holdtime,ringing,NULL);
 		if (res)
 			goto playout;
 
@@ -2783,11 +2766,11 @@ static int say_position(struct queue_ent *qe, int ringing)
 				goto playout;
 
 			if (avgholdmins == 1) {
-				res = play_file(qe->chan, qe->parent->sound_minute);
+				res = play_file(qe->chan, qe->parent->sound_minute, ringing, NULL);
 				if (res)
 					goto playout;
 			} else {
-				res = play_file(qe->chan, qe->parent->sound_minutes);
+				res = play_file(qe->chan, qe->parent->sound_minutes, ringing, NULL);
 				if (res)
 					goto playout;
 			}
@@ -2797,7 +2780,7 @@ static int say_position(struct queue_ent *qe, int ringing)
 			if (res)
 				goto playout;
 
-			res = play_file(qe->chan, qe->parent->sound_seconds);
+			res = play_file(qe->chan, qe->parent->sound_seconds, ringing, NULL);
 			if (res)
 				goto playout;
 		}
@@ -2811,11 +2794,11 @@ posout:
 			qe->chan->name, qe->parent->name, qe->pos);
 	}
 	if (say_thanks) {
-		res = play_file(qe->chan, qe->parent->sound_thanks);
+		res = play_file(qe->chan, qe->parent->sound_thanks, ringing, NULL);
 	}
 playout:
 
-	if ((res > 0 && !valid_exit(qe, res)))
+	if (res > 0) /* in other words, ignore any play_file problems... */
 		res = 0;
 
 	/* Set our last_pos indicators */
@@ -2823,13 +2806,18 @@ playout:
 	qe->last_pos_said = qe->pos;
 
 	/* Don't restart music on hold if we're about to exit the caller from the queue */
-	if (!res) {
+	/* Next section commented out by old Olle patch */
+	/*	if (!res) {
 		if (ringing) {
 			ast_indicate(qe->chan, AST_CONTROL_RINGING);
 		} else {
 			ast_moh_start(qe->chan, qe->moh, NULL);
 		}
-	}
+	} */
+	/* it used to be, that we'd fire up the MOH/Indication at this point;
+	   now, play_file handles those details; it no longer waits for any
+	   user input... so no questions about valid_exit().
+	*/
 	return res;
 }
 
@@ -3480,12 +3468,6 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 	if ((now - qe->last_periodic_announce_time) < qe->parent->periodicannouncefrequency)
 		return 0;
 
-	/* Stop the music on hold so we can play our own file */
-	if (ringing)
-		ast_indicate(qe->chan,-1);
-	else
-		ast_moh_stop(qe->chan);
-
 	ast_verb(3, "Playing periodic announcement\n");
 	
 	if (qe->parent->randomperiodicannounce && qe->parent->numperiodicannounce) {
@@ -3496,18 +3478,11 @@ static int say_periodic_announcement(struct queue_ent *qe, int ringing)
 	}
 	
 	/* play the announcement */
-	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]));
+	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]), ringing, qe->moh);
 
-	if (res > 0 && !valid_exit(qe, res))
-		res = 0;
-
-	/* Resume Music on Hold if the caller is going to stay in the queue */
-	if (!res) {
-		if (ringing)
-			ast_indicate(qe->chan, AST_CONTROL_RINGING);
-		else
-			ast_moh_start(qe->chan, qe->moh, NULL);
-	}
+	/* we no longer check for valid_exit(), as we simply
+	   start the playback and let the autoservice thread
+	   keep it going */
 
 	/* update last_periodic_announce_time */
 	if (qe->parent->relativeperiodicannounce)
@@ -3646,10 +3621,15 @@ static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callatte
 #endif
 
 	while ((*to = ast_remaining_ms(start_time_tv, orig)) && !peer) {
+
 		int numlines, retry, pos = 1;
 		struct ast_channel *watchers[AST_MAX_WATCHERS];
 		watchers[0] = in;
 		start = NULL;
+
+		if (background_prompts) {
+			play_file(qe->chan, NULL, 0, qe->moh);
+		}
 
 		for (retry = 0; retry < 2; retry++) {
 			numlines = 0;
@@ -4196,6 +4176,10 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 	/* This is the holding pen for callers 2 through maxlen */
 	for (;;) {
 
+		if (background_prompts) {
+			play_file(qe->chan, NULL, 0, qe->moh);
+		}
+
 		if (is_our_turn(qe))
 			break;
 
@@ -4217,9 +4201,9 @@ static int wait_our_turn(struct queue_ent *qe, int ringing, enum queue_result *r
 		}
 
 		/* Make a position announcement, if enabled */
-		if (qe->parent->announcefrequency &&
-			(res = say_position(qe,ringing)))
+		if (qe->parent->announcefrequency && (res = say_position(qe,ringing))) {
 			break;
+		}
 
 		/* If we have timed out, break out */
 		if (qe->expire && (time(NULL) >= qe->expire)) {
@@ -4446,6 +4430,7 @@ static const struct ast_datastore_info queue_transfer_info = {
 	.chan_fixup = queue_transfer_fixup,
 	.destroy = queue_transfer_destroy,
 };
+
 
 /*! \brief Log an attended transfer when a queue caller channel is masqueraded
  *
@@ -4903,39 +4888,41 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			int res2;
 
 			res2 = ast_autoservice_start(qe->chan);
-			if (!res2) {
-				if (qe->parent->memberdelay) {
-					ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
-					res2 = ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
+			if (qe->parent->memberdelay) {
+				ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
+				res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
+			}
+			if (!res2 && announce) {
+				if (play_file(peer, announce, ringing, qe->moh) < 0) {
+					ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", announce, peer->name);
 				}
-				if (!res2 && announce) {
-					if (play_file(peer, announce) < 0) {
-						ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", announce, peer->name);
-					}
-				}
-				if (!res2 && qe->parent->reportholdtime) {
-					if (!play_file(peer, qe->parent->sound_reporthold)) {
-						int holdtime, holdtimesecs;
+			}
+			if (!res2 && qe->parent->reportholdtime) {
+				int res3;
+				res3 = play_file(peer, qe->parent->sound_reporthold, ringing, qe->moh);
+				if (!res3) {
+					int holdtime, holdtimesecs;
 
-						time(&now);
-						holdtime = abs((now - qe->start) / 60);
-						holdtimesecs = abs((now - qe->start) % 60);
-						if (holdtime > 0) {
-							ast_say_number(peer, holdtime, AST_DIGIT_ANY, peer->language, NULL);
-							if (play_file(peer, qe->parent->sound_minutes) < 0) {
-								ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_minutes, peer->name);
-							}
+					time(&now);
+					holdtime = abs((now - qe->start) / 60);
+					holdtimesecs = abs((now - qe->start) % 60);
+					if (holdtime > 0) {
+						ast_say_number(peer, holdtime, AST_DIGIT_ANY, peer->language, NULL);
+						if (play_file(peer, qe->parent->sound_minutes, ringing, qe->moh) < 0) {
+							ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_minutes, peer->name);
 						}
-						if (holdtimesecs > 1) {
-							ast_say_number(peer, holdtimesecs, AST_DIGIT_ANY, peer->language, NULL);
-							if (play_file(peer, qe->parent->sound_seconds) < 0) {
-								ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_seconds, peer->name);
-							}
+					}
+					if (holdtimesecs > 1) {
+						ast_say_number(peer, holdtimesecs, AST_DIGIT_ANY, peer->language, NULL);
+						if (play_file(peer, qe->parent->sound_seconds, ringing, qe->moh) < 0) {
+							ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_seconds, peer->name);
 						}
 					}
 				}
 				ast_autoservice_stop(qe->chan);
 			}
+
+
 			if (ast_check_hangup(peer)) {
 				/* Agent must have hung up */
 				ast_log(LOG_WARNING, "Agent on %s hungup on the customer.\n", peer->name);
@@ -4964,10 +4951,11 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			}
 		}
 		/* Stop music on hold */
-		if (ringing)
+		if (ringing) {
 			ast_indicate(qe->chan,-1);
-		else
+		} else {
 			ast_moh_stop(qe->chan);
+		}
 		/* If appropriate, log that we have a destination channel */
 		if (qe->chan->cdr)
 			ast_cdr_setdestchan(qe->chan->cdr, peer->name);
@@ -4985,7 +4973,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 
 		/* Play announcement to the caller telling it's his turn if defined */
 		if (!ast_strlen_zero(qe->parent->sound_callerannounce)) {
-			if (play_file(qe->chan, qe->parent->sound_callerannounce))
+			if (play_file(qe->chan, qe->parent->sound_callerannounce,ringing,qe->moh))
 				ast_log(LOG_WARNING, "Announcement file '%s' is unavailable, continuing anyway...\n", qe->parent->sound_callerannounce);
 		}
 
@@ -5152,7 +5140,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 			
 			res = ast_autoservice_start(qe->chan);
 			if (res) {
-				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
+				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel %s\n", qe->chan->name);
 				res = -1;
 			}
 			
@@ -5373,8 +5361,9 @@ static int wait_a_bit(struct queue_ent *qe)
 {
 	/* Don't need to hold the lock while we setup the outgoing calls */
 	int retrywait = qe->parent->retry * 1000;
+	int res;
 
-	int res = ast_waitfordigit(qe->chan, retrywait);
+	res = ast_waitfordigit(qe->chan, retrywait);
 	if (res > 0 && !valid_exit(qe, res))
 		res = 0;
 
@@ -6064,6 +6053,326 @@ static void copy_rules(struct queue_ent *qe, const char *rulename)
 	AST_LIST_UNLOCK(&rule_lists);
 }
 
+/*! \brief Data structure for \ref play_file() channel frame generator */
+struct gen_state {
+	struct ast_channel *chan;
+	struct ast_filestream *stream;
+	int sample_queue;
+	char filename[512];
+	struct ast_queue_streamfile_info *aqsi;
+};
+
+
+/*! \brief Allocate generator data structures if needed 
+
+We don't really do anything here since we get the needed data as params.
+*/
+static void *gen_alloc(struct ast_channel *chan, void *params)
+{
+	struct gen_state *state = params;
+
+	ast_debug(3, "--- Allocating generator for %s\n", chan->name);
+	return state;
+}
+
+/*! \brief Close file stream used by generator */
+static void gen_closestream(struct gen_state *state)
+{
+	if (!state->stream) {
+		ast_debug(3, "--- No active stream to close.\n");
+		return;
+	}
+
+	ast_closestream(state->stream);
+	state->filename[0] = '\0';
+	state->chan->stream = NULL;
+	state->stream = NULL;
+	state->aqsi->now_playing = 0;	/* Important flag to indicate we are no longer playing on this channel */
+}
+
+/*! \brief Release generator on channel */
+static void gen_release(struct ast_channel *chan, void *data)
+{
+	struct gen_state *state = data;
+	ast_debug(3, "--- releasing stream \n");
+	if (!data) {
+		ast_debug(3, "--- No state??? \n");
+		return;
+	}
+	gen_closestream(state);
+	ast_free(state);
+}
+
+
+/*! \brief Read frames from file stream and return them to the generator \ref gen_generate() */
+static struct ast_frame *gen_readframe(struct gen_state *state)
+{
+	struct ast_frame *f = NULL;
+	if (state && state->chan) {
+		ast_debug(3, "... Generating frames for %s\n", state->chan->name);
+	} else {
+		ast_log(LOG_ERROR, "... no channel to generate frames for!\n");
+		return f;
+	}
+	if (ast_strlen_zero(state->filename)) {
+		ast_log(LOG_ERROR, ".... no file to read from?? Generator for %s\n", state->chan->name);
+		return f;
+	}
+
+	if (!state->stream) {
+		if (!(state->stream = ast_openstream_full(state->chan, state->filename, state->chan->language, 1))) {
+			ast_log(LOG_WARNING, "File '%s' could not be opened: %s\n", state->filename, strerror(errno));
+			return f;
+		}
+
+	}
+	f = ast_readframe(state->stream);
+
+	return f;
+}
+
+/*! \brief The actual generator that reads frames and sends them to the channel
+	While letting the queue app do it's thing.
+ */
+static int gen_generate(struct ast_channel *chan, void *data, int len, int samples)
+{
+	struct gen_state *state = data;
+	struct ast_frame *f = NULL;
+	int res = 0;
+
+	ast_debug(2, "***** Generating good old prompts for your benefit. Did I hear a thank you?\n");
+
+	if (!state) {
+		ast_log(LOG_ERROR, "---- Do not have a current state data structure\n");
+		return -1;
+	}
+	if (!state->chan) {
+		ast_log(LOG_ERROR, "... no channel to generate frames for!\n");
+		return -1;
+	}
+	
+	state->sample_queue += samples;
+	ast_debug(3, "--------->>>>> Generating %d samples - sample queue now %d  channel %s\n", samples, state->sample_queue, chan->name);
+
+	while (state->sample_queue > 0) {
+		if (!(f = gen_readframe(state))) {
+			ast_debug(3, "---- :-( Could not get more frames\n");
+			return -1;
+		}
+
+		res = ast_write(chan, f);
+		state->sample_queue -= f->samples;
+		ast_frfree(f);
+		if (res < 0) {
+			ast_log(LOG_WARNING, "Failed to write frame: %s\n", strerror(errno));
+			return -1;
+		}
+	}
+
+	return res;
+}
+
+/*! \brief Generator initialization structure for play_file */
+static struct ast_generator play_file_gen =
+{
+	alloc: gen_alloc,		/*! \ref gen_alloc() */
+	release: gen_release,		/*! \ref gen_release() */
+	generate: gen_generate,		/*! \ref gen_generate() */
+};
+
+/*! \brief Play queue updates in the background, being able to interrupt if an
+	agent becomes available.
+
+   To enable playing of a string of files, one after the other, and not have to wait
+   around for each one to finish before playing the next, instead we put them into
+   a list, which we insert at the tail.
+
+   Make sure to get things rolling with a plain play_file(), then use this
+   to queue up the others in sequence 
+
+   When called without a filename, we check if we have a list of files in the 
+   playlist. If so we start playing again. 
+*/
+static int play_file(struct ast_channel *chan, const char *filename, int ringing, char *moh)
+{
+	int res = 0;
+	struct ast_datastore *datastore;
+	struct ast_queue_streamfile_info *aqsi = NULL;
+	struct gen_state *generatordata;
+	struct ast_queue_streamfile_name *sfn = NULL;
+	char playfilename[512];
+	
+
+	if (!background_prompts) {
+		if (ast_strlen_zero(filename)) {
+			return 0;
+		}
+
+		if (!ast_fileexists(filename, NULL, chan->language)) {
+			return 0;
+		}
+
+		ast_stopstream(chan);
+
+		res = ast_streamfile(chan, filename, chan->language);
+		if (!res) {
+			res = ast_waitstream(chan, AST_DIGIT_ANY);
+		}
+
+		ast_stopstream(chan);
+		if (ringing) {
+                        ast_indicate(chan, AST_CONTROL_RINGING);
+                } else {
+                        ast_moh_start(chan, moh, NULL);
+		}
+
+		return res;
+	}
+
+	/* look up the datastore and the play_finished struct, and set appropriate values */
+	
+	ast_channel_lock(chan);
+	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) {
+		aqsi = datastore->data;
+		if (aqsi) {  /* copy this stuff into place */
+			aqsi->ringing = ringing;
+			if (moh) {
+				strcpy(aqsi->moh, moh);
+			}
+		}
+	} else {
+		ast_log(LOG_ERROR, "Can't find the ast_sound_ending datastore! on chan %s\n", chan->name);
+		ast_channel_unlock(chan);
+		return 1; /* Why continue, if I can't access the datastore & list? */
+	}
+	ast_channel_unlock(chan);
+	if (option_debug && !ast_strlen_zero(filename)) {
+		ast_debug(2, "---- Aqsi now playing: %s\n", aqsi->now_playing ? "true" : "false");
+	}
+	
+	if (aqsi->now_playing == 0) {
+		playfilename[0] = '\0';
+		if (ast_strlen_zero(filename)) {
+			/* take the first one if we have a playlist */
+			if (!AST_LIST_EMPTY(&aqsi->flist)) {
+				sfn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
+				ast_copy_string(playfilename, sfn->filename, sizeof(playfilename));
+				ast_free(sfn);
+				ast_debug(3, "--- No filename and not playing - selecting next file in playlist - %s\n", playfilename);
+			}
+			if (ast_strlen_zero(playfilename)) {
+				ast_debug(3, "--- empty queue... No filename and not currently playing\n");
+				if (ringing) {
+					ast_indicate(chan, AST_CONTROL_RINGING);
+				} else {
+					if (!ast_test_flag(chan, AST_FLAG_MOH)) {
+						ast_moh_start(chan, aqsi->qe->moh ? aqsi->qe->moh : NULL, NULL);
+					}
+				}
+				return 0;
+			}
+		} else {
+			ast_copy_string(playfilename, filename, sizeof(playfilename));
+		}
+	} else {
+		if (ast_strlen_zero(filename)) {
+			ast_debug(3, "--- just checking... No filename and currently playing\n");
+			return 0;
+		}
+	}
+
+	/* If the filename doesn't exist, do not queue it up */
+	if (!ast_strlen_zero(filename)) {
+		if (!ast_fileexists(filename, NULL, chan->language)) {
+			ast_log(LOG_ERROR, "Filename %s does not exist, not queued for playing out on chan %s\n", filename, chan->name);
+			return 0;
+		}
+	}
+
+	AST_LIST_LOCK(&aqsi->flist);
+	
+	if (aqsi->now_playing) {
+		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
+		fn->filename = ast_strdup(filename);
+		if (!fn || ! fn->filename) {
+			ast_log(LOG_ERROR, "Error allocating memory.\n");
+			AST_LIST_UNLOCK(&aqsi->flist);
+			return 1;
+		} 
+		ast_debug(3, "    queued sound file %s for playing on chan %s\n", filename, chan->name);
+		
+		/* link the struct into the current ast_queue_streamfile_info struct */
+		AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list); 
+		/* in this case, nothing else to do, just insert the new file at the end of the list */
+	} else {
+		/* Start playing */
+
+		/* Stop the music on hold so we can play our own file */
+		if (ringing) {
+			ast_debug(3, "Stopping Indication on %s\n", chan->name);
+			ast_indicate(chan,-1);
+		} else {
+			ast_debug(3, "Stopping MOH on chan %s\n", chan->name);
+			ast_moh_stop(chan);
+		}
+			
+		ast_debug(3, "Stopping Streaming on chan %s\n", chan->name);
+		ast_stopstream(chan);
+		
+		ast_debug(3, "Autoservice stop on chan %s\n", chan->name);
+		ast_autoservice_stop(chan);
+
+		/* Create generator to start playing audio without waiting */
+		generatordata = ast_calloc(1, sizeof(struct gen_state));
+		if (!generatordata) {
+			ast_log(LOG_ERROR, "Can't allocate generator input\n");
+			AST_LIST_UNLOCK(&aqsi->flist);
+			return 1;
+		}
+		ast_copy_string(generatordata->filename, playfilename, sizeof(generatordata->filename));
+		generatordata->chan = chan;
+		generatordata->aqsi = aqsi;
+
+		/* Starting new generator on channel. */
+		if (ast_activate_generator(chan, &play_file_gen, generatordata)) {
+			ast_log(LOG_ERROR, "Not playing requested prompt %s. Generator failed on %s.\n", playfilename, chan->name);
+			/* oops, the current file has problems */
+			/* restore the moh */
+			if (ringing) {
+				ast_indicate(chan, AST_CONTROL_RINGING);
+			} else {
+				ast_moh_start(chan, aqsi->qe->moh, NULL);
+			}
+			AST_LIST_UNLOCK(&aqsi->flist);
+			return 1;
+		} else {
+			ast_debug(3, "--- Generator Starting to play file %s \n", playfilename);
+		}
+		aqsi->now_playing = 1; /* We have begun playback */
+	}
+	
+	AST_LIST_UNLOCK(&aqsi->flist);
+	ast_waitfor(chan, 1);
+	
+	return 0; /* non-zero most likely means the file doesn't exist */
+}
+
+/*! \brief This routine propably will only need to be called at module unload time */
+void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata)
+{
+	struct ast_queue_streamfile_name *fn;
+	AST_LIST_LOCK(&playdata->flist);
+	while (!AST_LIST_EMPTY(&playdata->flist)) {
+		fn = AST_LIST_REMOVE_HEAD(&playdata->flist, list);
+		ast_free(fn->filename);
+
+		ast_free(fn);
+	}
+	AST_LIST_UNLOCK(&playdata->flist);
+	AST_LIST_HEAD_DESTROY(&playdata->flist);
+	ast_free(playdata);
+}
+
 /*!\brief The starting point for all queue calls
  *
  * The process involved here is to 
@@ -6087,6 +6396,9 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 	int qcontinue = 0;
 	int max_penalty, min_penalty;
 	enum queue_result reason = QUEUE_UNKNOWN;
+	struct ast_datastore *datastore = NULL;
+	struct ast_queue_streamfile_info *aqsi = ast_calloc(1, sizeof(struct ast_queue_streamfile_info));
+
 	/* whether to exit Queue application after the timeout hits */
 	int tries = 0;
 	int noption = 0;
@@ -6209,6 +6521,24 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		S_OR(args.url, ""),
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
 		qe.opos);
+
+	/* Add the background music datastore for this channel */
+	if (background_prompts) {
+		datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
+		if (datastore && aqsi) {
+			/* If memory allocation worked out */
+			aqsi->qe = &qe;
+			aqsi->chan = chan;
+			aqsi->ringing = ringing;
+			aqsi->now_playing = 0;
+			ast_copy_string(aqsi->moh, qe.moh, sizeof(aqsi->moh));
+			AST_LIST_HEAD_INIT(&aqsi->flist);
+			datastore->data = aqsi;
+	
+			ast_channel_datastore_add(chan, datastore);
+		}
+	}
+
 	copy_rules(&qe, args.rule);
 	qe.pr = AST_LIST_FIRST(&qe.qe_rules);
 check_turns:
@@ -6242,6 +6572,9 @@ check_turns:
 			break;
 		}
 
+		if (background_prompts) {
+			play_file(qe.chan, NULL, ringing, qe.moh);	
+		}
 		if (makeannouncement) {
 			/* Make a position announcement, if enabled */
 			if (qe.parent->announcefrequency)
@@ -6324,6 +6657,12 @@ check_turns:
 	}
 
 stop:
+	/* remove the playdata datastore */
+	ast_channel_datastore_remove(chan, datastore);
+	
+    /* get rid of the datastore for non-wait sound playing */
+	destroy_streamfile_info(aqsi);
+	
 	if (res) {
 		if (res < 0) {
 			if (!qe.handled) {
@@ -6340,17 +6679,6 @@ stop:
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY",
 				"%s|%d", qe.digits, qe.pos);
 		}
-	}
-
-	/* Don't allow return code > 0 */
-	if (res >= 0) {
-		res = 0;	
-		if (ringing) {
-			ast_indicate(chan, -1);
-		} else {
-			ast_moh_stop(chan);
-		}			
-		ast_stopstream(chan);
 	}
 
 	set_queue_variables(qe.parent, qe.chan);
@@ -6816,6 +7144,10 @@ static void queue_set_global_params(struct ast_config *cfg)
 	update_cdr = 0;
 	if ((general_val = ast_variable_retrieve(cfg, "general", "updatecdr")))
 		update_cdr = ast_true(general_val);
+	background_prompts = 0;
+	if ((general_val = ast_variable_retrieve(cfg, "general", "background_prompts"))) {
+		background_prompts = ast_true(general_val);
+	}
 	shared_lastcall = 0;
 	if ((general_val = ast_variable_retrieve(cfg, "general", "shared_lastcall")))
 		shared_lastcall = ast_true(general_val);

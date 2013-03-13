@@ -527,6 +527,13 @@ struct ast_channel_tech {
 	 */
 	int (* const send_digit_begin)(struct ast_channel *chan, char digit);
 
+	/*! 
+	 * \brief Continue sending a literal DTMF digit 
+	 *
+	 * \note The channel is not locked when this function gets called. 
+	 */
+	int (* const send_digit_continue)(struct ast_channel *chan, char digit, unsigned int duration);
+
 	/*!
 	 * \brief Stop sending a literal DTMF digit
 	 *
@@ -1868,6 +1875,15 @@ int ast_senddigit(struct ast_channel *chan, char digit, unsigned int duration);
  */
 int ast_senddigit_begin(struct ast_channel *chan, char digit);
 
+/*! \brief Continue to send a DTMF digit to a channel
+ * used on RTP bridges mainly (to get the duration correct)
+ * Send a DTMF digit to a channel.
+ * \param chan channel to act upon
+ * \param digit the DTMF digit to send, encoded in ASCII
+ * \return Returns 0 on success, -1 on failure
+ */
+int ast_senddigit_continue(struct ast_channel *chan, char digit, unsigned int duration);
+
 /*!
  * \brief Send a DTMF digit to a channel.
  * \param chan channel to act upon
@@ -2363,6 +2379,42 @@ struct ast_silence_generator *ast_channel_start_silence_generator(struct ast_cha
  * to its previous write format.
  */
 void ast_channel_stop_silence_generator(struct ast_channel *chan, struct ast_silence_generator *state);
+
+/*!
+ * \brief An opaque 'object' structure use by noise generators on channels.
+ */
+struct ast_noise_generator;
+
+/*!
+ * \brief Starts a noise generator on the given channel.
+ * \param chan The channel to generate silence on
+ * \param level The noise level in negative (dBOV)
+ * \return An ast_noise_generator pointer, or NULL if an error occurs
+ *
+ * \details
+ * This function will cause SLINEAR noise to be generated on the supplied
+ * channel until it is disabled; if the channel cannot be put into SLINEAR
+ * mode then the function will fail.
+ *
+ * \note
+ * The pointer returned by this function must be preserved and passed to
+ * ast_channel_stop_noise_generator when you wish to stop the noise
+ * generation.
+ */
+struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel *chan, const float level);
+
+/*!
+ * \brief Stops a previously-started noise generator on the given channel.
+ * \param chan The channel to operate on
+ * \param state The ast_noise_generator pointer return by a previous call to
+ * ast_channel_start_noise_generator.
+ * \return nothing
+ *
+ * \details
+ * This function will stop the operating noise generator and return the channel
+ * to its previous write format.
+ */
+void ast_channel_stop_noise_generator(struct ast_channel *chan, struct ast_noise_generator *state);
 
 /*!
  * \brief Check if the channel can run in internal timing mode.
@@ -3518,6 +3570,28 @@ int ast_channel_get_device_name(struct ast_channel *chan, char *device_name, siz
  * \param size The size of the buffer to write to
  */
 int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
+
+/*! \brief Asynchronous filestream playing playlist
+  Used (at least at first) in app_queue - in the ast_queue_streamfile_info channel datastore 
+*/
+struct ast_queue_streamfile_name {
+  char *filename;
+  AST_LIST_ENTRY(ast_queue_streamfile_name) list;
+};
+
+/*! \brief Information data about background playing of prompts */
+struct ast_queue_streamfile_info {
+  void (*digitHandler)(void *data, char digit); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
+  struct queue_ent *qe;
+  AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
+  struct ast_channel *chan;
+  int ringing;
+  char moh[80];
+  int now_playing;
+  int valid_exit;  /* if valid_exit() in app_queue is true */
+};
+
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif

@@ -126,6 +126,7 @@ static const struct ast_format_list AST_FORMAT_LIST[] = {
 	{ AST_FORMAT_SIREN14, "siren14", 32000, "ITU G.722.1 Annex C, (Siren14, licensed from Polycom)", 120, 20, 80, 20, 20 },	/*!< Binary commercial distribution */
 	{ AST_FORMAT_TESTLAW, "testlaw", 8000, "G.711 test-law", 80, 10, 150, 10, 20 },                        /*!< codec_ulaw.c */
 	{ AST_FORMAT_G719, "g719", 48000, "ITU G.719", 160, 20, 80, 20, 20 },
+	{ AST_FORMAT_CN, "cn", 8000, "Comfort Noise"},
 };
 
 struct ast_frame ast_null_frame = { AST_FRAME_NULL, };
@@ -807,6 +808,11 @@ void ast_frame_dump(const char *name, struct ast_frame *f, char *prefix)
 	switch(f->frametype) {
 	case AST_FRAME_DTMF_BEGIN:
 		strcpy(ftype, "DTMF Begin");
+		subclass[0] = f->subclass.integer;
+		subclass[1] = '\0';
+		break;
+	case AST_FRAME_DTMF_CONTINUE:
+		strcpy(ftype, "DTMF Continue");
 		subclass[0] = f->subclass.integer;
 		subclass[1] = '\0';
 		break;

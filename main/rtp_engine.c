@@ -162,7 +162,7 @@ static const struct ast_rtp_payload_type static_RTP_PT[AST_RTP_MAX_PT] = {
 	[16] = {1, AST_FORMAT_ADPCM}, /* 11.025 kHz */
 	[17] = {1, AST_FORMAT_ADPCM}, /* 22.050 kHz */
 	[18] = {1, AST_FORMAT_G729A},
-	[19] = {0, AST_RTP_CN},         /* Also used for CN */
+	[19] = {1, AST_FORMAT_CN},         /* Also used for CN */
 	[26] = {1, AST_FORMAT_JPEG},
 	[31] = {1, AST_FORMAT_H261},
 	[34] = {1, AST_FORMAT_H263},
@@ -736,6 +736,11 @@ void ast_rtp_codecs_packetization_set(struct ast_rtp_codecs *codecs, struct ast_
 int ast_rtp_instance_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 {
 	return instance->engine->dtmf_begin ? instance->engine->dtmf_begin(instance, digit) : -1;
+}
+
+int ast_rtp_instance_dtmf_continue(struct ast_rtp_instance *instance, char digit, unsigned int duration)
+{
+	return instance->engine->dtmf_continue ? instance->engine->dtmf_continue(instance, digit, duration) : -1;
 }
 
 int ast_rtp_instance_dtmf_end(struct ast_rtp_instance *instance, char digit)

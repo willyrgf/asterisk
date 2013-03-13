@@ -300,6 +300,13 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;allow=ulaw                     ; Allow codecs in order of preference
 ;allow=ilbc                     ; see https://wiki.asterisk.org/wiki/display/AST/RTP+Packetization
 				; for framing options
+
+;comfort-noise=yes		; Enable Comfort Noise generation on RTP streams
+;				; Available per device too
+;				; Generating comfort noise is a burden to your CPU
+;				; This should not be enabled on low-end devices.
+;				; You should not enable this unless you have internal
+;				; timing support enabled in asterisk.conf
 ;
 ; This option specifies a preference for which music on hold class this channel
 ; should listen to when put on hold if the music class has not been set on the
@@ -414,6 +421,15 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;outboundproxy=[2001:db8::1]:5062               ; IPv6 address literal with explicit port
 ;                                               ; (could also be tcp,udp) - defining transports on the proxy line only
 ;                                               ; applies for the global proxy, otherwise use the transport= option
+;supportpath=yes		; This activates parsing and handling of Path header as defined in RFC 3327. This enables
+				; Asterisk to route outgoing out-of-dialog requests via a set of proxies by using a pre-loaded
+				; route-set defined by the Path headers in the REGISTER request. NOTE: As this influences routing 
+				; of SIP requests make sure to not trust Path headers provided by the user's SIP client (the proxy
+				; in front of Asterisk should remove existing user provided Path headers). NOTE: when a peer has a
+				; path and outboundproxy set, the path will be added to Router header but routing to next hop is
+				; done using the outboundproxy. 
+				; NOTE: Path support does not work with realtime registrations yet.
+
 ;matchexternaddrlocally = yes     ; Only substitute the externaddr or externhost setting if it matches
                                 ; your localnet setting. Unless you have some sort of strange network
                                 ; setup you will not need to enable this.
@@ -1165,6 +1181,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; timerb
 ; qualifyfreq
 ; t38pt_usertpsource
+; tonezone              ; Default Tone zone (see indications.conf) for calls created by this device
 ; contactpermit         ; Limit what a host may register as (a neat trick
 ; contactdeny           ; is to register at the same IP as a SIP provider,
 ;                       ; then call oneself, and get redirected to that

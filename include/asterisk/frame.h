@@ -124,6 +124,8 @@ enum ast_frame_type {
 	AST_FRAME_MODEM,	
 	/*! DTMF begin event, subclass is the digit */
 	AST_FRAME_DTMF_BEGIN,
+	/*! DTMF continue event, subclass is the digit */
+	AST_FRAME_DTMF_CONTINUE,
 };
 #define AST_FRAME_DTMF AST_FRAME_DTMF_END
 
@@ -301,6 +303,8 @@ extern struct ast_frame ast_null_frame;
 #define AST_FORMAT_SPEEX16    (1ULL << 33)
 /*! Raw mu-law data (G.711) */
 #define AST_FORMAT_TESTLAW    (1ULL << 47)
+/*! Comfort noise. Not a frame type per se, but needs to be added as a codec */
+#define AST_FORMAT_CN    (1ULL << 48)
 /*! Reserved bit - do not use */
 #define AST_FORMAT_RESERVED   (1ULL << 63)
 
@@ -336,6 +340,7 @@ enum ast_control_frame_type {
 	AST_CONTROL_END_OF_Q = 29,		/*!< Indicate that this position was the end of the channel queue for a softhangup. */
 	AST_CONTROL_INCOMPLETE = 30,	/*!< Indication that the extension dialed is incomplete */
 	AST_CONTROL_UPDATE_RTP_PEER = 31, /*!< Interrupt the bridge and have it update the peer */
+	AST_CONTROL_CNG_END = 32,	/*!< Disable CNG playout in bridge */
 };
 
 enum ast_frame_read_action {
@@ -493,6 +498,10 @@ enum ast_control_transfer {
  * Option data is an integer value of 0 or 1 */
 #define AST_OPTION_SECURE_SIGNALING        18
 #define AST_OPTION_SECURE_MEDIA            19
+
+/*! Support of CNG transmission,
+    if not enabled a noise generator will kick in  */
+#define AST_OPTION_CNG_SUPPORT            20
 
 struct oprmode {
 	struct ast_channel *peer;

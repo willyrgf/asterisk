@@ -1,0 +1,2517 @@
+Index: apps/app_queue.c
+===================================================================
+--- apps/app_queue.c	(.../branches/1.8)	(revision 383005)
++++ apps/app_queue.c	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -881,7 +881,6 @@
+ 	{ QUEUE_AUTOPAUSE_ALL,"all" },
+ };
+ 
+-
+ static struct ast_taskprocessor *devicestate_tps;
+ 
+ #define DEFAULT_RETRY		5
+@@ -928,6 +927,9 @@
+ /*! \brief queues.conf [general] option */
+ static int shared_lastcall = 1;
+ 
++/*! \brief Play prompts without interrupts (foreground) */
++static int background_prompts = 0;
++
+ /*! \brief Subscription to device state change events */
+ static struct ast_event_sub *device_state_sub;
+ 
+@@ -1190,6 +1192,7 @@
+ 
+ static void update_realtime_members(struct call_queue *q);
+ static int set_member_paused(const char *queuename, const char *interface, const char *reason, int paused);
++static int play_file(struct ast_channel *chan, const char *filename, int ringing, char *moh);
+ 
+ static void queue_transfer_fixup(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan); 
+ /*! \brief sets the QUEUESTATUS channel variable */
+@@ -2627,29 +2630,8 @@
+ 	return res;
+ }
+ 
+-static int play_file(struct ast_channel *chan, const char *filename)
+-{
+-	int res;
++void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata);
+ 
+-	if (ast_strlen_zero(filename)) {
+-		return 0;
+-	}
+-
+-	if (!ast_fileexists(filename, NULL, chan->language)) {
+-		return 0;
+-	}
+-
+-	ast_stopstream(chan);
+-
+-	res = ast_streamfile(chan, filename, chan->language);
+-	if (!res)
+-		res = ast_waitstream(chan, AST_DIGIT_ANY);
+-
+-	ast_stopstream(chan);
+-
+-	return res;
+-}
+-
+ /*!
+  * \brief Check for valid exit from queue via goto
+  * \retval 0 if failure
+@@ -2681,7 +2663,7 @@
+ 
+ 	/* We have an exact match */
+ 	if (!ast_goto_if_exists(qe->chan, qe->context, qe->digits, 1)) {
+-		qe->valid_digits = 1;
++		qe->valid_digits = 1; /* there it is, the only indication */
+ 		/* Return 1 on a successful goto */
+ 		return 1;
+ 	}
+@@ -2704,11 +2686,12 @@
+ 	if ((qe->last_pos_said == qe->pos) && ((now - qe->last_pos) < qe->parent->announcefrequency))
+ 		return 0;
+ 
+-	if (ringing) {
+-		ast_indicate(qe->chan,-1);
+-	} else {
+-		ast_moh_stop(qe->chan);
+-	}
++	/* Commented out by old Olle patch */
++	/* if (ringing) { */
++	/* 	ast_indicate(qe->chan,-1); */
++	/* } else { */
++	/* 	ast_moh_stop(qe->chan); */
++	/* } */
+ 
+ 	if (qe->parent->announceposition == ANNOUNCEPOSITION_YES ||
+ 		qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN ||
+@@ -2720,7 +2703,7 @@
+ 	if (announceposition == 1) {
+ 		/* Say we're next, if we are */
+ 		if (qe->pos == 1) {
+-			res = play_file(qe->chan, qe->parent->sound_next);
++			res = play_file(qe->chan, qe->parent->sound_next, ringing, NULL);
+ 			if (res)
+ 				goto playout;
+ 			else
+@@ -2728,7 +2711,7 @@
+ 		} else {
+ 			if (qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN && qe->pos > qe->parent->announcepositionlimit){
+ 				/* More than Case*/
+-				res = play_file(qe->chan, qe->parent->queue_quantity1);
++				res = play_file(qe->chan, qe->parent->queue_quantity1, ringing, NULL);
+ 				if (res)
+ 					goto playout;
+ 				res = ast_say_number(qe->chan, qe->parent->announcepositionlimit, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
+@@ -2736,7 +2719,7 @@
+ 					goto playout;
+ 			} else {
+ 				/* Normal Case */
+-				res = play_file(qe->chan, qe->parent->sound_thereare);
++				res = play_file(qe->chan, qe->parent->sound_thereare, ringing, NULL);
+ 				if (res)
+ 					goto playout;
+ 				res = ast_say_number(qe->chan, qe->pos, AST_DIGIT_ANY, qe->chan->language, NULL); /* Needs gender */
+@@ -2745,11 +2728,11 @@
+ 			}
+ 			if (qe->parent->announceposition == ANNOUNCEPOSITION_MORE_THAN && qe->pos > qe->parent->announcepositionlimit){
+ 				/* More than Case*/
+-				res = play_file(qe->chan, qe->parent->queue_quantity2);
++				res = play_file(qe->chan, qe->parent->queue_quantity2, ringing, NULL);
+ 				if (res)
+ 					goto playout;
+ 			} else {
+-				res = play_file(qe->chan, qe->parent->sound_calls);
++				res = play_file(qe->chan, qe->parent->sound_calls, ringing, NULL);
+ 				if (res)
+ 					goto playout;
+ 			}
+@@ -2770,10 +2753,10 @@
+ 
+ 	/* If the hold time is >1 min, if it's enabled, and if it's not
+ 	   supposed to be only once and we have already said it, say it */
+-    if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
+-        ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
+-        !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
+-		res = play_file(qe->chan, qe->parent->sound_holdtime);
++	if ((avgholdmins+avgholdsecs) > 0 && qe->parent->announceholdtime &&
++       	 ((qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE && !qe->last_pos) ||
++       	 !(qe->parent->announceholdtime == ANNOUNCEHOLDTIME_ONCE))) {
++		res = play_file(qe->chan, qe->parent->sound_holdtime,ringing,NULL);
+ 		if (res)
+ 			goto playout;
+ 
+@@ -2783,11 +2766,11 @@
+ 				goto playout;
+ 
+ 			if (avgholdmins == 1) {
+-				res = play_file(qe->chan, qe->parent->sound_minute);
++				res = play_file(qe->chan, qe->parent->sound_minute, ringing, NULL);
+ 				if (res)
+ 					goto playout;
+ 			} else {
+-				res = play_file(qe->chan, qe->parent->sound_minutes);
++				res = play_file(qe->chan, qe->parent->sound_minutes, ringing, NULL);
+ 				if (res)
+ 					goto playout;
+ 			}
+@@ -2797,7 +2780,7 @@
+ 			if (res)
+ 				goto playout;
+ 
+-			res = play_file(qe->chan, qe->parent->sound_seconds);
++			res = play_file(qe->chan, qe->parent->sound_seconds, ringing, NULL);
+ 			if (res)
+ 				goto playout;
+ 		}
+@@ -2811,11 +2794,11 @@
+ 			qe->chan->name, qe->parent->name, qe->pos);
+ 	}
+ 	if (say_thanks) {
+-		res = play_file(qe->chan, qe->parent->sound_thanks);
++		res = play_file(qe->chan, qe->parent->sound_thanks, ringing, NULL);
+ 	}
+ playout:
+ 
+-	if ((res > 0 && !valid_exit(qe, res)))
++	if (res > 0) /* in other words, ignore any play_file problems... */
+ 		res = 0;
+ 
+ 	/* Set our last_pos indicators */
+@@ -2823,13 +2806,18 @@
+ 	qe->last_pos_said = qe->pos;
+ 
+ 	/* Don't restart music on hold if we're about to exit the caller from the queue */
+-	if (!res) {
++	/* Next section commented out by old Olle patch */
++	/*	if (!res) {
+ 		if (ringing) {
+ 			ast_indicate(qe->chan, AST_CONTROL_RINGING);
+ 		} else {
+ 			ast_moh_start(qe->chan, qe->moh, NULL);
+ 		}
+-	}
++	} */
++	/* it used to be, that we'd fire up the MOH/Indication at this point;
++	   now, play_file handles those details; it no longer waits for any
++	   user input... so no questions about valid_exit().
++	*/
+ 	return res;
+ }
+ 
+@@ -3480,12 +3468,6 @@
+ 	if ((now - qe->last_periodic_announce_time) < qe->parent->periodicannouncefrequency)
+ 		return 0;
+ 
+-	/* Stop the music on hold so we can play our own file */
+-	if (ringing)
+-		ast_indicate(qe->chan,-1);
+-	else
+-		ast_moh_stop(qe->chan);
+-
+ 	ast_verb(3, "Playing periodic announcement\n");
+ 	
+ 	if (qe->parent->randomperiodicannounce && qe->parent->numperiodicannounce) {
+@@ -3496,19 +3478,12 @@
+ 	}
+ 	
+ 	/* play the announcement */
+-	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]));
++	res = play_file(qe->chan, ast_str_buffer(qe->parent->sound_periodicannounce[qe->last_periodic_announce_sound]), ringing, qe->moh);
+ 
+-	if (res > 0 && !valid_exit(qe, res))
+-		res = 0;
++	/* we no longer check for valid_exit(), as we simply
++	   start the playback and let the autoservice thread
++	   keep it going */
+ 
+-	/* Resume Music on Hold if the caller is going to stay in the queue */
+-	if (!res) {
+-		if (ringing)
+-			ast_indicate(qe->chan, AST_CONTROL_RINGING);
+-		else
+-			ast_moh_start(qe->chan, qe->moh, NULL);
+-	}
+-
+ 	/* update last_periodic_announce_time */
+ 	if (qe->parent->relativeperiodicannounce)
+ 		time(&qe->last_periodic_announce_time);
+@@ -3646,11 +3621,16 @@
+ #endif
+ 
+ 	while ((*to = ast_remaining_ms(start_time_tv, orig)) && !peer) {
++
+ 		int numlines, retry, pos = 1;
+ 		struct ast_channel *watchers[AST_MAX_WATCHERS];
+ 		watchers[0] = in;
+ 		start = NULL;
+ 
++		if (background_prompts) {
++			play_file(qe->chan, NULL, 0, qe->moh);
++		}
++
+ 		for (retry = 0; retry < 2; retry++) {
+ 			numlines = 0;
+ 			for (o = outgoing; o; o = o->q_next) { /* Keep track of important channels */
+@@ -4196,6 +4176,10 @@
+ 	/* This is the holding pen for callers 2 through maxlen */
+ 	for (;;) {
+ 
++		if (background_prompts) {
++			play_file(qe->chan, NULL, 0, qe->moh);
++		}
++
+ 		if (is_our_turn(qe))
+ 			break;
+ 
+@@ -4217,9 +4201,9 @@
+ 		}
+ 
+ 		/* Make a position announcement, if enabled */
+-		if (qe->parent->announcefrequency &&
+-			(res = say_position(qe,ringing)))
++		if (qe->parent->announcefrequency && (res = say_position(qe,ringing))) {
+ 			break;
++		}
+ 
+ 		/* If we have timed out, break out */
+ 		if (qe->expire && (time(NULL) >= qe->expire)) {
+@@ -4447,6 +4431,7 @@
+ 	.destroy = queue_transfer_destroy,
+ };
+ 
++
+ /*! \brief Log an attended transfer when a queue caller channel is masqueraded
+  *
+  * When a caller is masqueraded, we want to log a transfer. Fixup time is the closest we can come to when
+@@ -4903,39 +4888,41 @@
+ 			int res2;
+ 
+ 			res2 = ast_autoservice_start(qe->chan);
+-			if (!res2) {
+-				if (qe->parent->memberdelay) {
+-					ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
+-					res2 = ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
++			if (qe->parent->memberdelay) {
++				ast_log(LOG_NOTICE, "Delaying member connect for %d seconds\n", qe->parent->memberdelay);
++				res2 |= ast_safe_sleep(peer, qe->parent->memberdelay * 1000);
++			}
++			if (!res2 && announce) {
++				if (play_file(peer, announce, ringing, qe->moh) < 0) {
++					ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", announce, peer->name);
+ 				}
+-				if (!res2 && announce) {
+-					if (play_file(peer, announce) < 0) {
+-						ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", announce, peer->name);
+-					}
+-				}
+-				if (!res2 && qe->parent->reportholdtime) {
+-					if (!play_file(peer, qe->parent->sound_reporthold)) {
+-						int holdtime, holdtimesecs;
++			}
++			if (!res2 && qe->parent->reportholdtime) {
++				int res3;
++				res3 = play_file(peer, qe->parent->sound_reporthold, ringing, qe->moh);
++				if (!res3) {
++					int holdtime, holdtimesecs;
+ 
+-						time(&now);
+-						holdtime = abs((now - qe->start) / 60);
+-						holdtimesecs = abs((now - qe->start) % 60);
+-						if (holdtime > 0) {
+-							ast_say_number(peer, holdtime, AST_DIGIT_ANY, peer->language, NULL);
+-							if (play_file(peer, qe->parent->sound_minutes) < 0) {
+-								ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_minutes, peer->name);
+-							}
++					time(&now);
++					holdtime = abs((now - qe->start) / 60);
++					holdtimesecs = abs((now - qe->start) % 60);
++					if (holdtime > 0) {
++						ast_say_number(peer, holdtime, AST_DIGIT_ANY, peer->language, NULL);
++						if (play_file(peer, qe->parent->sound_minutes, ringing, qe->moh) < 0) {
++							ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_minutes, peer->name);
+ 						}
+-						if (holdtimesecs > 1) {
+-							ast_say_number(peer, holdtimesecs, AST_DIGIT_ANY, peer->language, NULL);
+-							if (play_file(peer, qe->parent->sound_seconds) < 0) {
+-								ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_seconds, peer->name);
+-							}
++					}
++					if (holdtimesecs > 1) {
++						ast_say_number(peer, holdtimesecs, AST_DIGIT_ANY, peer->language, NULL);
++						if (play_file(peer, qe->parent->sound_seconds, ringing, qe->moh) < 0) {
++							ast_log(LOG_ERROR, "play_file failed for '%s' on %s\n", qe->parent->sound_seconds, peer->name);
+ 						}
+ 					}
+ 				}
+ 				ast_autoservice_stop(qe->chan);
+ 			}
++
++
+ 			if (ast_check_hangup(peer)) {
+ 				/* Agent must have hung up */
+ 				ast_log(LOG_WARNING, "Agent on %s hungup on the customer.\n", peer->name);
+@@ -4964,10 +4951,11 @@
+ 			}
+ 		}
+ 		/* Stop music on hold */
+-		if (ringing)
++		if (ringing) {
+ 			ast_indicate(qe->chan,-1);
+-		else
++		} else {
+ 			ast_moh_stop(qe->chan);
++		}
+ 		/* If appropriate, log that we have a destination channel */
+ 		if (qe->chan->cdr)
+ 			ast_cdr_setdestchan(qe->chan->cdr, peer->name);
+@@ -4985,7 +4973,7 @@
+ 
+ 		/* Play announcement to the caller telling it's his turn if defined */
+ 		if (!ast_strlen_zero(qe->parent->sound_callerannounce)) {
+-			if (play_file(qe->chan, qe->parent->sound_callerannounce))
++			if (play_file(qe->chan, qe->parent->sound_callerannounce,ringing,qe->moh))
+ 				ast_log(LOG_WARNING, "Announcement file '%s' is unavailable, continuing anyway...\n", qe->parent->sound_callerannounce);
+ 		}
+ 
+@@ -5152,7 +5140,7 @@
+ 			
+ 			res = ast_autoservice_start(qe->chan);
+ 			if (res) {
+-				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel\n");
++				ast_log(LOG_ERROR, "Unable to start autoservice on calling channel %s\n", qe->chan->name);
+ 				res = -1;
+ 			}
+ 			
+@@ -5373,8 +5361,9 @@
+ {
+ 	/* Don't need to hold the lock while we setup the outgoing calls */
+ 	int retrywait = qe->parent->retry * 1000;
++	int res;
+ 
+-	int res = ast_waitfordigit(qe->chan, retrywait);
++	res = ast_waitfordigit(qe->chan, retrywait);
+ 	if (res > 0 && !valid_exit(qe, res))
+ 		res = 0;
+ 
+@@ -6064,6 +6053,326 @@
+ 	AST_LIST_UNLOCK(&rule_lists);
+ }
+ 
++/*! \brief Data structure for \ref play_file() channel frame generator */
++struct gen_state {
++	struct ast_channel *chan;
++	struct ast_filestream *stream;
++	int sample_queue;
++	char filename[512];
++	struct ast_queue_streamfile_info *aqsi;
++};
++
++
++/*! \brief Allocate generator data structures if needed 
++
++We don't really do anything here since we get the needed data as params.
++*/
++static void *gen_alloc(struct ast_channel *chan, void *params)
++{
++	struct gen_state *state = params;
++
++	ast_debug(3, "--- Allocating generator for %s\n", chan->name);
++	return state;
++}
++
++/*! \brief Close file stream used by generator */
++static void gen_closestream(struct gen_state *state)
++{
++	if (!state->stream) {
++		ast_debug(3, "--- No active stream to close.\n");
++		return;
++	}
++
++	ast_closestream(state->stream);
++	state->filename[0] = '\0';
++	state->chan->stream = NULL;
++	state->stream = NULL;
++	state->aqsi->now_playing = 0;	/* Important flag to indicate we are no longer playing on this channel */
++}
++
++/*! \brief Release generator on channel */
++static void gen_release(struct ast_channel *chan, void *data)
++{
++	struct gen_state *state = data;
++	ast_debug(3, "--- releasing stream \n");
++	if (!data) {
++		ast_debug(3, "--- No state??? \n");
++		return;
++	}
++	gen_closestream(state);
++	ast_free(state);
++}
++
++
++/*! \brief Read frames from file stream and return them to the generator \ref gen_generate() */
++static struct ast_frame *gen_readframe(struct gen_state *state)
++{
++	struct ast_frame *f = NULL;
++	if (state && state->chan) {
++		ast_debug(3, "... Generating frames for %s\n", state->chan->name);
++	} else {
++		ast_log(LOG_ERROR, "... no channel to generate frames for!\n");
++		return f;
++	}
++	if (ast_strlen_zero(state->filename)) {
++		ast_log(LOG_ERROR, ".... no file to read from?? Generator for %s\n", state->chan->name);
++		return f;
++	}
++
++	if (!state->stream) {
++		if (!(state->stream = ast_openstream_full(state->chan, state->filename, state->chan->language, 1))) {
++			ast_log(LOG_WARNING, "File '%s' could not be opened: %s\n", state->filename, strerror(errno));
++			return f;
++		}
++
++	}
++	f = ast_readframe(state->stream);
++
++	return f;
++}
++
++/*! \brief The actual generator that reads frames and sends them to the channel
++	While letting the queue app do it's thing.
++ */
++static int gen_generate(struct ast_channel *chan, void *data, int len, int samples)
++{
++	struct gen_state *state = data;
++	struct ast_frame *f = NULL;
++	int res = 0;
++
++	ast_debug(2, "***** Generating good old prompts for your benefit. Did I hear a thank you?\n");
++
++	if (!state) {
++		ast_log(LOG_ERROR, "---- Do not have a current state data structure\n");
++		return -1;
++	}
++	if (!state->chan) {
++		ast_log(LOG_ERROR, "... no channel to generate frames for!\n");
++		return -1;
++	}
++	
++	state->sample_queue += samples;
++	ast_debug(3, "--------->>>>> Generating %d samples - sample queue now %d  channel %s\n", samples, state->sample_queue, chan->name);
++
++	while (state->sample_queue > 0) {
++		if (!(f = gen_readframe(state))) {
++			ast_debug(3, "---- :-( Could not get more frames\n");
++			return -1;
++		}
++
++		res = ast_write(chan, f);
++		state->sample_queue -= f->samples;
++		ast_frfree(f);
++		if (res < 0) {
++			ast_log(LOG_WARNING, "Failed to write frame: %s\n", strerror(errno));
++			return -1;
++		}
++	}
++
++	return res;
++}
++
++/*! \brief Generator initialization structure for play_file */
++static struct ast_generator play_file_gen =
++{
++	alloc: gen_alloc,		/*! \ref gen_alloc() */
++	release: gen_release,		/*! \ref gen_release() */
++	generate: gen_generate,		/*! \ref gen_generate() */
++};
++
++/*! \brief Play queue updates in the background, being able to interrupt if an
++	agent becomes available.
++
++   To enable playing of a string of files, one after the other, and not have to wait
++   around for each one to finish before playing the next, instead we put them into
++   a list, which we insert at the tail.
++
++   Make sure to get things rolling with a plain play_file(), then use this
++   to queue up the others in sequence 
++
++   When called without a filename, we check if we have a list of files in the 
++   playlist. If so we start playing again. 
++*/
++static int play_file(struct ast_channel *chan, const char *filename, int ringing, char *moh)
++{
++	int res = 0;
++	struct ast_datastore *datastore;
++	struct ast_queue_streamfile_info *aqsi = NULL;
++	struct gen_state *generatordata;
++	struct ast_queue_streamfile_name *sfn = NULL;
++	char playfilename[512];
++	
++
++	if (!background_prompts) {
++		if (ast_strlen_zero(filename)) {
++			return 0;
++		}
++
++		if (!ast_fileexists(filename, NULL, chan->language)) {
++			return 0;
++		}
++
++		ast_stopstream(chan);
++
++		res = ast_streamfile(chan, filename, chan->language);
++		if (!res) {
++			res = ast_waitstream(chan, AST_DIGIT_ANY);
++		}
++
++		ast_stopstream(chan);
++		if (ringing) {
++                        ast_indicate(chan, AST_CONTROL_RINGING);
++                } else {
++                        ast_moh_start(chan, moh, NULL);
++		}
++
++		return res;
++	}
++
++	/* look up the datastore and the play_finished struct, and set appropriate values */
++	
++	ast_channel_lock(chan);
++	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) {
++		aqsi = datastore->data;
++		if (aqsi) {  /* copy this stuff into place */
++			aqsi->ringing = ringing;
++			if (moh) {
++				strcpy(aqsi->moh, moh);
++			}
++		}
++	} else {
++		ast_log(LOG_ERROR, "Can't find the ast_sound_ending datastore! on chan %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 1; /* Why continue, if I can't access the datastore & list? */
++	}
++	ast_channel_unlock(chan);
++	if (option_debug && !ast_strlen_zero(filename)) {
++		ast_debug(2, "---- Aqsi now playing: %s\n", aqsi->now_playing ? "true" : "false");
++	}
++	
++	if (aqsi->now_playing == 0) {
++		playfilename[0] = '\0';
++		if (ast_strlen_zero(filename)) {
++			/* take the first one if we have a playlist */
++			if (!AST_LIST_EMPTY(&aqsi->flist)) {
++				sfn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
++				ast_copy_string(playfilename, sfn->filename, sizeof(playfilename));
++				ast_free(sfn);
++				ast_debug(3, "--- No filename and not playing - selecting next file in playlist - %s\n", playfilename);
++			}
++			if (ast_strlen_zero(playfilename)) {
++				ast_debug(3, "--- empty queue... No filename and not currently playing\n");
++				if (ringing) {
++					ast_indicate(chan, AST_CONTROL_RINGING);
++				} else {
++					if (!ast_test_flag(chan, AST_FLAG_MOH)) {
++						ast_moh_start(chan, aqsi->qe->moh ? aqsi->qe->moh : NULL, NULL);
++					}
++				}
++				return 0;
++			}
++		} else {
++			ast_copy_string(playfilename, filename, sizeof(playfilename));
++		}
++	} else {
++		if (ast_strlen_zero(filename)) {
++			ast_debug(3, "--- just checking... No filename and currently playing\n");
++			return 0;
++		}
++	}
++
++	/* If the filename doesn't exist, do not queue it up */
++	if (!ast_strlen_zero(filename)) {
++		if (!ast_fileexists(filename, NULL, chan->language)) {
++			ast_log(LOG_ERROR, "Filename %s does not exist, not queued for playing out on chan %s\n", filename, chan->name);
++			return 0;
++		}
++	}
++
++	AST_LIST_LOCK(&aqsi->flist);
++	
++	if (aqsi->now_playing) {
++		struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
++		fn->filename = ast_strdup(filename);
++		if (!fn || ! fn->filename) {
++			ast_log(LOG_ERROR, "Error allocating memory.\n");
++			AST_LIST_UNLOCK(&aqsi->flist);
++			return 1;
++		} 
++		ast_debug(3, "    queued sound file %s for playing on chan %s\n", filename, chan->name);
++		
++		/* link the struct into the current ast_queue_streamfile_info struct */
++		AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list); 
++		/* in this case, nothing else to do, just insert the new file at the end of the list */
++	} else {
++		/* Start playing */
++
++		/* Stop the music on hold so we can play our own file */
++		if (ringing) {
++			ast_debug(3, "Stopping Indication on %s\n", chan->name);
++			ast_indicate(chan,-1);
++		} else {
++			ast_debug(3, "Stopping MOH on chan %s\n", chan->name);
++			ast_moh_stop(chan);
++		}
++			
++		ast_debug(3, "Stopping Streaming on chan %s\n", chan->name);
++		ast_stopstream(chan);
++		
++		ast_debug(3, "Autoservice stop on chan %s\n", chan->name);
++		ast_autoservice_stop(chan);
++
++		/* Create generator to start playing audio without waiting */
++		generatordata = ast_calloc(1, sizeof(struct gen_state));
++		if (!generatordata) {
++			ast_log(LOG_ERROR, "Can't allocate generator input\n");
++			AST_LIST_UNLOCK(&aqsi->flist);
++			return 1;
++		}
++		ast_copy_string(generatordata->filename, playfilename, sizeof(generatordata->filename));
++		generatordata->chan = chan;
++		generatordata->aqsi = aqsi;
++
++		/* Starting new generator on channel. */
++		if (ast_activate_generator(chan, &play_file_gen, generatordata)) {
++			ast_log(LOG_ERROR, "Not playing requested prompt %s. Generator failed on %s.\n", playfilename, chan->name);
++			/* oops, the current file has problems */
++			/* restore the moh */
++			if (ringing) {
++				ast_indicate(chan, AST_CONTROL_RINGING);
++			} else {
++				ast_moh_start(chan, aqsi->qe->moh, NULL);
++			}
++			AST_LIST_UNLOCK(&aqsi->flist);
++			return 1;
++		} else {
++			ast_debug(3, "--- Generator Starting to play file %s \n", playfilename);
++		}
++		aqsi->now_playing = 1; /* We have begun playback */
++	}
++	
++	AST_LIST_UNLOCK(&aqsi->flist);
++	ast_waitfor(chan, 1);
++	
++	return 0; /* non-zero most likely means the file doesn't exist */
++}
++
++/*! \brief This routine propably will only need to be called at module unload time */
++void destroy_streamfile_info(struct ast_queue_streamfile_info *playdata)
++{
++	struct ast_queue_streamfile_name *fn;
++	AST_LIST_LOCK(&playdata->flist);
++	while (!AST_LIST_EMPTY(&playdata->flist)) {
++		fn = AST_LIST_REMOVE_HEAD(&playdata->flist, list);
++		ast_free(fn->filename);
++
++		ast_free(fn);
++	}
++	AST_LIST_UNLOCK(&playdata->flist);
++	AST_LIST_HEAD_DESTROY(&playdata->flist);
++	ast_free(playdata);
++}
++
+ /*!\brief The starting point for all queue calls
+  *
+  * The process involved here is to 
+@@ -6087,6 +6396,9 @@
+ 	int qcontinue = 0;
+ 	int max_penalty, min_penalty;
+ 	enum queue_result reason = QUEUE_UNKNOWN;
++	struct ast_datastore *datastore = NULL;
++	struct ast_queue_streamfile_info *aqsi = ast_calloc(1, sizeof(struct ast_queue_streamfile_info));
++
+ 	/* whether to exit Queue application after the timeout hits */
+ 	int tries = 0;
+ 	int noption = 0;
+@@ -6209,6 +6521,24 @@
+ 		S_OR(args.url, ""),
+ 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, ""),
+ 		qe.opos);
++
++	/* Add the background music datastore for this channel */
++	if (background_prompts) {
++		datastore = ast_datastore_alloc(ast_sound_ending(), NULL);
++		if (datastore && aqsi) {
++			/* If memory allocation worked out */
++			aqsi->qe = &qe;
++			aqsi->chan = chan;
++			aqsi->ringing = ringing;
++			aqsi->now_playing = 0;
++			ast_copy_string(aqsi->moh, qe.moh, sizeof(aqsi->moh));
++			AST_LIST_HEAD_INIT(&aqsi->flist);
++			datastore->data = aqsi;
++	
++			ast_channel_datastore_add(chan, datastore);
++		}
++	}
++
+ 	copy_rules(&qe, args.rule);
+ 	qe.pr = AST_LIST_FIRST(&qe.qe_rules);
+ check_turns:
+@@ -6242,6 +6572,9 @@
+ 			break;
+ 		}
+ 
++		if (background_prompts) {
++			play_file(qe.chan, NULL, ringing, qe.moh);	
++		}
+ 		if (makeannouncement) {
+ 			/* Make a position announcement, if enabled */
+ 			if (qe.parent->announcefrequency)
+@@ -6324,6 +6657,12 @@
+ 	}
+ 
+ stop:
++	/* remove the playdata datastore */
++	ast_channel_datastore_remove(chan, datastore);
++	
++    /* get rid of the datastore for non-wait sound playing */
++	destroy_streamfile_info(aqsi);
++	
+ 	if (res) {
+ 		if (res < 0) {
+ 			if (!qe.handled) {
+@@ -6342,17 +6681,6 @@
+ 		}
+ 	}
+ 
+-	/* Don't allow return code > 0 */
+-	if (res >= 0) {
+-		res = 0;	
+-		if (ringing) {
+-			ast_indicate(chan, -1);
+-		} else {
+-			ast_moh_stop(chan);
+-		}			
+-		ast_stopstream(chan);
+-	}
+-
+ 	set_queue_variables(qe.parent, qe.chan);
+ 
+ 	leave_queue(&qe);
+@@ -6816,6 +7144,10 @@
+ 	update_cdr = 0;
+ 	if ((general_val = ast_variable_retrieve(cfg, "general", "updatecdr")))
+ 		update_cdr = ast_true(general_val);
++	background_prompts = 0;
++	if ((general_val = ast_variable_retrieve(cfg, "general", "background_prompts"))) {
++		background_prompts = ast_true(general_val);
++	}
+ 	shared_lastcall = 0;
+ 	if ((general_val = ast_variable_retrieve(cfg, "general", "shared_lastcall")))
+ 		shared_lastcall = ast_true(general_val);
+Index: include/asterisk/channel.h
+===================================================================
+--- include/asterisk/channel.h	(.../branches/1.8)	(revision 383005)
++++ include/asterisk/channel.h	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -3518,6 +3518,28 @@
+  * \param size The size of the buffer to write to
+  */
+ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
++
++/*! \brief Asynchronous filestream playing playlist
++  Used (at least at first) in app_queue - in the ast_queue_streamfile_info channel datastore 
++*/
++struct ast_queue_streamfile_name {
++  char *filename;
++  AST_LIST_ENTRY(ast_queue_streamfile_name) list;
++};
++
++/*! \brief Information data about background playing of prompts */
++struct ast_queue_streamfile_info {
++  void (*digitHandler)(void *data, char digit); /* a func ptr to the handler that will do what needs doing when the streaming of a soundfile is finished */
++  struct queue_ent *qe;
++  AST_LIST_HEAD(,ast_queue_streamfile_name) flist;   /* a list of other sound files that need to be played in sequence */
++  struct ast_channel *chan;
++  int ringing;
++  char moh[80];
++  int now_playing;
++  int valid_exit;  /* if valid_exit() in app_queue is true */
++};
++
++
+ #if defined(__cplusplus) || defined(c_plusplus)
+ }
+ #endif
+Index: include/asterisk/file.h
+===================================================================
+--- include/asterisk/file.h	(.../branches/1.8)	(revision 383005)
++++ include/asterisk/file.h	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -40,6 +40,8 @@
+ struct ast_filestream;
+ struct ast_format;
+ 
++const struct ast_datastore_info *ast_sound_ending(void);
++
+ /*! The maximum number of formats we expect to see in a format string */
+ #define AST_MAX_FORMATS 10
+ 
+@@ -336,6 +338,7 @@
+  */
+ char *ast_format_str_reduce(char *fmts);
+ 
++
+ #if defined(__cplusplus) || defined(c_plusplus)
+ }
+ #endif
+Index: main/channel.c
+===================================================================
+--- main/channel.c	(.../branches/1.8)	(revision 383005)
++++ main/channel.c	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -3090,10 +3090,12 @@
+ 
+ void ast_deactivate_generator(struct ast_channel *chan)
+ {
++	ast_debug(3, "ast_deactivate_generator() called on chan %s\n", chan->name);
+ 	ast_channel_lock(chan);
+ 	if (chan->generatordata) {
+ 		if (chan->generator && chan->generator->release)
+ 			chan->generator->release(chan, chan->generatordata);
++		ast_debug(3,"removing the generator stuff on chan %s\n", chan->name);
+ 		chan->generatordata = NULL;
+ 		chan->generator = NULL;
+ 		ast_channel_set_fd(chan, AST_GENERATOR_FD, -1);
+@@ -3101,6 +3103,7 @@
+ 		ast_settimeout(chan, 0, NULL, NULL);
+ 	}
+ 	ast_channel_unlock(chan);
++	ast_debug(3, "ast_deactivate_generator() done on chan %s\n", chan->name);
+ }
+ 
+ static int generator_force(const void *data)
+@@ -3118,8 +3121,11 @@
+ 		generate = chan->generator->generate;
+ 	ast_channel_unlock(chan);
+ 
+-	if (!tmp || !generate)
++	ast_debug(3, "GENERATOR_FORCE: generate() CALLED res=%d on chan %s\n", res, chan->name);
++	if (!tmp || !generate) {
++		ast_log(LOG_ERROR, "Can't find generator data or generator function \n");
+ 		return 0;
++	}
+ 
+ 	res = generate(chan, tmp, 0, ast_format_rate(chan->writeformat & AST_FORMAT_AUDIO_MASK) / 50);
+ 
+@@ -3130,7 +3136,7 @@
+ 	ast_channel_unlock(chan);
+ 
+ 	if (res) {
+-		ast_debug(1, "Auto-deactivating generator\n");
++		ast_debug(1, "Auto-deactivating generator on chan %s\n", chan->name);
+ 		ast_deactivate_generator(chan);
+ 	}
+ 
+@@ -3148,6 +3154,7 @@
+ 		chan->generatordata = NULL;
+ 	}
+ 	if (gen->alloc && !(chan->generatordata = gen->alloc(chan, params))) {
++		ast_debug(3,"Generator Data is -1\n");
+ 		res = -1;
+ 	}
+ 	if (!res) {
+@@ -3694,6 +3701,7 @@
+ 
+ static void ast_read_generator_actions(struct ast_channel *chan, struct ast_frame *f)
+ {
++	ast_debug(3, "----- Jost poking around. Have a happy life. \n");
+ 	if (chan->generator && chan->generator->generate && chan->generatordata &&  !ast_internal_timing_enabled(chan)) {
+ 		void *tmp = chan->generatordata;
+ 		int (*generate)(struct ast_channel *chan, void *tmp, int datalen, int samples) = chan->generator->generate;
+@@ -4295,6 +4303,7 @@
+ 
+ 				/* Run generator sitting on the line if timing device not available
+ 				* and synchronous generation of outgoing frames is necessary       */
++				ast_debug(3, ">>>>>>>>> just another silly message. We are generating, man! \n");
+ 				ast_read_generator_actions(chan, f);
+ 			}
+ 			break;
+Index: main/features.c
+===================================================================
+--- main/features.c	(.../branches/1.8)	(revision 383005)
++++ main/features.c	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -1598,10 +1598,13 @@
+ 	ast_debug(4, "AMI ParkedCall Channel: %s\n", chan->name);
+ 	ast_debug(4, "AMI ParkedCall From: %s\n", event_from);
+ 
++/* OEJ */
++#ifdef HAVE_ADSI
+ 	if (peer && adsipark && ast_adsi_available(peer)) {
+ 		adsi_announce_park(peer, pu->parkingexten);	/* Only supports parking numbers */
+ 		ast_adsi_unload_session(peer);
+ 	}
++#endif
+ 
+ 	snprintf(app_data, sizeof(app_data), "%s,%s", pu->parkingexten,
+ 		pu->parkinglot->name);
+Index: main/asterisk.dynamics
+===================================================================
+--- main/asterisk.dynamics	(.../branches/1.8)	(revision 383005)
++++ main/asterisk.dynamics	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -1,4 +1,5 @@
+ {
++	*ast_sound_*;
+ 	*ast_adsi_*;
+ 	*ast_agi_*;
+ 	*ast_pktccops_*;
+Index: main/say.c
+===================================================================
+--- main/say.c	(.../branches/1.8)	(revision 383005)
++++ main/say.c	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -54,12 +54,13 @@
+ #include "asterisk/lock.h"
+ #include "asterisk/localtime.h"
+ #include "asterisk/utils.h"
++#include "asterisk/musiconhold.h"
+ #include "asterisk/app.h"
+ 
+ /* Forward declaration */
+ static int wait_file(struct ast_channel *chan, const char *ints, const char *file, const char *lang);
++static int wait_file_full(struct ast_channel *chan, const char *ints, const char *file, const char *lang, int audiofd, int ctrlfd);
+ 
+-
+ static int say_character_str_full(struct ast_channel *chan, const char *str, const char *ints, const char *lang, int audiofd, int ctrlfd)
+ {
+ 	const char *fn;
+@@ -127,14 +128,7 @@
+ 		}
+ 		if ((fn && ast_fileexists(fn, NULL, lang) > 0) ||
+ 			(snprintf(asciibuf + 13, sizeof(asciibuf) - 13, "%d", str[num]) > 0 && ast_fileexists(asciibuf, NULL, lang) > 0 && (fn = asciibuf))) {
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, lang, audiofd, ctrlfd);
+ 		}
+ 		num++;
+ 	}
+@@ -207,14 +201,7 @@
+ 			fn = fnbuf;
+ 		}
+ 		if (fn && ast_fileexists(fn, NULL, lang) > 0) {
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, lang, audiofd, ctrlfd);
+ 		}
+ 		num++;
+ 	}
+@@ -257,14 +244,7 @@
+ 			break;
+ 		}
+ 		if (fn && ast_fileexists(fn, NULL, lang) > 0) {
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, lang, audiofd, ctrlfd);
+ 		}
+ 		num++;
+ 	}
+@@ -423,13 +403,88 @@
+ static int ast_say_datetime_from_now_ka(struct ast_channel *chan, time_t t, const char *ints, const char *lang);
+ static int ast_say_datetime_from_now_he(struct ast_channel *chan, time_t t, const char *ints, const char *lang);
+ 
+-static int wait_file(struct ast_channel *chan, const char *ints, const char *file, const char *lang) 
++static int wait_file(struct ast_channel *chan, const char *ints, const char *file, const char *lang)
+ {
++	return wait_file_full(chan, ints, file, lang, -1, -1);
++}
++
++/*! \brief this routine to provide \ref wait_file() capability for those with audiofd, ctrlfd  */
++static int wait_file_full(struct ast_channel *chan, const char *ints, const char *file, const char *lang, int audiofd, int ctrlfd) 
++{
+ 	int res;
+-	if ((res = ast_streamfile(chan, file, lang)))
++	struct ast_datastore *datastore;
++
++	/* if a datastore is present, we are in the queue app (perhaps others in time)
++	   and don't want to wait around for the sounds to finish playing */
++
++	if ((datastore = ast_channel_datastore_find(chan, ast_sound_ending(), NULL))) { /* app_queue wants to schedule this instead of play & wait */
++		struct ast_queue_streamfile_info *aqsi = datastore->data;
++		if (!aqsi) {
++			return 0;
++		}
++		AST_LIST_LOCK(&aqsi->flist);
++		if (aqsi->now_playing) {
++			struct ast_queue_streamfile_name *fn = ast_calloc(1, sizeof(*fn));
++			
++			fn->filename = ast_strdup(file);
++			ast_debug(3, "----> Adding file %s to playlist for %s\n", file, chan->name);
++			
++			/* link the struct into the current ast_queue_streamfile_info struct */
++			AST_LIST_INSERT_TAIL(&aqsi->flist, fn, list);
++		} else {
++			/* if not playing, then start playing this file */
++			if (aqsi->ringing) {
++				ast_indicate(aqsi->chan,-1);
++			} else {
++				ast_moh_stop(aqsi->chan);
++			}
++				
++			ast_stopstream(aqsi->chan);
++				
++			ast_autoservice_stop(aqsi->chan);
++				
++			ast_debug(3, "Starting to stream %s\n", file);
++			res = ast_streamfile(aqsi->chan, file, aqsi->chan->language); /* begin the streaming */
++				
++			while (res && !AST_LIST_EMPTY(&aqsi->flist)) {
++				/* really, how could this even be possible?  just in case.... */
++				struct ast_queue_streamfile_name *fn;
++		
++				fn = AST_LIST_REMOVE_HEAD(&aqsi->flist, list);
++					
++				ast_debug(3,"Start streaming file %s\n", fn->filename);
++				res = ast_streamfile(aqsi->chan, fn->filename, aqsi->chan->language);
++			}
++				
++				
++			if (res) {
++				/* oops, the current file has problems */
++				/* restore the moh */
++				if (aqsi->ringing) {
++					ast_indicate(aqsi->chan, AST_CONTROL_RINGING);
++				} else {
++					ast_moh_start(aqsi->chan, aqsi->moh, NULL);
++				}
++				AST_LIST_UNLOCK(&aqsi->flist);
++				return 1;
++			}
++			aqsi->now_playing = 1; /* We have begun playback */
++			ast_autoservice_start(aqsi->chan); /* this will let the sound file play in a different thread */
++		}
++		AST_LIST_UNLOCK(&aqsi->flist);
++		return 0;
++		
++	} 
++
++	/* otherwise, exactly business as usual */
++	if ((res = ast_streamfile(chan, file, lang))) {
+ 		ast_log(LOG_WARNING, "Unable to play message %s\n", file);
+-	if (!res)
++	}
++	if ((audiofd  > -1) && (ctrlfd > -1)) {
++		res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
++	} else {
+ 		res = ast_waitstream(chan, ints);
++	}
+ 	return res;
+ }
+ 
+@@ -565,13 +620,7 @@
+ 			}
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -687,14 +736,7 @@
+ 			num -= left * (exp10_int(length-1));
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) {
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				} else {
+-					res = ast_waitstream(chan, ints);
+-				}
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res; 
+@@ -796,13 +838,7 @@
+ 			}
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) 
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else  
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -925,21 +961,11 @@
+ 			res = -1;
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) 
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else  
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 			if (!res) {
+-				if (strlen(fna) != 0 && !ast_streamfile(chan, fna, language)) {
+-					if ((audiofd > -1) && (ctrlfd > -1))
+-						res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-					else
+-						res = ast_waitstream(chan, ints);
++				if (strlen(fna)) {
++					res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 				}
+-				ast_stopstream(chan);
+ 				strcpy(fna, "");
+ 			}
+ 		}
+@@ -1011,13 +1037,7 @@
+ 		}
+ 		
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) 
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else  
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -1115,14 +1135,7 @@
+ 		}
+ 
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
+-
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 			
+ 	}
+@@ -1207,13 +1220,7 @@
+ 			res = -1;
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -1378,14 +1385,7 @@
+ 		}
+ 		tmpnum = 0;
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) {
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				} else {
+-					res = ast_waitstream(chan, ints);
+-				}
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -1460,13 +1460,7 @@
+ 			}
+ 		}
+ 		if (!res) {
+-			if(!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -1613,13 +1607,7 @@
+ 				}
+ 			}
+ 			if (!res) {
+-				if (!ast_streamfile(chan, fn, language)) {
+-					if ((audiofd > -1) && (ctrlfd > -1))
+-						res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-					else
+-						res = ast_waitstream(chan, ints);
+-				}
+-				ast_stopstream(chan);
++				res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 			}
+ 		}
+ 	return res;
+@@ -1704,13 +1692,7 @@
+ 		}
+ 
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -1796,13 +1778,7 @@
+ 		}
+ 		
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) 
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else  
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -1843,13 +1819,7 @@
+ 	char file_name[255] = "digits/";
+ 	strcat(file_name, fn);
+ 	ast_debug(1, "Trying to play: %s\n", file_name);
+-	if (!ast_streamfile(chan, file_name, language)) {
+-		if ((audiofd > -1) && (ctrlfd > -1))
+-			ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-		else
+-			ast_waitstream(chan, ints);
+-	}
+-	ast_stopstream(chan);
++	wait_file_full(chan, ints, file_name, language, audiofd, ctrlfd);
+ }
+ 
+ static void powiedz(struct ast_channel *chan, const char *language, int audiofd, int ctrlfd, const char *ints, odmiana *odm, int rzad, int i)
+@@ -2185,17 +2155,10 @@
+ 			res = -1;
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);	
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 		if (!res && playh) {
+ 			res = wait_file(chan, ints, "digits/pt-e", language);
+-			ast_stopstream(chan);
+ 			playh = 0;
+ 		}
+ 	}
+@@ -2268,15 +2231,7 @@
+ 		}
+ 
+ 		if (!ast_streamfile(chan, fn, language)) {
+-			if ((audiofd > -1) && (ctrlfd > -1)) {
+-				res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-			} else {
+-				res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
+-			if (res) {
+-				return res;
+-			}
++		  res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 		start = 0;
+ 	}
+@@ -2381,13 +2336,7 @@
+ 				}
+ 			}
+ 			if (!res) {
+-				if (!ast_streamfile(chan, fn, language)) {
+-					if ((audiofd > -1) && (ctrlfd > -1))
+-						res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-					else
+-						res = ast_waitstream(chan, ints);
+-				}
+-				ast_stopstream(chan);
++				res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 			}
+ 	}
+ 	return res;
+@@ -2548,13 +2497,7 @@
+ 			res = -1;
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -2617,13 +2560,7 @@
+ 			ast_copy_string(fn, "digits/larn", sizeof(fn));
+ 		}
+ 		if (!res) {
+-			if(!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd  > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -2830,14 +2767,7 @@
+ 		}
+ 
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) {
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				} else {
+-					res = ast_waitstream(chan, ints);
+-				}
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -3002,22 +2932,11 @@
+ 		}
+ 
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) 
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else  
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 			if (!res) {
+-				if (strlen(fna) != 0 && !ast_streamfile(chan, fna, language)) {
+-					if ((audiofd > -1) && (ctrlfd > -1)) {
+-						res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-					} else {
+-						res = ast_waitstream(chan, ints);
+-					}
++				if (strlen(fna)) {
++					res = wait_file_full(chan, ints, fna, language, audiofd, ctrlfd);
+ 				}
+-				ast_stopstream(chan);
+ 				strcpy(fna, "");
+ 			}
+ 		}
+@@ -3165,22 +3084,11 @@
+ 		}
+ 
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) 
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else  
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 			if (!res) {
+-				if (strlen(fna) != 0 && !ast_streamfile(chan, fna, language)) {
+-					if ((audiofd > -1) && (ctrlfd > -1)) {
+-						res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-					} else {
+-						res = ast_waitstream(chan, ints);
+-					}
++				if (strlen(fna) != 0) {
++					res = wait_file_full(chan, ints, fna, language, audiofd, ctrlfd);
+ 				}
+-				ast_stopstream(chan);
+ 				strcpy(fna, "");
+ 			}
+ 		}
+@@ -3263,14 +3171,7 @@
+ 			res = -1;
+ 		}
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1)) {
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				} else {
+-					res = ast_waitstream(chan, ints);
+-				}
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -3322,20 +3223,18 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file_full(chan, ints, fn, lang, -1, -1);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file_full(chan, ints, fn, lang, -1, -1);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
++#ifdef IS_THIS_A_MISTAKE
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	return res;
+@@ -3351,19 +3250,17 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_enumeration(chan, tm.tm_mday, ints, lang, (char * ) NULL);
++#ifdef IS_THIS_A_MISTAKE
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		/* Year */
+@@ -3400,19 +3297,17 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_enumeration(chan, tm.tm_mday, ints, lang, (char * ) NULL);
++#ifdef IS_THIS_A_MISTAKE
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		/* Year */
+@@ -3451,23 +3346,23 @@
+ 
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}	
+ 	if (!res)
+ 		ast_say_number(chan, tm.tm_mday , ints, lang, (char *) NULL);
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);		
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	return res;
+ }
+@@ -3482,19 +3377,17 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+@@ -3511,20 +3404,18 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	return res;
+@@ -3540,27 +3431,25 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
++		res = wait_file(chan, ints, fn, lang);
+ 		ast_copy_string(fn, "digits/tee", sizeof(fn));
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res) {
+ 		ast_copy_string(fn, "digits/duan", sizeof(fn));
+-		res = ast_streamfile(chan, fn, lang);
++		res = wait_file(chan, ints, fn, lang);
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res){
+ 		ast_copy_string(fn, "digits/posor", sizeof(fn));
+-		res = ast_streamfile(chan, fn, lang);
++		res = wait_file(chan, ints, fn, lang);
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	}	
+ 	return res;
+@@ -3603,24 +3492,20 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res) {
+-			res = ast_waitstream(chan, ints);
+-		}
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res) {
+-			res = ast_waitstream(chan, ints);
+-		}
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, "m");
+ 	}
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res) {
+ 		res = ast_waitstream(chan, ints);
+ 	}
++#endif
+ 	if (!res) {
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, "m");
+ 	}
+@@ -6330,26 +6215,20 @@
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else if (tm.tm_min) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/oh", lang);
++			res = wait_file(chan, ints, "digits/oh", lang);
+ 		if (!res)
+-			res = ast_waitstream(chan, ints);
+-		if (!res)
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/oclock", lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, "digits/oclock", lang);
+ 	}
+ 	if (pm) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/p-m", lang);
++			res = wait_file(chan, ints, "digits/p-m", lang);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/a-m", lang);
++			res = wait_file(chan, ints, "digits/a-m", lang);
+ 	}
+-	if (!res)
+-		res = ast_waitstream(chan, ints);
+ 	return res;
+ }
+ 
+@@ -6364,10 +6243,8 @@
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_hour, ints, lang, "n");
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/oclock", lang);
++		res = wait_file(chan, ints, "digits/oclock", lang);
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 	    if (tm.tm_min > 0) 
+ 		res = ast_say_number(chan, tm.tm_min, ints, lang, "f");
+ 	return res;
+@@ -6384,14 +6261,12 @@
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_hour, ints, lang, "n");
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/oclock", lang);
++		res = wait_file(chan, ints, "digits/oclock", lang);
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 	    if (tm.tm_min > 0) { 
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, "f");
+ 			if (!res)
+-				res = ast_streamfile(chan, "digits/minute", lang);
++				res = wait_file(chan, ints, "digits/minute", lang);
+ 		}
+ 	return res;
+ }
+@@ -6407,9 +6282,8 @@
+ 
+ 	res = ast_say_number(chan, tm.tm_hour, ints, lang, "f");
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/oclock", lang);
+-	if (tm.tm_min) {
+-		if (!res)
++		res = wait_file(chan, ints, "digits/oclock", lang);
++	if (tm.tm_min && !res) {
+ 		res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	}
+ 	return res;
+@@ -6426,11 +6300,8 @@
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_hour, ints, lang, (char *) NULL);
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/nl-uur", lang);
+-	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+-	    if (tm.tm_min > 0) 
++		res = wait_file(chan, ints, "digits/nl-uur", lang);
++	if (!res && tm.tm_min > 0)
+ 		res = ast_say_number(chan, tm.tm_min, ints, lang, NULL);
+ 	return res;
+ }
+@@ -6530,27 +6401,20 @@
+ 		hour -= 12;
+ 		pm = 1;
+ 	}
+-	if (pm) {
+-		if (!res)
+-			res = ast_streamfile(chan, "digits/p-m", lang);
++	if (pm && !res) {
++		res = wait_file(chan, ints, "digits/p-m", lang);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/a-m", lang);
++			res = wait_file(chan, ints, "digits/a-m", lang);
+ 	}
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 		res = ast_say_number(chan, hour, ints, lang, (char *) NULL);
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/oclock", lang);
++		res = wait_file(chan, ints, "digits/oclock", lang);
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 		res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/minute", lang);
+-	if (!res)
+-		res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, "digits/minute", lang);
+ 	return res;
+ }
+ 
+@@ -6577,16 +6441,22 @@
+ 		if (!res) {				/* say a leading zero if needed */
+ 			res = ast_say_number_full_he(chan, 0, ints, lang, "f", -1, -1);
+ 		}
++#ifdef IS_THIS_A_MISTAKE 
+ 		if (!res)
+ 			res = ast_waitstream(chan, ints);
++#endif
+ 		if (!res)
+ 			res = ast_say_number_full_he(chan, tm.tm_min, ints, lang, "f", -1, -1);
+ 	} else {
++#ifdef IS_THIS_A_MISTAKE 
+ 		if (!res)
+ 			res = ast_waitstream(chan, ints);
++#endif
+ 	}
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	return res;
+ }
+ static int say_datetime(struct ast_channel *chan, time_t t, const char *ints, const char *lang)
+@@ -6645,15 +6515,11 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+@@ -6675,27 +6541,21 @@
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else if (tm.tm_min) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/oh", lang);
++			res = wait_file(chan, ints, "digits/oh", lang);
+ 		if (!res)
+-			res = ast_waitstream(chan, ints);
+-		if (!res)
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/oclock", lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, "digits/oclock", lang);
+ 	}
+ 	if (pm) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/p-m", lang);
++			res = wait_file(chan, ints, "digits/p-m", lang);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/a-m", lang);
++			res = wait_file(chan, ints, "digits/a-m", lang);
+ 	}
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	return res;
+ }
+@@ -6744,27 +6604,25 @@
+ 
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_hour, ints, lang, "f");
+ 	if (!res)
+-			res = ast_streamfile(chan, "digits/oclock", lang);
++		res = wait_file(chan, ints, "digits/oclock", lang);
+ 	if (tm.tm_min > 0) {
+ 		if (!res)
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} 
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res)
+ 		res = ast_waitstream(chan, ints);
++#endif
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	return res;
+@@ -6780,9 +6638,7 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	res = ast_say_date(chan, t, ints, lang);
+ 	if (!res) {
+-		res = ast_streamfile(chan, "digits/nl-om", lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, "digits/nl-om", lang);
+ 	}
+ 	if (!res) 
+ 		ast_say_time(chan, t, ints, lang);
+@@ -6801,15 +6657,11 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+@@ -6831,27 +6683,21 @@
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else if (tm.tm_min) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/oh", lang);
++			res = wait_file(chan, ints, "digits/oh", lang);
+ 		if (!res)
+-			res = ast_waitstream(chan, ints);
+-		if (!res)
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/oclock", lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, "digits/oclock", lang);
+ 	}
+ 	if (pm) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/p-m", lang);
++			res = wait_file(chan, ints, "digits/p-m", lang);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/a-m", lang);
++			res = wait_file(chan, ints, "digits/a-m", lang);
+ 	}
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	return res;
+ }
+@@ -6881,19 +6727,15 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res){
+ 		ast_copy_string(fn, "digits/posor", sizeof(fn));
+-		res = ast_streamfile(chan, fn, lang);
++		res = wait_file(chan, ints, fn, lang);
+ 		res = ast_say_number(chan, tm.tm_year + 1900 + 543, ints, lang, (char *) NULL);
+ 	}	
+ 	if (!res)
+@@ -6904,7 +6746,7 @@
+ 		hour = 24;
+ 	if (!res){
+ 		ast_copy_string(fn, "digits/wela", sizeof(fn));
+-		res = ast_streamfile(chan, fn, lang);
++		res = wait_file(chan, ints, fn, lang);
+ 	}	
+ 	if (!res)
+ 		res = ast_say_number(chan, hour, ints, lang, (char *) NULL);
+@@ -6927,17 +6769,13 @@
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, (char *) NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res)
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+- 		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 
+ 	hour = tm.tm_hour;
+@@ -6951,25 +6789,19 @@
+ 	}
+ 	if (pm) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/p-m", lang);
++			res = wait_file(chan, ints, "digits/p-m", lang);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/a-m", lang);
++			res = wait_file(chan, ints, "digits/a-m", lang);
+ 	}
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 		res = ast_say_number(chan, hour, ints, lang, (char *) NULL);
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/oclock", lang);
++		res = wait_file(chan, ints, "digits/oclock", lang);
+ 	if (!res)
+-		res = ast_waitstream(chan, ints);
+-	if (!res)
+ 		res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	if (!res)
+-		res = ast_streamfile(chan, "digits/minute", lang);
+-	if (!res)
+-		res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, "digits/minute", lang);
+ 	return res;
+ }
+ 
+@@ -6985,17 +6817,11 @@
+ 	ast_localtime(&when, &tm, NULL);
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res) {
+-			res = ast_waitstream(chan, ints);
+-		}
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res) {
+-			res = ast_waitstream(chan, ints);
+-		}
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	if (!res) {
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, "f");
+@@ -7019,20 +6845,26 @@
+ 			/* say a leading zero if needed */
+ 			res = ast_say_number(chan, 0, ints, lang, "f");
+ 		}
++#ifdef IS_THIS_A_MISTAKE 
+ 		if (!res) {
+ 			res = ast_waitstream(chan, ints);
+ 		}
++#endif
+ 		if (!res) {
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, "f");
+ 		}
+ 	} else {
++#ifdef IS_THIS_A_MISTAKE 
+ 		if (!res) {
+ 			res = ast_waitstream(chan, ints);
+ 		}
++#endif
+ 	}
++#ifdef IS_THIS_A_MISTAKE 
+ 	if (!res) {
+ 		res = ast_waitstream(chan, ints);
+ 	}
++#endif
+ 	if (!res) {
+ 		res = ast_say_number(chan, tm.tm_year + 1900, ints, lang, "f");
+ 	}
+@@ -7079,9 +6911,7 @@
+ 		/* Day of month and month */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 		if (!res)
+ 			res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+@@ -7090,9 +6920,7 @@
+ 		/* Just what day of the week */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 	} /* Otherwise, it was today */
+ 	if (!res)
+@@ -7117,9 +6945,7 @@
+ 		/* Day of month and month */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 		if (!res)
+ 			res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+@@ -7128,9 +6954,7 @@
+ 		/* Just what day of the week */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 	} /* Otherwise, it was today */
+ 	if (!res)
+@@ -7205,9 +7029,7 @@
+ 		/* Day of month and month */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 		if (!res) {
+ 			res = ast_say_number(chan, tm.tm_mday, ints, lang, "f");
+@@ -7216,10 +7038,7 @@
+ 		/* Just what day of the week */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res) {
+-				res = ast_waitstream(chan, ints);
+-			}
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 	}							/* Otherwise, it was today */
+ 	if (!res) {
+@@ -7250,9 +7069,7 @@
+ 		tmp = (num/10) * 10;
+ 		left = num - tmp;
+ 		snprintf(fn, sizeof(fn), "digits/%d", tmp);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 		if (left)
+ 			gr_say_number_female(left, chan, ints, lang);
+ 			
+@@ -7289,9 +7106,7 @@
+  
+ 	if (!num) {
+ 		ast_copy_string(fn, "digits/0", sizeof(fn));
+-		res = ast_streamfile(chan, fn, chan->language);
+-		if (!res)
+-			return  ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, chan->language);
+ 	}
+ 
+ 	while (!res && num ) {
+@@ -7336,13 +7151,7 @@
+ 			}
+ 		} 
+ 		if (!res) {
+-			if (!ast_streamfile(chan, fn, language)) {
+-				if ((audiofd > -1) && (ctrlfd > -1))
+-					res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-				else
+-					res = ast_waitstream(chan, ints);
+-			}
+-			ast_stopstream(chan);
++			res = wait_file_full(chan, ints, fn, language, audiofd, ctrlfd);
+ 		}
+ 	}
+ 	return res;
+@@ -7373,9 +7182,7 @@
+ 	/* W E E K - D A Y */
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	/* D A Y */
+ 	if (!res) {
+@@ -7384,9 +7191,7 @@
+ 	/* M O N T H */
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	/* Y E A R */
+ 	if (!res)
+@@ -7427,26 +7232,20 @@
+ 	res = gr_say_number_female(hour, chan, ints, lang);
+ 	if (tm.tm_min) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/kai", lang);
++			res = wait_file(chan, ints, "digits/kai", lang);
+ 		if (!res)
+-			res = ast_waitstream(chan, ints);
+-		if (!res)
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char *) NULL);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/hwra", lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, "digits/hwra", lang);
+ 	}
+ 	if (pm) {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/p-m", lang);
++			res = wait_file(chan, ints, "digits/p-m", lang);
+ 	} else {
+ 		if (!res)
+-			res = ast_streamfile(chan, "digits/a-m", lang);
++			res = wait_file(chan, ints, "digits/a-m", lang);
+ 	}
+-	if (!res)
+-		res = ast_waitstream(chan, ints);
+ 	return res;
+ }
+ 
+@@ -7464,9 +7263,7 @@
+ 	/* W E E K - D A Y */
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	/* D A Y */
+ 	if (!res) {
+@@ -7475,9 +7272,7 @@
+ 	/* M O N T H */
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 
+ 	res = ast_say_time_gr(chan, t, ints, lang);
+@@ -7550,16 +7345,12 @@
+ 			/* Minute */
+ 			if (tm.tm_min) {
+ 				if (!res)
+-					res = ast_streamfile(chan, "digits/kai", lang);
++					res = wait_file(chan, ints, "digits/kai", lang);
+ 				if (!res)
+-					res = ast_waitstream(chan, ints);
+-				if (!res)
+ 					res = ast_say_number_full_gr(chan, tm.tm_min, ints, lang, -1, -1);
+ 			} else {
+ 				if (!res)
+-					res = ast_streamfile(chan, "digits/oclock", lang);
+-				if (!res)
+-					res = ast_waitstream(chan, ints);
++					res = wait_file(chan, ints, "digits/oclock", lang);
+ 			}
+ 			break;
+ 		case 'P':
+@@ -8054,13 +7845,7 @@
+ 		strncat(new_string, remaining, len);  /* we can't sprintf() it, it's not null-terminated. */
+ /* 		new_string[len + strlen("digits/")] = '\0'; */
+ 
+-		if (!ast_streamfile(chan, new_string, language)) {
+-			if ((audiofd  > -1) && (ctrlfd > -1))
+-				res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-			else
+-				res = ast_waitstream(chan, ints);
+-		}
+-		ast_stopstream(chan);
++		res = wait_file_full(chan, ints, new_string, language, audiofd, ctrlfd);
+ 
+ 		ast_free(new_string);
+ 
+@@ -8076,13 +7861,7 @@
+ 		char* new_string = ast_malloc(strlen(remaining) + 1 + strlen("digits/"));
+ 		sprintf(new_string, "digits/%s", remaining);
+ 
+-		if (!ast_streamfile(chan, new_string, language)) {
+-			if ((audiofd  > -1) && (ctrlfd > -1))
+-				res = ast_waitstream_full(chan, ints, audiofd, ctrlfd);
+-			else
+-				res = ast_waitstream(chan, ints);
+-		}
+-		ast_stopstream(chan);
++		res = wait_file_full(chan, ints, new_string, language, audiofd, ctrlfd);
+ 
+ 		ast_free(new_string);
+ 
+@@ -8121,23 +7900,16 @@
+ 
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/tslis %d", tm.tm_wday);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 
+ 	if (!res) {
+ 		res = ast_say_number(chan, tm.tm_mday, ints, lang, (char * ) NULL);
+-/* 		if (!res)
+- 			res = ast_waitstream(chan, ints);
+-*/
+ 	}
+ 
+ 	if (!res) {
+ 		snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-		res = ast_streamfile(chan, fn, lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, fn, lang);
+ 	}
+ 	return res;
+ 
+@@ -8158,9 +7930,7 @@
+ 
+ 	res = ast_say_number(chan, tm.tm_hour, ints, lang, (char*)NULL);
+ 	if (!res) {
+-		res = ast_streamfile(chan, "digits/saati_da", lang);
+-		if (!res)
+-			res = ast_waitstream(chan, ints);
++		res = wait_file(chan, ints, "digits/saati_da", lang);
+ 	}
+ 
+ 	if (tm.tm_min) {
+@@ -8168,9 +7938,7 @@
+ 			res = ast_say_number(chan, tm.tm_min, ints, lang, (char*)NULL);
+ 
+ 			if (!res) {
+-				res = ast_streamfile(chan, "digits/tsuti", lang);
+-				if (!res)
+-					res = ast_waitstream(chan, ints);
++				res = wait_file(chan, ints, "digits/tsuti", lang);
+ 			}
+ 		}
+ 	}
+@@ -8216,18 +7984,14 @@
+ 			res = ast_say_number(chan, tm.tm_mday, ints, lang, (char *) NULL);
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/mon-%d", tm.tm_mon);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 
+ 	} else if (daydiff) {
+ 		/* Just what day of the week */
+ 		if (!res) {
+ 			snprintf(fn, sizeof(fn), "digits/day-%d", tm.tm_wday);
+-			res = ast_streamfile(chan, fn, lang);
+-			if (!res)
+-				res = ast_waitstream(chan, ints);
++			res = wait_file(chan, ints, fn, lang);
+ 		}
+ 	} /* Otherwise, it was today */
+ 	if (!res)
+@@ -8299,7 +8063,7 @@
+ 	}
+ 	temp = ast_alloca((temp_len = (strlen(noun) + strlen(ending) + 1)));
+ 	snprintf(temp, temp_len, "%s%s", noun, ending);
+-	return ast_play_and_wait(chan, temp);
++	return wait_file(chan, AST_DIGIT_ANY, temp, chan->language);
+ }
+ 
+ /*
+@@ -8341,7 +8105,7 @@
+ 	}
+ 	temp = ast_alloca((temp_len = (strlen(adjective) + strlen(ending) + 1)));
+ 	snprintf(temp, temp_len, "%s%s", adjective, ending);
+-	return ast_play_and_wait(chan, temp);
++	return wait_file(chan, AST_DIGIT_ANY, temp, chan->language);
+ }
+ 
+ 
+Index: main/file.c
+===================================================================
+--- main/file.c	(.../branches/1.8)	(revision 383005)
++++ main/file.c	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -48,6 +48,7 @@
+ #include "asterisk/app.h"
+ #include "asterisk/pbx.h"
+ #include "asterisk/linkedlists.h"
++#include "asterisk/channel.h"
+ #include "asterisk/module.h"
+ #include "asterisk/astobj2.h"
+ #include "asterisk/test.h"
+@@ -709,6 +710,18 @@
+ 	return NULL;
+ }
+ 
++static const struct ast_datastore_info ast_sound_ending_obj = { /* this is here because it is referenced here
++							     and the only other place it is used is in app_queue,
++							     which is not always loaded. */
++        .type = "ast_sound_ending"
++};
++
++const struct ast_datastore_info *ast_sound_ending()
++{
++	return &ast_sound_ending_obj;
++}
++
++
+ static struct ast_frame *read_frame(struct ast_filestream *s, int *whennext)
+ {
+ 	struct ast_frame *fr, *new_fr;
+@@ -757,6 +770,7 @@
+ 		struct ast_frame *fr;
+ 
+ 		if (s->orig_chan_name && strcasecmp(s->owner->name, s->orig_chan_name)) {
++			ast_debug(3, "--- Giving up here\n");
+ 			goto return_failure;
+ 		}
+ 
+@@ -767,6 +781,7 @@
+ 				ast_log(LOG_WARNING, "Failed to write frame\n");
+ 				ast_frfree(fr);
+ 			}
++			ast_debug(3, "--- Giving up here now\n");
+ 			goto return_failure;
+ 		} 
+ 
+@@ -793,6 +808,8 @@
+ 	return FSREAD_SUCCESS_SCHED;
+ 
+ return_failure:
++	ast_debug(3, "DEBUG: return_failure called. Giving up. !\n");
++
+ 	s->owner->streamid = -1;
+ 	ast_settimeout(s->owner, 0, NULL, NULL);
+ 	return FSREAD_FAILURE;
+Index: configs/queues.conf.sample
+===================================================================
+--- configs/queues.conf.sample	(.../branches/1.8)	(revision 383005)
++++ configs/queues.conf.sample	(.../team/oej/pinequeue-1.8)	(revision 383005)
+@@ -61,6 +61,14 @@
+ ;
+ ;shared_lastcall=no
+ ;
++; Prompts played to the caller by default is played in the foreground,
++; which means that even if a queue member becomes available, the 
++; prompt will be played fully. Enabling 'background_prompts' will
++; make sure that prompts are interruptible. If a queue member becomes
++; available, the prompt will be interrupted.
++;
++background_prompts=no
++;
+ ;[markq]
+ ;
+ ; A sample call queue

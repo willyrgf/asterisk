@@ -32,6 +32,7 @@
 #include "asterisk/channel.h"
 #include "asterisk/app.h"
 #include "asterisk/astobj.h"
+#include "asterisk/indications.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -284,6 +285,7 @@
 #define SIP_PROG_INBAND_NO     (1 << 25)
 #define SIP_PROG_INBAND_YES    (2 << 25)
 
+#define SIP_USEPATH          (1 << 27) /*!< P: Trust and use incoming Path headers? */
 #define SIP_SENDRPID         (3 << 29) /*!< DP: Remote Party-ID Support */
 #define SIP_SENDRPID_NO      (0 << 29)
 #define SIP_SENDRPID_PAI     (1 << 29) /*!< Use "P-Asserted-Identity" for rpid */
@@ -294,7 +296,7 @@
 #define SIP_FLAGS_TO_COPY \
 	(SIP_PROMISCREDIR | SIP_TRUSTRPID | SIP_SENDRPID | SIP_DTMF | SIP_REINVITE | \
 	 SIP_PROG_INBAND | SIP_USECLIENTCODE | SIP_NAT_FORCE_RPORT | SIP_G726_NONSTANDARD | \
-	 SIP_USEREQPHONE | SIP_INSECURE)
+	 SIP_USEREQPHONE | SIP_INSECURE | SIP_USEPATH)
 /*@}*/
 
 /*! \name SIPflags2
@@ -347,6 +349,7 @@
 #define SIP_PAGE2_VIDEOSUPPORT_ALWAYS       (1 << 27)   /*!< DP: Always set up video, even if endpoints don't support it */
 #define SIP_PAGE2_HAVEPEERCONTEXT           (1 << 28)   /*< Are we associated with a configured peer context? */
 #define SIP_PAGE2_USE_SRTP                  (1 << 29)   /*!< DP: Whether we should offer (only)  SRTP */
+#define SIP_PAGE2_ALLOW_CN                  (1 << 30)   /*!< DP: If we allow Comfort Noise generation */
 
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
@@ -354,7 +357,8 @@
 	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
 	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS | SIP_PAGE2_PREFERRED_CODEC | \
 	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP |\
-	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP)
+	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP |\
+	SIP_PAGE2_ALLOW_CN )
 
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
@@ -685,6 +689,7 @@ struct __show_chan_arg {
 struct sip_settings {
 	int peer_rtupdate;          /*!< G: Update database with registration data for peer? */
 	int rtsave_sysname;         /*!< G: Save system name at registration? */
+	int rtsave_path;            /*!< G: Save path header on registration */
 	int ignore_regexpire;       /*!< G: Ignore expiration of peer  */
 	int rtautoclear;            /*!< Realtime ?? */
 	int directrtpsetup;         /*!< Enable support for Direct RTP setup (no re-invites) */
@@ -1068,6 +1073,7 @@ struct sip_pvt {
 	unsigned int stalenonce:1;          /*!< Marks the current nonce as responded too */
 	unsigned int ongoing_reinvite:1;    /*!< There is a reinvite in progress that might need to be cleaned up */
 	char lastmsg[256];                  /*!< Last Message sent/received */
+	char zone[MAX_TONEZONE_COUNTRY];        /*!< Default tone zone for this call */
 	int amaflags;                       /*!< AMA Flags */
 	uint32_t pendinginvite; /*!< Any pending INVITE or state NOTIFY (in subscribe pvt's) ? (seqno of this) */
 	uint32_t glareinvite;      /*!< A invite received while a pending invite is already present is stored here.  Its seqno is the
@@ -1241,6 +1247,7 @@ struct sip_peer {
 	int lastmsgssent;
 	unsigned int sipoptions;        /*!<  Supported SIP options */
 	struct ast_flags flags[3];      /*!<  SIP_ flags */
+	char zone[MAX_TONEZONE_COUNTRY];        /*!< Default tone zone for this user */
 
 	/*! Mailboxes that this peer cares about */
 	AST_LIST_HEAD_NOLOCK(, sip_mailbox) mailboxes;
@@ -1273,6 +1280,7 @@ struct sip_peer {
 	int timer_t1;                   /*!<  The maximum T1 value for the peer */
 	int timer_b;                    /*!<  The maximum timer B (transaction timeouts) */
 	int fromdomainport;             /*!<  The From: domain port */
+	struct sip_route *path;         /*!<  Head of linked list of out-of-dialog outgoing routing steps (fm Path headers) */
 
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */

@@ -107,12 +107,21 @@ enum strict_rtp_state {
 	STRICT_RTP_CLOSED,   /*! Drop all RTP packets not coming from source that was learned */
 };
 
+/*! \brief States for an outbound RTP stream that handles DTMF in RFC 2833 mode */
+enum dtmf_send_states {
+	DTMF_NOT_SENDING = 0,	/*! Not sending DTMF this very moment */
+	DTMF_SEND_INIT,		/*! Initializing */
+	DTMF_SEND_INPROGRESS,	/*! Playing DTMF */
+	DTMF_SEND_INPROGRESS_WITH_QUEUE	/*! Playing and having a queue to continue with */
+};
+
 #define FLAG_3389_WARNING               (1 << 0)
 #define FLAG_NAT_ACTIVE                 (3 << 1)
 #define FLAG_NAT_INACTIVE               (0 << 1)
 #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
 #define FLAG_NEED_MARKER_BIT            (1 << 3)
 #define FLAG_DTMF_COMPENSATE            (1 << 4)
+#define FLAG_CN_ACTIVE			(1 << 5)
 
 /*! \brief RTP session description */
 struct ast_rtp {
@@ -154,18 +163,25 @@ struct ast_rtp {
 	unsigned int dtmf_timeout;        /*!< When this timestamp is reached we consider END frame lost and forcibly abort digit */
 	unsigned int dtmfsamples;
 	enum ast_rtp_dtmf_mode dtmfmode;  /*!< The current DTMF mode of the RTP stream */
+
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
-	char sending_digit;	/*!< boolean - are we sending digits */
+	enum dtmf_send_states sending_dtmf;     /*!< - are we sending dtmf */
 	char send_digit;	/*!< digit we are sending */
+	char send_dtmf_frame;	/*!< Number of samples in a frame with the current packetization */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmfqueue;	/*!< \ref DTMFQUEUE : Queue for DTMF that we receive while occupied with transmitting an outbound DTMF */
+	struct timeval dtmfmute;
+
 	int send_payload;
 	int send_duration;
+	int send_endflag:1;		/*!< We have received END marker but are in waiting mode */
+	unsigned int received_duration; /*!< Received duration (according to control frames) */
+
 	unsigned int flags;
 	struct timeval rxcore;
 	struct timeval txcore;
 	double drxcore;                 /*!< The double representation of the first received packet */
 	struct timeval lastrx;          /*!< timeval when we last received a packet */
-	struct timeval dtmfmute;
 	struct ast_smoother *smoother;
 	int *ioid;
 	unsigned short seqno;		/*!< Sequence number, RFC 3550, page 13. */
@@ -272,6 +288,7 @@ AST_LIST_HEAD_NOLOCK(frame_list, ast_frame);
 static int ast_rtp_new(struct ast_rtp_instance *instance, struct sched_context *sched, struct ast_sockaddr *addr, void *data);
 static int ast_rtp_destroy(struct ast_rtp_instance *instance);
 static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit);
+static int ast_rtp_dtmf_continue(struct ast_rtp_instance *instance, char digit, unsigned int duration);
 static int ast_rtp_dtmf_end(struct ast_rtp_instance *instance, char digit);
 static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, char digit, unsigned int duration);
 static int ast_rtp_dtmf_mode_set(struct ast_rtp_instance *instance, enum ast_rtp_dtmf_mode dtmf_mode);
@@ -300,6 +317,7 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.new = ast_rtp_new,
 	.destroy = ast_rtp_destroy,
 	.dtmf_begin = ast_rtp_dtmf_begin,
+	.dtmf_continue = ast_rtp_dtmf_continue,
 	.dtmf_end = ast_rtp_dtmf_end,
 	.dtmf_end_with_duration = ast_rtp_dtmf_end_with_duration,
 	.dtmf_mode_set = ast_rtp_dtmf_mode_set,
@@ -322,6 +340,25 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.qos = ast_rtp_qos_set,
 	.sendcng = ast_rtp_sendcng,
 };
+
+/*! * \page DTMFQUEUE Queue for outbound DTMF events
+
+	The Asterisk RTP Engine contains a queue for outbound DTMF events. Because of Asterisk's
+	architecture, we might have situations where DTMF events are not happening at the same
+ 	time on the inbound call leg and the outbound. Because the feature handling, we might
+	"swallow" a DTMF for a while to figure out the next digit. When we realize that this
+	is not a digit we want, we start playing out the complete DTMF on the outbound call leg.
+
+	During that time, we might get an incoming DTMF begin signal on the inbound call leg,
+	which is transported over the bridge and to the outbound call leg, that gets a 
+	request to begin a new DTMF, while still playing out the previous one.
+
+	In order not to drop this DTMF, we queue it up until we're done with the previous
+	DTMF and then play it out.
+
+	The DTMF queue is held in the rtp structure. 
+*/
+
 
 static inline int rtp_debug_test_addr(struct ast_sockaddr *addr)
 {
@@ -586,6 +623,7 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 static int ast_rtp_destroy(struct ast_rtp_instance *instance)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	struct ast_frame *f;
 
 	/* Destroy the smoother that was smoothing out audio if present */
 	if (rtp->smoother) {
@@ -612,6 +650,11 @@ static int ast_rtp_destroy(struct ast_rtp_instance *instance)
 	if (rtp->red) {
 		AST_SCHED_DEL(rtp->sched, rtp->red->schedid);
 		ast_free(rtp->red);
+	}
+
+	/* Empty the DTMF queue */
+	while ((f = AST_LIST_REMOVE_HEAD(&rtp->dtmfqueue, frame_list))) {
+		ast_frfree(f);
 	}
 
 	/* Finally destroy ourselves */
@@ -646,6 +689,17 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 	/* If we have no remote address information bail out now */
 	if (ast_sockaddr_isnull(&remote_address)) {
 		return -1;
+	}
+
+	/* If we're sending DTMF already, we will ignore this but raise sending_dtmf with one
+	   to mark that we're busy and can't be disturbed. When we receive an END packet, we will
+	   act on that - either start playing with some delay or stack it up in a dtmfqueue.
+	*/
+	if (rtp->sending_dtmf) {
+		ast_debug(3, "Received DTMF begin while we're playing out DTMF. Ignoring \n");
+		rtp->sending_dtmf = DTMF_SEND_INPROGRESS_WITH_QUEUE;	/* Tell the world that there's an ignored DTMF */
+	//	AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+/* OEJ Fix ??? */
 	}
 
 	/* Convert given digit into what we want to transmit */
@@ -691,19 +745,67 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 				    payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 		}
 		rtp->seqno++;
-		rtp->send_duration += 160;
+		rtp->send_duration += 160;	/* OEJ - check what's going on here. */
+		
 		rtpheader[0] = htonl((2 << 30) | (payload << 16) | (rtp->seqno));
 	}
 
-	/* Record that we are in the process of sending a digit and information needed to continue doing so */
-	rtp->sending_digit = 1;
+	/* Since we received a begin, we can safely store the digit and disable any compensation */
+	rtp->sending_dtmf = DTMF_SEND_INIT;
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
+
+	ast_log(LOG_DEBUG, "DEBUG DTMF BEGIN - Digit %d send-digit %d\n", digit, rtp->send_digit);
 
 	return 0;
 }
 
-static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
+/*! \brief Get notification of duration updates */
+static int ast_rtp_dtmf_continue(struct ast_rtp_instance *instance, char digit, unsigned int duration)
+{
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+
+	ast_debug(4, "DTMF CONTINUE - Duration %d Digit %d Send-digit %d\n", duration, digit, rtp->send_digit);
+
+	/* If we missed the BEGIN, we will have to turn on the flag */
+	if (!rtp->sending_dtmf) {
+		rtp->sending_dtmf = DTMF_SEND_INPROGRESS;
+	}
+
+	/* Duration is in ms. Calculate the duration in timestamps */
+	if (duration > 0) {
+		/* We have an incoming duration from the incoming channel. This needs
+		   to be matched with our outbound pacing. The inbound can be paced
+		   in either 50 ms or whatever packetization that is used on that channel,
+		   so we can't assume 20 ms (160 units in 8000 hz audio).
+		*/
+		int dursamples = duration * rtp_get_rate(rtp->f.subclass.codec) / 1000;
+
+		/* How do we get the sample rate for the primary media in this call? */
+
+		ast_debug(4, "DTMF CONTINUE : %d ms %d samples\n", duration, dursamples);
+		rtp->received_duration = dursamples;
+	} else {
+		ast_debug(4, "DTMF CONTINUE : Missing duration!!!!!!!\n");
+		
+	}
+	return 0;
+}
+
+/*! \brief Send continuation frame for DTMF 
+
+This is called when we get a frame in ast_rtp_read. To keep the timing, because there may be delays through Asterisk
+feature handling and other code, we need to clock the outbound DTMF with the frame size we have on the stream.
+We should not cut short and send a begin then in the next packet an END with a duration that exceeds the
+framesize (in most cases for audio 20 ms) and number of frames. That will seriously cause issues in gateways
+or phones down the path.
+
+An effect of this is that we may get a new DTMF frame while we're transmitting the previous one. For this case,
+we have implemented an DTMF queue that will queue up the dtmf and play out. The alternative would be to skip
+these, which is no good, or cut them short and cause issues with timing for other devices, while we solve our
+own situation. That's generally considered bad behaviour amongst SIP devices.
+*/
+static int ast_rtp_dtmf_cont(struct ast_rtp_instance *instance)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr remote_address = { {0,} };
@@ -718,6 +820,20 @@ static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
 		return -1;
 	}
 
+	ast_debug(4, "---- Send duration %d Received duration %d Endflag %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, rtp->send_digit);
+
+	/*! \todo XXX This code assumes 160 samples, which is for 20 ms of 8000 samples
+		we need to calculate this based on the current sample rate and the rtp 
+		stream packetization. Please help me figure this out :-)
+	 */
+	if (rtp->received_duration == 0 || rtp->send_duration + 160 <= rtp->received_duration) {
+		rtp->send_duration += 160;
+	} else if (rtp->send_endflag) {
+		ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d - sending END packet\n", rtp->send_duration, rtp->received_duration);
+		/* We are done, ready to send end flag */
+		rtp->send_endflag = 0;
+		return ast_rtp_dtmf_end_with_duration(instance, 0, rtp->received_duration);
+	}
 	/* Actually create the packet we will be sending */
 	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastdigitts);
@@ -740,7 +856,7 @@ static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
 
 	/* And now we increment some values for the next time we swing by */
 	rtp->seqno++;
-	rtp->send_duration += 160;
+	rtp->send_duration += 160;	/* Again assuming 20 ms packetization and 8000 samples */
 
 	return 0;
 }
@@ -753,12 +869,25 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 	char data[256];
 	unsigned int *rtpheader = (unsigned int*)data;
 	unsigned int measured_samples;
+	unsigned int dursamples;
 
 	ast_rtp_instance_get_remote_address(instance, &remote_address);
 
 	/* Make sure we know where the remote side is so we can send them the packet we construct */
 	if (ast_sockaddr_isnull(&remote_address)) {
 		return -1;
+	}
+	dursamples =  duration * (8000 / 1000);     /* How do we get the sample rate for the primary media in this call? */
+
+	ast_debug(1, "---- Send duration %d Received duration %d Duration %d Endflag %d Digit %d      Send-digit %d\n", rtp->send_duration, rtp->received_duration, duration, rtp->send_endflag, digit, rtp     ->send_digit);
+
+	if (!rtp->send_endflag && rtp->send_duration + 160 < rtp->received_duration) {
+		/* We still have to send DTMF continuation, because otherwise we will end prematurely. Set end flag to indicate
+		   that we will have to end ourselves when we're done with the actual duration
+		 */
+		ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d - Avoiding sending END packet\n", rtp->send_duration, rtp->received_duration);
+		rtp->send_endflag = 1;
+		return ast_rtp_dtmf_cont(instance);
 	}
 
 	/* Convert the given digit to the one we are going to send */
@@ -812,7 +941,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 
 	/* Oh and we can't forget to turn off the stuff that says we are sending DTMF */
 	rtp->lastts += rtp->send_duration;
-	rtp->sending_digit = 0;
+	rtp->sending_dtmf = DTMF_NOT_SENDING;
 	rtp->send_digit = 0;
 
 	return 0;
@@ -1162,7 +1291,7 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 		frame->samples /= 2;
 	}
 
-	if (rtp->sending_digit) {
+	if (rtp->sending_dtmf) {
 		return 0;
 	}
 
@@ -1560,7 +1689,7 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 		resp = 'X';
 	} else {
 		/* Not a supported event */
-		ast_log(LOG_DEBUG, "Ignoring RTP 2833 Event: %08x. Not a DTMF Digit.\n", event);
+		ast_debug(4, "Ignoring RTP 2833 Event: %08x. Not a DTMF Digit.\n", event);
 		return;
 	}
 
@@ -1595,6 +1724,7 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 				f = ast_frdup(create_dtmf_frame(instance, AST_FRAME_DTMF_END, 0));
 				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass.codec)), ast_tv(0, 0));
 				rtp->resp = 0;
+				ast_debug(4, "--GOT DTMF END message. Duration samples %d (%ld ms)\n", rtp->dtmf_duration, f->len);
 				rtp->dtmf_duration = rtp->dtmf_timeout = 0;
 				AST_LIST_INSERT_TAIL(frames, f, frame_list);
 			} else if (rtpdebug) {
@@ -1633,6 +1763,10 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 			if (rtp->resp) {
 				/* Digit continues */
 				rtp->dtmf_duration = new_duration;
+				f = ast_frdup(create_dtmf_frame(instance, AST_FRAME_DTMF_CONTINUE, 0));
+				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass.codec)), ast_tv(0, 0));
+				AST_LIST_INSERT_TAIL(frames, f, frame_list);
+				ast_debug(4, "Queued frame AST_FRAME_DTMF_CONTINUE, Samples %d Ms %d\n", rtp->dtmf_duration, (int)f->len);
 			} else {
 				/* New digit began */
 				rtp->resp = resp;
@@ -1738,17 +1872,8 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 	/* Convert comfort noise into audio with various codecs.  Unfortunately this doesn't
 	   totally help us out becuase we don't have an engine to keep it going and we are not
 	   guaranteed to have it every 20ms or anything */
-	if (rtpdebug)
+	if (rtpdebug) {
 		ast_debug(0, "- RTP 3389 Comfort noise event: Level %" PRId64 " (len = %d)\n", rtp->lastrxformat, len);
-
-	if (ast_test_flag(rtp, FLAG_3389_WARNING)) {
-		struct ast_sockaddr remote_address = { {0,} };
-
-		ast_rtp_instance_get_remote_address(instance, &remote_address);
-
-		ast_log(LOG_NOTICE, "Comfort noise support incomplete in Asterisk (RFC 3389). Please turn off on client if possible. Client address: %s\n",
-			ast_sockaddr_stringify(&remote_address));
-		ast_set_flag(rtp, FLAG_3389_WARNING);
 	}
 
 	/* Must have at least one byte */
@@ -1765,9 +1890,21 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 		rtp->f.datalen = 0;
 	}
 	rtp->f.frametype = AST_FRAME_CNG;
+		/* The noise level is expressed in -dBov with values 0 to 127, representing 0 to -127 dBov
+		   It's in bits 1-7 in the payload. Bit 0 is always 0.
+		*/
 	rtp->f.subclass.integer = data[0] & 0x7f;
 	rtp->f.samples = 0;
 	rtp->f.delivery.tv_usec = rtp->f.delivery.tv_sec = 0;
+
+	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		ast_set_flag(rtp, FLAG_CN_ACTIVE);
+		ast_debug(0, "###### ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
+		/* Start the generator on the other end. */
+	
+	} else {
+		/* Check if the level is the same. If not, reactivate. */
+	}
 
 	return &rtp->f;
 }
@@ -1821,8 +1958,10 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 		length &= 0xffff;
 
 		if ((i + length) > packetwords) {
-			if (option_debug || rtpdebug)
+			if (rtpdebug || option_debug) {
+				/* Because of rtpdebug, this can't be ast_debug() */
 				ast_log(LOG_DEBUG, "RTCP Read too short\n");
+			}
 			return &ast_null_frame;
 		}
 
@@ -2136,8 +2275,8 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	}
 
 	/* If we are currently sending DTMF to the remote party send a continuation packet */
-	if (rtp->sending_digit) {
-		ast_rtp_dtmf_continuation(instance);
+	if (rtp->sending_dtmf) {
+		ast_rtp_dtmf_cont(instance);
 	}
 
 	/* Actually read in the data from the socket */
@@ -2345,6 +2484,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	/* If the payload is not actually an Asterisk one but a special one pass it off to the respective handler */
 	if (!payload.asterisk_format) {
 		struct ast_frame *f = NULL;
+		if (payload.code != AST_RTP_CN && ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+			/* Insert a control frame to indicate that we need to shut down Comfort Noise generators, if active */
+			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+			ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+			f = ast_frdup(&cngoff);
+			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+			f = NULL;
+		}
 		if (payload.code == AST_RTP_DTMF) {
 			/* process_dtmf_rfc2833 may need to return multiple frames. We do this
 			 * by passing the pointer to the frame list to it so that the method
@@ -2371,6 +2519,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			return AST_LIST_FIRST(&frames);
 		}
 		return &ast_null_frame;
+	}
+	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		struct ast_frame *f = NULL;
+		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+		ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+		f = ast_frdup(&cngoff);
+		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+		f = NULL;
 	}
 
 	rtp->lastrxformat = rtp->f.subclass.codec = payload.code;

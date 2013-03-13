@@ -1598,10 +1598,13 @@ static int park_call_full(struct ast_channel *chan, struct ast_channel *peer, st
 	ast_debug(4, "AMI ParkedCall Channel: %s\n", chan->name);
 	ast_debug(4, "AMI ParkedCall From: %s\n", event_from);
 
+/* OEJ */
+#ifdef HAVE_ADSI
 	if (peer && adsipark && ast_adsi_available(peer)) {
 		adsi_announce_park(peer, pu->parkingexten);	/* Only supports parking numbers */
 		ast_adsi_unload_session(peer);
 	}
+#endif
 
 	snprintf(app_data, sizeof(app_data), "%s,%s", pu->parkingexten,
 		pu->parkinglot->name);
@@ -4163,11 +4166,11 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 					   digits to come in for features. */
 					ast_debug(1, "Timed out for feature!\n");
 					if (!ast_strlen_zero(peer_featurecode)) {
-						ast_dtmf_stream(chan, peer, peer_featurecode, 0, 0);
+						ast_dtmf_stream(chan, peer, peer_featurecode, 0, f ? f->len : 0);
 						memset(peer_featurecode, 0, sizeof(peer_featurecode));
 					}
 					if (!ast_strlen_zero(chan_featurecode)) {
-						ast_dtmf_stream(peer, chan, chan_featurecode, 0, 0);
+						ast_dtmf_stream(peer, chan, chan_featurecode, 0, f ? f->len : 0);
 						memset(chan_featurecode, 0, sizeof(chan_featurecode));
 					}
 					if (f)
@@ -4242,6 +4245,12 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 					break;
 				}
 				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
+				break;
+			case AST_CONTROL_CNG_END:
+				/* If we are playing out CNG noise on the bridged channel, stop it now. 
+				   otherwise, ignore this frame. */
+				ast_debug(2, "*** Bridge got CNG END frame \n");
+				ast_channel_stop_noise_generator(other, NULL);
 				break;
 			case AST_CONTROL_AOC:
 			case AST_CONTROL_HOLD:
@@ -4362,6 +4371,21 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 					ast_debug(1, "Set feature timer to %ld ms\n", config->feature_timer);
 				}
 			}
+		} else if (f->frametype == AST_FRAME_CNG) {
+			/* We got a CNG frame 
+			  Check if the bridged channel has active CNG 
+			*/
+			int cngsupport = 0;
+			int len = sizeof(cngsupport);
+			ast_channel_queryoption(other, AST_OPTION_CNG_SUPPORT, &cngsupport, &len, 0);
+			if (cngsupport) {
+				ast_debug(1, "*** Bridge got CNG frame. Forwarding it \n");
+				ast_write(other, f);
+			} else {
+				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) \n");
+				ast_moh_start(other, NULL, NULL);
+			}
+			
 		}
 		if (f)
 			ast_frfree(f);
