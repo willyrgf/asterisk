@@ -26,6 +26,8 @@ originate with video/text and many more contributions.
 Nordicom Norge AS, Kristiansand, Norway, for funding work with RTCP support
 and Call Quality Records.
 
+Nordicom Norge AS for funding of the SIP PRACK support in chan_sip.
+
 === WISHLIST CONTRIBUTERS ===
 Jeremy McNamara - SpeeX support
 Nick Seraphin - RDNIS support

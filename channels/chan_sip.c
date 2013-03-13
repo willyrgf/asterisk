@@ -1245,10 +1245,10 @@ static void add_cc_call_info_to_response(struct sip_pvt *p, struct sip_request *
 static int __transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable);
 static int retrans_pkt(const void *data);
 static int transmit_response_using_temp(ast_string_field callid, struct ast_sockaddr *addr, int useglobal_nat, const int intended_method, const struct sip_request *req, const char *msg);
-static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_reliable(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const struct sip_request *req, enum xmittype reliable, int oldsdp, int rpid);
+static int transmit_response(struct sip_pvt *p, const char *msg, const struct sip_request *req);
 static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *unsupported);
 static int transmit_response_with_auth(struct sip_pvt *p, const char *msg, const struct sip_request *req, const char *rand, enum xmittype reliable, const char *header, int stale);
 static int transmit_provisional_response(struct sip_pvt *p, const char *msg, const struct sip_request *req, int with_sdp);
@@ -1269,6 +1269,7 @@ static int transmit_notify_with_sipfrag(struct sip_pvt *p, int cseq, char *messa
 static int transmit_cc_notify(struct ast_cc_agent *agent, struct sip_pvt *subscription, enum sip_cc_notify_state state);
 static int transmit_register(struct sip_registry *r, int sipmethod, const char *auth, const char *authheader);
 static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno);
+static void add_required_respheader(struct sip_request *req);
 static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno);
 static void copy_request(struct sip_request *dst, const struct sip_request *src);
 static void receive_message(struct sip_pvt *p, struct sip_request *req);
@@ -4125,6 +4126,9 @@ static enum sip_result __sip_reliable_xmit(struct sip_pvt *p, uint32_t seqno, in
 		if (sscanf(ast_str_buffer(pkt->data), "SIP/2.0 %30u", &respid) == 1) {
 			pkt->response_code = respid;
 		}
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && respid > 100 && respid < 200) {
+			pkt->rseqno = p->rseq;
+		}
 	}
 	pkt->timer_t1 = p->timer_t1;	/* Set SIP timer T1 */
 	pkt->retransid = -1;
@@ -4306,7 +4310,7 @@ int sip_cancel_destroy(struct sip_pvt *p)
 
 /*! \brief Acknowledges receipt of a packet and stops retransmission
  * called with p locked*/
-int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
+int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod, uint32_t rseqno)
 {
 	struct sip_pkt *cur, *prev = NULL;
 	const char *msg = "Not Found";	/* used only for debugging */
@@ -4325,6 +4329,10 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 		if (cur->seqno != seqno || cur->is_resp != resp) {
 			continue;
 		}
+		/* With PRACK we can have a situation with multiple unPRACKed responses */
+		if (rseqno && cur->rseqno != rseqno) {
+			continue;
+		}
 		if (cur->is_resp || cur->method == sipmethod) {
 			res = TRUE;
 			msg = "Found";
@@ -4336,6 +4344,7 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 				if (sipdebug)
 					ast_debug(4, "** SIP TIMER: Cancelling retransmit of packet (reply received) Retransid #%d\n", cur->retransid);
 			}
+
 			/* This odd section is designed to thwart a
 			 * race condition in the packet scheduler. There are
 			 * two conditions under which deleting the packet from the
@@ -4366,8 +4375,8 @@ int __sip_ack(struct sip_pvt *p, uint32_t seqno, int resp, int sipmethod)
 			break;
 		}
 	}
-	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s\n",
-		p->callid, resp ? "Response" : "Request", seqno, msg);
+	ast_debug(1, "Stopping retransmission on '%s' of %s %u: Match %s Rseq %u\n",
+		p->callid, resp ? "Response" : "Request", seqno, msg, rseqno);
 	return res;
 }
 
@@ -4385,7 +4394,7 @@ void __sip_pretend_ack(struct sip_pvt *p)
 		}
 		cur = p->packets;
 		method = (cur->method) ? cur->method : find_sip_method(ast_str_buffer(cur->data));
-		__sip_ack(p, cur->seqno, cur->is_resp, method);
+		__sip_ack(p, cur->seqno, cur->is_resp, method, cur->rseqno);
 	}
 }
 
@@ -4498,6 +4507,10 @@ static void update_provisional_keepalive(struct sip_pvt *pvt, int with_sdp)
 		with_sdp ? send_provisional_keepalive_with_sdp : send_provisional_keepalive, dialog_ref(pvt, "Increment refcount to pass dialog pointer to sched callback"));
 }
 
+/*! \brief Adds a Required header 
+
+	Needs to be called before attachment (i.e. SDP) is added
+*/
 static void add_required_respheader(struct sip_request *req)
 {
 	struct ast_str *str;
@@ -4526,10 +4539,35 @@ static void add_required_respheader(struct sip_request *req)
 	ast_free(str);
 }
 
+
+/*! \brief Active PRACK if supported by config and by other end */
+static void add_prack_respheader(struct sip_pvt *p, struct sip_request *req, int reliable)
+{
+	/* If method is INVITE and it contains Supported: 100 rel and we have enabled PRACK */
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL)) {
+		/* Check if the invite has 100 REL supported here */
+		if (reliable == XMIT_PRACK) {
+			char buf[SIPBUFSIZE/2];
+			if (p->rseq == 0) {
+				p->rseq = 41; /* Starting level. Hi Douglas */
+			}
+			snprintf(buf, sizeof(buf), "%d", ++(p->rseq));
+			add_header(req, "Rseq", buf);
+			req->rseqno = p->rseq;
+			req->reqsipoptions |= SIP_OPT_100REL;
+			append_history(p, "PRACK", "PRACK Required: Our Rseq %u", p->rseq);
+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK USED HERE. Rseq %u \n", p->rseq);
+		} else {
+			ast_debug(2, "=!=!=!=!=!=!=!= PRACK COULD BE USED HERE. Exactly HERE\n");
+		}
+	}
+}
+
 /*! \brief Transmit response on SIP request*/
 static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
 {
 	int res;
+
 
 	finalize_content(req);
 	add_blank(req);
@@ -4555,7 +4593,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 	}
 
 	res = (reliable) ?
-		 __sip_reliable_xmit(p, seqno, 1, req->data, (reliable == XMIT_CRITICAL), req->method) :
+		 __sip_reliable_xmit(p, seqno, 1, req->data, (reliable == XMIT_CRITICAL || reliable == XMIT_PRACK), req->method) :
 		__sip_xmit(p, req->data);
 	deinit_req(req);
 	if (res > 0) {
@@ -6939,7 +6977,13 @@ static int sip_answer(struct ast_channel *ast)
 	struct sip_pvt *p = ast->tech_pvt;
 
 	sip_pvt_lock(p);
-	if (ast->_state != AST_STATE_UP) {
+	if (ast->_state != AST_STATE_UP && ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
+		ast_set_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
+		ast_debug(2, "<-<-<--<-<-<-< HOLDING Answer while waiting for PRACK to arrive on channel %s\n", ast->name);
+		sip_pvt_unlock(p);
+		return 0;
+	}
+	if (ast->_state != AST_STATE_UP || ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
 		try_suggested_sip_codec(p);	
 
 		ast_setstate(ast, AST_STATE_UP);
@@ -10401,13 +10445,15 @@ static int process_sdp_a_image(const char *a, struct sip_pvt *p)
  *  is supported for this dialog. */
 static int add_supported_header(struct sip_pvt *pvt, struct sip_request *req)
 {
-	int res;
+	char supported[256] = "replaces";
+
 	if (st_get_mode(pvt, 0) != SESSION_TIMER_MODE_REFUSE) {
-		res = add_header(req, "Supported", "replaces, timer");
-	} else {
-		res = add_header(req, "Supported", "replaces");
+		strncat(supported, ", timer", sizeof(supported));
+	} 
+	if (ast_test_flag(&pvt->flags[2], SIP_PAGE3_PRACK)) {
+		strncat(supported, ", 100rel", sizeof(supported));
 	}
-	return res;
+	return add_header(req, "Supported", supported);
 }
 
 /*! \brief Add header to SIP message */
@@ -10925,7 +10971,6 @@ static int reqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod, ui
 		seqno = p->ocseq;
 	}
 	
-	/* A CANCEL must have the same branch as the INVITE that it is canceling. */
 	if (sipmethod == SIP_CANCEL) {
 		p->branch = p->invite_branch;
 		build_via(p);
@@ -11048,8 +11093,10 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 {
 	struct sip_request resp;
 	uint32_t seqno = 0;
+	int res;
 
-	if (reliable && (sscanf(get_header(req, "CSeq"), "%30u ", &seqno) != 1)) {
+	res = sscanf(get_header(req, "CSeq"), "%30u ", &seqno);
+	if (reliable && res != 1) {
 		ast_log(LOG_WARNING, "Unable to determine sequence number from '%s'\n", get_header(req, "CSeq"));
 		return -1;
 	}
@@ -11060,6 +11107,10 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			&& (!strncmp(msg, "180", 3) || !strncmp(msg, "183", 3))) {
 		ast_clear_flag(&p->flags[1], SIP_PAGE2_CONNECTLINEUPDATE_PEND);
 		add_rpid(&resp, p);
+	}
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
+		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
+		reliable = XMIT_PRACK;
 	}
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
@@ -11100,6 +11151,10 @@ static int __transmit_response(struct sip_pvt *p, const char *msg, const struct 
 			add_header(&resp, "X-Asterisk-HangupCauseCode", buf);
 		}
 	}
+	if (strncmp(msg, "100", 3)) {
+		add_prack_respheader(p, &resp, reliable);
+		add_required_respheader(&resp);
+	}
 	return send_response(p, &resp, reliable, seqno);
 }
 
@@ -11112,6 +11167,7 @@ static int transmit_response_with_sip_etag(struct sip_pvt *p, const char *msg, c
 	}
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "SIP-ETag", esc_entry->entity_tag);
+	add_required_respheader(&resp);
 
 	return send_response(p, &resp, 0, 0);
 }
@@ -11199,6 +11255,7 @@ static int transmit_response_with_unsupported(struct sip_pvt *p, const char *msg
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
 	add_header(&resp, "Unsupported", unsupported);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
@@ -11252,6 +11309,7 @@ static int transmit_response_with_date(struct sip_pvt *p, const char *msg, const
 	struct sip_request resp;
 	respprep(&resp, p, msg, req);
 	append_date(&resp);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
@@ -11261,6 +11319,7 @@ static int transmit_response_with_allow(struct sip_pvt *p, const char *msg, cons
 	struct sip_request resp;
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "Accept", "application/sdp");
+	add_required_respheader(&resp);
 	return send_response(p, &resp, reliable, 0);
 }
 
@@ -11273,6 +11332,7 @@ static int transmit_response_with_minexpires(struct sip_pvt *p, const char *msg,
 	snprintf(tmp, sizeof(tmp), "%d", min_expiry);
 	respprep(&resp, p, msg, req);
 	add_header(&resp, "Min-Expires", tmp);
+	add_required_respheader(&resp);
 	return send_response(p, &resp, XMIT_UNRELIABLE, 0);
 }
 
@@ -12359,6 +12419,18 @@ static int transmit_response_with_sdp(struct sip_pvt *p, const char *msg, const 
 	if (rpid == TRUE) {
 		add_rpid(&resp, p);
 	}
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL) && strncmp(msg, "100", 3) && !strncmp(msg, "1", 1)) {
+		ast_debug(2, "=!=!=!=!=!= PRACK applied to message \"%s\" \n", msg);
+		reliable = XMIT_PRACK;
+	}
+	if (strncmp(msg, "100", 3)) {
+		/* If we send a response WITH sdp we are not allowed to respond before the PRACK is received */
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_100REL)) {
+			ast_set_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);
+		}
+		add_prack_respheader(p, &resp, reliable);
+		add_required_respheader(&resp);
+	}
 	if (ast_test_flag(&p->flags[0], SIP_OFFER_CC)) {
 		add_cc_call_info_to_response(p, &resp);
 	}
@@ -12769,7 +12841,69 @@ static int transmit_publish(struct sip_epa_entry *epa_entry, enum sip_publish_ty
 }
 
 /*! 
- * \brief Build REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
+ * \brief transmit SIP PRACK as a response to a provisional response with a Rseq and Require: 100rel header 
+ */
+static int transmit_prack(struct sip_pvt *p, uint32_t their_rseq)
+{
+	int res;
+	int comparerseq = TRUE;
+	uint32_t focus_rseq = p->irseq;
+
+	/* During the early media phase, we could have a situation where we get provisional
+	   responses from multiple devices, in separate early dialogs. In this case, this 
+	   code focuses on the FIRST early media response as the one in focus where we 
+	   check the rseq sequence numbers for retransmits and act upon them.
+	*/
+
+	if (!ast_strlen_zero(p->theirtag_prack) && strcmp(p->theirtag, p->theirtag_prack)) {
+		/* We have already sent a PRACK in this dialog, but to a different device.
+		   In this code, we focus on the first response that requires PRACK and do not check
+		   the validity of rseq in responses in other early dialogs by controlling
+		   the PRACK sequence numbers ordering.
+
+		   To be 100% RFC correct, we should have a sip_pvt structure for each early dialog
+		   and terminate them if we get a 199 response in that early dialog. these should
+		   be organized in a tree-like structure based on the original
+		   INVITE callid, cseq and from-tag.
+		*/
+		comparerseq = FALSE;
+	}
+	
+	if (comparerseq) {
+		if (their_rseq == p->irseq) {
+			ast_debug(3, "!?!?!?!?!? This is a retransmit of the previous response. %u \n", their_rseq);
+			/* RFC 3262: In particular, a UAC SHOULD NOT retransmit the PRACK request
+   		   		when it receives a retransmission of the provisional response being
+   		   		acknowledged, although doing so does not create a protocol error.*/
+			return -2;	/* Not used by transmit_invite et al */
+		}
+		if (p->irseq > 0 && their_rseq != p->irseq + 1) {
+			ast_debug(3, "!?!?!?!?!? This is a response out of sequence! ignored. %u \n", their_rseq);
+			/* RFC 3262: if the UAC receives another reliable provisional
+   				response to the same request, and its RSeq value is not one higher
+   				than the value of the sequence number, that response MUST NOT be
+   				acknowledged with a PRACK, and MUST NOT be processed further by the
+   				UAC.  An implementation MAY discard the response, or MAY cache the
+   				response in the hopes of receiving the missing responses.
+			*/
+			return -3;
+		}
+	}
+	p->irseq = their_rseq;
+	res = transmit_invite(p, SIP_PRACK, 0, 1, NULL);
+
+	if (ast_strlen_zero(p->theirtag_prack)) {
+		p->irseq = their_rseq;
+		ast_string_field_set(p, theirtag_prack, p->tag);		/* Save this tag as a PRACK focus for this dialog */
+	} else {
+		p->irseq = focus_rseq;
+	}
+
+	return res;
+}
+
+/*! 
+ * \brief Build PRACK/REFER/INVITE/OPTIONS/SUBSCRIBE message and transmit it
  * \param p sip_pvt structure
  * \param sipmethod
  * \param sdp unknown
@@ -12784,7 +12918,9 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 
 	if (init) {/* Bump branch even on initial requests */
 		p->branch ^= ast_random();
-		p->invite_branch = p->branch;
+		if (sipmethod != SIP_PRACK) {
+			p->invite_branch = p->branch;
+		}
 		build_via(p);
 	}
 	if (init > 1) {
@@ -12820,12 +12956,19 @@ static int transmit_invite(struct sip_pvt *p, int sipmethod, int sdp, int init, 
 		}
 		snprintf(buf, sizeof(buf), "%d", p->expiry);
 		add_header(&req, "Expires", buf);
+	} else if (sipmethod == SIP_PRACK) {
+		/* Place holder */
+		/* Add headers for PRACK */
+		char buf[SIPBUFSIZE/2];
+		snprintf(buf, sizeof(buf), "%u %u %s", p->irseq, p->lastinvite, "INVITE");
+		add_header(&req, "RAck", buf);
 	}
 
 	/* This new INVITE is part of an attended transfer. Make sure that the
 	other end knows and replace the current call with this new call */
 	if (p->options && !ast_strlen_zero(p->options->replaces)) {
 		add_header(&req, "Replaces", p->options->replaces);
+		/* XXX This needs to be automated since we can have multiple options here */
 		add_header(&req, "Require", "replaces");
 	}
 
@@ -18341,6 +18484,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  DirectMedia  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_DIRECT_MEDIA)));
 		ast_cli(fd, "  PromiscRedir : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)));
 		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
+		ast_cli(fd, "  PRACK support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK)));
 		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
 		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
 		ast_cli(fd, "  Comfort Noise: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)));
@@ -18481,6 +18625,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 
 		/* - is enumerated */
 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
+		astman_append(s, "SIP-PRACK: %s\r\n", ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK) ? "Y" : "N");
 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n", ast_sockaddr_stringify_addr(&peer->addr), ast_sockaddr_port(&peer->addr));
 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_sockaddr_stringify_addr(&peer->defaddr), ast_sockaddr_port(&peer->defaddr));
@@ -19080,7 +19225,9 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Timer T1 minimum:       %d\n", global_t1min);
  	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
 	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
+	ast_cli(a->fd, "  Early media focus:      %s\n", AST_CLI_YESNO(sip_cfg.early_media_focus));
 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
+	ast_cli(a->fd, "  PRACK support:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_PRACK)));
 
 	ast_cli(a->fd, "\nDefault Settings:\n");
 	ast_cli(a->fd, "-----------------\n");
@@ -19463,6 +19610,8 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
 			ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
+			ast_cli(a->fd, "  SIP PRACK support:      %s\n", ast_test_flag(&cur->flags[2], SIP_PAGE3_100REL) ? "Active" :
+					(ast_test_flag(&cur->flags[2], SIP_PAGE3_PRACK) ? "Enabled" : "Disabled"));
 			ast_cli(a->fd, "  Force rport:            %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_NAT_FORCE_RPORT)));
 			if (ast_sockaddr_isnull(&cur->redirip)) {
 				ast_cli(a->fd,
@@ -20716,6 +20865,48 @@ static int sip_reinvite_retry(const void *data)
 	return 0;
 }
 
+/*! \brief Handle PRACK responses
+ */
+static void handle_response_prack(struct sip_pvt *p, int resp, const char *rest, struct sip_request *req, uint32_t seqno)
+{
+	ast_debug(2, "---> Got response on PRACK :: %d \n", resp);
+	/* Handle authentication early */
+	if (resp == 401 || resp == 407) {
+		if (p->options) {
+			p->options->auth_type = (resp == 401 ? WWW_AUTH : PROXY_AUTH);
+		}
+		if ((p->authtries == MAX_AUTHTRIES) || do_proxy_auth(p, req, resp, SIP_PRACK, 1)) {
+			ast_log(LOG_NOTICE, "Failed to authenticate on PRACK to '%s'\n", get_header(&p->initreq, "From"));
+		}
+		return;
+	}
+
+	/* THe REALLY important thing is that the PRACK request gets a response. The response itself
+	   is not that important. A 481 means that the call will hang up. No response at all means
+	   that the call will hang up 
+	 */
+	switch(resp) {
+	case 200:	/* 200 OK - all is fine in the kingdom of SIP */
+		break;
+
+	case 408: /* Timeout */
+	case 481: /* Ok, they did not find our call ID. Let's die */
+		if (p->owner) {
+			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
+		}
+		break;
+	case 403: /* Forbidden */
+	case 415: /* Unsupported media type */
+	case 488: /* Not acceptable here */
+	case 606: /* Not Acceptable */
+	default:
+		/* Don't do anything */
+		break;
+	};
+	
+	
+}
+
 /*!
  * \brief Handle authentication challenge for SIP UPDATE
  *
@@ -20972,7 +21163,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_setstate(p->owner, AST_STATE_RINGING);
 			}
 		}
-		if (find_sdp(req)) {
+		if (!req->ignoresdp && find_sdp(req)) {
 			if (p->invitestate != INV_CANCELLED)
 				p->invitestate = INV_EARLY_MEDIA;
 			res = process_sdp(p, req, SDP_T38_NONE);
@@ -20981,6 +21172,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
 			}
 			ast_rtp_instance_activate(p->rtp);
+			if (sip_cfg.early_media_focus && ast_strlen_zero(p->theirtag_early)) {
+				ast_string_field_set(p, theirtag_early, p->tag);
+			}
 		}
 		check_pendings(p);
 		break;
@@ -21044,13 +21238,16 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			}
 			sip_handle_cc(p, req, AST_CC_CCNR);
 		}
-		if (find_sdp(req)) {
+		if (!req->ignoresdp && find_sdp(req)) {
 			if (p->invitestate != INV_CANCELLED)
 				p->invitestate = INV_EARLY_MEDIA;
 			res = process_sdp(p, req, SDP_T38_NONE);
 			if (!req->ignore && p->owner) {
 				/* Queue a progress frame */
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
+			}
+			if (sip_cfg.early_media_focus && ast_strlen_zero(p->theirtag_early)) {
+				ast_string_field_set(p, theirtag_early, p->tag);
 			}
 			ast_rtp_instance_activate(p->rtp);
 		} else {
@@ -21155,6 +21352,10 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 
 		/* Check for Session-Timers related headers */
 		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
+			/* XXX Code should check in response if there's a "Require: timer"
+				header. If there is, sessions timer is enabled for this dialog
+				If not, only this side (UAC) do session timers.
+			 */
 			p_hdrval = (char*)get_header(req, "Session-Expires");
 			if (!ast_strlen_zero(p_hdrval)) {
 				/* UAS supports Session-Timers */
@@ -21872,6 +22073,9 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	struct ast_channel *owner;
 	int sipmethod;
 	const char *c = get_header(req, "Cseq");
+	const char *required = get_header(req, "Require");
+	char tag[128];
+
 	/* GCC 4.2 complains if I try to cast c as a char * when passing it to ast_skip_nonblanks, so make a copy of it */
 	char *c_copy = ast_strdupa(c);
 	/* Skip the Cseq and its subsequent spaces */
@@ -21913,7 +22117,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				ack_res = __sip_semi_ack(p, seqno, 0, sipmethod);
 			}
 		} else {
-			ack_res = __sip_ack(p, seqno, 0, sipmethod);
+			ack_res = __sip_ack(p, seqno, 0, sipmethod, 0);
 		}
 
 		if (ack_res == FALSE) {
@@ -21932,13 +22136,14 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		p->pendinginvite = 0;
 	}
 
-	/* Get their tag if we haven't already */
-	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
-		char tag[128];
+	
+	/* Always get the tag. Find_call will filter out after we have an established dialog,
+	   so that we don't update the tag after a 200 or other final response. 
+	   Provided that SIP pedantic checking is turned on of course.
+	*/
+	gettag(req, "To", tag, sizeof(tag));
+	ast_string_field_set(p, theirtag, tag);
 
-		gettag(req, "To", tag, sizeof(tag));
-		ast_string_field_set(p, theirtag, tag);
-	}
 	/* This needs to be configurable on a channel/peer level,
 	   not mandatory for all communication. Sadly enough, NAT implementations
 	   are not so stable so we can always rely on these headers.
@@ -21958,6 +22163,49 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 		pvt_set_needdestroy(p, "received 4XX response to a BYE");
 		return;
 	}
+	
+	/* If we have a required header in the response, the other side have activated an extension
+	   we said that we do support */
+	if (!ast_strlen_zero(required)) {
+		int activeextensions = parse_required_sip_options(required);
+		if (activeextensions & SIP_OPT_100REL) {
+
+			const char *rseq = get_header(req, "RSeq");
+			uint32_t their_rseq;
+			int res;
+			ast_debug(3, "!=!=!=!=!=! Response relies on PRACK! Rseq %s\n", rseq);
+
+			/* XXX If the response relies on PRACK, we need to start a PRACK transaction
+			 */
+			sscanf(get_header(req, "RSeq"), "%30u ", &their_rseq);
+			append_history(p, "TxPrack", "Their Rseq %u\n", their_rseq);
+			parse_ok_contact(p, req);
+			build_route(p, req, 1, resp);
+			
+			res = transmit_prack(p, their_rseq);
+			if (res == -2) {
+				/* This response is a retransmit and should be ignored */
+				/* RFC 3262: Once a reliable provisional response is received, retransmissions of
+   				   that response MUST be discarded.  A response is a retransmission when
+   				   its dialog ID, CSeq, and RSeq match the original response.  
+				*/
+				append_history(p, "PrIgnore", "Ignoring this retransmit (PRACK active)\n");
+				return;
+			} else if (res  == -3) {
+				append_history(p, "PrIgnore", "Ignoring this response - out of order (PRACK active)\n");
+				return;
+			}
+		}
+		if (activeextensions & SIP_OPT_TIMER) {
+			ast_debug(3, "!=!=!=!=!=! The other side activated Session timers! \n");
+		}
+	}
+
+	if (sip_cfg.early_media_focus && !ast_strlen_zero(p->theirtag_early) && strcmp(p->theirtag_early, p->theirtag)) {
+		/* If we already are in early media phase, and have a response from a new device in this call we should
+	   	ignore the SDP. */
+		req->ignoresdp = TRUE;
+	}
 
 	if (p->relatedpeer && sipmethod == SIP_OPTIONS) {
 		/* We don't really care what the response is, just that it replied back.
@@ -21975,6 +22223,9 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	} else if (sipmethod == SIP_INFO) {
 		/* More good gravy! */
 		handle_response_info(p, resp, rest, req, seqno);
+	} else if (sipmethod == SIP_PRACK) {
+		/* More good candy! */
+		handle_response_prack(p, resp, rest, req, seqno);
 	} else if (sipmethod == SIP_MESSAGE) {
 		/* More good gravy! */
 		handle_response_message(p, resp, rest, req, seqno);
@@ -23122,6 +23373,37 @@ static int handle_request_update(struct sip_pvt *p, struct sip_request *req)
 	return 0;
 }
 
+/*! Support for the SIP Prack method
+ */
+static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
+{
+	const char *rack = get_header(req, "RAck");
+	uint32_t rseq, cseq;
+
+	if(sscanf(rack, "%30u %30u", &rseq, &cseq) != 2) {
+		/* we did not get proper rseq/cseq */
+		transmit_response(p, "481 Could not get proper rseq/cseq in Rack", req);
+	}
+	ast_debug(3, "!=!=!=!=!=!= Got PRACK with rseq %u and cseq %u \n", rseq, cseq);
+	if (rseq <= p->rseq) {
+		/* Ack the retransmits */
+		int acked = __sip_ack(p, cseq, 1 /* response */, 0, rseq);
+		ast_debug(2, "!=!=!=!=!=! Tried acking the response - %s \n", acked ? "Sucess" : "Total utterly failure");
+	}
+	append_history(p, "PRACK", "PRACK received Rseq %u", rseq);
+	transmit_response(p, "200 OK", req);
+	if (ast_test_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK)) {
+		/* If the response sent reliably contained an SDP, we're not allowed to  answer
+		   until we have a PRACK response 
+		 */
+		ast_debug(2, "-<-<--<-<-<-<- Finally a good time to answer call (PRACK arrived) %s \n", p->owner->name);
+		ast_clear_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
+		sip_answer(p->owner);
+	}
+	ast_clear_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK);	/* Clear flag */
+	return 0;
+}
+
 /*!
  * \brief Handle incoming INVITE request
  * \note If the INVITE has a Replaces header, it is part of an
@@ -23183,7 +23465,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			p->invitestate = INV_COMPLETED;
 			if (!p->lastinvite)
 				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-			res = -1;
+			res = 0;
 			goto request_invite_cleanup;
 		}
 	}
@@ -23192,6 +23474,23 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	Include the Require: option tags for further processing as well */
 	p->sipoptions |= required_profile;
 	p->reqsipoptions = required_profile;
+
+	/* Check if the request supports or require PRACK */
+	if (p->reqsipoptions & SIP_OPT_100REL || p->sipoptions & SIP_OPT_100REL) {
+		if (ast_test_flag(&p->flags[2], SIP_PAGE3_PRACK)) {	/* Is PRACK enabled for this dialog? */
+			ast_set_flag(&p->flags[2], SIP_PAGE3_100REL);	/* Mark PRACK as active for this dialog */
+			ast_debug(2, "--#-#-#-#- Adding PRACK support for this dialog \n");
+		} else if (p->reqsipoptions & SIP_OPT_100REL) {
+			/* If PRACK was required but is disabled in configuration, don't play */
+			transmit_response(p, "420 Bad extension (unsupported)", req);
+			p->invitestate = INV_COMPLETED;
+			if (!p->lastinvite) {
+				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+			}
+			res = 0;
+			goto request_invite_cleanup;
+		}
+	}
 
 	/* Check if this is a loop */
 	if (ast_test_flag(&p->flags[0], SIP_OUTGOING) && p->owner && (p->invitestate != INV_TERMINATED && p->invitestate != INV_CONFIRMED) && p->owner->_state != AST_STATE_UP) {
@@ -23255,7 +23554,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			 * transaction. Calling __sip_ack will take care of this by clearing the p->pendinginvite and removing the response
 			 * from the previous transaction from the list of outstanding packets.
 			 */
-			__sip_ack(p, p->pendinginvite, 1, 0);
+			__sip_ack(p, p->pendinginvite, 1, 0, 0);
 		} else {
 			/* We already have a pending invite. Sorry. You are on hold. */
 			p->glareinvite = seqno;
@@ -25369,7 +25668,7 @@ static int handle_request_publish(struct sip_pvt *p, struct sip_request *req, st
 		return 0;
 	} else if (auth_result == AUTH_SUCCESSFUL && p->lastinvite) {
 		/* We need to stop retransmitting the 401 */
-		__sip_ack(p, p->lastinvite, 1, 0);
+		__sip_ack(p, p->lastinvite, 1, 0, 0);
 	}
 
 	publish_type = determine_sip_publish_type(req, event, etag, expires_str, &expires_int);
@@ -26199,12 +26498,15 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 	case SIP_UPDATE:
 		res = handle_request_update(p, req);
 		break;
+	case SIP_PRACK:
+		res = handle_request_prack(p, req);
+		break;
 	case SIP_ACK:
 		/* Make sure we don't ignore this */
 		if (seqno == p->pendinginvite) {
 			p->invitestate = INV_TERMINATED;
 			p->pendinginvite = 0;
-			acked = __sip_ack(p, seqno, 1 /* response */, 0);
+			acked = __sip_ack(p, seqno, 1 /* response */, 0, 0);
 			if (find_sdp(req)) {
 				if (process_sdp(p, req, SDP_T38_NONE)) {
 					return -1;
@@ -26217,7 +26519,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 		} else if (p->glareinvite == seqno) {
 			/* handle ack for the 491 pending sent for glareinvite */
 			p->glareinvite = 0;
-			acked = __sip_ack(p, seqno, 1, 0);
+			acked = __sip_ack(p, seqno, 1, 0, 0);
 		}
 		if (!acked) {
 			/* Got an ACK that did not match anything. Ignore
@@ -27863,6 +28165,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
 	} else if (!strcasecmp(v->name, "comfort-noise")) {
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOW_CN);
+	} else if (!strcasecmp(v->name, "prack")) {
+		ast_set_flag(&mask[2], SIP_PAGE3_PRACK);
+		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_PRACK);
 	} else
 		res = 0;
 
@@ -29044,6 +29349,7 @@ static int reload_config(enum channelreloadreason reason)
 	externtcpport = STANDARD_SIP_PORT;
 	externtlsport = STANDARD_TLS_PORT;
 	sip_cfg.srvlookup = DEFAULT_SRVLOOKUP;
+	sip_cfg.early_media_focus = DEFAULT_EARLY_MEDIA_FOCUS;
 	global_tos_sip = DEFAULT_TOS_SIP;
 	global_tos_audio = DEFAULT_TOS_AUDIO;
 	global_tos_video = DEFAULT_TOS_VIDEO;
@@ -29384,6 +29690,8 @@ static int reload_config(enum channelreloadreason reason)
 			global_match_auth_username = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "srvlookup")) {
 			sip_cfg.srvlookup = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "earlymediafocus")) {
+			sip_cfg.early_media_focus = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "pedantic")) {
 			sip_cfg.pedanticsipchecking = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "maxexpirey") || !strcasecmp(v->name, "maxexpiry")) {
