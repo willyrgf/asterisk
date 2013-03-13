@@ -1165,6 +1165,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; timerb
 ; qualifyfreq
 ; t38pt_usertpsource
+; tonezone              ; Default Tone zone (see indications.conf) for calls created by this device
 ; contactpermit         ; Limit what a host may register as (a neat trick
 ; contactdeny           ; is to register at the same IP as a SIP provider,
 ;                       ; then call oneself, and get redirected to that

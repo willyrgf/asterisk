@@ -30,6 +30,8 @@
 #include "asterisk/utils.h"
 #include "asterisk/data.h"
 
+#define MAX_TONEZONE_COUNTRY 16
+
 /*!
  * \brief Description of a tone
  */
@@ -72,7 +74,7 @@ struct ast_tone_zone_sound {
  */
 struct ast_tone_zone {
 	/*! \brief Country code that this set of tones is for */
-	char country[16];
+	char country[MAX_TONEZONE_COUNTRY];
 	/*! 
 	 * \brief Text description of the given country.
 	 *

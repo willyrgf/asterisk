@@ -32,6 +32,7 @@
 #include "asterisk/channel.h"
 #include "asterisk/app.h"
 #include "asterisk/astobj.h"
+#include "asterisk/indications.h"
 
 #ifndef FALSE
 #define FALSE    0
@@ -1068,6 +1069,7 @@ struct sip_pvt {
 	unsigned int stalenonce:1;          /*!< Marks the current nonce as responded too */
 	unsigned int ongoing_reinvite:1;    /*!< There is a reinvite in progress that might need to be cleaned up */
 	char lastmsg[256];                  /*!< Last Message sent/received */
+	char zone[MAX_TONEZONE_COUNTRY];        /*!< Default tone zone for this call */
 	int amaflags;                       /*!< AMA Flags */
 	uint32_t pendinginvite; /*!< Any pending INVITE or state NOTIFY (in subscribe pvt's) ? (seqno of this) */
 	uint32_t glareinvite;      /*!< A invite received while a pending invite is already present is stored here.  Its seqno is the
@@ -1241,6 +1243,7 @@ struct sip_peer {
 	int lastmsgssent;
 	unsigned int sipoptions;        /*!<  Supported SIP options */
 	struct ast_flags flags[3];      /*!<  SIP_ flags */
+	char zone[MAX_TONEZONE_COUNTRY];        /*!< Default tone zone for this user */
 
 	/*! Mailboxes that this peer cares about */
 	AST_LIST_HEAD_NOLOCK(, sip_mailbox) mailboxes;
