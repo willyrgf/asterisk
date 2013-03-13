@@ -1,0 +1,20 @@
+Edvina AB
+Olle E. Johansson
+
+
+Pine Test Edition 1.8
+=====================
+
+This branch is a combination of a lot of work being done on 1.8.
+- set tone zone in sip.conf
+- fix DTMF duration for bridged calls
+- make queues play prompts in the background, so that agents can answer the call
+  whenever they're free and don't have to wait
+- support incoming comfort noice/silence suppression
+- improved RTCP handling and call quality records in database or log files (cqr)
+
+There are README files for each individual branch in the /patches directory.
+Read them!
+
+Individual patches are in the /patches directory. Note that there still are
+debugging prompts in here, so do not be surprised if you get some weird output.
