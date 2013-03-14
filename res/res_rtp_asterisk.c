@@ -2025,7 +2025,8 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 					rtt *= 1000;
 				}
 				rtt = rtt / 1000.;
-				rttsec = rtt / 1000.;
+				//rttsec = rtt / 1000.;
+				rttsec = rtt; 	/* OEJ TESTING */
 				rtp->rtcp->rtt = rttsec;
 
 				if (comp - dlsr >= lsr) {
@@ -3038,6 +3039,7 @@ static int ast_rtp_get_stat(struct ast_rtp_instance *instance, struct ast_rtp_in
 	}
 
 	/* To fix */
+	stats->numberofreports = rtp->rtcp->rec_rr_count + rtp->rtcp->rec_sr_count;
 	stats->readcost = rtp->rtcp->readcost;
         stats->writecost = rtp->rtcp->writecost;
 	stats->lasttxformat = rtp->lasttxformat;
