@@ -141,7 +141,7 @@ struct ast_translator {
 	                                        *   on translation cost table. */
 	int comp_cost;                         /*!< Cost value associated with this translator based
 	                                        *   on computation time. This cost value is computed based
-											*   on the time required to translate sample data. */
+						*   on the time required to translate sample data. */
 
 	int (*newpvt)(struct ast_trans_pvt *); /*!< initialize private data 
                                             *   associated with the translator */

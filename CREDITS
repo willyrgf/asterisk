@@ -25,6 +25,9 @@ originate with video/text and many more contributions.
 
 ClearIT AB for work with meetme, res_mutestream, RTCP, manager and tonezones
 
+Nordicom Norge AS, Kristiansand, Norway, for funding work with RTCP support
+and Call Quality Records.
+
 === WISHLIST CONTRIBUTERS ===
 Jeremy McNamara - SpeeX support
 Nick Seraphin - RDNIS support
@@ -118,6 +121,7 @@ Olle E. Johansson - SIP RFC compliance, documentation and testing, testing,
 	SIP presence support, SIP call state updates (dialog-info), 
 	QUEUE_EXISTS function, device state provider architecture,
 	multiparking (together with mvanbaak), meetme and parking device states,
+        RTCP improvements, Call Quality Records,
 	MiniVM - the small voicemail system, many documentation
 	updates/corrections, and many bug fixes.
 	oej(AT)edvina.net, http://edvina.net
@@ -219,7 +223,8 @@ FCCN, Lissabon, Portugal - SIP show channels CLI command (developed by oej)
 Viagenie, Canada - IPv6 support in socket layers and SIP implementation
 	Developers: Marc Blanchet, Simon Perreault and Jean-Philippe Dionne
 
-ClearIT AB, Sweden - res_mutestream, queue_exists and various other patches (developed by oej)
+ClearIT AB, Sweden - res_mutestream, queue_exists, RTCP improvements and various 
+        other patches (developed by oej)
 
 Despegar.com, Argentina - AstData API implementation, also sponsored by Google as part of the
 	gsoc/2009 program (developed by Eliel)

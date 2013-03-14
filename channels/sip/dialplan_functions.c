@@ -162,6 +162,11 @@ int sip_acf_channel_read(struct ast_channel *chan, const char *funcname, char *p
 			if (!ast_rtp_instance_get_quality(rtp, AST_RTP_INSTANCE_STAT_FIELD_QUALITY, quality_buf, sizeof(quality_buf))) {
 				return -1;
 			}
+#ifdef OEJ
+			if (!ast_rtp_instance_get_qualdata(rtp, ???, &qos)) {
+				this_needs_some_love;
+			}
+#endif
 
 			ast_copy_string(buf, quality_buf, buflen);
 			return res;

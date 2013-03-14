@@ -191,6 +191,7 @@ static char *levels[NUMLOGLEVELS] = {
 	"ERROR",
 	"VERBOSE",
 	"DTMF",
+	"CQR",
 };
 
 /*! \brief Colors used in the console for logging */
@@ -202,7 +203,7 @@ static const int colors[NUMLOGLEVELS] = {
 	COLOR_RED,
 	COLOR_GREEN,
 	COLOR_BRGREEN,
-	0,
+	COLOR_BRBLUE,
 	0,
 	0,
 	0,

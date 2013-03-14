@@ -750,6 +750,8 @@ struct sip_settings {
 	int compactheaders;         /*!< send compact sip headers */
 	int allow_external_domains; /*!< Accept calls to external SIP domains? */
 	int callevents;             /*!< Whether we send manager events or not */
+	int rtcpevents;             /*!< Whether we send manager RTCP events or not */
+	int rtcptimer;		    /*!< How often, during a call, to report RTCP stats */
 	int regextenonqualify;      /*!< Whether to add/remove regexten when qualifying peers */
 	int legacy_useroption_parsing; /*!< Whether to strip useroptions in URI via semicolons */
 	int send_diversion;	        /*!< Whether to Send SIP Diversion headers */
@@ -1159,6 +1161,7 @@ struct sip_pvt {
 	int waitid;                         /*!< Wait ID for scheduler after 491 or other delays */
 	int reinviteid;                     /*!< Reinvite in case of provisional, but no final response */
 	int autokillid;                     /*!< Auto-kill ID (scheduler) */
+	int rtcpeventid;                        /*!< Scheduler ID for RTCP Events */
 	int t38id;                          /*!< T.38 Response ID */
 	struct sip_refer *refer;            /*!< REFER: SIP transfer data structure */
 	enum subscriptiontype subscribed;   /*!< SUBSCRIBE: Is this dialog a subscription?  */
@@ -1188,6 +1191,9 @@ struct sip_pvt {
 	struct sip_srtp *srtp;              /*!< Structure to hold Secure RTP session data for audio */
 	struct sip_srtp *vsrtp;             /*!< Structure to hold Secure RTP session data for video */
 	struct sip_srtp *tsrtp;             /*!< Structure to hold Secure RTP session data for text */
+	struct ast_rtp_instance_stats *audioqual;       /*!< Audio: The latest quality report, for realtime storage */
+	struct ast_rtp_instance_stats *videoqual;       /*!< Video: The latest quality report, for realtime storage */
+	struct sip_settings *sip_cfg;                   /*! Which sip_cfg is associated with this dialog */
 
 	int red;                            /*!< T.140 RTP Redundancy */
 	int hangupcause;                    /*!< Storage of hangupcause copied from our owner before we disconnect from the AST channel (only used at hangup) */
