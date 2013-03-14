@@ -581,22 +581,6 @@ void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int st
 static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_frame *frame;
-	struct ast_timer *interval_timer;
-
-	if (bridge_channel->features
-		&& (interval_timer = bridge_channel->features->interval_timer)) {
-		if (ast_wait_for_input(ast_timer_fd(interval_timer), 0) == 1) {
-			ast_timer_ack(interval_timer, 1);
-			if (bridge_channel_interval_ready(bridge_channel)) {
-				struct ast_frame interval_action = {
-					.frametype = AST_FRAME_BRIDGE_ACTION,
-					.subclass.integer = AST_BRIDGE_ACTION_INTERVAL,
-				};
-
-				ast_bridge_channel_queue_frame(bridge_channel, &interval_action);
-			}
-		}
-	}
 
 	if (bridge_channel->features && bridge_channel->features->mute) {
 		frame = ast_read_noaudio(bridge_channel->chan);
@@ -1444,7 +1428,7 @@ static void bridge_channel_handle_control(struct ast_bridge_channel *bridge_chan
  * \brief Handle bridge channel write frame to channel.
  * \since 12.0.0
  *
- * \param bridge_channel Channel to outgoing frame.
+ * \param bridge_channel Channel to write outgoing frame.
  *
  * \return Nothing
  */
@@ -1484,6 +1468,36 @@ static void bridge_channel_handle_write(struct ast_bridge_channel *bridge_channe
 
 /*!
  * \internal
+ * \brief Handle bridge channel interval expiration.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Channel to check interval on.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_handle_interval(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_timer *interval_timer;
+
+	if (bridge_channel->features
+		&& (interval_timer = bridge_channel->features->interval_timer)) {
+		if (ast_wait_for_input(ast_timer_fd(interval_timer), 0) == 1) {
+			ast_timer_ack(interval_timer, 1);
+			if (bridge_channel_interval_ready(bridge_channel)) {
+/* BUGBUG since this is now only run by the channel thread, there is no need to queue the action once this intervals become a first class wait item in bridge_channel_wait(). */
+				struct ast_frame interval_action = {
+					.frametype = AST_FRAME_BRIDGE_ACTION,
+					.subclass.integer = AST_BRIDGE_ACTION_INTERVAL,
+				};
+
+				ast_bridge_channel_queue_frame(bridge_channel, &interval_action);
+			}
+		}
+	}
+}
+
+/*!
+ * \internal
  * \brief Wait for something to happen on the bridge channel and handle it.
  * \since 12.0.0
  *
@@ -1513,11 +1527,13 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 			bridge_channel->bridge);
 		ao2_unlock(bridge_channel);
 		outfd = -1;
+/* BUGBUG need to make the next expiring active interval setup ms timeout rather than holding up the chan reads. */
 		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1,
 			&bridge_channel->alert_pipe[0], 1, NULL, &outfd, &ms);
 		if (!bridge_channel->suspended
 			&& bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 			if (chan) {
+				bridge_channel_handle_interval(bridge_channel);
 				ast_bridge_handle_trip(bridge_channel);
 			} else if (-1 < outfd) {
 				bridge_channel_handle_write(bridge_channel);
