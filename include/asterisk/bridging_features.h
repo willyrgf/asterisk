@@ -203,12 +203,12 @@ struct ast_bridge_features {
 	struct ast_flags feature_flags;
 	/*! Used to assign the sequence number to the next interval hook added. */
 	unsigned int interval_sequence;
-	/*! Bit to indicate that the feature_flags and hook list is setup */
+	/*! TRUE if feature_flags is setup */
 	unsigned int usable:1;
-	/*! Bit to indicate whether the channel/bridge is muted or not */
+	/*! TRUE if the channel/bridge is muted. */
 	unsigned int mute:1;
 /* BUGBUG why is dtmf_passthrough not a feature_flags bit? */
-	/*! Bit to indicate whether DTMF should be passed into the bridge tech or not.  */
+	/*! TRUE if DTMF should be passed into the bridge tech.  */
 	unsigned int dtmf_passthrough:1;
 };
 

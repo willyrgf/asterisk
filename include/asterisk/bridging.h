@@ -1,8 +1,9 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2007 - 2009, Digium, Inc.
+ * Copyright (C) 2007 - 2009, 2013 Digium, Inc.
  *
+ * Richard Mudgett <rmudgett@digium.com>
  * Joshua Colp <jcolp@digium.com>
  *
  * See http://www.asterisk.org for more information about
@@ -16,10 +17,16 @@
  * at the top of the source tree.
  */
 
-/*! \file
+/*!
+ * \file
  * \brief Channel Bridging API
+ *
+ * \author Richard Mudgett <rmudgett@digium.com>
  * \author Joshua Colp <jcolp@digium.com>
  * \ref AstBridging
+ *
+ * See Also:
+ * \arg \ref AstCREDITS
  */
 
 /*!
@@ -76,12 +83,6 @@ enum ast_bridge_capability {
 	AST_BRIDGE_CAPABILITY_1TO1MIX = (1 << 2),
 	/*! Bridge is capable of mixing 2 or more channels */
 	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 3),
-	/*! Bridge should run using the multithreaded model */
-	AST_BRIDGE_CAPABILITY_MULTITHREADED = (1 << 4),
-	/*! Bridge technology can do video mixing (or something along those lines) */
-	AST_BRIDGE_CAPABILITY_VIDEO = (1 << 6),
-	/*! Bridge technology can optimize things based on who is talking */
-	AST_BRIDGE_CAPABILITY_OPTIMIZE = (1 << 7),
 };
 
 /*! \brief State information about a bridged channel */
@@ -129,10 +130,8 @@ struct ast_bridge_channel {
 	struct ast_bridge *bridge;
 	/*! Private information unique to the bridge technology */
 	void *bridge_pvt;
-	/*! Thread handling the bridged channel */
+	/*! Thread handling the bridged channel (Needed by ast_bridge_depart) */
 	pthread_t thread;
-	/*! TRUE if the channel has been poked. */
-	unsigned int poked;
 	/*! TRUE if the channel is in a bridge. */
 	unsigned int in_bridge:1;
 	/*! TRUE if the channel just joined the bridge. */
@@ -156,8 +155,10 @@ struct ast_bridge_channel {
 	struct bridge_roles_datastore *bridge_roles;
 	/*! Linked list information */
 	AST_LIST_ENTRY(ast_bridge_channel) entry;
-	/*! Queue of actions to perform on the channel. */
-	AST_LIST_HEAD_NOLOCK(, ast_frame) action_queue;
+	/*! Queue of outgoing frames to the channel. */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) wr_queue;
+	/*! Pipe to alert thread when frames are put into the wr_queue. */
+	int alert_pipe[2];
 };
 
 enum ast_bridge_action_type {
@@ -214,10 +215,10 @@ struct ast_bridge_video_mode {
  * \brief Structure that contains information about a bridge
  */
 struct ast_bridge {
-	/*! Condition, used if we want to wake up the bridge thread. */
-	ast_cond_t cond;
 	/*! Number of channels participating in the bridge */
-	int num_channels;
+	unsigned int num_channels;
+	/*! Number of active channels in the bridge. */
+	unsigned int num_active;
 	/*! The video mode this bridge is using */
 	struct ast_bridge_video_mode video_mode;
 	/*!
@@ -234,14 +235,8 @@ struct ast_bridge {
 	 * for bridge technologies that mix audio. When set to 0, the bridge tech must choose a
 	 * default interval for itself. */
 	unsigned int internal_mixing_interval;
-	/*! TRUE if the bridge thread is waiting on channels in the bridge array */
-	unsigned int waiting:1;
-	/*! TRUE if the bridge thread should stop */
-	unsigned int stop:1;
 	/*! TRUE if the bridge was reconfigured. */
 	unsigned int reconfigured:1;
-	/*! TRUE if the bridge thread loop should break.  Reconfig, stop, action-queue. */
-	unsigned int interrupt:1;
 	/*! TRUE if the bridge has been dissolved.  Any channel that now tries to join is immediately ejected. */
 	unsigned int dissolved:1;
 	/*! Bridge flags to tweak behavior */
@@ -250,16 +245,6 @@ struct ast_bridge {
 	struct ast_bridge_technology *technology;
 	/*! Private information unique to the bridge technology */
 	void *bridge_pvt;
-	/*! Thread running the bridge */
-	pthread_t thread;
-	/*! Enabled features information */
-	struct ast_bridge_features features;
-	/*! Array of channels that the bridge thread is currently handling */
-	struct ast_channel **array;
-	/*! Number of channels in the above array (Number of active channels) */
-	unsigned int array_num;
-	/*! Number of channels the array can handle */
-	unsigned int array_size;
 	/*! Call ID associated with the bridge */
 	struct ast_callid *callid;
 	/*! Linked list of channels participating in the bridge */
@@ -631,11 +616,11 @@ void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast
 int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action);
 
 /*!
- * \brief Put an action onto the specified bridge_channel.
+ * \brief Write a frame to the specified bridge_channel.
  * \since 12.0.0
  *
- * \param bridge_channel Channel to queue the action on.
- * \param action What to do.
+ * \param bridge_channel Channel to queue the frame.
+ * \param fr Frame to write.
  *
  * \retval 0 on success.
  * \retval -1 on error.
@@ -643,7 +628,7 @@ int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
  * \note This API call is meant for internal bridging operations.
  * \note BUGBUG This may get moved.
  */
-int ast_bridge_channel_queue_action(struct ast_bridge_channel *bridge_channel, struct ast_frame *action);
+int ast_bridge_channel_queue_frame(struct ast_bridge_channel *bridge_channel, struct ast_frame *fr);
 
 /*!
  * \brief Restore the formats of a bridge channel's channel to how they were before bridge_channel_join
@@ -809,4 +794,4 @@ void ast_after_bridge_goto_discard(struct ast_channel *chan);
 }
 #endif
 
-#endif /* _ASTERISK_BRIDGING_H */
+#endif	/* _ASTERISK_BRIDGING_H */

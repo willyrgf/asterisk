@@ -84,8 +84,9 @@ static int simple_bridge_write(struct ast_bridge *bridge, struct ast_bridge_chan
 	/* The bridging core takes care of freeing the passed in frame. */
 	if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 /* BUGBUG need to handle control frames in a bridge tech specific way here.  Mostly just queue action to bridge channel. */
-		if (!other->suspended) {
-			ast_write(other->chan, frame);
+		if (!other->suspended
+			|| ast_is_deferrable_frame(frame)) {
+			ast_bridge_channel_queue_frame(other, frame);
 		}
 	}
 
@@ -97,7 +98,6 @@ static struct ast_bridge_technology simple_bridge = {
 	.capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX,
 	.preference = AST_BRIDGE_PREFERENCE_MEDIUM,
 	.join = simple_bridge_join,
-	.thread_loop = ast_bridge_thread_generic,
 	.write = simple_bridge_write,
 };
 

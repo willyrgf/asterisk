@@ -291,7 +291,7 @@ static void *multiplexed_thread_function(void *data)
 			}
 			if (!stop && bridge) {
 /* BUGBUG need to update thread callid for each bridge trip. */
-				ast_bridge_handle_trip(bridge, NULL, winner);
+//				ast_bridge_handle_trip(bridge, NULL, winner);
 				ao2_unlock(bridge);
 			}
 			ao2_lock(muxed_thread);
@@ -484,8 +484,9 @@ static int multiplexed_bridge_write(struct ast_bridge *bridge, struct ast_bridge
 	/* The bridging core takes care of freeing the passed in frame. */
 	if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 /* BUGBUG need to handle control frames in a bridge tech specific way here.  Mostly just queue action to bridge channel. */
-		if (!other->suspended) {
-			ast_write(other->chan, frame);
+		if (!other->suspended
+			|| ast_is_deferrable_frame(frame)) {
+			ast_bridge_channel_queue_frame(other, frame);
 		}
 	}
 

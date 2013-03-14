@@ -270,15 +270,18 @@ static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 
 	/* Ok, so we are the announcer and there are one or more people available to receive our writes. Let's do it. */
 	AST_LIST_TRAVERSE(&bridge->channels, other, entry) {
-		struct hc *other_hc = other->bridge_pvt;
-		/* Skip writes on channels without the bridge pvt struct. */
-		if (!other_hc) {
+		if (!other->bridge_pvt) {
+			continue;
+		}
+		if (bridge_channel == other) {
 			continue;
 		}
 
-		if ((bridge_channel != other) && (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT)) {
-			if (!other->suspended) {
-				ast_write(other->chan, frame);
+		if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+/* BUGBUG need to handle control frames in a bridge tech specific way here.  Mostly just queue action to bridge channel. */
+			if (!other->suspended
+				|| ast_is_deferrable_frame(frame)) {
+				ast_bridge_channel_queue_frame(other, frame);
 			}
 		}
 	}
@@ -292,7 +295,6 @@ static struct ast_bridge_technology holding_bridge = {
 	.preference = AST_BRIDGE_PREFERENCE_MEDIUM,
 	.write = holding_bridge_write,
 	.join = holding_bridge_join,
-	.thread_loop = ast_bridge_thread_generic,
 	.leave = holding_bridge_leave,
 };
 

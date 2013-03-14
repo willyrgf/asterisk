@@ -85,15 +85,6 @@ struct ast_bridge_technology {
 	 * \retval -1 on failure
 	 */
 	int (*write)(struct ast_bridge *bridge, struct ast_bridge_channel *bridged_channel, struct ast_frame *frame);
-	/*!
-	 * \brief Callback for bridge thread loop.
-	 *
-	 * \retval 0 on success
-	 * \retval -1 on failure
-	 */
-	int (*thread_loop)(struct ast_bridge *bridge);
-	/*! Callback for poking a bridge channel thread */
-	void (*poke_channel)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*! Formats that the bridge technology supports */
 	struct ast_format_cap *format_capabilities;
 	/*! TRUE if the bridge technology is currently suspended. */
@@ -147,61 +138,6 @@ int __ast_bridge_technology_register(struct ast_bridge_technology *technology, s
  * considered when creating a new bridge.
  */
 int ast_bridge_technology_unregister(struct ast_bridge_technology *technology);
-
-/*!
- * \brief Generic bridge thread loop.
- * \since 12.0.0
- *
- * \param bridge Handle this bridge thread's loop.
- *
- * \retval 0 on success.
- * \retval non-zero on error.
- */
-int ast_bridge_thread_generic(struct ast_bridge *bridge);
-
-/*!
- * \brief Poke the bridge thread if it is not us.
- * \since 12.0.0
- *
- * \param bridge What to poke.
- *
- * \note This function assumes the bridge is locked.
- *
- * \return Nothing
- */
-void ast_bridge_poke(struct ast_bridge *bridge);
-
-/*!
- * \brief Poke the bridge channel thread if it is not us.
- * \since 12.0.0
- *
- * \param bridge_channel What to poke.
- *
- * \note This function assumes the bridge_channel is locked.
- *
- * \return Nothing
- */
-void ast_bridge_channel_poke(struct ast_bridge_channel *bridge_channel);
-
-/*!
- * \brief Feed notification that a frame is waiting on a channel into the bridging core
- *
- * \param bridge The bridge that the notification should influence
- * \param bridge_channel Bridge channel the notification was received on (if known)
- * \param chan Channel the notification was received on (if known)
- *
- * Example usage:
- *
- * \code
- * ast_bridge_handle_trip(bridge, NULL, chan);
- * \endcode
- *
- * This tells the bridging core that a frame has been received on
- * the channel pointed to by chan and that it should be read and handled.
- *
- * \note This should only be used by bridging technologies.
- */
-void ast_bridge_handle_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_channel *chan);
 
 /*!
  * \brief Lets the bridging indicate when a bridge channel has stopped or started talking.
