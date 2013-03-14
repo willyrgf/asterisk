@@ -213,6 +213,28 @@ void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast
 	ao2_unlock(bridge_channel);
 }
 
+/*!
+ * \internal
+ * \brief Put an action onto the specified bridge. Don't dup the action frame.
+ * \since 12.0.0
+ *
+ * \param bridge What to queue the action on.
+ * \param action What to do.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static void ast_bridge_queue_action_nodup(struct ast_bridge *bridge, struct ast_frame *action)
+{
+	ast_debug(1, "Queueing action type:%d sub:%d on bridge %p\n",
+		action->frametype, action->subclass.integer, bridge);
+
+	ao2_lock(bridge);
+	AST_LIST_INSERT_TAIL(&bridge->action_queue, action, frame_list);
+	ao2_unlock(bridge);
+	ast_bridge_manager_service_req(bridge);
+}
+
 int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
 {
 	struct ast_frame *dup;
@@ -221,14 +243,7 @@ int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
 	if (!dup) {
 		return -1;
 	}
-
-	ast_debug(1, "Queueing action type:%d sub:%d on bridge %p\n",
-		action->frametype, action->subclass.integer, bridge);
-
-	ao2_lock(bridge);
-	AST_LIST_INSERT_TAIL(&bridge->action_queue, dup, frame_list);
-	ao2_unlock(bridge);
-	ast_bridge_manager_service_req(bridge);
+	ast_bridge_queue_action_nodup(bridge, dup);
 	return 0;
 }
 
@@ -691,23 +706,6 @@ static void bridge_complete_join(struct ast_bridge *bridge)
 	}
 }
 
-/*!
- * \internal
- * \brief Handle bridge action frame.
- * \since 12.0.0
- *
- * \param bridge What to execute the action on.
- * \param action What to do.
- *
- * \note This function assumes the bridge is locked.
- *
- * \return Nothing
- */
-static void bridge_action_bridge(struct ast_bridge *bridge, struct ast_frame *action)
-{
-	/*! \todo BUGBUG bridge_action() not written */
-}
-
 /*! \brief Helper function used to find the "best" bridge technology given a specified capabilities */
 static struct ast_bridge_technology *find_best_technology(uint32_t capabilities)
 {
@@ -745,12 +743,109 @@ static struct ast_bridge_technology *find_best_technology(uint32_t capabilities)
 	return best;
 }
 
+struct tech_deferred_destroy {
+	struct ast_bridge_technology *tech;
+	void *tech_pvt;
+};
+
+/*!
+ * \internal
+ * \brief Deferred destruction of bridge tech private structure.
+ * \since 12.0.0
+ *
+ * \param bridge What to execute the action on.
+ * \param action Deferred bridge tech destruction.
+ *
+ * \note On entry, bridge must not be locked.
+ *
+ * \return Nothing
+ */
+static void bridge_tech_deferred_destroy(struct ast_bridge *bridge, struct ast_frame *action)
+{
+	struct tech_deferred_destroy *deferred = action->data.ptr;
+	struct ast_bridge dummy_bridge = {
+		.technology = deferred->tech,
+		.bridge_pvt = deferred->tech_pvt,
+		};
+
+	ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy (deferred)\n",
+		dummy_bridge.technology->name, &dummy_bridge, bridge);
+	dummy_bridge.technology->destroy(&dummy_bridge);
+	ast_module_unref(dummy_bridge.technology->mod);
+}
+
+/*!
+ * \internal
+ * \brief Handle bridge action frame.
+ * \since 12.0.0
+ *
+ * \param bridge What to execute the action on.
+ * \param action What to do.
+ *
+ * \note On entry, bridge is already locked.
+ * \note Can be called by the bridge destructor.
+ *
+ * \return Nothing
+ */
+static void bridge_action_bridge(struct ast_bridge *bridge, struct ast_frame *action)
+{
+#if 0	/* In case we need to know when the destructor is calling us. */
+	int in_destructor = !ao2_ref(bridge, 0);
+#endif
+
+	switch (action->subclass.integer) {
+	case AST_BRIDGE_ACTION_DEFERRED_TECH_DESTROY:
+		ao2_unlock(bridge);
+		bridge_tech_deferred_destroy(bridge, action);
+		ao2_lock(bridge);
+		break;
+	default:
+		/* Unexpected deferred action type.  Should never happen. */
+		ast_assert(0);
+		break;
+	}
+}
+
+/*!
+ * \internal
+ * \brief Do any pending bridge actions.
+ * \since 12.0.0
+ *
+ * \param bridge What to do actions on.
+ *
+ * \note On entry, bridge is already locked.
+ * \note Can be called by the bridge destructor.
+ *
+ * \return Nothing
+ */
+static void bridge_handle_actions(struct ast_bridge *bridge)
+{
+	struct ast_frame *action;
+
+	while ((action = AST_LIST_REMOVE_HEAD(&bridge->action_queue, frame_list))) {
+		switch (action->frametype) {
+		case AST_FRAME_BRIDGE_ACTION:
+			bridge_action_bridge(bridge, action);
+			break;
+		default:
+			/* Unexpected deferred frame type.  Should never happen. */
+			ast_assert(0);
+			break;
+		}
+		ast_frfree(action);
+	}
+}
+
 static void destroy_bridge(void *obj)
 {
 	struct ast_bridge *bridge = obj;
-	struct ast_frame *action;
 
 	ast_debug(1, "Actually destroying bridge %p, nobody wants it anymore\n", bridge);
+
+	/* Do any pending actions in the context of destruction. */
+	ao2_lock(bridge);
+	bridge_handle_actions(bridge);
+	ao2_unlock(bridge);
 
 	/* There should not be any channels left in the bridge. */
 	ast_assert(AST_LIST_EMPTY(&bridge->channels));
@@ -765,12 +860,6 @@ static void destroy_bridge(void *obj)
 
 	if (bridge->callid) {
 		bridge->callid = ast_callid_unref(bridge->callid);
-	}
-
-	/* Flush any unhandled actions. */
-/* BUGBUG need to destroy unused bridge action frames specially since they can have referenced pointers. */
-	while ((action = AST_LIST_REMOVE_HEAD(&bridge->action_queue, frame_list))) {
-		ast_frfree(action);
 	}
 
 	cleanup_video_mode(bridge);
@@ -936,11 +1025,12 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	uint32_t new_capabilities = 0;
 	struct ast_bridge_technology *new_technology;
 	struct ast_bridge_technology *old_technology = bridge->technology;
+	struct ast_bridge_channel *bridge_channel;
+	struct ast_frame *deferred_action;
 	struct ast_bridge dummy_bridge = {
 		.technology = bridge->technology,
 		.bridge_pvt = bridge->bridge_pvt,
 	};
-	struct ast_bridge_channel *bridge_channel;
 
 	if (bridge->dissolved) {
 		ast_debug(1, "Bridge %p is dissolved, not performing smart bridge operation.\n",
@@ -978,8 +1068,8 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	/* Attempt to find a new bridge technology to satisfy the capabilities */
 	new_technology = find_best_technology(new_capabilities);
 	if (!new_technology) {
-		if (new_capabilities == AST_BRIDGE_CAPABILITY_1TO1MIX) {
-			ast_debug(1, "Bridge %p could not switch to 1to1 bridge technology, skipping smart bridge operation.\n",
+		if (bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
+			ast_debug(1, "Bridge %p could not get a new bridge technology, staying with old technology.\n",
 				bridge);
 			return 0;
 		}
@@ -987,6 +1077,31 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 		ast_log(LOG_WARNING, "No bridge technology available to support bridge %p\n",
 			bridge);
 		return -1;
+	}
+
+	if (old_technology->destroy) {
+		struct tech_deferred_destroy deferred_tech_destroy = {
+			.tech = dummy_bridge.technology,
+			.tech_pvt = dummy_bridge.bridge_pvt,
+		};
+		struct ast_frame action = {
+			.frametype = AST_FRAME_BRIDGE_ACTION,
+			.subclass.integer = AST_BRIDGE_ACTION_DEFERRED_TECH_DESTROY,
+			.data.ptr = &deferred_tech_destroy,
+			.datalen = sizeof(deferred_tech_destroy),
+		};
+
+		/*
+		 * We need to defer the bridge technology destroy callback
+		 * because we have the bridge locked.
+		 */
+		deferred_action = ast_frdup(&action);
+		if (!deferred_action) {
+			ast_module_unref(new_technology->mod);
+			return -1;
+		}
+	} else {
+		deferred_action = NULL;
 	}
 
 	/*
@@ -1051,18 +1166,20 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 		}
 	}
 
-/* BUGBUG Must defer the destroy to the bridge manager thread to avoid deadlock with softmix mixing thread also holding bridge lock. */
 	/*
 	 * Now that all the channels have been moved over we need to get
 	 * rid of all the information the old technology may have left
 	 * around.
 	 */
-	ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy\n",
-		old_technology->name, &dummy_bridge, bridge);
 	if (old_technology->destroy) {
-		old_technology->destroy(&dummy_bridge);
+		ast_debug(1, "Deferring bridge technology %s bridge structure %p destruction\n",
+			old_technology->name, bridge);
+		ast_bridge_queue_action_nodup(bridge, deferred_action);
+	} else {
+		ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy\n",
+			old_technology->name, &dummy_bridge, bridge);
+		ast_module_unref(old_technology->mod);
 	}
-	ast_module_unref(old_technology->mod);
 
 	return 0;
 }
@@ -2908,27 +3025,13 @@ void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *
  */
 static void bridge_manager_service(struct ast_bridge *bridge)
 {
-	struct ast_frame *action;
-
 	ao2_lock(bridge);
 	if (bridge->callid) {
 		ast_callid_threadassoc_change(bridge->callid);
 	}
 
-	/* Run a pending bridge action. */
-	action = AST_LIST_REMOVE_HEAD(&bridge->action_queue, frame_list);
-	if (action) {
-		switch (action->frametype) {
-		case AST_FRAME_BRIDGE_ACTION:
-			bridge_action_bridge(bridge, action);
-			break;
-		default:
-			/* Unexpected deferred frame type.  Should never happen. */
-			ast_assert(0);
-			break;
-		}
-		ast_frfree(action);
-	}
+	/* Do any pending bridge actions. */
+	bridge_handle_actions(bridge);
 	ao2_unlock(bridge);
 }
 
