@@ -1,0 +1,162 @@
+Olle E. Johansson
+oej@edvina.net
+
+2013-03-14
+
+
+
+
+
+
+Pinefrog - RTCP cleanup and additions
+-------------------------------------
+
+This branch is aimed at porting the code in pinefrog-1.4, which is now a few years old,
+to Asterisk 1.8 and hopefully (with some help) to Asterisk trunk to be integrated.
+The 1.4 code has been running in production for years in universities, call centers
+and service providers.
+
+The 1.8 port of Pinefrog is supported by Nordicom, Norway (http://www.nordicom.no). 
+The 1.4 work was sponsored by several companies, including ClearIT AB, Sweden.
+
+Status of 11 port
+------------------
+2013-03-13	Started
+
+Todo for 11
+------------
+DONE: - Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
+DONE: - Add support of outbound SDES end and goodbye
+DONE: - Add manager events at end-of call
+DONE: - Add realtime storage of RTCP reports
+DONE: - Add time manager events (configured in sip.conf)
+DONE: - Add more information to RTCP debug
+DONE: - Add more data aggregation to ast_rtcp structure (from svn trunk really)
+- Add RTCP for p2p RTP bridges. Needs to be tested and validated.
+
+Background
+==========
+RTCP, as defined in RFC 3550, is a protocol that co-exists with RTP, the protocol used
+for realtime multimedia in VoIP. RTCP gives the endpoints a tool to exchange data about
+the media streams exchanged. As a result, both ends can get informaiton about the
+latency for data sent in both directions, packet loss and jitter for each media stream.
+
+A VoIP call is at least two media streams and they can have different properties in
+regards of quality. A router or switch in the middle could have a lot of outbound traffic,
+causing delays and possible packet loss. This might not affect inbound traffic.
+
+In Asterisk, the RTCP handler is part of the RTP module. The RTP module produces RTCP
+report that can be added to channel variables, cdr logs or sent through AMI.
+
+In 1.4, the data used is mostly based on the latest report, it's not aggregated. This
+is fixed in trunk.
+
+In both implementations (and the 1.6 releases in between) the RTCP support is not
+very complete.
+
+- It doesn't handle RTCP SDES packets
+- It doesn't send RTCP END packets at end of session
+- It doesn't handle receiving END packets
+- It doesn't handle re-invites in a good way.
+- It seems to mix sender and receiver reports, thus mixing data from two streams 
+    - when does this happen, if at all?
+
+RTCP and NAT
+------------
+I suspect that RTCP doesn't traverse NAT very well in our implementation. For RTP,
+we start with sending media to probe NAT. I've added emtpy RTCP RR+SDES CNAME packets
+to start probing a NAT (if Asterisk is behind a NAT). I am afraid that very few devices
+do that early on.
+The idea is (like RTP)
+ - Send a few RTCP packets in the start of the session.
+ - The receiver can then apply symmetric RTCP and start sending to the NAT outside port
+   that we're sending from and we'll get their packets.
+
+Todo
+----
+- When CNAME changes, we have a different stream and need to restart the stats.
+  Should we add ability to produce multiple RTCP reports for one "call" and aggregate them?
+  The different parts might have different properties.
+- Document realtime storage format. Add missing fields.
+- BUG: RTCP is halted during hold. It should not stop.
+- During HOLD, send RTCP SR reports without report block, only the header and no chunks 
+
+Open Issues
+-----------
+Bridged channel ID is hard to get.
+
+The CQR and the final manager report lacks the bridged channel identifiers in too many cases. One leg of
+the call gets it, but not both. 
+This will affect realtime as well, so we need to copy the channel name to a stored variable while it exists.
+
+Do we have a counter of consecutive lost packets? How do we measure lost packets on inbound
+stream? Gaps in seq numbers or just the sender reports from the other end compared with received 
+no of packets?
+
+
+
+Ideas and thoughts for the future
+---------------------------------
+- Asterisk propagates jitter and packet loss over a bridge (especially the p2p RTP bridge).
+  If the call is transfered on the OTHER side of the bridge, we have a new call with new
+  properties. Maybe events like this should generate a new SDES and reset RTCP?
+  Part A of the call can have very different properties than part B. If I have a call with
+  someone internally, that then transfers me to a call with someone on the Internet, the
+  call quality (jitter etc) will change dramatically. This will require some sort of CONTROL
+  packet over the bridge, informing about changes on the other side of the bridge (masq).
+- Can we have some sort of ring buffer for the latest RTCP reports for a device (peer) 
+  and use that to determine the status of the connection to the peer?
+- Can we use the RTCP APP packet for relaying events in joined bridges, like meetme?
+- What should we use as CNAME? Currently SIP call ID.
+- Separate on the IPs of different media servers. IE we can have one SIP peer with
+  multiple media IPs with different properties
+
+Scenarios to test
+------------------
+- normal bridged call
+- RTP p2p bridged call
+- Nat traversal - Asterisk outside of NAT and inside (as client to external service)
+- Call hold
+- Call with music-on-hold
+
+Database structure
+-------------------
+Example database schema for MySQL:
+
+CREATE TABLE `astcqr` (
+  `channel` varchar(50) NOT NULL,
+  `uniqueid` varchar(35) NOT NULL,
+  `bridgedchannel` varchar(50) NOT NULL,
+  `bridgeduniqueid` varchar(35) NOT NULL,
+  `pvtcallid` varchar(80) NOT NULL,
+  `rtpmedia` varchar(50) NOT NULL,
+  `localssrc` varchar(50) NOT NULL,
+  `remotessrc` varchar(50) NOT NULL,
+  `rtt` varchar(10) NOT NULL,
+  `localjitter` varchar(10) NOT NULL,
+  `remotejitter` varchar(10) NOT NULL,
+  `sendformat` varchar(10) NOT NULL,
+  `receiveformat` varchar(10) NOT NULL,
+  `rtcpstatus` varchar(10) NOT NULL,
+  `duration` varchar(10) NOT NULL,
+  `packetsent` varchar(30) NOT NULL,
+  `packetreceived` varchar(30) NOT NULL,
+  `packetlossin` varchar(30) NOT NULL,
+  `packetlossout` varchar(30) NOT NULL,
+  `rttmax` varchar(12) NOT NULL,
+  `rttmin` varchar(12) NOT NULL,
+  `writetranslator` varchar(15) NOT NULL,
+  `readtranslator` varchar(15) NOT NULL,
+  `writecost` varchar(10) NOT NULL,
+  `readcost` varchar(10) NOT NULL,
+  `remoteip` varchar(25) NOT NULL,
+  KEY `ChannelUnique` (`channel`,`uniqueid`)
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COMMENT='FOr pinefrog stats'
+
+Realtime configuration
+========================
+In extconfig.conf add
+
+rtpcqr => mysql,asterisk,astcqr
+
+
