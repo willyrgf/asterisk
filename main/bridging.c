@@ -264,8 +264,7 @@ void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast
  * \param bridge What to queue the action on.
  * \param action What to do.
  *
- * \retval 0 on success.
- * \retval -1 on error.
+ * \return Nothing
  */
 static void ast_bridge_queue_action_nodup(struct ast_bridge *bridge, struct ast_frame *action)
 {
@@ -2441,8 +2440,8 @@ int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
 		sched_yield();
 	}
 
-	if (bridge1->dissolved) {
-		ast_debug(1, "Can't merge bridge %p into bridge %p, destination bridge is dissolved.\n",
+	if (bridge1->dissolved || bridge2->dissolved) {
+		ast_debug(1, "Can't merge bridge %p into bridge %p, one or both bridges are dissolved.\n",
 			bridge2, bridge1);
 	} else if (bridge1->inhibit_merge || bridge2->inhibit_merge
 		|| ast_test_flag(&bridge1->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY | AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
