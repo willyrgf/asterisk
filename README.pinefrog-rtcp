@@ -62,6 +62,26 @@ very complete.
 - It seems to mix sender and receiver reports, thus mixing data from two streams 
     - when does this happen, if at all?
 
+NOTES
+-----
+RTCP is a mutual protocol. Asterisk sends data to a phone and tells the phone in a
+"Sender report" how much we've sent. The phone responds with a "Receiver report"
+to give data about packets lost between the sender and receiver, variations in
+time (jitter) and timestamps to calculate latency. The phone does the same
+with the RTP stream towards Asterisk - sends a "Sender Report" and receives
+a "Receiver report". 
+
+This means that in order to get relevant data, it's a tango for two. The phone
+needs to have a working RTCP implementation. This is sadly not the case for 
+all SIP phones. Some phones have timers, so for short calls you will not get
+any reports, because it's set to send RTCP after five minutes or something
+longer than your phone call. 
+
+The conclusion is that the CQRs doesn't work for all phones. You will always
+get data from Asterisk's point of view, but you may not get data from the other
+end. Put pressure on your vendors to participate in the RTCP interaction
+so you can get control of your calls.
+
 RTCP and NAT
 ------------
 I suspect that RTCP doesn't traverse NAT very well in our implementation. For RTP,
