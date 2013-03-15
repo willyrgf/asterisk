@@ -191,6 +191,49 @@ int ast_bridge_technology_unregister(struct ast_bridge_technology *technology)
 	return current ? 0 : -1;
 }
 
+/*!
+ * \internal
+ * \brief Lock the bridge associated with the bridge channel.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Channel that wants to lock the bridge.
+ *
+ * \details
+ * This is an upstream lock operation.  The defined locking
+ * order is bridge then bridge_channel.
+ *
+ * \note On entry, neither the bridge nor bridge_channel is locked.
+ *
+ * \note The bridge_channel->bridge pointer changes because of a
+ * bridge-merge/channel-move operation between bridges.
+ *
+ * \return Nothing
+ */
+static void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_bridge *bridge;
+
+	for (;;) {
+		/* Safely get the bridge pointer */
+		ao2_lock(bridge_channel);
+		bridge = bridge_channel->bridge;
+		ao2_ref(bridge, +1);
+		ao2_unlock(bridge_channel);
+
+		/*
+		 * The bridge pointer cannot change while the bridge or
+		 * bridge_channel is locked.
+		 */
+		ao2_lock(bridge);
+		if (bridge == bridge_channel->bridge) {
+			ao2_ref(bridge, -1);
+			return;
+		}
+		ao2_unlock(bridge);
+		ao2_ref(bridge, -1);
+	}
+}
+
 void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
 /* BUGBUG need cause code for the bridge_channel leaving the bridge. */
@@ -649,7 +692,7 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 /* BUGBUG bridge join or impart needs to do CONNECTED_LINE updates if the channels are being swapped and it is a 1-1 bridge. */
 
 	/* Simply write the frame out to the bridge technology. */
-	ao2_lock(bridge_channel->bridge);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
 	ao2_unlock(bridge_channel->bridge);
 	ast_frfree(frame);
@@ -1251,7 +1294,7 @@ static void bridge_channel_suspend_nolock(struct ast_bridge_channel *bridge_chan
  */
 static void bridge_channel_suspend(struct ast_bridge_channel *bridge_channel)
 {
-	ao2_lock(bridge_channel->bridge);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel_suspend_nolock(bridge_channel);
 	ao2_unlock(bridge_channel->bridge);
 }
@@ -1294,7 +1337,7 @@ static void bridge_channel_unsuspend_nolock(struct ast_bridge_channel *bridge_ch
  */
 static void bridge_channel_unsuspend(struct ast_bridge_channel *bridge_channel)
 {
-	ao2_lock(bridge_channel->bridge);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel_unsuspend_nolock(bridge_channel);
 	ao2_unlock(bridge_channel->bridge);
 }
@@ -1672,7 +1715,10 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	ast_debug(1, "Joining bridge channel %p(%s) to bridge %p\n",
 		bridge_channel, ast_channel_name(bridge_channel->chan), bridge_channel->bridge);
 
-/* BUGBUG the code is assuming that bridge_channel->bridge does not change which is just wrong.  The bridge pointer can change with merges and moves.  The locking protocol must be implemented. */
+	/*
+	 * Directly locking the bridge is safe here because nobody else
+	 * knows about this bridge_channel yet.
+	 */
 	ao2_lock(bridge_channel->bridge);
 
 	if (!bridge_channel->bridge->callid) {
@@ -1690,7 +1736,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 		bridge_channel_wait(bridge_channel);
 	}
-	ao2_lock(bridge_channel->bridge);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 
 	ast_bridge_channel_pull(bridge_channel);
 	ast_bridge_reconfigured(bridge_channel->bridge);
@@ -2368,7 +2414,9 @@ static void ast_bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *b
 
 		/* Point to new bridge.*/
 		ao2_ref(bridge1, +1);
+		ao2_lock(bridge_channel);
 		bridge_channel->bridge = bridge1;
+		ao2_unlock(bridge_channel);
 		ao2_ref(bridge2, -1);
 
 		ast_bridge_channel_push(bridge_channel);
