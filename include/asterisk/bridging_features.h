@@ -156,9 +156,8 @@ struct ast_bridge_hook_timer {
 	unsigned int seqno;
 };
 
-/*!
- * \brief Structure that is the essence of a feature hook.
- */
+/* BUGBUG ast_bridge_hook needs to be turned into ao2 objects so bridge push/pulls can add/remove hooks */
+/*! \brief Structure that is the essence of a feature hook. */
 struct ast_bridge_hook {
 	/*! Linked list information */
 	AST_LIST_ENTRY(ast_bridge_hook) entry;
@@ -183,10 +182,13 @@ struct ast_bridge_hook {
  * \brief Structure that contains features information
  */
 struct ast_bridge_features {
+/* BUGBUG dtmf_hooks needs to be an ao2_container so it would be possible to iterate without keeping a lock */
 	/*! Attached DTMF feature hooks */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) dtmf_hooks;
+/* BUGBUG hangup_hooks needs to be an ao2_container so it would be possible to iterate without keeping a lock */
 	/*! Attached hangup interception hooks */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) hangup_hooks;
+/* BUGBUG use of interval_hooks needs to be made ao2 safe */
 	/*! Attached interval hooks */
 	struct ast_heap *interval_hooks;
 	/*! Used to determine when interval based features should be checked */
@@ -207,7 +209,6 @@ struct ast_bridge_features {
 	unsigned int usable:1;
 	/*! TRUE if the channel/bridge is muted. */
 	unsigned int mute:1;
-/* BUGBUG why is dtmf_passthrough not a feature_flags bit? */
 	/*! TRUE if DTMF should be passed into the bridge tech.  */
 	unsigned int dtmf_passthrough:1;
 };
