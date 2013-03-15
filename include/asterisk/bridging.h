@@ -129,7 +129,7 @@ struct ast_bridge_channel {
 	/*! Bridge this channel is participating in */
 	struct ast_bridge *bridge;
 	/*! Private information unique to the bridge technology */
-	void *bridge_pvt;
+	void *tech_pvt;
 	/*! Thread handling the bridged channel (Needed by ast_bridge_depart) */
 	pthread_t thread;
 	/*! TRUE if the channel is in a bridge. */
@@ -246,7 +246,7 @@ struct ast_bridge {
 	/*! Bridge technology that is handling the bridge */
 	struct ast_bridge_technology *technology;
 	/*! Private information unique to the bridge technology */
-	void *bridge_pvt;
+	void *tech_pvt;
 	/*! Call ID associated with the bridge */
 	struct ast_callid *callid;
 	/*! Linked list of channels participating in the bridge */

@@ -807,7 +807,7 @@ static void bridge_tech_deferred_destroy(struct ast_bridge *bridge, struct ast_f
 	struct tech_deferred_destroy *deferred = action->data.ptr;
 	struct ast_bridge dummy_bridge = {
 		.technology = deferred->tech,
-		.bridge_pvt = deferred->tech_pvt,
+		.tech_pvt = deferred->tech_pvt,
 		};
 
 	ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy (deferred)\n",
@@ -1071,7 +1071,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	struct ast_frame *deferred_action;
 	struct ast_bridge dummy_bridge = {
 		.technology = bridge->technology,
-		.bridge_pvt = bridge->bridge_pvt,
+		.tech_pvt = bridge->tech_pvt,
 	};
 
 	if (bridge->dissolved) {
@@ -1124,7 +1124,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	if (old_technology->destroy) {
 		struct tech_deferred_destroy deferred_tech_destroy = {
 			.tech = dummy_bridge.technology,
-			.tech_pvt = dummy_bridge.bridge_pvt,
+			.tech_pvt = dummy_bridge.tech_pvt,
 		};
 		struct ast_frame action = {
 			.frametype = AST_FRAME_BRIDGE_ACTION,
@@ -1156,11 +1156,11 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 
 	/*
 	 * Since we are soon going to pass this bridge to a new
-	 * technology we need to NULL out the bridge_pvt pointer but
+	 * technology we need to NULL out the tech_pvt pointer but
 	 * don't worry as it still exists in dummy_bridge, ditto for the
 	 * old technology.
 	 */
-	bridge->bridge_pvt = NULL;
+	bridge->tech_pvt = NULL;
 	bridge->technology = new_technology;
 
 	/* Setup the new bridge technology. */
@@ -1170,7 +1170,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 /* BUGBUG need to output the bridge id for tracking why. */
 		ast_log(LOG_WARNING, "Bridge technology %s for bridge %p failed to get setup\n",
 			new_technology->name, bridge);
-		bridge->bridge_pvt = dummy_bridge.bridge_pvt;
+		bridge->tech_pvt = dummy_bridge.tech_pvt;
 		bridge->technology = dummy_bridge.technology;
 		ast_module_unref(new_technology->mod);
 		return -1;

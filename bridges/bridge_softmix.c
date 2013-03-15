@@ -307,7 +307,7 @@ static void softmix_translate_helper_cleanup(struct softmix_translate_helper *tr
 
 static void set_softmix_bridge_data(int rate, int interval, struct ast_bridge_channel *bridge_channel, int reset)
 {
-	struct softmix_channel *sc = bridge_channel->bridge_pvt;
+	struct softmix_channel *sc = bridge_channel->tech_pvt;
 	unsigned int channel_read_rate = ast_format_rate(ast_channel_rawreadformat(bridge_channel->chan));
 
 	ast_mutex_lock(&sc->lock);
@@ -366,14 +366,14 @@ static void softmix_poke_thread(struct softmix_bridge_data *softmix_data)
 /*! \brief Function called when a channel is unsuspended from the bridge */
 static void softmix_bridge_unsuspend(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
-	softmix_poke_thread(bridge->bridge_pvt);
+	softmix_poke_thread(bridge->tech_pvt);
 }
 
 /*! \brief Function called when a channel is joined into the bridge */
 static int softmix_bridge_join(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct softmix_channel *sc;
-	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
+	struct softmix_bridge_data *softmix_data = bridge->tech_pvt;
 
 	/* Create a new softmix_channel structure and allocate various things on it */
 	if (!(sc = ast_calloc(1, sizeof(*sc)))) {
@@ -384,7 +384,7 @@ static int softmix_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chan
 	ast_mutex_init(&sc->lock);
 
 	/* Can't forget to record our pvt structure within the bridged channel structure */
-	bridge_channel->bridge_pvt = sc;
+	bridge_channel->tech_pvt = sc;
 
 	set_softmix_bridge_data(softmix_data->internal_rate,
 		softmix_data->internal_mixing_interval
@@ -399,12 +399,12 @@ static int softmix_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chan
 /*! \brief Function called when a channel leaves the bridge */
 static void softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
-	struct softmix_channel *sc = bridge_channel->bridge_pvt;
+	struct softmix_channel *sc = bridge_channel->tech_pvt;
 
 	if (!sc) {
 		return;
 	}
-	bridge_channel->bridge_pvt = NULL;
+	bridge_channel->tech_pvt = NULL;
 
 	/* Drop mutex lock */
 	ast_mutex_destroy(&sc->lock);
@@ -471,8 +471,8 @@ static void softmix_pass_video_all(struct ast_bridge *bridge, struct ast_bridge_
 /*! \brief Function called when a channel writes a frame into the bridge */
 static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-	struct softmix_channel *sc = bridge_channel->bridge_pvt;
-	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
+	struct softmix_channel *sc = bridge_channel->tech_pvt;
+	struct softmix_bridge_data *softmix_data = bridge->tech_pvt;
 	int totalsilence = 0;
 	int cur_energy = 0;
 	int silence_threshold = bridge_channel->tech_args.silence_threshold ?
@@ -718,7 +718,7 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 {
 	struct softmix_stats stats = { { 0 }, };
 	struct softmix_mixing_array mixing_array;
-	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
+	struct softmix_bridge_data *softmix_data = bridge->tech_pvt;
 	struct ast_timer *timer;
 	struct softmix_translate_helper trans_helper;
 	int16_t buf[MAX_DATALEN];
@@ -778,7 +778,7 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 
 		/* Go through pulling audio from each factory that has it available */
 		AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
-			struct softmix_channel *sc = bridge_channel->bridge_pvt;
+			struct softmix_channel *sc = bridge_channel->tech_pvt;
 
 			/* Update the sample rate to match the bridge's native sample rate if necessary. */
 			if (update_all_rates) {
@@ -813,7 +813,7 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 
 		/* Next step go through removing the channel's own audio and creating a good frame... */
 		AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
-			struct softmix_channel *sc = bridge_channel->bridge_pvt;
+			struct softmix_channel *sc = bridge_channel->tech_pvt;
 
 			if (bridge_channel->suspended) {
 				continue;
@@ -894,7 +894,7 @@ static void *softmix_mixing_thread(void *data)
 
 	ast_debug(1, "Starting mixing thread for bridge %p\n", bridge);
 
-	softmix_data = bridge->bridge_pvt;
+	softmix_data = bridge->tech_pvt;
 	while (!softmix_data->stop) {
 		if (!bridge->num_active) {
 			/* Wait for something to happen to the bridge. */
@@ -955,13 +955,13 @@ static int softmix_bridge_create(struct ast_bridge *bridge)
 	softmix_data->internal_rate = 8000;
 	softmix_data->internal_mixing_interval = DEFAULT_SOFTMIX_INTERVAL;
 
-	bridge->bridge_pvt = softmix_data;
+	bridge->tech_pvt = softmix_data;
 
 	/* Start the mixing thread. */
 	if (ast_pthread_create(&softmix_data->thread, NULL, softmix_mixing_thread, bridge)) {
 		softmix_data->thread = AST_PTHREADT_NULL;
 		softmix_bridge_data_destroy(softmix_data);
-		bridge->bridge_pvt = NULL;
+		bridge->tech_pvt = NULL;
 		return -1;
 	}
 
@@ -974,7 +974,7 @@ static void softmix_bridge_destroy(struct ast_bridge *bridge)
 	struct softmix_bridge_data *softmix_data;
 	pthread_t thread;
 
-	softmix_data = bridge->bridge_pvt;
+	softmix_data = bridge->tech_pvt;
 	if (!softmix_data) {
 		return;
 	}
@@ -991,7 +991,7 @@ static void softmix_bridge_destroy(struct ast_bridge *bridge)
 	}
 
 	softmix_bridge_data_destroy(softmix_data);
-	bridge->bridge_pvt = NULL;
+	bridge->tech_pvt = NULL;
 }
 
 static struct ast_bridge_technology softmix_bridge = {

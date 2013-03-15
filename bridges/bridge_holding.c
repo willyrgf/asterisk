@@ -71,7 +71,7 @@ struct holding_channel {
 
 static void participant_stop_hold_audio(struct ast_bridge_channel *bridge_channel)
 {
-	struct holding_channel *hc = bridge_channel->bridge_pvt;
+	struct holding_channel *hc = bridge_channel->tech_pvt;
 	if (!hc) {
 		return;
 	}
@@ -101,7 +101,7 @@ static void participant_reaction_announcer_join(struct ast_bridge_channel *bridg
 /* This should only be called on verified holding_participants. */
 static void participant_start_hold_audio(struct ast_bridge_channel *bridge_channel)
 {
-	struct holding_channel *hc = bridge_channel->bridge_pvt;
+	struct holding_channel *hc = bridge_channel->tech_pvt;
 	const char *moh_class;
 
 	if (!hc) {
@@ -124,7 +124,7 @@ static void participant_start_hold_audio(struct ast_bridge_channel *bridge_chann
 static void handle_participant_join(struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *announcer_channel)
 {
 	struct ast_channel *us = bridge_channel->chan;
-	struct holding_channel *hc = bridge_channel->bridge_pvt;
+	struct holding_channel *hc = bridge_channel->tech_pvt;
 	const char *idle_mode = ast_bridge_channel_get_role_option(bridge_channel, "holding_participant", "idle_mode");
 
 
@@ -165,22 +165,22 @@ static int holding_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chan
 		return -1;
 	}
 
-	bridge_channel->bridge_pvt = hc;
+	bridge_channel->tech_pvt = hc;
 
 	/* The bridge pvt holds the announcer channel if we have one. */
-	announcer_channel = bridge->bridge_pvt;
+	announcer_channel = bridge->tech_pvt;
 
 	if (ast_bridge_channel_has_role(bridge_channel, "announcer")) {
 		/* If another announcer already exists, scrap the holding channel struct so we know to ignore it in the future */
 		if (announcer_channel) {
-			bridge_channel->bridge_pvt = NULL;
+			bridge_channel->tech_pvt = NULL;
 			ast_free(hc);
 			ast_log(LOG_WARNING, "A second announcer channel %s attempted to enter a holding bridge.\n",
 				ast_channel_name(announcer_channel->chan));
 			return -1;
 		}
 
-		bridge->bridge_pvt = bridge_channel;
+		bridge->tech_pvt = bridge_channel;
 		ast_set_flag(&hc->holding_roles, HOLDING_ROLE_ANNOUNCER);
 
 		/* The announcer should always be made compatible with signed linear */
@@ -208,7 +208,7 @@ static int holding_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chan
 
 static void participant_reaction_announcer_leave(struct ast_bridge_channel *bridge_channel)
 {
-	struct holding_channel *hc = bridge_channel->bridge_pvt;
+	struct holding_channel *hc = bridge_channel->tech_pvt;
 
 	if (!hc) {
 		/* We are dealing with a channel that failed to join properly. Skip it. */
@@ -224,20 +224,20 @@ static void participant_reaction_announcer_leave(struct ast_bridge_channel *brid
 static void holding_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_bridge_channel *other_channel;
-	struct holding_channel *hc = bridge_channel->bridge_pvt;
+	struct holding_channel *hc = bridge_channel->tech_pvt;
 
 	if (!hc) {
 		return;
 	}
 
 	if (!ast_test_flag(&hc->holding_roles, HOLDING_ROLE_ANNOUNCER)) {
-		/* It's not an announcer so nothing needs to react to its departure. Just free the bridge_pvt. */
-		if (!bridge->bridge_pvt) {
+		/* It's not an announcer so nothing needs to react to its departure. Just free the tech_pvt. */
+		if (!bridge->tech_pvt) {
 			/* Since no announcer is in the channel, we may be playing MOH/ringing. Stop that. */
 			participant_stop_hold_audio(bridge_channel);
 		}
 		ast_free(hc);
-		bridge_channel->bridge_pvt = NULL;
+		bridge_channel->tech_pvt = NULL;
 		return;
 	}
 
@@ -246,19 +246,19 @@ static void holding_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_ch
 		participant_reaction_announcer_leave(other_channel);
 	}
 
-	/* Since the announcer is leaving, we should clear the bridge_pvt pointing to it */
-	bridge->bridge_pvt = NULL;
+	/* Since the announcer is leaving, we should clear the tech_pvt pointing to it */
+	bridge->tech_pvt = NULL;
 
 	ast_free(hc);
-	bridge_channel->bridge_pvt = NULL;
+	bridge_channel->tech_pvt = NULL;
 }
 
 static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	struct ast_bridge_channel *other;
-	struct holding_channel *hc = bridge_channel->bridge_pvt;
+	struct holding_channel *hc = bridge_channel->tech_pvt;
 
-	/* If there is no bridge_pvt, then the channel failed to allocate one when it joined and is borked. Don't listen to him. */
+	/* If there is no tech_pvt, then the channel failed to allocate one when it joined and is borked. Don't listen to him. */
 	if (!hc) {
 		return -1;
 	}
@@ -270,7 +270,7 @@ static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 
 	/* Ok, so we are the announcer and there are one or more people available to receive our writes. Let's do it. */
 	AST_LIST_TRAVERSE(&bridge->channels, other, entry) {
-		if (!other->bridge_pvt) {
+		if (!other->tech_pvt) {
 			continue;
 		}
 		if (bridge_channel == other) {
