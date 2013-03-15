@@ -78,6 +78,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RTCP_PT_RTPFB   205		/*!< RTPFB - Generic RTP feedback RFC 4585 */
 #define RTCP_PT_PSFB    206		/*!< PSFB - Payload specific data  RFC 4585 */
 #define RTCP_PT_XR      207		/*!< XR   - Extended report - RFC3611 */
+#define RTCP_PT_AVB     208		/*!< ACB RTCP Packet */
+#define RTCP_PT_RSI     209		/*!< Receiver summary information */
+#define RTCP_PT_TOKEN   210		/*!< Port mapping, RFC 6284 */
 
 /*! \brief RFC 3550 RTCP SDES Item types */
 enum rtcp_sdes {
@@ -378,6 +381,40 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.isactive = ast_rtp_isactive,
 	.rtcp_write_empty = ast_rtcp_write_empty_frame,
 };
+
+
+/* Payload types */
+struct {
+	int		payload;
+	const char 	*desc;
+} rtcp_pt[] = {
+	{ RTCP_PT_FUR,	"FIR  - Full Intra-frame request (h.261)", },
+	{ RTCP_PT_NACK,	"NACK - Negative acknowledgement (h.261)", },
+	{ RTCP_PT_IJ,	"IJ   - RFC 5450 Extended Inter-arrival jitter report", },
+	{ RTCP_PT_SR,	"SR   - RFC 3550 Sender report", },
+	{ RTCP_PT_RR,	"RR   - RFC 3550 Receiver report", },
+	{ RTCP_PT_SDES,	"SDES - Source Description", },
+	{ RTCP_PT_BYE ,	"BYE  - Goodbye", },
+	{ RTCP_PT_APP,	"APP  - Application defined", },
+	{ RTCP_PT_RTPFB," RTPFB - Generic RTP feedback RFC 4585", },
+	{ RTCP_PT_PSFB,	"PSFB - Payload specific data  RFC 4585", },
+	{ RTCP_PT_XR,	"XR   - Extended report - RFC3611", },
+	{ RTCP_PT_AVB,	"ACB RTCP Packet", },
+	{ RTCP_PT_RSI,	"Receiver summary information", },
+	{ RTCP_PT_TOKEN,"Port mapping, RFC 6284", },
+};
+
+const char *find_rtcp_pt(int payload)
+{
+	int x;
+
+	for (x = 0; x < ARRAY_LEN(rtcp_pt); x++) {
+		if (rtcp_pt[x].payload == payload)
+			return rtcp_pt[x].desc;
+	}
+
+	return "Unknown RTCP payload";
+}
 
 static inline int rtp_debug_test_addr(struct ast_sockaddr *addr)
 {
@@ -1955,7 +1992,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 		if (rtcp_debug_test_addr(&addr)) {
 			ast_verbose("\n\nGot RTCP from %s\n",
 				    ast_sockaddr_stringify(&addr));
-			ast_verbose("PT: %d(%s)\n", pt, (pt == 200) ? "Sender Report" : (pt == 201) ? "Receiver Report" : (pt == 192) ? "H.261 FUR" : "Unknown");
+			ast_verbose("PT: %d(%s)\n", pt, find_rtcp_pt(pt)); 
 			ast_verbose("Reception reports: %d\n", rc);
 			ast_verbose("   SSRC of packet sender: %u (%x)", ntohl(rtcpheader[i + 1]), ntohl(rtcpheader[i + 1]));
 			ast_verbose("   (Position %d of %d)\n", i, packetwords);
@@ -2025,8 +2062,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 					rtt *= 1000;
 				}
 				rtt = rtt / 1000.;
-				//rttsec = rtt / 1000.;
-				rttsec = rtt; 	/* OEJ TESTING */
+				rttsec = rtt / 1000.;
 				rtp->rtcp->rtt = rttsec;
 
 				if (comp - dlsr >= lsr) {
@@ -2078,7 +2114,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 
 			rtp->rtcp->reported_normdev_jitter = reported_normdev_jitter_current;
 
-			rtp->rtcp->reported_lost = ntohl(rtcpheader[i + 1]) & 0xffffff;
+			rtp->rtcp->reported_lost = ntohl(rtcpheader[i + 1]) & 0xffffff;	/* Lost packets for HOLE session, not for report time */
 
 			reported_lost = (double) rtp->rtcp->reported_lost;
 
@@ -2086,7 +2122,7 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 			if (rtp->rtcp->reported_jitter_count == 0)
 				rtp->rtcp->reported_minlost = reported_lost;
 
-			if (reported_lost < rtp->rtcp->reported_minlost)
+			if (reported_lost < rtp->rtcp->reported_minlost)	/* OEJ: Min and max are not really interesting here. */
 				rtp->rtcp->reported_minlost = reported_lost;
 
 			if (reported_lost > rtp->rtcp->reported_maxlost)
