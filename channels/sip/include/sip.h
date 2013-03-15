@@ -161,7 +161,7 @@
  *  \todo This string should be set dynamically. We only support REFER and SUBSCRIBE if we have
  *  allowsubscribe and allowrefer on in sip.conf.
  */
-#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH"
+#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, PRACK"
 
 /*! \brief Standard SIP unsecure port for UDP and TCP from RFC 3261. DO NOT CHANGE THIS */
 #define STANDARD_SIP_PORT	5060
@@ -194,6 +194,7 @@
 #define DEFAULT_MWI_FROM       ""
 #define DEFAULT_NOTIFYMIME     "application/simple-message-summary"
 #define DEFAULT_ALLOWGUEST     TRUE
+#define DEFAULT_EARLY_MEDIA_FOCUS	FALSE;	/*!< Focus on a single early media stream */
 #define DEFAULT_RTPKEEPALIVE   0      /*!< Default RTPkeepalive setting */
 #define DEFAULT_CALLCOUNTER    FALSE   /*!< Do not enable call counters by default */
 #define DEFAULT_SRVLOOKUP      TRUE    /*!< Recommended setting is ON */
@@ -234,6 +235,7 @@
 #define DEFAULT_ENGINE     "asterisk"      /*!< Default RTP engine to use for sessions */
 #define DEFAULT_STORE_SIP_CAUSE FALSE      /*!< Don't store HASH(SIP_CAUSE,<channel name>) for channels by default */
 #endif
+#define DEFAULT_PRACK	FALSE		/*!< Default: Prack is turned off */
 /*@}*/
 
 /*! \name SIPflags
@@ -374,10 +376,14 @@
 #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 4)  /*!< DP: Only send direct media reinvites on outgoing calls */
 #define SIP_PAGE3_USE_AVPF               (1 << 5)  /*!< DGP: Support a minimal AVPF-compatible profile */
 #define SIP_PAGE3_ICE_SUPPORT            (1 << 6)  /*!< DGP: Enable ICE support */
+#define SIP_PAGE3_PRACK               	 (1 << 7)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_100REL               	 (1 << 8)  /*!< D: If PRACK is active for a specific dialog */
+#define SIP_PAGE3_INVITE_WAIT_FOR_PRACK  (1 << 9)  /*!< D: Wait for PRACK response before sending 200 OK */
+#define SIP_PAGE3_ANSWER_WAIT_FOR_PRACK	 (1 << 10)  /*!< D: Send ANSWER when PRACK is received */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
 	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_SRTP_TAG_32 | SIP_PAGE3_NAT_AUTO_RPORT | SIP_PAGE3_NAT_AUTO_COMEDIA | \
-	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT)
+	 SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_AVPF | SIP_PAGE3_ICE_SUPPORT | SIP_PAGE3_PRACK)
 
 #define CHECK_AUTH_BUF_INITLEN   256
 
@@ -436,6 +442,7 @@ enum invitestates {
  * where the original response would be sent RELIABLE in an INVITE transaction
  */
 enum xmittype {
+	XMIT_PRACK = 3,    /*!< Transmit response the PRACK way: reliably, with re-transmits. */
 	XMIT_CRITICAL = 2,    /*!< Transmit critical SIP message reliably, with re-transmits.
 	                       *   If it fails, it's critical and will cause a teardown of the session */
 	XMIT_RELIABLE = 1,    /*!< Transmit SIP message reliably, with re-transmits */
@@ -611,7 +618,7 @@ enum sipmethod {
 	SIP_NOTIFY,     /*!< Status update, Part of the event package standard, result of a SUBSCRIBE or a REFER */
 	SIP_INVITE,     /*!< Set up a session */
 	SIP_ACK,        /*!< End of a three-way handshake started with INVITE. */
-	SIP_PRACK,      /*!< Reliable pre-call signalling. Not supported in Asterisk. */
+	SIP_PRACK,      /*!< Reliable pre-call signalling. */
 	SIP_BYE,        /*!< End of a session */
 	SIP_REFER,      /*!< Refer to another URI (transfer) */
 	SIP_SUBSCRIBE,  /*!< Subscribe for updates (voicemail, session status, device status, presence) */
@@ -734,6 +741,7 @@ struct __show_chan_arg {
 	      be applied to devices (trunks, services, phones)
 */
 struct sip_settings {
+	int early_media_focus;		/*!< G: Focus on the first early media stream received, ignore the rest */
 	int peer_rtupdate;          /*!< G: Update database with registration data for peer? */
 	int rtsave_sysname;         /*!< G: Save system name at registration? */
 	int ignore_regexpire;       /*!< G: Ignore expiration of peer  */
@@ -815,12 +823,15 @@ struct sip_request {
 	int headers;            /*!< # of SIP Headers */
 	int method;             /*!< Method of this request */
 	int lines;              /*!< Body Content */
+	uint32_t rseqno;		/*!< PRACK Rseq */
+	unsigned int reqsipoptions;  /*!< Required SIP options for this answer */
 	unsigned int sdp_start; /*!< the line number where the SDP begins */
 	unsigned int sdp_count; /*!< the number of lines of SDP */
 	char debug;             /*!< print extra debugging if non zero */
 	char has_to_tag;        /*!< non-zero if packet has To: tag */
 	char ignore;            /*!< if non-zero This is a re-transmit, ignore it */
 	char authenticated;     /*!< non-zero if this request was authenticated */
+	char ignoresdp;		/*!< In some cases, we have to ignore the SDP in responses */
 	ptrdiff_t header[SIP_MAX_HEADERS]; /*!< Array of offsets into the request string of each SIP header*/
 	ptrdiff_t line[SIP_MAX_LINES];     /*!< Array of offsets into the request string of each SDP line*/
 	struct ast_str *data;	
@@ -828,7 +839,6 @@ struct sip_request {
 	/* XXX Do we need to unref socket.ser when the request goes away? */
 	struct sip_socket socket;          /*!< The socket used for this request */
 	AST_LIST_ENTRY(sip_request) next;
-	unsigned int reqsipoptions; /*!< Items needed for Required header in responses */
 };
 
 /* \brief given a sip_request and an offset, return the char * that resides there
@@ -1040,6 +1050,8 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(theirtag_prack);  /*!< Current tag focus for PRACK handling */
+		AST_STRING_FIELD(theirtag_early);  /*!< Current tag focus for early media handling */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
@@ -1069,6 +1081,8 @@ struct sip_pvt {
 	uint32_t ocseq;                         /*!< Current outgoing seqno */
 	uint32_t icseq;                         /*!< Current incoming seqno */
 	uint32_t init_icseq;                    /*!< Initial incoming seqno from first request */
+	uint32_t rseq;                          /*!< Current PRACK rseq on our side*/
+	uint32_t irseq;                         /*!< Current PRACK rseq on their side*/
 	ast_group_t callgroup;                  /*!< Call group */
 	ast_group_t pickupgroup;                /*!< Pickup group */
 	struct ast_namedgroups *named_callgroups;   /*!< Named call group */
@@ -1236,6 +1250,7 @@ struct sip_pkt {
 	int retrans;              /*!< Retransmission number */
 	int method;               /*!< SIP method for this packet */
 	uint32_t seqno;           /*!< Sequence number */
+	uint32_t rseqno;           /*!< PRACK Sequence number */
 	char is_resp;             /*!< 1 if this is a response packet (e.g. 200 OK), 0 if it is a request */
 	char is_fatal;            /*!< non-zero if there is a fatal error */
 	int response_code;        /*!< If this is a response, the response code */
@@ -1857,7 +1872,7 @@ static const struct cfsip_options {
 	char * const text;  /*!< Text id, as in standard */
 } sip_options[] = {	/* XXX used in 3 places */
 	/* RFC3262: PRACK 100% reliability */
-	{ SIP_OPT_100REL,	NOT_SUPPORTED,	"100rel" },
+	{ SIP_OPT_100REL,	SUPPORTED,	"100rel" },
 	/* RFC3959: SIP Early session support */
 	{ SIP_OPT_EARLY_SESSION, NOT_SUPPORTED,	"early-session" },
 	/* SIMPLE events:  RFC4662 */
