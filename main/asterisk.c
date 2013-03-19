@@ -4272,7 +4272,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (ast_bridge_init()) {
+	if (ast_bridging_init()) {
 		printf("%s", term_quit());
 		exit(1);
 	}

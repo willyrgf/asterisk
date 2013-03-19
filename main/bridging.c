@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/pbx.h"
 #include "asterisk/test.h"
+#include "asterisk/_private.h"
 
 #include "asterisk/heap.h"
 #include "asterisk/say.h"
@@ -3186,7 +3187,7 @@ static void bridge_shutdown(void)
 	bridge_manager = NULL;
 }
 
-int ast_bridge_init(void)
+int ast_bridging_init(void)
 {
 	bridge_manager = bridge_manager_create();
 	if (!bridge_manager) {
