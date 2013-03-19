@@ -241,7 +241,6 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/uuid.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/stasis.h"
-#include "asterisk/bridging.h"
 
 #include "../defaults.h"
 
