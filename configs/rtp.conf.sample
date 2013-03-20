@@ -20,3 +20,6 @@ rtpend=20000
 ;dtmftimeout=3000
 ; rtcpinterval = 5000 	; Milliseconds between rtcp reports 
 			;(min 500, max 60000, default 5000)
+;
+; PLC - packet loss concealment
+plc=yes

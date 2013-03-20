@@ -77,6 +77,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
+static int poormansplc;			/*!< Are we using poor man's packet loss concealment? */
 static int rtpstart;			/*!< First port for RTP sessions (set in rtp.conf) */
 static int rtpend;			/*!< Last port for RTP sessions (set in rtp.conf) */
 static int rtpdebug;			/*!< Are we debugging? */
@@ -110,6 +111,7 @@ struct rtpPayloadType {
 struct ast_rtp {
 	int s;
 	struct ast_frame f;
+	struct ast_frame *plcbuf;	/*!< Buffer for Poor man's PLC */
 	unsigned char rawdata[8192 + AST_FRIENDLY_OFFSET];
 	unsigned int ssrc;		/*!< Synchronization source, RFC 3550, page 10. */
 	unsigned int themssrc;		/*!< Their SSRC */
@@ -1194,6 +1196,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	struct rtpPayloadType rtpPT;
 	struct ast_rtp *bridged = NULL;
 	struct frame_list frames;
+	int lostpackets = 0;
 	
 	/* If time is up, kill it */
 	if (rtp->sending_digit)
@@ -1329,6 +1332,21 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	if ( (int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
 		rtp->cycles += RTP_SEQ_MOD;
 
+	if (rtp->rxcount > 1) {
+		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
+		/* RTP sequence numbers are consecutive. Have we lost a packet? */
+		if (lostpackets) {
+			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
+		}
+		if (poormansplc && rtp->plcbuf != NULL) {
+			int i;
+			for (i = 0; i < lostpackets; i++) {
+				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
+				ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
+			}
+		}
+	}
+
 	rtp->lastrxseqno = seqno;
 	
 	if (rtp->themssrc==0)
@@ -1436,6 +1454,14 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			rtp->f.subclass |= 0x1;
 	}
 	rtp->f.src = "RTP";
+	if (poormansplc) {
+		/* Copy this frame to buffer */
+		if (rtp->plcbuf) {
+			/* We have something here. Take it away, dear Henry. */
+			ast_frame_free(rtp->plcbuf, 0);
+		}
+		rtp->plcbuf = ast_frdup(&rtp->f);
+	}
 
 	AST_LIST_INSERT_TAIL(&frames, &rtp->f, frame_list);
 	return AST_LIST_FIRST(&frames);
@@ -2002,6 +2028,7 @@ void ast_rtp_new_init(struct ast_rtp *rtp)
 	rtp->ssrc = ast_random();
 	rtp->seqno = ast_random() & 0xffff;
 	ast_set_flag(rtp, FLAG_HAS_DTMF);
+	rtp->plcbuf = NULL;
 
 	return;
 }
@@ -2197,6 +2224,10 @@ void ast_rtp_stop(struct ast_rtp *rtp)
 	}
 	
 	ast_clear_flag(rtp, FLAG_P2P_SENT_MARK);
+	if (rtp->plcbuf != NULL) {
+		ast_frfree(rtp->plcbuf);
+		rtp->plcbuf = NULL;
+	}
 }
 
 void ast_rtp_reset(struct ast_rtp *rtp)
@@ -2216,6 +2247,10 @@ void ast_rtp_reset(struct ast_rtp *rtp)
 	rtp->dtmf_timeout = 0;
 	rtp->seqno = 0;
 	rtp->rxseqno = 0;
+	if (rtp->plcbuf) {
+		ast_frfree(rtp->plcbuf);
+		rtp->plcbuf = NULL;
+	}
 }
 
 char *ast_rtp_get_quality(struct ast_rtp *rtp, struct ast_rtp_quality *qual)
@@ -2294,6 +2329,9 @@ void ast_rtp_destroy(struct ast_rtp *rtp)
 		close(rtp->rtcp->s);
 		free(rtp->rtcp);
 		rtp->rtcp=NULL;
+	}
+	if (rtp->plcbuf) {
+		ast_frfree(rtp->plcbuf);
 	}
 
 	ast_mutex_destroy(&rtp->bridge_lock);
@@ -3946,6 +3984,7 @@ int ast_rtp_reload(void)
 	struct ast_config *cfg;
 	const char *s;
 
+	poormansplc = 0;
 	rtpstart = 5000;
 	rtpend = 31000;
 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
@@ -3984,6 +4023,12 @@ int ast_rtp_reload(void)
 			if (ast_false(s))
 				ast_log(LOG_WARNING, "Disabling RTP checksums is not supported on this operating system!\n");
 #endif
+		}
+		if ((s = ast_variable_retrieve(cfg, "general", "plc"))) {
+			poormansplc = ast_true(s);
+			if (option_debug > 1) {
+				ast_log(LOG_DEBUG, "*** Poor man's PLC is turned %s\n", poormansplc ? "on" : "off" );
+			}
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {
 			dtmftimeout = atoi(s);
