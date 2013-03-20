@@ -1,0 +1,326 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 383463)
++++ channels/chan_sip.c	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -5595,6 +5595,10 @@
+ 
+ 		ast_rtp_instance_set_prop(dialog->trtp, AST_RTP_PROPERTY_RTCP, 1);
+ 	}
++	if (ast_test_flag(&dialog->flags[2], SIP_PAGE3_POORMANSPLC)) {
++		/* This is only supported for AUDIO */
++		ast_rtp_instance_plc_set_state(dialog->rtp, TRUE);
++	}
+ 
+ 	ast_rtp_instance_set_timeout(dialog->rtp, dialog->rtptimeout);
+ 	ast_rtp_instance_set_hold_timeout(dialog->rtp, dialog->rtpholdtimeout);
+@@ -18093,6 +18097,7 @@
+ 		ast_cli(fd, "  Dynamic      : %s\n", AST_CLI_YESNO(peer->host_dynamic));
+ 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, "<unspecified>"));
+ 		ast_cli(fd, "  MaxCallBR    : %d kbps\n", peer->maxcallbitrate);
++		ast_cli(fd, "  PLC          : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_POORMANSPLC)));
+ 		ast_cli(fd, "  Expire       : %ld\n", ast_sched_when(sched, peer->expire));
+ 		ast_cli(fd, "  Insecure     : %s\n", insecure2str(ast_test_flag(&peer->flags[0], SIP_INSECURE)));
+ 		ast_cli(fd, "  Force rport  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT)));
+@@ -18785,6 +18790,7 @@
+ 	ast_cli(a->fd, "  Relax DTMF:             %s\n", AST_CLI_YESNO(global_relaxdtmf));
+ 	ast_cli(a->fd, "  RFC2833 Compensation:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_RFC2833_COMPENSATE)));
+ 	ast_cli(a->fd, "  Symmetric RTP:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_SYMMETRICRTP)));
++	ast_cli(a->fd, "  Poor man's PLC:         %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_POORMANSPLC)));
+ 	ast_cli(a->fd, "  Compact SIP headers:    %s\n", AST_CLI_YESNO(sip_cfg.compactheaders));
+ 	ast_cli(a->fd, "  RTP Keepalive:          %d %s\n", global_rtpkeepalive, global_rtpkeepalive ? "" : "(Disabled)" );
+ 	ast_cli(a->fd, "  RTP Timeout:            %d %s\n", global_rtptimeout, global_rtptimeout ? "" : "(Disabled)" );
+@@ -19194,6 +19200,7 @@
+ 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
+ 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
+ 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
++			ast_cli(a->fd, "  Poor man's PLC:         %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_POORMANSPLC)));
+ 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
+ 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
+ 			ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
+@@ -27477,6 +27484,10 @@
+ 			ast_log(LOG_WARNING, "Unknown dtmf mode '%s' on line %d, using rfc2833\n", v->value, v->lineno);
+ 			ast_set_flag(&flags[0], SIP_DTMF_RFC2833);
+ 		}
++	} else if (!strcasecmp(v->name, "plc")) {
++		if (ast_true(v->value)) {
++			ast_set_flag(&flags[2], SIP_PAGE3_POORMANSPLC);
++		}
+ 	} else if (!strcasecmp(v->name, "nat")) {
+ 		ast_set_flag(&mask[0], SIP_NAT_FORCE_RPORT);
+ 		ast_set_flag(&flags[0], SIP_NAT_FORCE_RPORT); /* Default to "force_rport" */
+Index: channels/sip/include/sip.h
+===================================================================
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 383463)
++++ channels/sip/include/sip.h	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -359,9 +359,10 @@
+ 
+ #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+ #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
++#define SIP_PAGE3_POORMANSPLC		 (1 << 28)	/*!< DPG: Enable poor man's PLC - packet loss concealment */
+ 
+ #define SIP_PAGE3_FLAGS_TO_COPY \
+-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
++	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_POORMANSPLC)
+ 
+ /*@}*/
+ 
+Index: funcs/func_curl.c
+===================================================================
+--- funcs/func_curl.c	(.../branches/1.8)	(revision 383463)
++++ funcs/func_curl.c	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -568,7 +568,6 @@
+ 	struct ast_datastore *store = NULL;
+ 	int hashcompat = 0;
+ 	AST_LIST_HEAD(global_curl_info, curl_settings) *list = NULL;
+-	char curl_errbuf[CURL_ERROR_SIZE + 1]; /* add one to be safe */
+ 
+ 	if (buf) {
+ 		*buf = '\0';
+@@ -630,20 +629,8 @@
+ 		curl_easy_setopt(*curl, CURLOPT_POSTFIELDS, args.postdata);
+ 	}
+ 
+-	/* Temporarily assign a buffer for curl to write errors to. */
+-	curl_errbuf[0] = curl_errbuf[CURL_ERROR_SIZE] = '\0';
+-	curl_easy_setopt(*curl, CURLOPT_ERRORBUFFER, curl_errbuf);
++	curl_easy_perform(*curl);
+ 
+-	if (curl_easy_perform(*curl) != 0) {
+-		ast_log(LOG_WARNING, "%s ('%s')\n", curl_errbuf, args.url);
+-	}
+-
+-	/* Reset buffer to NULL so curl doesn't try to write to it when the
+-	 * buffer is deallocated. Documentation is vague about allowing NULL
+-	 * here, but the source allows it. See: "typecheck: allow NULL to unset
+-	 * CURLOPT_ERRORBUFFER" (62bcf005f4678a93158358265ba905bace33b834). */
+-	curl_easy_setopt(*curl, CURLOPT_ERRORBUFFER, (char*)NULL);
+-
+ 	if (store) {
+ 		AST_LIST_UNLOCK(list);
+ 	}
+Index: include/asterisk/rtp_engine.h
+===================================================================
+--- include/asterisk/rtp_engine.h	(.../branches/1.8)	(revision 383463)
++++ include/asterisk/rtp_engine.h	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -377,6 +377,8 @@
+ 	format_t (*available_formats)(struct ast_rtp_instance *instance, format_t to_endpoint, format_t to_asterisk);
+ 	/*! Callback to send CNG */
+ 	int (*sendcng)(struct ast_rtp_instance *instance, int level);
++	/*! Callback to turn on or off poor man's packet loss concealment in the RTP engine */
++	void (*plc_set_state)(struct ast_rtp_instance *instance, int state);
+ 	/*! Linked list information */
+ 	AST_RWLIST_ENTRY(ast_rtp_engine) entry;
+ };
+@@ -1854,6 +1856,13 @@
+  */
+ struct ast_srtp *ast_rtp_instance_get_srtp(struct ast_rtp_instance *instance);
+ 
++/*!
++ * \brief Change state of PLC for RTP instance
++ * \param instance the RTP instance
++ * \param state 1 for on, 0 for off
++ */
++void ast_rtp_instance_plc_set_state(struct ast_rtp_instance *instance, int state);
++
+ #if defined(__cplusplus) || defined(c_plusplus)
+ }
+ #endif
+Index: main/rtp_engine.c
+===================================================================
+--- main/rtp_engine.c	(.../branches/1.8)	(revision 383463)
++++ main/rtp_engine.c	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -783,6 +783,14 @@
+ 	}
+ }
+ 
++void ast_rtp_instance_plc_set_state(struct ast_rtp_instance *instance, int state)
++{
++	if (instance->engine->plc_set_state) {
++		instance->engine->plc_set_state(instance, state);
++	}
++}
++
++
+ int ast_rtp_instance_fd(struct ast_rtp_instance *instance, int rtcp)
+ {
+ 	return instance->engine->fd ? instance->engine->fd(instance, rtcp) : -1;
+Index: configs/rtp.conf.sample
+===================================================================
+--- configs/rtp.conf.sample	(.../branches/1.8)	(revision 383463)
++++ configs/rtp.conf.sample	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -32,3 +32,20 @@
+ ; if rtp packets are dropped from one or both ends after a call is
+ ; connected. This option is set to 4 by default.
+ ; probation=8
++
++; The RTP channels has an implementation of Packet Loss Concealment
++; that is named "Poor Man's PLC". Normally a PLC happens withing the
++; context of a jitter buffer. This PLC just copies the previous
++; packet into the stream again if a packet (or multiple) is missing.
++; If a packet arrives too late (reordered) it will be ignored.
++; This introduces a bit of jitter since we're sending two
++; packets at the same time. Hopefully the phone or gw at the
++; end of the line will have a jitter buffer and play out the media
++; properly. This PLC will make sure that Asterisk outbound RTP streams has
++; less skew and that recordings will actually have a proper amount of
++; media. Default is turned off.
++; This setting apply to ALL rtp streams in this Asterisk instance.
++; If you have video or text streams, it might not be a good idea.
++;
++; You can turn this on per device or globally in sip.conf too.
++;plc=yes
+Index: res/res_rtp_asterisk.c
+===================================================================
+--- res/res_rtp_asterisk.c	(.../branches/1.8)	(revision 383463)
++++ res/res_rtp_asterisk.c	(.../team/oej/pinefool-poor-mans-plc-1.8)	(revision 383463)
+@@ -87,6 +87,7 @@
+ 
+ static int rtpstart = DEFAULT_RTP_START;			/*!< First port for RTP sessions (set in rtp.conf) */
+ static int rtpend = DEFAULT_RTP_END;			/*!< Last port for RTP sessions (set in rtp.conf) */
++static int poormansplc;                 /*!< Are we using poor man's packet loss concealment? */
+ static int rtpdebug;			/*!< Are we debugging? */
+ static int rtcpdebug;			/*!< Are we debugging RTCP? */
+ static int rtcpstats;			/*!< Are we debugging RTCP? */
+@@ -113,11 +114,13 @@
+ #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
+ #define FLAG_NEED_MARKER_BIT            (1 << 3)
+ #define FLAG_DTMF_COMPENSATE            (1 << 4)
++#define FLAG_POORMANSPLC	        (1 << 15)
+ 
+ /*! \brief RTP session description */
+ struct ast_rtp {
+ 	int s;
+ 	struct ast_frame f;
++	struct ast_frame *plcbuf;	/*!< Buffer for Poor man's PLC */
+ 	unsigned char rawdata[8192 + AST_FRIENDLY_OFFSET];
+ 	unsigned int ssrc;		/*!< Synchronization source, RFC 3550, page 10. */
+ 	unsigned int themssrc;		/*!< Their SSRC */
+@@ -293,11 +296,13 @@
+ static void ast_rtp_stop(struct ast_rtp_instance *instance);
+ static int ast_rtp_qos_set(struct ast_rtp_instance *instance, int tos, int cos, const char* desc);
+ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level);
++static void ast_rtp_plc_set_state(struct ast_rtp_instance *instance, int state);
+ 
+ /* RTP Engine Declaration */
+ static struct ast_rtp_engine asterisk_rtp_engine = {
+ 	.name = "asterisk",
+ 	.new = ast_rtp_new,
++	.plc_set_state = ast_rtp_plc_set_state,
+ 	.destroy = ast_rtp_destroy,
+ 	.dtmf_begin = ast_rtp_dtmf_begin,
+ 	.dtmf_end = ast_rtp_dtmf_end,
+@@ -529,6 +534,11 @@
+ 	}
+ 
+ 	/* Set default parameters on the newly created RTP structure */
++	rtp->plcbuf = NULL;
++
++	if (poormansplc) {
++		ast_set_flag(rtp, FLAG_POORMANSPLC);	/* If PLC is globally set, turn it on */
++	}
+ 	rtp->ssrc = ast_random();
+ 	rtp->seqno = ast_random() & 0xffff;
+ 	rtp->strict_rtp_state = (strictrtp ? STRICT_RTP_LEARN : STRICT_RTP_OPEN);
+@@ -613,6 +623,9 @@
+ 		AST_SCHED_DEL(rtp->sched, rtp->red->schedid);
+ 		ast_free(rtp->red);
+ 	}
++	if (rtp->plcbuf != NULL) {
++		ast_frfree(rtp->plcbuf);
++	}
+ 
+ 	/* Finally destroy ourselves */
+ 	ast_free(rtp);
+@@ -1150,6 +1163,16 @@
+ 	return res;
+ }
+ 
++static void ast_rtp_plc_set_state(struct ast_rtp_instance *instance, int state)
++{
++	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
++	if (state) {
++		ast_set_flag(rtp, FLAG_POORMANSPLC);
++	} else {
++		ast_clear_flag(rtp, FLAG_POORMANSPLC);
++	}
++}
++
+ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame *frame, int codec)
+ {
+ 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+@@ -2126,6 +2149,7 @@
+ 	struct ast_rtp_payload_type payload;
+ 	struct ast_sockaddr remote_address = { {0,} };
+ 	struct frame_list frames;
++	int lostpackets = 0;
+ 
+ 	/* If this is actually RTCP let's hop on over and handle it */
+ 	if (rtcp) {
+@@ -2327,6 +2351,30 @@
+ 	if ((int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
+ 		rtp->cycles += RTP_SEQ_MOD;
+ 
++	if (rtp->rxcount > 1) {
++		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno)  {
++			/* This is a latecome we've already replaced. A jitter buffer would have handled this
++			   properly, but in many cases we can't afford a jitterbuffer and will have to live
++			   with the face that the poor man's PLC already has replaced this frame and we can't
++			   insert it AGAIN, because that would cause negative skew.
++			   Henry, just ignore this late visitor. Thank you.
++			*/
++			return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
++		}
++		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
++		/* RTP sequence numbers are consecutive. Have we lost a packet? */
++		if (lostpackets) {
++			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
++		}
++		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && rtp->plcbuf != NULL) {
++			int i;
++			for (i = 0; i < lostpackets; i++) {
++				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
++				ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
++			}
++		}
++	}
++
+ 	prev_seqno = rtp->lastrxseqno;
+ 	rtp->lastrxseqno = seqno;
+ 
+@@ -2493,6 +2541,15 @@
+ 		rtp->f.delivery.tv_usec = 0;
+ 	}
+ 
++	if (ast_test_flag(rtp, FLAG_POORMANSPLC)) {
++		/* Copy this frame to buffer */
++		if (rtp->plcbuf) {
++			/* We have something here. Take it away, dear Henry. */
++			ast_frame_free(rtp->plcbuf, 0);
++		}
++		rtp->plcbuf = ast_frdup(&rtp->f);
++	}
++
+ 	AST_LIST_INSERT_TAIL(&frames, &rtp->f, frame_list);
+ 	return AST_LIST_FIRST(&frames);
+ }
+@@ -2978,6 +3035,7 @@
+ 	rtpend = DEFAULT_RTP_END;
+ 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
+ 	strictrtp = STRICT_RTP_OPEN;
++	poormansplc = 0;
+ 	learning_min_sequential = DEFAULT_LEARNING_MIN_SEQUENTIAL;
+ 	if (cfg) {
+ 		if ((s = ast_variable_retrieve(cfg, "general", "rtpstart"))) {
+@@ -3011,6 +3069,12 @@
+ 				ast_log(LOG_WARNING, "Disabling RTP checksums is not supported on this operating system!\n");
+ #endif
+ 		}
++		if ((s = ast_variable_retrieve(cfg, "general", "plc"))) {
++			poormansplc = ast_true(s);
++			if (option_debug > 1) {
++				ast_log(LOG_DEBUG, "*** Poor man's PLC is turned %s\n", poormansplc ? "on" : "off" );
++			}
++		}
+ 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {
+ 			dtmftimeout = atoi(s);
+ 			if ((dtmftimeout < 0) || (dtmftimeout > 64000)) {

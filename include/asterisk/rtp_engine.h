@@ -428,6 +428,8 @@ struct ast_rtp_engine {
 	/*! Callback to set translation information for the CQR record */
 	void (*set_translator) (struct ast_rtp_instance *instance, const char *readtranslator, const int readcost, const char *writetranslator, const int writecost);
 	int (*rtcp_write_empty)(struct ast_rtp_instance *instance);
+	/*! Callback to turn on or off poor man's packet loss concealment in the RTP engine */
+	void (*plc_set_state)(struct ast_rtp_instance *instance, int state);
 	/*! Linked list information */
 	AST_RWLIST_ENTRY(ast_rtp_engine) entry;
 };
@@ -1992,6 +1994,13 @@ int ast_rtp_instance_set_bridged_chan(struct ast_rtp_instance *instance, const c
  * \retval -1 not implemented by RTP engine
  */
 int ast_rtp_instance_set_translator(struct ast_rtp_instance *instance, const char *readtranslator, const int readcost, const char *writetranslator, const int writecost);
+
+/*!
+ * \brief Change state of PLC for RTP instance
+ * \param instance the RTP instance
+ * \param state 1 for on, 0 for off
+ */
+void ast_rtp_instance_plc_set_state(struct ast_rtp_instance *instance, int state);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

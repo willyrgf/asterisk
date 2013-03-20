@@ -32,3 +32,20 @@ rtpend=20000
 ; if rtp packets are dropped from one or both ends after a call is
 ; connected. This option is set to 4 by default.
 ; probation=8
+
+; The RTP channels has an implementation of Packet Loss Concealment
+; that is named "Poor Man's PLC". Normally a PLC happens withing the
+; context of a jitter buffer. This PLC just copies the previous
+; packet into the stream again if a packet (or multiple) is missing.
+; If a packet arrives too late (reordered) it will be ignored.
+; This introduces a bit of jitter since we're sending two
+; packets at the same time. Hopefully the phone or gw at the
+; end of the line will have a jitter buffer and play out the media
+; properly. This PLC will make sure that Asterisk outbound RTP streams has
+; less skew and that recordings will actually have a proper amount of
+; media. Default is turned off.
+; This setting apply to ALL rtp streams in this Asterisk instance.
+; If you have video or text streams, it might not be a good idea.
+;
+; You can turn this on per device or globally in sip.conf too.
+;plc=yes
