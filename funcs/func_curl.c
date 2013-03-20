@@ -581,6 +581,7 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 	struct ast_datastore *store = NULL;
 	int hashcompat = 0;
 	AST_LIST_HEAD(global_curl_info, curl_settings) *list = NULL;
+	char curl_errbuf[CURL_ERROR_SIZE + 1]; /* add one to be safe */
 
 	if (buf) {
 		*buf = '\0';
@@ -642,7 +643,19 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 		curl_easy_setopt(*curl, CURLOPT_POSTFIELDS, args.postdata);
 	}
 
-	curl_easy_perform(*curl);
+	/* Temporarily assign a buffer for curl to write errors to. */
+	curl_errbuf[0] = curl_errbuf[CURL_ERROR_SIZE] = '\0';
+	curl_easy_setopt(*curl, CURLOPT_ERRORBUFFER, curl_errbuf);
+
+	if (curl_easy_perform(*curl) != 0) {
+		ast_log(LOG_WARNING, "%s ('%s')\n", curl_errbuf, args.url);
+	}
+
+	/* Reset buffer to NULL so curl doesn't try to write to it when the
+	 * buffer is deallocated. Documentation is vague about allowing NULL
+	 * here, but the source allows it. See: "typecheck: allow NULL to unset
+	 * CURLOPT_ERRORBUFFER" (62bcf005f4678a93158358265ba905bace33b834). */
+	curl_easy_setopt(*curl, CURLOPT_ERRORBUFFER, (char*)NULL);
 
 	if (store) {
 		AST_LIST_UNLOCK(list);
@@ -665,20 +678,11 @@ static int acf_curl_helper(struct ast_channel *chan, const char *cmd, char *info
 			int rowcount = 0;
 			while (fields && values && (piece = strsep(&remainder, "&"))) {
 				char *name = strsep(&piece, "=");
-				/* Do this before the decode, because if something has encoded
-				 * a literal plus-sign, we don't want to translate that to a
-				 * space. */
-				if (hashcompat == HASHCOMPAT_LEGACY) {
-					if (piece) {
-						ast_uri_decode(piece, ast_uri_http_legacy);
-					}
-					ast_uri_decode(name, ast_uri_http_legacy);
-				} else {
-					if (piece) {
-						ast_uri_decode(piece, ast_uri_http);
-					}
-					ast_uri_decode(name, ast_uri_http);
+				struct ast_flags mode = (hashcompat == HASHCOMPAT_LEGACY ? ast_uri_http_legacy : ast_uri_http);
+				if (piece) {
+					ast_uri_decode(piece, mode);
 				}
+				ast_uri_decode(name, mode);
 				ast_str_append(&fields, 0, "%s%s", rowcount ? "," : "", ast_str_set_escapecommas(&escapebuf, 0, name, INT_MAX));
 				ast_str_append(&values, 0, "%s%s", rowcount ? "," : "", ast_str_set_escapecommas(&escapebuf, 0, S_OR(piece, ""), INT_MAX));
 				rowcount++;
