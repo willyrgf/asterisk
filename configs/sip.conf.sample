@@ -1007,6 +1007,22 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                               ; AOC-E to snom endpoints.  This option can be used both in the
                               ; peer and global scope.  The default for this option is off.
 
+;------------------------------ POOR MAN'S PLC CONFIGURATION - --------------------------
+; The RTP channels has an implementation of Packet Loss Concealment
+; that is named "Poor Man's PLC". Normally a PLC happens withing the
+; context of a jitter buffer. This PLC just copies the previous
+; packet into the stream again if a packet (or multiple) is missing.
+; If a packet arrives too late (reordered) it will be ignored.
+; This introduces a bit of jitter since we're sending two
+; packets at the same time. Hopefully the phone or server at the
+; end of the line will have a jitter buffer and play out the media
+; properly. This PLC will make sure that Asterisk outbound RTP streams has
+; less skew and that recordings will actually have a proper amount of
+; media. Default is turned off.
+;
+; This setting is also accepted on device level (peers/users).
+; plc = yes
+
 
 ;------------------------------ JITTER BUFFER CONFIGURATION --------------------------
 ; jbenable = yes              ; Enables the use of a jitterbuffer on the receiving side of a
