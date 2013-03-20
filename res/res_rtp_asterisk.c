@@ -87,6 +87,7 @@ static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
 static int rtpstart = DEFAULT_RTP_START;			/*!< First port for RTP sessions (set in rtp.conf) */
 static int rtpend = DEFAULT_RTP_END;			/*!< Last port for RTP sessions (set in rtp.conf) */
+static int poormansplc;                 /*!< Are we using poor man's packet loss concealment? */
 static int rtpdebug;			/*!< Are we debugging? */
 static int rtcpdebug;			/*!< Are we debugging RTCP? */
 static int rtcpstats;			/*!< Are we debugging RTCP? */
@@ -118,6 +119,7 @@ enum strict_rtp_state {
 struct ast_rtp {
 	int s;
 	struct ast_frame f;
+	struct ast_frame *plcbuf;	/*!< Buffer for Poor man's PLC */
 	unsigned char rawdata[8192 + AST_FRIENDLY_OFFSET];
 	unsigned int ssrc;		/*!< Synchronization source, RFC 3550, page 10. */
 	unsigned int themssrc;		/*!< Their SSRC */
@@ -529,6 +531,7 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 	}
 
 	/* Set default parameters on the newly created RTP structure */
+	rtp->plcbuf = NULL;
 	rtp->ssrc = ast_random();
 	rtp->seqno = ast_random() & 0xffff;
 	rtp->strict_rtp_state = (strictrtp ? STRICT_RTP_LEARN : STRICT_RTP_OPEN);
@@ -612,6 +615,9 @@ static int ast_rtp_destroy(struct ast_rtp_instance *instance)
 	if (rtp->red) {
 		AST_SCHED_DEL(rtp->sched, rtp->red->schedid);
 		ast_free(rtp->red);
+	}
+	if (rtp->plcbuf != NULL) {
+		ast_frfree(rtp->plcbuf);
 	}
 
 	/* Finally destroy ourselves */
@@ -2126,6 +2132,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	struct ast_rtp_payload_type payload;
 	struct ast_sockaddr remote_address = { {0,} };
 	struct frame_list frames;
+	int lostpackets = 0;
 
 	/* If this is actually RTCP let's hop on over and handle it */
 	if (rtcp) {
@@ -2327,6 +2334,30 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	if ((int)rtp->lastrxseqno - (int)seqno  > 100) /* if so it would indicate that the sender cycled; allow for misordering */
 		rtp->cycles += RTP_SEQ_MOD;
 
+	if (rtp->rxcount > 1) {
+		if (poormansplc && seqno < rtp->lastrxseqno)  {
+			/* This is a latecome we've already replaced. A jitter buffer would have handled this
+			   properly, but in many cases we can't afford a jitterbuffer and will have to live
+			   with the face that the poor man's PLC already has replaced this frame and we can't
+			   insert it AGAIN, because that would cause negative skew.
+			   Henry, just ignore this late visitor. Thank you.
+			*/
+			return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
+		}
+		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
+		/* RTP sequence numbers are consecutive. Have we lost a packet? */
+		if (lostpackets) {
+			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
+		}
+		if (poormansplc && rtp->plcbuf != NULL) {
+			int i;
+			for (i = 0; i < lostpackets; i++) {
+				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
+				ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
+			}
+		}
+	}
+
 	prev_seqno = rtp->lastrxseqno;
 	rtp->lastrxseqno = seqno;
 
@@ -2491,6 +2522,18 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		rtp->lastitexttimestamp = timestamp;
 		rtp->f.delivery.tv_sec = 0;
 		rtp->f.delivery.tv_usec = 0;
+	}
+
+	//	if (rtp->plcbuf) {
+	//		ast_frfree(rtp->plcbuf);
+	//	}
+	if (poormansplc) {
+		/* Copy this frame to buffer */
+		if (rtp->plcbuf) {
+			/* We have something here. Take it away, dear Henry. */
+			ast_frame_free(rtp->plcbuf, 0);
+		}
+		rtp->plcbuf = ast_frdup(&rtp->f);
 	}
 
 	AST_LIST_INSERT_TAIL(&frames, &rtp->f, frame_list);
@@ -2978,6 +3021,7 @@ static int rtp_reload(int reload)
 	rtpend = DEFAULT_RTP_END;
 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 	strictrtp = STRICT_RTP_OPEN;
+	poormansplc = 0;
 	learning_min_sequential = DEFAULT_LEARNING_MIN_SEQUENTIAL;
 	if (cfg) {
 		if ((s = ast_variable_retrieve(cfg, "general", "rtpstart"))) {
@@ -3010,6 +3054,12 @@ static int rtp_reload(int reload)
 			if (ast_false(s))
 				ast_log(LOG_WARNING, "Disabling RTP checksums is not supported on this operating system!\n");
 #endif
+		}
+		if ((s = ast_variable_retrieve(cfg, "general", "plc"))) {
+			poormansplc = ast_true(s);
+			if (option_debug > 1) {
+				ast_log(LOG_DEBUG, "*** Poor man's PLC is turned %s\n", poormansplc ? "on" : "off" );
+			}
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {
 			dtmftimeout = atoi(s);
