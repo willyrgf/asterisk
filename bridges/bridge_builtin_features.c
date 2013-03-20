@@ -277,7 +277,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 
 	/* Create a bridge to use to talk to the person we are calling */
 	attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX,
-		AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
+		AST_BRIDGE_FLAG_DISSOLVE_HANGUP, NULL);
 	if (!attended_bridge) {
 		ast_hangup(peer);
 /* BUGBUG beeperr needs to be configurable from features.conf */

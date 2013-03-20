@@ -845,17 +845,17 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 		}
 		stat_iteration_counter--;
 
-		ao2_unlock(bridge);
+		ast_bridge_unlock(bridge);
 		/* cleanup any translation frame data from the previous mixing iteration. */
 		softmix_translate_helper_cleanup(&trans_helper);
 		/* Wait for the timing source to tell us to wake up and get things done */
 		ast_waitfor_n_fd(&timingfd, 1, &timeout, NULL);
 		if (ast_timer_ack(timer, 1) < 0) {
 			ast_log(LOG_ERROR, "Failed to acknowledge timer in softmix bridge.\n");
-			ao2_lock(bridge);
+			ast_bridge_lock(bridge);
 			goto softmix_cleanup;
 		}
-		ao2_lock(bridge);
+		ast_bridge_lock(bridge);
 
 		/* make sure to detect mixing interval changes if they occur. */
 		if (bridge->internal_mixing_interval && (bridge->internal_mixing_interval != softmix_data->internal_mixing_interval)) {
@@ -887,7 +887,7 @@ static void *softmix_mixing_thread(void *data)
 	struct ast_bridge *bridge = data;
 	struct softmix_bridge_data *softmix_data;
 
-	ao2_lock(bridge);
+	ast_bridge_lock(bridge);
 	if (bridge->callid) {
 		ast_callid_threadassoc_add(bridge->callid);
 	}
@@ -898,13 +898,13 @@ static void *softmix_mixing_thread(void *data)
 	while (!softmix_data->stop) {
 		if (!bridge->num_active) {
 			/* Wait for something to happen to the bridge. */
-			ao2_unlock(bridge);
+			ast_bridge_unlock(bridge);
 			ast_mutex_lock(&softmix_data->lock);
 			if (!softmix_data->stop) {
 				ast_cond_wait(&softmix_data->cond, &softmix_data->lock);
 			}
 			ast_mutex_unlock(&softmix_data->lock);
-			ao2_lock(bridge);
+			ast_bridge_lock(bridge);
 			continue;
 		}
 
@@ -913,13 +913,13 @@ static void *softmix_mixing_thread(void *data)
 			 * A mixing error occurred.  Sleep and try again later so we
 			 * won't flood the logs.
 			 */
-			ao2_unlock(bridge);
+			ast_bridge_unlock(bridge);
 			sleep(1);
-			ao2_lock(bridge);
+			ast_bridge_lock(bridge);
 		}
 	}
 
-	ao2_unlock(bridge);
+	ast_bridge_unlock(bridge);
 
 	ast_debug(1, "Stopping mixing thread for bridge %p\n", bridge);
 

@@ -195,7 +195,9 @@ static int bridgewait_exec(struct ast_channel *chan, const char *data)
 
 	ast_mutex_lock(&bridgewait_lock);
 	if (!holding_bridge) {
-		holding_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_HOLDING, AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM);
+/* BUGBUG this holding bridge needs a personality to manage the timeout. Otherwise, the timer will move to the next bridge which is likely not desireable. */
+		holding_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_HOLDING,
+			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM, NULL);
 	}
 	ast_mutex_unlock(&bridgewait_lock);
 

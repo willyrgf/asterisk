@@ -115,9 +115,138 @@ struct ast_bridge_tech_optimizations {
 };
 
 /*!
+ * \brief Create the bridge personality.
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \details
+ * Allocate and setup the self->personality_pvt.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+typedef int (*ast_personality_create_fn)(struct ast_bridge *self);
+
+/*!
+ * \brief Destroy the bridge personality.
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \details
+ * Release any resources held by self->personality_pvt and
+ * release self->personality_pvt.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_personality_destroy_fn)(struct ast_bridge *self);
+
+/*!
+ * \brief Can this channel be pushed into its bridge.
+ *
+ * \param self Bridge channel to operate upon.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \note On entry, self->bridge is already locked.
+ *
+ * \retval TRUE if can push this channel into its bridge.
+ */
+typedef int (*ast_personality_channel_can_push_fn)(struct ast_bridge_channel *self, struct ast_bridge_channel *swap);
+
+/*!
+ * \brief Push this channel into its bridge.
+ *
+ * \param self Bridge channel to operate upon.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \details
+ * Setup any channel hooks controlled by the personality,
+ * allocate and setup the self->personality_pvt.  If there is a
+ * swap channel, use it as a guide to setting up the self
+ * channel.
+ *
+ * \note On entry, self->bridge is already locked.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+typedef int (*ast_personality_channel_push_fn)(struct ast_bridge_channel *self, struct ast_bridge_channel *swap);
+
+/*!
+ * \brief Pull this channel from its bridge.
+ *
+ * \param self Bridge channel to operate upon.
+ *
+ * \details
+ * Remove any channel hooks controlled by the personality.
+ * Release any resources held by self->personality_pvt and
+ * release self->personality_pvt.
+ *
+ * \note On entry, self->bridge is already locked.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_personality_channel_pull_fn)(struct ast_bridge_channel *self);
+
+/*!
+ * \brief Masquerade push this channel into its bridge.
+ *
+ * \param self Bridge channel to operate upon.
+ *
+ * \note This is a virtual push into the bridge because a
+ * masquerade swaps the guts of the channel to give it a new
+ * identity.  This is mostly for external bridge monitor
+ * bookkeeping.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_personality_channel_push_masquerade_fn)(struct ast_bridge_channel *self);
+
+/*!
+ * \brief Masquerade pull this channel from its bridge.
+ *
+ * \param self Bridge channel to operate upon.
+ *
+ * \note This is a virtual pull from the bridge because a
+ * masquerade swaps the guts of the channel to give it a new
+ * identity.  This is mostly for external bridge monitor
+ * bookkeeping.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_personality_channel_pull_masquerade_fn)(struct ast_bridge_channel *self);
+
+/*! Bridge personality virtual methods table definition. */
+struct ast_personality_methods {
+	/*! Bridge personality name for log messages. */
+	const char *name;
+	/*! Create the bridge personality. */
+	ast_personality_create_fn create;
+	/*! Destroy the bridge personality. */
+	ast_personality_destroy_fn destroy;
+	/*! TRUE if can push the bridge channel into its bridge. */
+	ast_personality_channel_can_push_fn can_push;
+	/*! Push the bridge channel into its bridge. */
+	ast_personality_channel_push_fn push;
+	/*! Pull the bridge channel from its bridge. */
+	ast_personality_channel_pull_fn pull;
+/*
+ * BUGBUG push_masquerade may just have to change into masquerade_complete so the bridge will need to check compatibility again.
+ * Otherwise, the bridge channel will have to constantly check if the set formats have changed before reading frames.
+ * Race conditions may force the bridge channel to constantly check anyway.                                                                                                                            .
+ */
+	/*! Virtually push the bridge channel into its bridge. */
+	ast_personality_channel_push_masquerade_fn push_masquerade;
+	/*! Virtually pull the bridge channel from its bridge. */
+	ast_personality_channel_pull_masquerade_fn pull_masquerade;
+};
+
+/*!
  * \brief Structure that contains information regarding a channel in a bridge
  */
 struct ast_bridge_channel {
+/* BUGBUG cond is only here because of external party suspend/unsuspend support. */
 	/*! Condition, used if we want to wake up a thread waiting on the bridged channel */
 	ast_cond_t cond;
 	/*! Current bridged channel state */
@@ -128,7 +257,21 @@ struct ast_bridge_channel {
 	struct ast_channel *swap;
 	/*! Bridge this channel is participating in */
 	struct ast_bridge *bridge;
-	/*! Private information unique to the bridge technology */
+	/*!
+	 * \brief Bridge personality private bridge channel data.
+	 *
+	 * \note This information is added when the channel is pushed
+	 * into the bridge and removed when it is pulled from the
+	 * bridge.
+	 */
+	void *personality_pvt;
+	/*!
+	 * \brief Private information unique to the bridge technology.
+	 *
+	 * \note This information is added when the channel joins the
+	 * bridge's technology and removed when it leaves the bridge's
+	 * technology.
+	 */
 	void *tech_pvt;
 	/*! Thread handling the bridged channel (Needed by ast_bridge_depart) */
 	pthread_t thread;
@@ -217,12 +360,32 @@ struct ast_bridge_video_mode {
  * \brief Structure that contains information about a bridge
  */
 struct ast_bridge {
+	/*! Bridge personality virtual method table. */
+	const struct ast_personality_methods *personality;
+	/*!
+	 * \brief Bridge personality private bridge data.
+	 *
+	 * \note This information is added when the bridge is created.
+	 */
+	void *personality_pvt;
+	/*! Bridge technology that is handling the bridge */
+	struct ast_bridge_technology *technology;
+	/*! Private information unique to the bridge technology */
+	void *tech_pvt;
+	/*! Call ID associated with the bridge */
+	struct ast_callid *callid;
+	/*! Linked list of channels participating in the bridge */
+	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
+	/*! Queue of actions to perform on the bridge. */
+	AST_LIST_HEAD_NOLOCK(, ast_frame) action_queue;
+	/*! The video mode this bridge is using */
+	struct ast_bridge_video_mode video_mode;
+	/*! Bridge flags to tweak behavior */
+	struct ast_flags feature_flags;
 	/*! Number of channels participating in the bridge */
 	unsigned int num_channels;
 	/*! Number of active channels in the bridge. */
 	unsigned int num_active;
-	/*! The video mode this bridge is using */
-	struct ast_bridge_video_mode video_mode;
 	/*!
 	 * \brief Count of the active temporary requests to inhibit bridge merges.
 	 * Zero if merges are allowed.
@@ -241,18 +404,6 @@ struct ast_bridge {
 	unsigned int reconfigured:1;
 	/*! TRUE if the bridge has been dissolved.  Any channel that now tries to join is immediately ejected. */
 	unsigned int dissolved:1;
-	/*! Bridge flags to tweak behavior */
-	struct ast_flags feature_flags;
-	/*! Bridge technology that is handling the bridge */
-	struct ast_bridge_technology *technology;
-	/*! Private information unique to the bridge technology */
-	void *tech_pvt;
-	/*! Call ID associated with the bridge */
-	struct ast_callid *callid;
-	/*! Linked list of channels participating in the bridge */
-	AST_LIST_HEAD_NOLOCK(, ast_bridge_channel) channels;
-	/*! Queue of actions to perform on the bridge. */
-	AST_LIST_HEAD_NOLOCK(, ast_frame) action_queue;
 };
 
 /*!
@@ -260,6 +411,7 @@ struct ast_bridge {
  *
  * \param capabilities The capabilities that we require to be used on the bridge
  * \param flags Flags that will alter the behavior of the bridge
+ * \param personality Personality of the new bridge (NULL if none)
  *
  * \retval a pointer to a new bridge on success
  * \retval NULL on failure
@@ -274,7 +426,21 @@ struct ast_bridge {
  * This creates a simple two party bridge that will be destroyed once one of
  * the channels hangs up.
  */
-struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags);
+struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags, const struct ast_personality_methods *personality);
+
+/*!
+ * \brief Try locking the bridge.
+ *
+ * \param bridge Bridge to try locking
+ *
+ * \retval 0 on success.
+ * \retval non-zero on error.
+ */
+#define ast_bridge_trylock(bridge)	_ast_bridge_trylock(bridge, __FILE__, __PRETTY_FUNCTION__, __LINE__, #bridge)
+static inline int _ast_bridge_trylock(struct ast_bridge *bridge, const char *file, const char *function, int line, const char *var)
+{
+	return __ao2_trylock(bridge, AO2_LOCK_REQ_MUTEX, file, function, line, var);
+}
 
 /*!
  * \brief Lock the bridge.
@@ -556,6 +722,46 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan);
  *       Doing so may result in bad things happening.
  */
 int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
+
+/*!
+ * \brief Try locking the bridge_channel.
+ *
+ * \param bridge_channel What to try locking
+ *
+ * \retval 0 on success.
+ * \retval non-zero on error.
+ */
+#define ast_bridge_channel_trylock(bridge_channel)	_ast_bridge_channel_trylock(bridge_channel, __FILE__, __PRETTY_FUNCTION__, __LINE__, #bridge_channel)
+static inline int _ast_bridge_channel_trylock(struct ast_bridge_channel *bridge_channel, const char *file, const char *function, int line, const char *var)
+{
+	return __ao2_trylock(bridge_channel, AO2_LOCK_REQ_MUTEX, file, function, line, var);
+}
+
+/*!
+ * \brief Lock the bridge_channel.
+ *
+ * \param bridge_channel What to lock
+ *
+ * \return Nothing
+ */
+#define ast_bridge_channel_lock(bridge_channel)	_ast_bridge_channel_lock(bridge_channel, __FILE__, __PRETTY_FUNCTION__, __LINE__, #bridge_channel)
+static inline void _ast_bridge_channel_lock(struct ast_bridge_channel *bridge_channel, const char *file, const char *function, int line, const char *var)
+{
+	__ao2_lock(bridge_channel, AO2_LOCK_REQ_MUTEX, file, function, line, var);
+}
+
+/*!
+ * \brief Unlock the bridge_channel.
+ *
+ * \param bridge_channel What to unlock
+ *
+ * \return Nothing
+ */
+#define ast_bridge_channel_unlock(bridge_channel)	_ast_bridge_channel_unlock(bridge_channel, __FILE__, __PRETTY_FUNCTION__, __LINE__, #bridge_channel)
+static inline void _ast_bridge_channel_unlock(struct ast_bridge_channel *bridge_channel, const char *file, const char *function, int line, const char *var)
+{
+	__ao2_unlock(bridge_channel, file, function, line, var);
+}
 
 /*!
  * \brief Set bridge channel state to leave bridge (if not leaving already) with no lock.
