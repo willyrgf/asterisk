@@ -1333,6 +1333,15 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		rtp->cycles += RTP_SEQ_MOD;
 
 	if (rtp->rxcount > 1) {
+		if (poormansplc && seqno < rtp->lastrxseqno)  {
+			/* This is a latecome we've already replaced. A jitter buffer would have handled this
+			   properly, but in many cases we can't afford a jitterbuffer and will have to live
+			   with the face that the poor man's PLC already has replaced this frame and we can't
+			   insert it AGAIN, because that would cause negative skew.
+			   Henry, just ignore this late visitor. Thank you.
+			*/
+			return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
+		}
 		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
 		/* RTP sequence numbers are consecutive. Have we lost a packet? */
 		if (lostpackets) {
