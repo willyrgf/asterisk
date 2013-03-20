@@ -783,6 +783,14 @@ void ast_rtp_instance_stop(struct ast_rtp_instance *instance)
 	}
 }
 
+void ast_rtp_instance_plc_set_state(struct ast_rtp_instance *instance, int state)
+{
+	if (instance->engine->plc_set_state) {
+		instance->engine->plc_set_state(instance, state);
+	}
+}
+
+
 int ast_rtp_instance_fd(struct ast_rtp_instance *instance, int rtcp)
 {
 	return instance->engine->fd ? instance->engine->fd(instance, rtcp) : -1;

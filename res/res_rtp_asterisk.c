@@ -114,6 +114,7 @@ enum strict_rtp_state {
 #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
 #define FLAG_NEED_MARKER_BIT            (1 << 3)
 #define FLAG_DTMF_COMPENSATE            (1 << 4)
+#define FLAG_POORMANSPLC	        (1 << 15)
 
 /*! \brief RTP session description */
 struct ast_rtp {
@@ -295,11 +296,13 @@ static void ast_rtp_stun_request(struct ast_rtp_instance *instance, struct ast_s
 static void ast_rtp_stop(struct ast_rtp_instance *instance);
 static int ast_rtp_qos_set(struct ast_rtp_instance *instance, int tos, int cos, const char* desc);
 static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level);
+static void ast_rtp_plc_set_state(struct ast_rtp_instance *instance, int state);
 
 /* RTP Engine Declaration */
 static struct ast_rtp_engine asterisk_rtp_engine = {
 	.name = "asterisk",
 	.new = ast_rtp_new,
+	.plc_set_state = ast_rtp_plc_set_state,
 	.destroy = ast_rtp_destroy,
 	.dtmf_begin = ast_rtp_dtmf_begin,
 	.dtmf_end = ast_rtp_dtmf_end,
@@ -532,6 +535,10 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 
 	/* Set default parameters on the newly created RTP structure */
 	rtp->plcbuf = NULL;
+
+	if (poormansplc) {
+		ast_set_flag(rtp, FLAG_POORMANSPLC);	/* If PLC is globally set, turn it on */
+	}
 	rtp->ssrc = ast_random();
 	rtp->seqno = ast_random() & 0xffff;
 	rtp->strict_rtp_state = (strictrtp ? STRICT_RTP_LEARN : STRICT_RTP_OPEN);
@@ -1154,6 +1161,16 @@ static int ast_rtcp_write(const void *data)
 	}
 
 	return res;
+}
+
+static void ast_rtp_plc_set_state(struct ast_rtp_instance *instance, int state)
+{
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	if (state) {
+		ast_set_flag(rtp, FLAG_POORMANSPLC);
+	} else {
+		ast_clear_flag(rtp, FLAG_POORMANSPLC);
+	}
 }
 
 static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame *frame, int codec)
@@ -2335,7 +2352,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		rtp->cycles += RTP_SEQ_MOD;
 
 	if (rtp->rxcount > 1) {
-		if (poormansplc && seqno < rtp->lastrxseqno)  {
+		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno)  {
 			/* This is a latecome we've already replaced. A jitter buffer would have handled this
 			   properly, but in many cases we can't afford a jitterbuffer and will have to live
 			   with the face that the poor man's PLC already has replaced this frame and we can't
@@ -2349,7 +2366,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		if (lostpackets) {
 			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
 		}
-		if (poormansplc && rtp->plcbuf != NULL) {
+		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && rtp->plcbuf != NULL) {
 			int i;
 			for (i = 0; i < lostpackets; i++) {
 				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
@@ -2524,10 +2541,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		rtp->f.delivery.tv_usec = 0;
 	}
 
-	//	if (rtp->plcbuf) {
-	//		ast_frfree(rtp->plcbuf);
-	//	}
-	if (poormansplc) {
+	if (ast_test_flag(rtp, FLAG_POORMANSPLC)) {
 		/* Copy this frame to buffer */
 		if (rtp->plcbuf) {
 			/* We have something here. Take it away, dear Henry. */

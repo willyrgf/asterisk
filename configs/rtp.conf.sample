@@ -44,4 +44,8 @@ rtpend=20000
 ; properly. This PLC will make sure that Asterisk outbound RTP streams has
 ; less skew and that recordings will actually have a proper amount of
 ; media. Default is turned off.
+; This setting apply to ALL rtp streams in this Asterisk instance.
+; If you have video or text streams, it might not be a good idea.
+;
+; You can turn this on per device or globally in sip.conf too.
 ;plc=yes

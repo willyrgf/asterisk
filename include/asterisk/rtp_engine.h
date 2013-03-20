@@ -377,6 +377,8 @@ struct ast_rtp_engine {
 	format_t (*available_formats)(struct ast_rtp_instance *instance, format_t to_endpoint, format_t to_asterisk);
 	/*! Callback to send CNG */
 	int (*sendcng)(struct ast_rtp_instance *instance, int level);
+	/*! Callback to turn on or off poor man's packet loss concealment in the RTP engine */
+	void (*plc_set_state)(struct ast_rtp_instance *instance, int state);
 	/*! Linked list information */
 	AST_RWLIST_ENTRY(ast_rtp_engine) entry;
 };
@@ -1853,6 +1855,13 @@ int ast_rtp_instance_add_srtp_policy(struct ast_rtp_instance *instance, struct a
  * \retval NULL if no SRTP instance exists
  */
 struct ast_srtp *ast_rtp_instance_get_srtp(struct ast_rtp_instance *instance);
+
+/*!
+ * \brief Change state of PLC for RTP instance
+ * \param instance the RTP instance
+ * \param state 1 for on, 0 for off
+ */
+void ast_rtp_instance_plc_set_state(struct ast_rtp_instance *instance, int state);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

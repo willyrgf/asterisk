@@ -5595,6 +5595,10 @@ static int dialog_initialize_rtp(struct sip_pvt *dialog)
 
 		ast_rtp_instance_set_prop(dialog->trtp, AST_RTP_PROPERTY_RTCP, 1);
 	}
+	if (ast_test_flag(&dialog->flags[2], SIP_PAGE3_POORMANSPLC)) {
+		/* This is only supported for AUDIO */
+		ast_rtp_instance_plc_set_state(dialog->rtp, TRUE);
+	}
 
 	ast_rtp_instance_set_timeout(dialog->rtp, dialog->rtptimeout);
 	ast_rtp_instance_set_hold_timeout(dialog->rtp, dialog->rtpholdtimeout);
@@ -18093,6 +18097,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  Dynamic      : %s\n", AST_CLI_YESNO(peer->host_dynamic));
 		ast_cli(fd, "  Callerid     : %s\n", ast_callerid_merge(cbuf, sizeof(cbuf), peer->cid_name, peer->cid_num, "<unspecified>"));
 		ast_cli(fd, "  MaxCallBR    : %d kbps\n", peer->maxcallbitrate);
+		ast_cli(fd, "  PLC          : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_POORMANSPLC)));
 		ast_cli(fd, "  Expire       : %ld\n", ast_sched_when(sched, peer->expire));
 		ast_cli(fd, "  Insecure     : %s\n", insecure2str(ast_test_flag(&peer->flags[0], SIP_INSECURE)));
 		ast_cli(fd, "  Force rport  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT)));
@@ -18785,6 +18790,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Relax DTMF:             %s\n", AST_CLI_YESNO(global_relaxdtmf));
 	ast_cli(a->fd, "  RFC2833 Compensation:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_RFC2833_COMPENSATE)));
 	ast_cli(a->fd, "  Symmetric RTP:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_SYMMETRICRTP)));
+	ast_cli(a->fd, "  Poor man's PLC:         %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_POORMANSPLC)));
 	ast_cli(a->fd, "  Compact SIP headers:    %s\n", AST_CLI_YESNO(sip_cfg.compactheaders));
 	ast_cli(a->fd, "  RTP Keepalive:          %d %s\n", global_rtpkeepalive, global_rtpkeepalive ? "" : "(Disabled)" );
 	ast_cli(a->fd, "  RTP Timeout:            %d %s\n", global_rtptimeout, global_rtptimeout ? "" : "(Disabled)" );
@@ -19194,6 +19200,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
+			ast_cli(a->fd, "  Poor man's PLC:         %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_POORMANSPLC)));
 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
 			ast_cli(a->fd, "  SIP Transfer mode:      %s\n", transfermode2str(cur->allowtransfer));
@@ -27476,6 +27483,10 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 		else {
 			ast_log(LOG_WARNING, "Unknown dtmf mode '%s' on line %d, using rfc2833\n", v->value, v->lineno);
 			ast_set_flag(&flags[0], SIP_DTMF_RFC2833);
+		}
+	} else if (!strcasecmp(v->name, "plc")) {
+		if (ast_true(v->value)) {
+			ast_set_flag(&flags[2], SIP_PAGE3_POORMANSPLC);
 		}
 	} else if (!strcasecmp(v->name, "nat")) {
 		ast_set_flag(&mask[0], SIP_NAT_FORCE_RPORT);
