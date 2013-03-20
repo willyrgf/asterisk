@@ -23,25 +23,22 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/time.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
 #include <dirent.h>
 
 #include "asterisk/channel.h"
 #include "asterisk/file.h"
 #include "asterisk/app.h"
 #include "asterisk/dsp.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/astdb.h"
 #include "asterisk/callerid.h"
 #include "asterisk/privacy.h"

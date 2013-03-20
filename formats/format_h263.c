@@ -23,25 +23,16 @@
  * \ingroup formats
  * \arg See \ref AstVideo
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
  
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -77,7 +68,7 @@ static int h263_open(struct ast_filestream *s)
 static struct ast_frame *h263_read(struct ast_filestream *s, int *whennext)
 {
 	int res;
-	int mark;
+	format_t mark;
 	unsigned short len;
 	unsigned int ts;
 	struct h263_desc *fs = (struct h263_desc *)s->_private;
@@ -93,17 +84,17 @@ static struct ast_frame *h263_read(struct ast_filestream *s, int *whennext)
 		return NULL;
 	}
 	s->fr.frametype = AST_FRAME_VIDEO;
-	s->fr.subclass = AST_FORMAT_H263;
+	s->fr.subclass.codec = AST_FORMAT_H263;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, len);
-	if ((res = fread(s->fr.data, 1, s->fr.datalen, s->f)) != s->fr.datalen) {
+	if ((res = fread(s->fr.data.ptr, 1, s->fr.datalen, s->f)) != s->fr.datalen) {
 		if (res)
 			ast_log(LOG_WARNING, "Short read (%d) (%s)!\n", res, strerror(errno));
 		return NULL;
 	}
 	s->fr.samples = fs->lastts;	/* XXX what ? */
 	s->fr.datalen = len;
-	s->fr.subclass |= mark;
+	s->fr.subclass.codec |= mark;
 	s->fr.delivery.tv_sec = 0;
 	s->fr.delivery.tv_usec = 0;
 	if ((res = fread(&ts, 1, sizeof(ts), s->f)) == sizeof(ts)) {
@@ -119,18 +110,18 @@ static int h263_write(struct ast_filestream *fs, struct ast_frame *f)
 	int res;
 	unsigned int ts;
 	unsigned short len;
-	int subclass;
-	int mark=0;
+	format_t subclass;
+	format_t mark=0;
 	if (f->frametype != AST_FRAME_VIDEO) {
 		ast_log(LOG_WARNING, "Asked to write non-video frame!\n");
 		return -1;
 	}
-	subclass = f->subclass;
+	subclass = f->subclass.codec;
 	if (subclass & 0x1)
 		mark=0x8000;
 	subclass &= ~0x1;
 	if (subclass != AST_FORMAT_H263) {
-		ast_log(LOG_WARNING, "Asked to write non-h263 frame (%d)!\n", f->subclass);
+		ast_log(LOG_WARNING, "Asked to write non-h263 frame (%s)!\n", ast_getformatname(f->subclass.codec));
 		return -1;
 	}
 	ts = htonl(f->samples);
@@ -143,7 +134,7 @@ static int h263_write(struct ast_filestream *fs, struct ast_frame *f)
 			ast_log(LOG_WARNING, "Bad write (%d/2): %s\n", res, strerror(errno));
 			return -1;
 	}
-	if ((res = fwrite(f->data, 1, f->datalen, fs->f)) != f->datalen) {
+	if ((res = fwrite(f->data.ptr, 1, f->datalen, fs->f)) != f->datalen) {
 			ast_log(LOG_WARNING, "Bad write (%d/%d): %s\n", res, f->datalen, strerror(errno));
 			return -1;
 	}
@@ -158,10 +149,19 @@ static int h263_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 
 static int h263_trunc(struct ast_filestream *fs)
 {
-	/* Truncate file to current length */
-	if (ftruncate(fileno(fs->f), ftello(fs->f)) < 0)
+	int fd;
+	off_t cur;
+
+	if ((fd = fileno(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine file descriptor for h263 filestream %p: %s\n", fs, strerror(errno));
 		return -1;
-	return 0;
+	}
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in h263 filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	/* Truncate file to current length */
+	return ftruncate(fd, cur);
 }
 
 static off_t h263_tell(struct ast_filestream *fs)
@@ -186,15 +186,18 @@ static const struct ast_format h263_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&h263_f);
+	if (ast_format_register(&h263_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
 	return ast_format_unregister(h263_f.name);
-}	
+}
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_FIRST, "Raw H.263 data",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Raw H.263 data",
 	.load = load_module,
 	.unload = unload_module,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

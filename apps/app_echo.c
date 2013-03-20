@@ -21,43 +21,44 @@
  * \brief Echo application -- play back what you hear to evaluate latency
  *
  * \author Mark Spencer <markster@digium.com>
- * 
+ *
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
-#include "asterisk/pbx.h"
 #include "asterisk/module.h"
+#include "asterisk/channel.h"
 
-static char *app = "Echo";
+/*** DOCUMENTATION
+	<application name="Echo" language="en_US">
+		<synopsis>
+			Echo media, DTMF back to the calling party
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Echos back any media or DTMF frames read from the calling 
+			channel back to itself. This will not echo CONTROL, MODEM, or NULL
+			frames. Note: If '#' detected application exits.</para>
+			<para>This application does not automatically answer and should be
+			preceeded by an application such as Answer() or Progress().</para>
+		</description>
+	</application>
+ ***/
 
-static char *synopsis = "Echo audio, video, or DTMF back to the calling party";
+static const char app[] = "Echo";
 
-static char *descrip = 
-"  Echo(): This application will echo any audio, video, or DTMF frames read from\n"
-"the calling channel back to itself. If the DTMF digit '#' is received, the\n"
-"application will exit.\n";
-
-
-static int echo_exec(struct ast_channel *chan, void *data)
+static int echo_exec(struct ast_channel *chan, const char *data)
 {
 	int res = -1;
-	int format;
-	struct ast_module_user *u;
-
-	u = ast_module_user_add(chan);
+	format_t format;
 
 	format = ast_best_codec(chan->nativeformats);
 	ast_set_write_format(chan, format);
@@ -70,11 +71,14 @@ static int echo_exec(struct ast_channel *chan, void *data)
 		}
 		f->delivery.tv_sec = 0;
 		f->delivery.tv_usec = 0;
-		if (ast_write(chan, f)) {
+		if (f->frametype != AST_FRAME_CONTROL
+			&& f->frametype != AST_FRAME_MODEM
+			&& f->frametype != AST_FRAME_NULL
+			&& ast_write(chan, f)) {
 			ast_frfree(f);
 			goto end;
 		}
-		if ((f->frametype == AST_FRAME_DTMF) && (f->subclass == '#')) {
+		if ((f->frametype == AST_FRAME_DTMF) && (f->subclass.integer == '#')) {
 			res = 0;
 			ast_frfree(f);
 			goto end;
@@ -82,24 +86,17 @@ static int echo_exec(struct ast_channel *chan, void *data)
 		ast_frfree(f);
 	}
 end:
-	ast_module_user_remove(u);
 	return res;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, echo_exec, synopsis, descrip);
+	return ast_register_application_xml(app, echo_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Simple Echo Application");

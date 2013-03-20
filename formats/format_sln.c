@@ -21,25 +21,16 @@
  * \arg File name extensions: sln, raw
  * \ingroup formats
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
  
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -52,10 +43,10 @@ static struct ast_frame *slinear_read(struct ast_filestream *s, int *whennext)
 	/* Send a frame from the file to the appropriate channel */
 
 	s->fr.frametype = AST_FRAME_VOICE;
-	s->fr.subclass = AST_FORMAT_SLINEAR;
+	s->fr.subclass.codec = AST_FORMAT_SLINEAR;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, BUF_SIZE);
-	if ((res = fread(s->fr.data, 1, s->fr.datalen, s->f)) < 1) {
+	if ((res = fread(s->fr.data.ptr, 1, s->fr.datalen, s->f)) < 1) {
 		if (res)
 			ast_log(LOG_WARNING, "Short read (%d) (%s)!\n", res, strerror(errno));
 		return NULL;
@@ -72,11 +63,11 @@ static int slinear_write(struct ast_filestream *fs, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Asked to write non-voice frame!\n");
 		return -1;
 	}
-	if (f->subclass != AST_FORMAT_SLINEAR) {
-		ast_log(LOG_WARNING, "Asked to write non-slinear frame (%d)!\n", f->subclass);
+	if (f->subclass.codec != AST_FORMAT_SLINEAR) {
+		ast_log(LOG_WARNING, "Asked to write non-slinear frame (%s)!\n", ast_getformatname(f->subclass.codec));
 		return -1;
 	}
-	if ((res = fwrite(f->data, 1, f->datalen, fs->f)) != f->datalen) {
+	if ((res = fwrite(f->data.ptr, 1, f->datalen, fs->f)) != f->datalen) {
 			ast_log(LOG_WARNING, "Bad write (%d/%d): %s\n", res, f->datalen, strerror(errno));
 			return -1;
 	}
@@ -85,13 +76,25 @@ static int slinear_write(struct ast_filestream *fs, struct ast_frame *f)
 
 static int slinear_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 {
-	off_t offset=0,min,cur,max;
+	off_t offset=0, min = 0, cur, max;
 
-	min = 0;
 	sample_offset <<= 1;
-	cur = ftello(fs->f);
-	fseeko(fs->f, 0, SEEK_END);
-	max = ftello(fs->f);
+
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in sln filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
+	if (fseeko(fs->f, 0, SEEK_END) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to seek to end of sln filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
+	if ((max = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine max position in sln filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
 	if (whence == SEEK_SET)
 		offset = sample_offset;
 	else if (whence == SEEK_CUR || whence == SEEK_FORCECUR)
@@ -108,7 +111,19 @@ static int slinear_seek(struct ast_filestream *fs, off_t sample_offset, int when
 
 static int slinear_trunc(struct ast_filestream *fs)
 {
-	return ftruncate(fileno(fs->f), ftello(fs->f));
+	int fd;
+	off_t cur;
+
+	if ((fd = fileno(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine file descriptor for sln filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in sln filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	/* Truncate file to current length */
+	return ftruncate(fd, cur);
 }
 
 static off_t slinear_tell(struct ast_filestream *fs)
@@ -130,15 +145,18 @@ static const struct ast_format slin_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&slin_f);
+	if (ast_format_register(&slin_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
 	return ast_format_unregister(slin_f.name);
-}	
+}
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_FIRST, "Raw Signed Linear Audio support (SLN)",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Raw Signed Linear Audio support (SLN)",
 	.load = load_module,
 	.unload = unload_module,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

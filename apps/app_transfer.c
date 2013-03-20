@@ -27,76 +27,78 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
+#include "asterisk/channel.h"
 
+/*** DOCUMENTATION
+	<application name="Transfer" language="en_US">
+		<synopsis>
+			Transfer caller to remote extension.
+		</synopsis>
+		<syntax>
+			<parameter name="dest" required="true" argsep="">
+				<argument name="Tech/" />
+				<argument name="destination" required="true" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Requests the remote caller be transferred
+			to a given destination. If TECH (SIP, IAX2, LOCAL etc) is used, only
+			an incoming call with the same channel technology will be transfered.
+			Note that for SIP, if you transfer before call is setup, a 302 redirect
+			SIP message will be returned to the caller.</para>
+			<para>The result of the application will be reported in the <variable>TRANSFERSTATUS</variable>
+			channel variable:</para>
+			<variablelist>
+				<variable name="TRANSFERSTATUS">
+					<value name="SUCCESS">
+						Transfer succeeded.
+					</value>
+					<value name="FAILURE">
+						Transfer failed.
+					</value>
+					<value name="UNSUPPORTED">
+						Transfer unsupported by channel driver.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+ ***/
 
-static const char *app = "Transfer";
+static const char * const app = "Transfer";
 
-static const char *synopsis = "Transfer caller to remote extension";
-
-static const char *descrip = 
-"  Transfer([Tech/]dest[|options]):  Requests the remote caller be transferred\n"
-"to a given destination. If TECH (SIP, IAX2, LOCAL etc) is used, only\n"
-"an incoming call with the same channel technology will be transfered.\n"
-"Note that for SIP, if you transfer before call is setup, a 302 redirect\n"
-"SIP message will be returned to the caller.\n"
-"\nThe result of the application will be reported in the TRANSFERSTATUS\n"
-"channel variable:\n"
-"       SUCCESS      Transfer succeeded\n"
-"       FAILURE      Transfer failed\n"
-"       UNSUPPORTED  Transfer unsupported by channel driver\n"
-"The option string many contain the following character:\n"
-"'j' -- jump to n+101 priority if the channel transfer attempt\n"
-"       fails\n";
-
-static int transfer_exec(struct ast_channel *chan, void *data)
+static int transfer_exec(struct ast_channel *chan, const char *data)
 {
 	int res;
 	int len;
-	struct ast_module_user *u;
 	char *slash;
 	char *tech = NULL;
 	char *dest = NULL;
 	char *status;
 	char *parse;
-	int priority_jump = 0;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(dest);
-		AST_APP_ARG(options);
 	);
 
-	u = ast_module_user_add(chan);
-
 	if (ast_strlen_zero((char *)data)) {
-		ast_log(LOG_WARNING, "Transfer requires an argument ([Tech/]destination[|options])\n");
-		ast_module_user_remove(u);
+		ast_log(LOG_WARNING, "Transfer requires an argument ([Tech/]destination)\n");
 		pbx_builtin_setvar_helper(chan, "TRANSFERSTATUS", "FAILURE");
 		return 0;
 	} else
 		parse = ast_strdupa(data);
 
 	AST_STANDARD_APP_ARGS(args, parse);
-
-	if (args.options) {
-		if (strchr(args.options, 'j'))
-			priority_jump = 1;
-	}
 
 	dest = args.dest;
 
@@ -106,7 +108,6 @@ static int transfer_exec(struct ast_channel *chan, void *data)
 		/* Allow execution only if the Tech/destination agrees with the type of the channel */
 		if (strncasecmp(chan->tech->type, tech, len)) {
 			pbx_builtin_setvar_helper(chan, "TRANSFERSTATUS", "FAILURE");
-			ast_module_user_remove(u);
 			return 0;
 		}
 	}
@@ -114,7 +115,6 @@ static int transfer_exec(struct ast_channel *chan, void *data)
 	/* Check if the channel supports transfer before we try it */
 	if (!chan->tech->transfer) {
 		pbx_builtin_setvar_helper(chan, "TRANSFERSTATUS", "UNSUPPORTED");
-		ast_module_user_remove(u);
 		return 0;
 	}
 
@@ -122,8 +122,6 @@ static int transfer_exec(struct ast_channel *chan, void *data)
 
 	if (res < 0) {
 		status = "FAILURE";
-		if (priority_jump || ast_opt_priority_jumping)
-			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
 		res = 0;
 	} else {
 		status = "SUCCESS";
@@ -132,25 +130,17 @@ static int transfer_exec(struct ast_channel *chan, void *data)
 
 	pbx_builtin_setvar_helper(chan, "TRANSFERSTATUS", status);
 
-	ast_module_user_remove(u);
-
 	return res;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;	
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, transfer_exec, synopsis, descrip);
+	return ast_register_application_xml(app, transfer_exec);
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Transfer");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Transfers a caller to another extension");

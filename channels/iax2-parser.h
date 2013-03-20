@@ -19,7 +19,8 @@
 #define _IAX2_PARSER_H
 
 #include "asterisk/linkedlists.h"
-#include "asterisk/aes.h"
+#include "asterisk/crypto.h"
+#include "asterisk/frame_defs.h"
 
 struct iax_ies {
 	char *called_number;
@@ -32,8 +33,8 @@ struct iax_ies {
 	char *called_context;
 	char *username;
 	char *password;
-	unsigned int capability;
-	unsigned int format;
+	format_t capability;
+	format_t format;
 	char *codec_prefs;
 	char *language;
 	int version;
@@ -74,6 +75,9 @@ struct iax_ies {
 	unsigned short rr_delay;
 	unsigned int rr_dropped;
 	unsigned int rr_ooo;
+	struct ast_variable *vars;
+	char *osptokenblock[IAX_MAX_OSPBLOCK_NUM];
+	unsigned int ospblocklength[IAX_MAX_OSPBLOCK_NUM];
 	unsigned char calltoken;
 	unsigned char *calltokendata;
 };
@@ -124,9 +128,9 @@ struct iax_frame {
 	/*! is this packet encrypted or not. if set this varible holds encryption methods*/
 	int encmethods;
 	/*! store encrypt key */
-	aes_encrypt_ctx ecx;
+	ast_aes_encrypt_key ecx;
 	/*! store decrypt key which corresponds to ecx */
-	aes_decrypt_ctx mydcx;
+	ast_aes_decrypt_key mydcx;
 	/*! random data for encryption pad */
 	unsigned char semirand[32];
 	/*! Easy linking */
@@ -149,12 +153,13 @@ void iax_set_output(void (*output)(const char *data));
 /* Choose a different function for errors */
 void iax_set_error(void (*output)(const char *data));
 void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, struct sockaddr_in *sin, int datalen);
-void iax_frame_subclass2str(int subclass, char *str, size_t len);
+void iax_frame_subclass2str(enum iax_frame_subclass subclass, char *str, size_t len);
 
 const char *iax_ie2str(int ie);
 
 int iax_ie_append_raw(struct iax_ie_data *ied, unsigned char ie, const void *data, int datalen);
 int iax_ie_append_addr(struct iax_ie_data *ied, unsigned char ie, const struct sockaddr_in *sin);
+int iax_ie_append_versioned_uint64(struct iax_ie_data *ied, unsigned char ie, unsigned char version, uint64_t value);
 int iax_ie_append_int(struct iax_ie_data *ied, unsigned char ie, unsigned int value);
 int iax_ie_append_short(struct iax_ie_data *ied, unsigned char ie, unsigned short value);
 int iax_ie_append_str(struct iax_ie_data *ied, unsigned char ie, const char *str);

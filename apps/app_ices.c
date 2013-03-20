@@ -22,123 +22,100 @@
  *
  * \author Mark Spencer <markster@digium.com>
  * 
+ * \extref ICES - http://www.icecast.org/ices.php
+ *
  * \ingroup applications
  */
- 
-/*** MODULEINFO
-	<depend>working_fork</depend>
- ***/
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+ 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdio.h>
 #include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <sys/time.h>
-#include <errno.h>
-#ifdef HAVE_CAP
-#include <sys/capability.h>
-#endif /* HAVE_CAP */
 
+#include "asterisk/paths.h"	/* use ast_config_AST_CONFIG_DIR */
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/frame.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/options.h"
+#include "asterisk/app.h"
+
+/*** DOCUMENTATION
+	<application name="ICES" language="en_US">
+		<synopsis>
+			Encode and stream using 'ices'.
+		</synopsis>
+		<syntax>
+			<parameter name="config" required="true">
+				<para>ICES configuration file.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Streams to an icecast server using ices (available separately).
+			A configuration file must be supplied for ices (see contrib/asterisk-ices.xml).</para>
+			<note><para>ICES version 2 client and server required.</para></note>
+		</description>
+	</application>
+
+ ***/
 
 #define path_BIN "/usr/bin/"
 #define path_LOCAL "/usr/local/bin/"
 
 static char *app = "ICES";
 
-static char *synopsis = "Encode and stream using 'ices'";
-
-static char *descrip = 
-"  ICES(config.xml) Streams to an icecast server using ices\n"
-"(available separately).  A configuration file must be supplied\n"
-"for ices (see contrib/asterisk-ices.xml). \n";
-
 static int icesencode(char *filename, int fd)
 {
 	int res;
-	int x;
-	sigset_t fullset, oldset;
-#ifdef HAVE_CAP
-	cap_t cap;
-#endif
 
-	sigfillset(&fullset);
-	pthread_sigmask(SIG_BLOCK, &fullset, &oldset);
-
-	res = fork();
+	res = ast_safe_fork(0);
 	if (res < 0) 
 		ast_log(LOG_WARNING, "Fork failed\n");
 	if (res) {
-		pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 		return res;
 	}
-
-	/* Stop ignoring PIPE */
-	signal(SIGPIPE, SIG_DFL);
-	pthread_sigmask(SIG_UNBLOCK, &fullset, NULL);
-
-#ifdef HAVE_CAP
-	cap = cap_from_text("cap_net_admin-eip");
-
-	if (cap_set_proc(cap)) {
-		/* Careful with order! Logging cannot happen after we close FDs */
-		ast_log(LOG_WARNING, "Unable to remove capabilities.\n");
-	}
-	cap_free(cap);
-#endif
 
 	if (ast_opt_high_priority)
 		ast_set_priority(0);
 	dup2(fd, STDIN_FILENO);
-	for (x=STDERR_FILENO + 1;x<1024;x++) {
-		if ((x != STDIN_FILENO) && (x != STDOUT_FILENO))
-			close(x);
-	}
+	ast_close_fds_above_n(STDERR_FILENO);
 
 	/* Most commonly installed in /usr/local/bin 
 	 * But many places has it in /usr/bin 
 	 * As a last-ditch effort, try to use PATH
 	 */
-	execl(path_LOCAL "ices2", "ices", filename, (char *)NULL);
-	execl(path_BIN "ices2", "ices", filename, (char *)NULL);
-	execlp("ices2", "ices", filename, (char *)NULL);
+	execl(path_LOCAL "ices2", "ices", filename, SENTINEL);
+	execl(path_BIN "ices2", "ices", filename, SENTINEL);
+	execlp("ices2", "ices", filename, SENTINEL);
 
-	if (option_debug)
-		ast_log(LOG_DEBUG, "Couldn't find ices version 2, attempting to use ices version 1.");
+	ast_debug(1, "Couldn't find ices version 2, attempting to use ices version 1.\n");
 
-	execl(path_LOCAL "ices", "ices", filename, (char *)NULL);
-	execl(path_BIN "ices", "ices", filename, (char *)NULL);
-	execlp("ices", "ices", filename, (char *)NULL);
+	execl(path_LOCAL "ices", "ices", filename, SENTINEL);
+	execl(path_BIN "ices", "ices", filename, SENTINEL);
+	execlp("ices", "ices", filename, SENTINEL);
 
-	ast_log(LOG_WARNING, "Execute of ices failed, could not be found.\n");
+	ast_log(LOG_WARNING, "Execute of ices failed, could not find command.\n");
 	close(fd);
 	_exit(0);
 }
 
-static int ices_exec(struct ast_channel *chan, void *data)
+static int ices_exec(struct ast_channel *chan, const char *data)
 {
-	int res=0;
-	struct ast_module_user *u;
+	int res = 0;
 	int fds[2];
 	int ms = -1;
 	int pid = -1;
 	int flags;
 	int oreadformat;
-	struct timeval last;
 	struct ast_frame *f;
 	char filename[256]="";
 	char *c;
@@ -147,14 +124,9 @@ static int ices_exec(struct ast_channel *chan, void *data)
 		ast_log(LOG_WARNING, "ICES requires an argument (configfile.xml)\n");
 		return -1;
 	}
-
-	u = ast_module_user_add(chan);
-	
-	last = ast_tv(0, 0);
 	
 	if (pipe(fds)) {
 		ast_log(LOG_WARNING, "Unable to create pipe\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 	flags = fcntl(fds[1], F_GETFL);
@@ -169,7 +141,6 @@ static int ices_exec(struct ast_channel *chan, void *data)
 		close(fds[0]);
 		close(fds[1]);
 		ast_log(LOG_WARNING, "Answer failed!\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 
@@ -179,13 +150,12 @@ static int ices_exec(struct ast_channel *chan, void *data)
 		close(fds[0]);
 		close(fds[1]);
 		ast_log(LOG_WARNING, "Unable to set write format to signed linear\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 	if (((char *)data)[0] == '/')
 		ast_copy_string(filename, (char *) data, sizeof(filename));
 	else
-		snprintf(filename, sizeof(filename), "%s/%s", (char *)ast_config_AST_CONFIG_DIR, (char *)data);
+		snprintf(filename, sizeof(filename), "%s/%s", ast_config_AST_CONFIG_DIR, (char *)data);
 	/* Placeholder for options */		
 	c = strchr(filename, '|');
 	if (c)
@@ -197,18 +167,18 @@ static int ices_exec(struct ast_channel *chan, void *data)
 			/* Wait for audio, and stream */
 			ms = ast_waitfor(chan, -1);
 			if (ms < 0) {
-				ast_log(LOG_DEBUG, "Hangup detected\n");
+				ast_debug(1, "Hangup detected\n");
 				res = -1;
 				break;
 			}
 			f = ast_read(chan);
 			if (!f) {
-				ast_log(LOG_DEBUG, "Null frame == hangup() detected\n");
+				ast_debug(1, "Null frame == hangup() detected\n");
 				res = -1;
 				break;
 			}
 			if (f->frametype == AST_FRAME_VOICE) {
-				res = write(fds[1], f->data, f->datalen);
+				res = write(fds[1], f->data.ptr, f->datalen);
 				if (res < 0) {
 					if (errno != EAGAIN) {
 						ast_log(LOG_WARNING, "Write failed to pipe: %s\n", strerror(errno));
@@ -223,31 +193,23 @@ static int ices_exec(struct ast_channel *chan, void *data)
 	}
 	close(fds[0]);
 	close(fds[1]);
-	
+
 	if (pid > -1)
 		kill(pid, SIGKILL);
 	if (!res && oreadformat)
 		ast_set_read_format(chan, oreadformat);
-
-	ast_module_user_remove(u);
 
 	return res;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, ices_exec, synopsis, descrip);
+	return ast_register_application_xml(app, ices_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Encode and Stream via icecast and ices");

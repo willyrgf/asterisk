@@ -22,14 +22,29 @@
  * \brief Dialplan Expression Lexical Scanner
  */
 
-#include "asterisk.h"
-
-#if !defined(STANDALONE_AEL)
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-#endif
-
 #include <sys/types.h>
 #include <stdio.h>
+
+#if !defined(STANDALONE)
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+#else
+#ifndef __USE_ISOC99
+#define __USE_ISOC99 1
+#endif
+#endif
+
+#ifdef __USE_ISOC99
+#define FP___PRINTF "%.18Lg"
+#define FP___FMOD   fmodl
+#define FP___STRTOD  strtold
+#define FP___TYPE    long double
+#else
+#define FP___PRINTF "%.16g"
+#define FP___FMOD   fmod
+#define FP___STRTOD  strtod
+#define FP___TYPE    double
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
@@ -45,17 +60,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/ast_expr.h"
 #include "asterisk/logger.h"
+#ifndef STANDALONE
 #include "asterisk/strings.h"
+#include "asterisk/channel.h"
+#endif
+
+/* Conditionally redefine the macro from flex 2.5.35, in case someone uses flex <2.5.35 to regenerate this file. */
+#ifndef ECHO
+#define ECHO do { if (fwrite( yytext, yyleng, 1, yyout )) {} } while (0)
+#endif
 
 enum valtype {
-	AST_EXPR_integer, AST_EXPR_numeric_string, AST_EXPR_string
+	AST_EXPR_number, AST_EXPR_numeric_string, AST_EXPR_string
 } ;
 
 struct val {
 	enum valtype type;
 	union {
 		char *s;
-		quad_t i;
+		FP___TYPE i; /* long double or just double if it's a bad day */
 	} u;
 } ;
 
@@ -84,6 +107,7 @@ struct parse_io
 	char *string;
 	struct val *val;
 	yyscan_t scanner;
+	struct ast_channel *chan;
 };
  
 void ast_yyset_column(int column_no, yyscan_t yyscanner);
@@ -91,9 +115,10 @@ int ast_yyget_column(yyscan_t yyscanner);
 static int curlycount = 0;
 static char *expr2_token_subst(const char *mess);
 %}
+
 %option prefix="ast_yy"
-%option 8bit
 %option batch
+%option 8bit
 %option outfile="ast_expr2f.c"
 %option reentrant
 %option bison-bridge
@@ -101,8 +126,6 @@ static char *expr2_token_subst(const char *mess);
 %option noyywrap
 %option noyyfree
 %x var trail
-
-HIBIT           [\x80-\xff]
 
 %%
 
@@ -113,12 +136,14 @@ HIBIT           [\x80-\xff]
 \&\&	{ SET_COLUMNS; SET_STRING; return TOK_AND;}
 \=\=	{ SET_COLUMNS; SET_STRING; return TOK_EQ;}
 \=~	{ SET_COLUMNS; SET_STRING; return TOK_EQTILDE;}
+\~~	{ SET_COLUMNS; SET_STRING; return TOK_TILDETILDE;}
 \>	{ SET_COLUMNS; SET_STRING; return TOK_GT;}
 \<	{ SET_COLUMNS; SET_STRING; return TOK_LT;}
 \>\=	{ SET_COLUMNS; SET_STRING; return TOK_GE;}
 \<\=	{ SET_COLUMNS; SET_STRING; return TOK_LE;}
 \!\=	{ SET_COLUMNS; SET_STRING; return TOK_NE;}
 \+	{ SET_COLUMNS; SET_STRING; return TOK_PLUS;}
+\,	{ SET_COLUMNS; SET_STRING; return TOK_COMMA;}
 \-	{ SET_COLUMNS; SET_STRING; return TOK_MINUS;}
 \*	{ SET_COLUMNS; SET_STRING; return TOK_MULT;}
 \/	{ SET_COLUMNS; SET_STRING; return TOK_DIV;}
@@ -143,7 +168,7 @@ HIBIT           [\x80-\xff]
 \"[^"]*\"	{SET_COLUMNS; SET_STRING; return TOKEN;}
 
 [\n]		{/* what to do with eol */}
-[0-9]+		{
+[0-9]+(\.[0-9]+)?		{
 		SET_COLUMNS;
 		/* the original behavior of the expression parser was
 		 * to bring in numbers as a numeric string
@@ -152,18 +177,17 @@ HIBIT           [\x80-\xff]
 		return TOKEN;
 	}
 
-([a-zA-Z0-9\.';\\_^#@]|{HIBIT}|($[^{]))+	{
+([a-zA-Z0-9\.';\\_^#@]|[\x80-\xff]|($[^{]))+   {
 		SET_COLUMNS;
 		SET_STRING;
 		return TOKEN;
 	}
 
-([a-zA-Z0-9\.';\\_^#@]|{HIBIT}|($[^{]))+\$\{	{
+([a-zA-Z0-9\.';\\_^#@]|[\x80-\xff]|($[^{]))+\$\{	{
 		curlycount = 0;
 		BEGIN(var);
 		yymore();
 	}
-
 
 <var>[^{}]*\}	{
 		curlycount--;
@@ -224,24 +248,21 @@ int ast_yyerror(const char *, YYLTYPE *, struct parse_io *); /* likewise */
 
 void ast_yyfree(void *ptr, yyscan_t yyscanner)
 {
-      if (ptr) /* the normal generated yyfree func just frees its first arg;
-                    this get complaints on some systems, as sometimes this
-                    arg is a nil ptr! It's usually not fatal, but is irritating! */
-              free( (char *) ptr );
+    /* the normal generated yyfree func just frees its first arg;
+     this get complaints on some systems, as sometimes this
+     arg is a nil ptr! It's usually not fatal, but is irritating! */
+	free( (char *) ptr );
 }
 
-int ast_expr(char *expr, char *buf, int length)
+int ast_expr(char *expr, char *buf, int length, struct ast_channel *chan)
 {
-	struct parse_io io;
+	struct parse_io io = { .string = expr, .chan = chan };
 	int return_value = 0;
-	
-	memset(&io, 0, sizeof(io));
-	io.string = expr;  /* to pass to the error routine */
-	
+
 	ast_yylex_init(&io.scanner);
-	
+
 	ast_yy_scan_string(expr, io.scanner);
-	
+
 	ast_yyparse ((void *) &io);
 
 	ast_yylex_destroy(io.scanner);
@@ -252,17 +273,20 @@ int ast_expr(char *expr, char *buf, int length)
 			return_value = 1;
 		}
 	} else {
-		if (io.val->type == AST_EXPR_integer) {
+		if (io.val->type == AST_EXPR_number) {
 			int res_length;
 
-			res_length = snprintf(buf, length, "%ld", (long int) io.val->u.i);
+			res_length = snprintf(buf, length, FP___PRINTF, io.val->u.i);
 			return_value = (res_length <= length) ? res_length : length;
 		} else {
-#if defined(STANDALONE) || defined(LOW_MEMORY) || defined(STANDALONE_AEL)
-			strncpy(buf, io.val->u.s, length - 1);
+			if (io.val->u.s)
+#if defined(STANDALONE) || defined(LOW_MEMORY) || defined(STANDALONE)
+				strncpy(buf, io.val->u.s, length - 1);
 #else /* !STANDALONE && !LOW_MEMORY */
-			ast_copy_string(buf, io.val->u.s, length);
+				ast_copy_string(buf, io.val->u.s, length);
 #endif /* STANDALONE || LOW_MEMORY */
+			else
+				buf[0] = 0;
 			return_value = strlen(buf);
 			free(io.val->u.s);
 		}
@@ -270,6 +294,32 @@ int ast_expr(char *expr, char *buf, int length)
 	}
 	return return_value;
 }
+
+#ifndef STANDALONE
+int ast_str_expr(struct ast_str **str, ssize_t maxlen, struct ast_channel *chan, char *expr)
+{
+	struct parse_io io = { .string = expr, .chan = chan };
+
+	ast_yylex_init(&io.scanner);
+	ast_yy_scan_string(expr, io.scanner);
+	ast_yyparse ((void *) &io);
+	ast_yylex_destroy(io.scanner);
+
+	if (!io.val) {
+		ast_str_set(str, maxlen, "0");
+	} else {
+		if (io.val->type == AST_EXPR_number) {
+			int res_length;
+			ast_str_set(str, maxlen, FP___PRINTF, io.val->u.i);
+		} else if (io.val->u.s) {
+			ast_str_set(str, maxlen, "%s", io.val->u.s);
+			free(io.val->u.s);
+		}
+		free(io.val);
+	}
+	return ast_str_strlen(*str);
+}
+#endif
 
 
 char extra_error_message[4095];
@@ -289,7 +339,7 @@ void  ast_expr_clear_extra_error_info(void)
        extra_error_message[0] = 0;
 }
 
-static char *expr2_token_equivs1[] = 
+static const char * const expr2_token_equivs1[] = 
 {
 	"TOKEN",
 	"TOK_COND",
@@ -310,11 +360,12 @@ static char *expr2_token_equivs1[] =
 	"TOK_COMPL",
 	"TOK_COLON",
 	"TOK_EQTILDE",
+	"TOK_COMMA",
 	"TOK_RP",
 	"TOK_LP"
 };
 
-static char *expr2_token_equivs2[] = 
+static const char * const expr2_token_equivs2[] = 
 {
 	"<token>",
 	"?",
@@ -335,6 +386,7 @@ static char *expr2_token_equivs2[] =
 	"!",
 	":",
 	"=~",
+	",",
 	")",
 	"("
 };
@@ -345,7 +397,8 @@ static char *expr2_token_subst(const char *mess)
 	/* calc a length, malloc, fill, and return; yyerror had better free it! */
 	int len=0,i;
 	const char *p;
-	char *res, *s,*t;
+	char *res, *s;
+	const char *t;
 	int expr2_token_equivs_entries = sizeof(expr2_token_equivs1)/sizeof(char*);
 
 	for (p=mess; *p; p++) {
@@ -415,7 +468,7 @@ int ast_yyerror (const char *s,  yyltype *loc, struct parse_io *parseio )
 			(extra_error_message_supplied?extra_error_message:""), s2, parseio->string,spacebuf2);
 #endif
 #ifndef STANDALONE
-	ast_log(LOG_WARNING,"If you have questions, please refer to doc/channelvariables.txt.\n");
+	ast_log(LOG_WARNING,"If you have questions, please refer to https://wiki.asterisk.org/wiki/display/AST/Channel+Variables\n");
 #endif
 	free(s2);
 	return(0);

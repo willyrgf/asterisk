@@ -24,36 +24,41 @@
  *  
  * \ingroup applications
  */
- 
-/*** MODULEINFO
-	<depend>working_fork</depend>
- ***/
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+ 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>
-#include <stdio.h>
-#include <signal.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <fcntl.h>
 #include <sys/time.h>
 #include <sys/socket.h>
-#ifdef HAVE_CAP
-#include <sys/capability.h>
-#endif /* HAVE_CAP */
+#include <signal.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/frame.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/translate.h"
-#include "asterisk/options.h"
+#include "asterisk/app.h"
+
+/*** DOCUMENTATION
+	<application name="NBScat" language="en_US">
+		<synopsis>
+			Play an NBS local stream.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Executes nbscat to listen to the local NBS stream.
+			User can exit by pressing any key.</para>
+		</description>
+	</application>
+ ***/
 
 #define LOCAL_NBSCAT "/usr/local/bin/nbscat8k"
 #define NBSCAT "/usr/bin/nbscat8k"
@@ -64,56 +69,28 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static char *app = "NBScat";
 
-static char *synopsis = "Play an NBS local stream";
-
-static char *descrip = 
-"  NBScat: Executes nbscat to listen to the local NBS stream.\n"
-"User can exit by pressing any key\n.";
-
-
 static int NBScatplay(int fd)
 {
 	int res;
-	int x;
-	sigset_t fullset, oldset;
-#ifdef HAVE_CAP
-	cap_t cap;
-#endif
 
-	sigfillset(&fullset);
-	pthread_sigmask(SIG_BLOCK, &fullset, &oldset);
-
-	res = fork();
-	if (res < 0) 
+	res = ast_safe_fork(0);
+	if (res < 0) {
 		ast_log(LOG_WARNING, "Fork failed\n");
+	}
+
 	if (res) {
-		pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 		return res;
 	}
-	signal(SIGPIPE, SIG_DFL);
-	pthread_sigmask(SIG_UNBLOCK, &fullset, NULL);
 
-#ifdef HAVE_CAP
-	cap = cap_from_text("cap_net_admin-eip");
-
-	if (cap_set_proc(cap)) {
-		/* Careful with order! Logging cannot happen after we close FDs */
-		ast_log(LOG_WARNING, "Unable to remove capabilities.\n");
-	}
-	cap_free(cap);
-#endif
 	if (ast_opt_high_priority)
 		ast_set_priority(0);
 
 	dup2(fd, STDOUT_FILENO);
-	for (x = STDERR_FILENO + 1; x < 1024; x++) {
-		if (x != STDOUT_FILENO)
-			close(x);
-	}
+	ast_close_fds_above_n(STDERR_FILENO);
 	/* Most commonly installed in /usr/local/bin */
 	execl(NBSCAT, "nbscat8k", "-d", (char *)NULL);
 	execl(LOCAL_NBSCAT, "nbscat8k", "-d", (char *)NULL);
-	ast_log(LOG_WARNING, "Execute of nbscat8k failed\n");
+	fprintf(stderr, "Execute of nbscat8k failed\n");
 	_exit(0);
 }
 
@@ -132,10 +109,9 @@ static int timed_read(int fd, void *data, int datalen)
 	
 }
 
-static int NBScat_exec(struct ast_channel *chan, void *data)
+static int NBScat_exec(struct ast_channel *chan, const char *data)
 {
 	int res=0;
-	struct ast_module_user *u;
 	int fds[2];
 	int ms = -1;
 	int pid = -1;
@@ -148,11 +124,8 @@ static int NBScat_exec(struct ast_channel *chan, void *data)
 		short frdata[160];
 	} myf;
 	
-	u = ast_module_user_add(chan);
-
 	if (socketpair(AF_LOCAL, SOCK_STREAM, 0, fds)) {
 		ast_log(LOG_WARNING, "Unable to create socketpair\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 	
@@ -162,7 +135,6 @@ static int NBScat_exec(struct ast_channel *chan, void *data)
 	res = ast_set_write_format(chan, AST_FORMAT_SLINEAR);
 	if (res < 0) {
 		ast_log(LOG_WARNING, "Unable to set write format to signed linear\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 	
@@ -180,7 +152,7 @@ static int NBScat_exec(struct ast_channel *chan, void *data)
 				res = timed_read(fds[0], myf.frdata, sizeof(myf.frdata));
 				if (res > 0) {
 					myf.f.frametype = AST_FRAME_VOICE;
-					myf.f.subclass = AST_FORMAT_SLINEAR;
+					myf.f.subclass.codec = AST_FORMAT_SLINEAR;
 					myf.f.datalen = res;
 					myf.f.samples = res / 2;
 					myf.f.mallocd = 0;
@@ -188,13 +160,13 @@ static int NBScat_exec(struct ast_channel *chan, void *data)
 					myf.f.src = __PRETTY_FUNCTION__;
 					myf.f.delivery.tv_sec = 0;
 					myf.f.delivery.tv_usec = 0;
-					myf.f.data = myf.frdata;
+					myf.f.data.ptr = myf.frdata;
 					if (ast_write(chan, &myf.f) < 0) {
 						res = -1;
 						break;
 					}
 				} else {
-					ast_log(LOG_DEBUG, "No more mp3\n");
+					ast_debug(1, "No more mp3\n");
 					res = 0;
 					break;
 				}
@@ -202,19 +174,19 @@ static int NBScat_exec(struct ast_channel *chan, void *data)
 			} else {
 				ms = ast_waitfor(chan, ms);
 				if (ms < 0) {
-					ast_log(LOG_DEBUG, "Hangup detected\n");
+					ast_debug(1, "Hangup detected\n");
 					res = -1;
 					break;
 				}
 				if (ms) {
 					f = ast_read(chan);
 					if (!f) {
-						ast_log(LOG_DEBUG, "Null frame == hangup() detected\n");
+						ast_debug(1, "Null frame == hangup() detected\n");
 						res = -1;
 						break;
 					}
 					if (f->frametype == AST_FRAME_DTMF) {
-						ast_log(LOG_DEBUG, "User pressed a key\n");
+						ast_debug(1, "User pressed a key\n");
 						ast_frfree(f);
 						res = 0;
 						break;
@@ -232,25 +204,17 @@ static int NBScat_exec(struct ast_channel *chan, void *data)
 	if (!res && owriteformat)
 		ast_set_write_format(chan, owriteformat);
 
-	ast_module_user_remove(u);
-
 	return res;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, NBScat_exec, synopsis, descrip);
+	return ast_register_application_xml(app, NBScat_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Silly NBS Stream Application");

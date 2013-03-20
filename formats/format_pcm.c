@@ -19,29 +19,20 @@
 /*! \file
  *
  * \brief Flat, binary, ulaw PCM file format.
- * \arg File name extension: pcm, ulaw, ul, mu
+ * \arg File name extension: alaw, al, alw, pcm, ulaw, ul, mu, ulw, g722, au
  * 
  * \ingroup formats
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
  
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 #include "asterisk/ulaw.h"
@@ -93,10 +84,10 @@ static struct ast_frame *pcm_read(struct ast_filestream *s, int *whennext)
 	/* Send a frame from the file to the appropriate channel */
 
 	s->fr.frametype = AST_FRAME_VOICE;
-	s->fr.subclass = s->fmt->format;
+	s->fr.subclass.codec = s->fmt->format;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, BUF_SIZE);
-	if ((res = fread(s->fr.data, 1, s->fr.datalen, s->f)) < 1) {
+	if ((res = fread(s->fr.data.ptr, 1, s->fr.datalen, s->f)) < 1) {
 		if (res)
 			ast_log(LOG_WARNING, "Short read (%d) (%s)!\n", res, strerror(errno));
 		return NULL;
@@ -114,9 +105,20 @@ static int pcm_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 	off_t cur, max, offset = 0;
  	int ret = -1;	/* assume error */
 
-	cur = ftello(fs->f);
-	fseeko(fs->f, 0, SEEK_END);
-	max = ftello(fs->f);
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in pcm filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
+	if (fseeko(fs->f, 0, SEEK_END) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to seek to end of pcm filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
+	if ((max = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine max position in pcm filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
 
 	switch (whence) {
 	case SEEK_SET:
@@ -160,7 +162,18 @@ static int pcm_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 
 static int pcm_trunc(struct ast_filestream *fs)
 {
-	return ftruncate(fileno(fs->f), ftello(fs->f));
+	int cur, fd;
+
+	if ((fd = fileno(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine file descriptor for pcm filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in pcm filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	/* Truncate file to current length */
+	return ftruncate(fd, cur);
 }
 
 static off_t pcm_tell(struct ast_filestream *fs)
@@ -176,8 +189,8 @@ static int pcm_write(struct ast_filestream *fs, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Asked to write non-voice frame!\n");
 		return -1;
 	}
-	if (f->subclass != fs->fmt->format) {
-		ast_log(LOG_WARNING, "Asked to write incompatible format frame (%d)!\n", f->subclass);
+	if (f->subclass.codec != fs->fmt->format) {
+		ast_log(LOG_WARNING, "Asked to write incompatible format frame (%s)!\n", ast_getformatname(f->subclass.codec));
 		return -1;
 	}
 
@@ -222,7 +235,7 @@ static int pcm_write(struct ast_filestream *fs, struct ast_frame *f)
 	}
 #endif	/* REALTIME_WRITE */
 	
-	if ((res = fwrite(f->data, 1, f->datalen, fs->f)) != f->datalen) {
+	if ((res = fwrite(f->data.ptr, 1, f->datalen, fs->f)) != f->datalen) {
 		ast_log(LOG_WARNING, "Bad write (%d/%d): %s\n", res, f->datalen, strerror(errno));
 		return -1;
 	}
@@ -383,7 +396,7 @@ static int au_rewrite(struct ast_filestream *s, const char *comment)
 /* XXX check this, probably incorrect */
 static int au_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 {
-	off_t min, max, cur;
+	off_t min = AU_HEADER_SIZE, max, cur;
 	long offset = 0, bytes;
 
 	if (fs->fmt->format == AST_FORMAT_G722)
@@ -391,10 +404,20 @@ static int au_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 	else
 		bytes = sample_offset;
 
-	min = AU_HEADER_SIZE;
-	cur = ftello(fs->f);
-	fseek(fs->f, 0, SEEK_END);
-	max = ftello(fs->f);
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in au filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
+	if (fseeko(fs->f, 0, SEEK_END) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to seek to end of au filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+
+	if ((max = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine max position in au filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
 
 	if (whence == SEEK_SET)
 		offset = bytes + min;
@@ -402,7 +425,8 @@ static int au_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 		offset = bytes + cur;
 	else if (whence == SEEK_END)
 		offset = max - bytes;
-        if (whence != SEEK_FORCECUR) {
+
+	if (whence != SEEK_FORCECUR) {
 		offset = (offset > max) ? max : offset;
 	}
 
@@ -414,8 +438,21 @@ static int au_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 
 static int au_trunc(struct ast_filestream *fs)
 {
-	if (ftruncate(fileno(fs->f), ftell(fs->f)))
+	int fd;
+	off_t cur;
+
+	if ((fd = fileno(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine file descriptor for au filestream %p: %s\n", fs, strerror(errno));
 		return -1;
+	}
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in au filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	/* Truncate file to current length */
+	if (ftruncate(fd, cur)) {
+		return -1;
+	}
 	return update_header(fs->f);
 }
 
@@ -427,7 +464,7 @@ static off_t au_tell(struct ast_filestream *fs)
 
 static const struct ast_format alaw_f = {
 	.name = "alaw",
-	.exts = "alaw|al",
+	.exts = "alaw|al|alw",
 	.format = AST_FORMAT_ALAW,
 	.write = pcm_write,
 	.seek = pcm_seek,
@@ -444,7 +481,7 @@ static const struct ast_format alaw_f = {
 
 static const struct ast_format pcm_f = {
 	.name = "pcm",
-	.exts = "pcm|ulaw|ul|mu",
+	.exts = "pcm|ulaw|ul|mu|ulw",
 	.format = AST_FORMAT_ULAW,
 	.write = pcm_write,
 	.seek = pcm_seek,
@@ -482,18 +519,20 @@ static const struct ast_format au_f = {
 
 static int load_module(void)
 {
-	int index;
+	int i;
 
 	/* XXX better init ? */
-	for (index = 0; index < (sizeof(ulaw_silence) / sizeof(ulaw_silence[0])); index++)
-		ulaw_silence[index] = AST_LIN2MU(0);
-	for (index = 0; index < (sizeof(alaw_silence) / sizeof(alaw_silence[0])); index++)
-		alaw_silence[index] = AST_LIN2A(0);
+	for (i = 0; i < ARRAY_LEN(ulaw_silence); i++)
+		ulaw_silence[i] = AST_LIN2MU(0);
+	for (i = 0; i < ARRAY_LEN(alaw_silence); i++)
+		alaw_silence[i] = AST_LIN2A(0);
 
-	return ast_format_register(&pcm_f)
+	if ( ast_format_register(&pcm_f)
 		|| ast_format_register(&alaw_f)
 		|| ast_format_register(&au_f)
-		|| ast_format_register(&g722_f);
+		|| ast_format_register(&g722_f) )
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
@@ -502,9 +541,10 @@ static int unload_module(void)
 		|| ast_format_unregister(alaw_f.name)
 		|| ast_format_unregister(au_f.name)
 		|| ast_format_unregister(g722_f.name);
-}	
+}
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_FIRST, "Raw/Sun uLaw/ALaw 8KHz (PCM,PCMA,AU), G.722 16Khz",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Raw/Sun uLaw/ALaw 8KHz (PCM,PCMA,AU), G.722 16Khz",
 	.load = load_module,
 	.unload = unload_module,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

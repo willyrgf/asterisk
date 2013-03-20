@@ -23,43 +23,124 @@
  * \arg See also: \ref AstARA
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
+#include <signal.h>
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/frame.h"
 #include "asterisk/term.h"
 #include "asterisk/manager.h"
-#include "asterisk/file.h"
 #include "asterisk/cli.h"
 #include "asterisk/lock.h"
-#include "asterisk/md5.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/utils.h"
-#include "asterisk/crypto.h"
 #include "asterisk/astdb.h"
+#include "asterisk/app.h"
+#include "asterisk/astobj2.h"
 
 #define MODE_MATCH 		0
 #define MODE_MATCHMORE 	1
 #define MODE_CANMATCH 	2
 
 #define EXT_DATA_SIZE 256
+
+enum option_flags {
+	OPTION_PATTERNS_DISABLED = (1 << 0),
+};
+
+AST_APP_OPTIONS(switch_opts, {
+	AST_APP_OPTION('p', OPTION_PATTERNS_DISABLED),
+});
+
+struct cache_entry {
+	struct timeval when;
+	struct ast_variable *var;
+	int priority;
+	char *context;
+	char exten[2];
+};
+
+struct ao2_container *cache;
+pthread_t cleanup_thread = 0;
+
+static int cache_hash(const void *obj, const int flags)
+{
+	const struct cache_entry *e = obj;
+	return ast_str_case_hash(e->exten) + e->priority;
+}
+
+static int cache_cmp(void *obj, void *arg, int flags)
+{
+	struct cache_entry *e = obj, *f = arg;
+	return e->priority != f->priority ? 0 :
+		strcmp(e->exten, f->exten) ? 0 :
+		strcmp(e->context, f->context) ? 0 :
+		CMP_MATCH;
+}
+
+static struct ast_variable *dup_vars(struct ast_variable *v)
+{
+	struct ast_variable *new, *list = NULL;
+	for (; v; v = v->next) {
+		if (!(new = ast_variable_new(v->name, v->value, v->file))) {
+			ast_variables_destroy(list);
+			return NULL;
+		}
+		/* Reversed list in cache, but when we duplicate out of the cache,
+		 * it's back to correct order. */
+		new->next = list;
+		list = new;
+	}
+	return list;
+}
+
+static void free_entry(void *obj)
+{
+	struct cache_entry *e = obj;
+	ast_variables_destroy(e->var);
+}
+
+static int purge_old_fn(void *obj, void *arg, int flags)
+{
+	struct cache_entry *e = obj;
+	struct timeval *now = arg;
+	return ast_tvdiff_ms(*now, e->when) >= 1000 ? CMP_MATCH : 0;
+}
+
+static void *cleanup(void *unused)
+{
+	struct timespec forever = { 999999999, 0 }, one_second = { 1, 0 };
+	struct timeval now;
+
+	for (;;) {
+		pthread_testcancel();
+		if (ao2_container_count(cache) == 0) {
+			nanosleep(&forever, NULL);
+		}
+		pthread_testcancel();
+		now = ast_tvnow();
+		ao2_callback(cache, OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA, purge_old_fn, &now);
+		pthread_testcancel();
+		nanosleep(&one_second, NULL);
+	}
+
+	return NULL;
+}
 
 
 /* Realtime switch looks up extensions in the supplied realtime table.
@@ -76,7 +157,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 */
 
 
-static struct ast_variable *realtime_switch_common(const char *table, const char *context, const char *exten, int priority, int mode)
+static struct ast_variable *realtime_switch_common(const char *table, const char *context, const char *exten, int priority, int mode, struct ast_flags flags)
 {
 	struct ast_variable *var;
 	struct ast_config *cfg;
@@ -84,6 +165,12 @@ static struct ast_variable *realtime_switch_common(const char *table, const char
 	char *ematch;
 	char rexten[AST_MAX_EXTENSION + 20]="";
 	int match;
+	/* Optimization: since we don't support hints in realtime, it's silly to
+	 * query for a hint here, since we won't actually do anything with it.
+	 * This just wastes CPU time and resources. */
+	if (priority < 0) {
+		return NULL;
+	}
 	snprintf(pri, sizeof(pri), "%d", priority);
 	switch(mode) {
 	case MODE_MATCHMORE:
@@ -99,9 +186,9 @@ static struct ast_variable *realtime_switch_common(const char *table, const char
 		ematch = "exten";
 		ast_copy_string(rexten, exten, sizeof(rexten));
 	}
-	var = ast_load_realtime(table, ematch, rexten, "context", context, "priority", pri, NULL);
-	if (!var) {
-		cfg = ast_load_realtime_multientry(table, "exten LIKE", "\\_%", "context", context, "priority", pri, NULL);	
+	var = ast_load_realtime(table, ematch, rexten, "context", context, "priority", pri, SENTINEL);
+	if (!var && !ast_test_flag(&flags, OPTION_PATTERNS_DISABLED)) {
+		cfg = ast_load_realtime_multientry(table, "exten LIKE", "\\_%", "context", context, "priority", pri, SENTINEL);	
 		if (cfg) {
 			char *cat = ast_category_browse(cfg, NULL);
 
@@ -134,19 +221,57 @@ static struct ast_variable *realtime_common(const char *context, const char *ext
 	const char *ctx = NULL;
 	char *table;
 	struct ast_variable *var=NULL;
+	struct ast_flags flags = { 0, };
+	struct cache_entry *ce;
+	struct {
+		struct cache_entry ce;
+		char exten[AST_MAX_EXTENSION];
+	} cache_search = { { .priority = priority, .context = (char *) context }, };
 	char *buf = ast_strdupa(data);
-	if (buf) {
-		char *opts = strchr(buf, '/');
-		if (opts)
-			*opts++ = '\0';
-		table = strchr(buf, '@');
-		if (table) {
-			*table++ = '\0';
-			ctx = buf;
-		}
-		ctx = S_OR(ctx, context);
-		table = S_OR(table, "extensions");
-		var = realtime_switch_common(table, ctx, exten, priority, mode);
+	/* "Realtime" prefix is stripped off in the parent engine.  The
+	 * remaining string is: [[context@]table][/opts] */
+	char *opts = strchr(buf, '/');
+	if (opts)
+		*opts++ = '\0';
+	table = strchr(buf, '@');
+	if (table) {
+		*table++ = '\0';
+		ctx = buf;
+	}
+	ctx = S_OR(ctx, context);
+	table = S_OR(table, "extensions");
+	if (!ast_strlen_zero(opts)) {
+		ast_app_parse_options(switch_opts, &flags, NULL, opts);
+	}
+	ast_copy_string(cache_search.exten, exten, sizeof(cache_search.exten));
+	if (mode == MODE_MATCH && (ce = ao2_find(cache, &cache_search, OBJ_POINTER))) {
+		var = dup_vars(ce->var);
+		ao2_ref(ce, -1);
+	} else {
+		var = realtime_switch_common(table, ctx, exten, priority, mode, flags);
+		do {
+			struct ast_variable *new;
+			/* Only cache matches */
+			if (mode != MODE_MATCH) {
+				break;
+			}
+			if (!(new = dup_vars(var))) {
+				break;
+			}
+			if (!(ce = ao2_alloc(sizeof(*ce) + strlen(exten) + strlen(context), free_entry))) {
+				ast_variables_destroy(new);
+				break;
+			}
+			ce->context = ce->exten + strlen(exten) + 1;
+			strcpy(ce->exten, exten); /* SAFE */
+			strcpy(ce->context, context); /* SAFE */
+			ce->priority = priority;
+			ce->var = new;
+			ce->when = ast_tvnow();
+			ao2_link(cache, ce);
+			pthread_kill(cleanup_thread, SIGURG);
+			ao2_ref(ce, -1);
+		} while (0);
 	}
 	return var;
 }
@@ -184,26 +309,52 @@ static int realtime_exec(struct ast_channel *chan, const char *context, const ch
 		for (v = var; v ; v = v->next) {
 			if (!strcasecmp(v->name, "app"))
 				app = ast_strdupa(v->value);
-			else if (!strcasecmp(v->name, "appdata"))
-				tmp = ast_strdupa(v->value);
+			else if (!strcasecmp(v->name, "appdata")) {
+				if (ast_compat_pbx_realtime) {
+					char *ptr;
+					int in = 0;
+					tmp = ast_alloca(strlen(v->value) * 2 + 1);
+					for (ptr = tmp; *v->value; v->value++) {
+						if (*v->value == ',') {
+							*ptr++ = '\\';
+							*ptr++ = ',';
+						} else if (*v->value == '|' && !in) {
+							*ptr++ = ',';
+						} else {
+							*ptr++ = *v->value;
+						}
+
+						/* Don't escape '|', meaning 'or', inside expressions ($[ ]) */
+						if (v->value[0] == '[' && v->value[-1] == '$') {
+							in++;
+						} else if (v->value[0] == ']' && in) {
+							in--;
+						}
+					}
+					*ptr = '\0';
+				} else {
+					tmp = ast_strdupa(v->value);
+				}
+			}
 		}
 		ast_variables_destroy(var);
 		if (!ast_strlen_zero(app)) {
 			struct ast_app *a = pbx_findapp(app);
 			if (a) {
-				char appdata[512]="";
+				char appdata[512];
 				char tmp1[80];
 				char tmp2[80];
 				char tmp3[EXT_DATA_SIZE];
 
+				appdata[0] = 0; /* just in case the substitute var func isn't called */
 				if(!ast_strlen_zero(tmp))
 					pbx_substitute_variables_helper(chan, tmp, appdata, sizeof(appdata) - 1);
-				if (option_verbose > 2)
-					ast_verbose( VERBOSE_PREFIX_3 "Executing %s(\"%s\", \"%s\")\n",
+				ast_verb(3, "Executing [%s@%s:%d] %s(\"%s\", \"%s\")\n",
+						chan->exten, chan->context, chan->priority,
 						 term_color(tmp1, app, COLOR_BRCYAN, 0, sizeof(tmp1)),
 						 term_color(tmp2, chan->name, COLOR_BRMAGENTA, 0, sizeof(tmp2)),
 						 term_color(tmp3, S_OR(appdata, ""), COLOR_BRMAGENTA, 0, sizeof(tmp3)));
-				manager_event(EVENT_FLAG_CALL, "Newexten",
+				manager_event(EVENT_FLAG_DIALPLAN, "Newexten",
 							  "Channel: %s\r\n"
 							  "Context: %s\r\n"
 							  "Extension: %s\r\n"
@@ -235,24 +386,38 @@ static int realtime_matchmore(struct ast_channel *chan, const char *context, con
 
 static struct ast_switch realtime_switch =
 {
-        name:                   "Realtime",
-        description:   		"Realtime Dialplan Switch",
-        exists:                 realtime_exists,
-        canmatch:               realtime_canmatch,
-        exec:                   realtime_exec,
-        matchmore:              realtime_matchmore,
+	.name			= "Realtime",
+	.description		= "Realtime Dialplan Switch",
+	.exists			= realtime_exists,
+	.canmatch		= realtime_canmatch,
+	.exec			= realtime_exec,
+	.matchmore		= realtime_matchmore,
 };
 
 static int unload_module(void)
 {
 	ast_unregister_switch(&realtime_switch);
+	pthread_cancel(cleanup_thread);
+	pthread_kill(cleanup_thread, SIGURG);
+	pthread_join(cleanup_thread, NULL);
+	/* Destroy all remaining entries */
+	ao2_ref(cache, -1);
 	return 0;
 }
 
 static int load_module(void)
 {
-	ast_register_switch(&realtime_switch);
-	return 0;
+	if (!(cache = ao2_container_alloc(573, cache_hash, cache_cmp))) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (ast_pthread_create(&cleanup_thread, NULL, cleanup, NULL)) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (ast_register_switch(&realtime_switch))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Realtime Switch");

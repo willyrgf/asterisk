@@ -27,25 +27,24 @@
  * licensing even further) we elect to use DB1 which is BSD licensed 
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include "asterisk/_private.h"
+#include "asterisk/paths.h"	/* use ast_config_AST_DB */
 #include <sys/time.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
 #include <dirent.h>
 
 #include "asterisk/channel.h"
 #include "asterisk/file.h"
 #include "asterisk/app.h"
 #include "asterisk/dsp.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 #include "asterisk/astdb.h"
 #include "asterisk/cli.h"
 #include "asterisk/utils.h"
@@ -53,22 +52,80 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 #include "db1-ast/include/db.h"
 
-#ifdef __CYGWIN__
-#define dbopen __dbopen
-#endif
+/*** DOCUMENTATION
+	<manager name="DBGet" language="en_US">
+		<synopsis>
+			Get DB Entry.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="DBPut" language="en_US">
+		<synopsis>
+			Put DB entry.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" required="true" />
+			<parameter name="Val" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="DBDel" language="en_US">
+		<synopsis>
+			Delete DB entry.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+	<manager name="DBDelTree" language="en_US">
+		<synopsis>
+			Delete DB Tree.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Family" required="true" />
+			<parameter name="Key" />
+		</syntax>
+		<description>
+		</description>
+	</manager>
+ ***/
+
+#define MAX_DB_FIELD 256
 
 static DB *astdb;
 AST_MUTEX_DEFINE_STATIC(dblock);
+static ast_cond_t dbcond;
+static pthread_t syncthread;
+static int doexit;
+typedef int (*process_keys_cb)(DBT *key, DBT *value, const char *filter, void *data);
+
+static void db_sync(void);
 
 static int dbinit(void) 
 {
-	if (!astdb && !(astdb = dbopen((char *)ast_config_AST_DB, O_CREAT | O_RDWR, 0664, DB_BTREE, NULL))) {
+	if (doexit) {
+		return -1;
+	}
+	if (!astdb && !(astdb = dbopen(ast_config_AST_DB, O_CREAT | O_RDWR, AST_FILE_MODE, DB_BTREE, NULL))) {
 		ast_log(LOG_WARNING, "Unable to open Asterisk database '%s': %s\n", ast_config_AST_DB, strerror(errno));
 		return -1;
 	}
 	return 0;
 }
-
 
 static inline int keymatch(const char *key, const char *prefix)
 {
@@ -97,14 +154,94 @@ static inline int subkeymatch(const char *key, const char *suffix)
 	return 0;
 }
 
+static const char *dbt_data2str(DBT *dbt)
+{
+	char *data = "";
+
+	if (dbt->size) {
+		data = dbt->data;
+		data[dbt->size - 1] = '\0';
+	}
+
+	return data;
+}
+
+static inline const char *dbt_data2str_full(DBT *dbt, const char *def)
+{
+	return S_OR(dbt_data2str(dbt), def);
+}
+
+/*!
+ * \internal
+ * \brief Invoke a callback function on all keys, using given data and filter.
+ *
+ * \param cb      Callback function to invoke (itself returns number of keys it affected).
+ * \param data    Value to pass to cb's data param.
+ * \param filter  Value to pass to cb's filter param.
+ * \param sync    If non-zero, call db_sync() when done.
+ * \return Number of keys affected by the callback, or -1 if database is unavailable.
+ */
+static int process_db_keys(process_keys_cb cb, void *data, const char *filter, int sync)
+{
+	DBT key = { 0, }, value = { 0, }, last_key = { 0, };
+	int counter = 0;
+	int res, last = 0;
+	char last_key_s[MAX_DB_FIELD];
+
+	ast_mutex_lock(&dblock);
+	if (dbinit()) {
+		ast_mutex_unlock(&dblock);
+		return -1;
+	}
+
+	/* Somehow, the database can become corrupted such that astdb->seq will continue looping through
+	 * the database indefinitely. The pointer to last_key.data ends up getting re-used by the BDB lib
+	 * so this specifically queries for the last entry, makes a copy of the key, and then uses it as
+	 * a sentinel to avoid repeatedly looping over the list. */
+
+	if (astdb->seq(astdb, &last_key, &value, R_LAST)) {
+		/* Empty database */
+		ast_mutex_unlock(&dblock);
+		return 0;
+	}
+
+	memcpy(last_key_s, last_key.data, MIN(last_key.size - 1, sizeof(last_key_s)));
+	last_key_s[last_key.size - 1] = '\0';
+	for (res = astdb->seq(astdb, &key, &value, R_FIRST);
+			!res;
+			res = astdb->seq(astdb, &key, &value, R_NEXT)) {
+		/* The callback might delete the key, so we have to check it before calling */
+		last = !strcmp(dbt_data2str_full(&key, "<bad key>"), last_key_s);
+		counter += cb(&key, &value, filter, data);
+		if (last) {
+			break;
+		}
+	}
+
+	if (sync) {
+		db_sync();
+	}
+
+	ast_mutex_unlock(&dblock);
+
+	return counter;
+}
+
+static int db_deltree_cb(DBT *key, DBT *value, const char *filter, void *data)
+{
+	int res = 0;
+
+	if (keymatch(dbt_data2str_full(key, "<bad key>"), filter)) {
+		astdb->del(astdb, key, 0);
+		res = 1;
+	}
+	return res;
+}
+
 int ast_db_deltree(const char *family, const char *keytree)
 {
-	char prefix[256];
-	DBT key, data;
-	char *keys;
-	int res;
-	int pass;
-	
+	char prefix[MAX_DB_FIELD];
+
 	if (family) {
 		if (keytree) {
 			snprintf(prefix, sizeof(prefix), "/%s/%s", family, keytree);
@@ -116,35 +253,13 @@ int ast_db_deltree(const char *family, const char *keytree)
 	} else {
 		prefix[0] = '\0';
 	}
-	
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		return -1;
-	}
-	
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	pass = 0;
-	while (!(res = astdb->seq(astdb, &key, &data, pass++ ? R_NEXT : R_FIRST))) {
-		if (key.size) {
-			keys = key.data;
-			keys[key.size - 1] = '\0';
-		} else {
-			keys = "<bad key>";
-		}
-		if (keymatch(keys, prefix)) {
-			astdb->del(astdb, &key, 0);
-		}
-	}
-	astdb->sync(astdb, 0);
-	ast_mutex_unlock(&dblock);
-	return 0;
+
+	return process_db_keys(db_deltree_cb, NULL, prefix, 1);
 }
 
-int ast_db_put(const char *family, const char *keys, char *value)
+int ast_db_put(const char *family, const char *keys, const char *value)
 {
-	char fullkey[256];
+	char fullkey[MAX_DB_FIELD];
 	DBT key, data;
 	int res, fullkeylen;
 
@@ -159,19 +274,34 @@ int ast_db_put(const char *family, const char *keys, char *value)
 	memset(&data, 0, sizeof(data));
 	key.data = fullkey;
 	key.size = fullkeylen + 1;
-	data.data = value;
+	data.data = (char *) value;
 	data.size = strlen(value) + 1;
 	res = astdb->put(astdb, &key, &data, 0);
-	astdb->sync(astdb, 0);
+	db_sync();
 	ast_mutex_unlock(&dblock);
 	if (res)
 		ast_log(LOG_WARNING, "Unable to put value '%s' for key '%s' in family '%s'\n", value, keys, family);
+
 	return res;
 }
 
-int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
+/*!
+ * \internal
+ * \brief Get key value specified by family/key.
+ *
+ * Gets the value associated with the specified \a family and \a keys, and
+ * stores it, either into the fixed sized buffer specified by \a buffer
+ * and \a bufferlen, or as a heap allocated string if \a bufferlen is -1.
+ *
+ * \note If \a bufferlen is -1, \a buffer points to heap allocated memory
+ *       and must be freed by calling ast_free().
+ *
+ * \retval -1 An error occurred
+ * \retval 0 Success
+ */
+static int db_get_common(const char *family, const char *keys, char **buffer, int bufferlen)
 {
-	char fullkey[256] = "";
+	char fullkey[MAX_DB_FIELD] = "";
 	DBT key, data;
 	int res, fullkeylen;
 
@@ -184,7 +314,6 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	fullkeylen = snprintf(fullkey, sizeof(fullkey), "/%s/%s", family, keys);
 	memset(&key, 0, sizeof(key));
 	memset(&data, 0, sizeof(data));
-	memset(value, 0, valuelen);
 	key.data = fullkey;
 	key.size = fullkeylen + 1;
 
@@ -192,16 +321,18 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 
 	/* Be sure to NULL terminate our data either way */
 	if (res) {
-		if (option_debug)
-			ast_log(LOG_DEBUG, "Unable to find key '%s' in family '%s'\n", keys, family);
+		ast_debug(1, "Unable to find key '%s' in family '%s'\n", keys, family);
 	} else {
-#if 0
-		printf("Got value of size %d\n", data.size);
-#endif
 		if (data.size) {
 			((char *)data.data)[data.size - 1] = '\0';
-			/* Make sure that we don't write too much to the dst pointer or we don't read too much from the source pointer */
-			ast_copy_string(value, data.data, (valuelen > data.size) ? data.size : valuelen);
+
+			if (bufferlen == -1) {
+				*buffer = ast_strdup(data.data);
+			} else {
+				/* Make sure that we don't write too much to the dst pointer or we don't
+				 * read too much from the source pointer */
+				ast_copy_string(*buffer, data.data, bufferlen > data.size ? data.size : bufferlen);
+			}
 		} else {
 			ast_log(LOG_NOTICE, "Strange, empty value for /%s/%s\n", family, keys);
 		}
@@ -214,9 +345,26 @@ int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
 	return res;
 }
 
+int ast_db_get(const char *family, const char *keys, char *value, int valuelen)
+{
+	ast_assert(value != NULL);
+
+	/* Make sure we initialize */
+	value[0] = 0;
+
+	return db_get_common(family, keys, &value, valuelen);
+}
+
+int ast_db_get_allocated(const char *family, const char *keys, char **out)
+{
+	*out = NULL;
+
+	return db_get_common(family, keys, out, -1);
+}
+
 int ast_db_del(const char *family, const char *keys)
 {
-	char fullkey[256];
+	char fullkey[MAX_DB_FIELD];
 	DBT key;
 	int res, fullkeylen;
 
@@ -232,180 +380,258 @@ int ast_db_del(const char *family, const char *keys)
 	key.size = fullkeylen + 1;
 	
 	res = astdb->del(astdb, &key, 0);
-	astdb->sync(astdb, 0);
+	db_sync();
 	
 	ast_mutex_unlock(&dblock);
 
-	if (res && option_debug)
-		ast_log(LOG_DEBUG, "Unable to find key '%s' in family '%s'\n", keys, family);
+	if (res) {
+		ast_debug(1, "Unable to find key '%s' in family '%s'\n", keys, family);
+	}
 	return res;
 }
 
-static int database_put(int fd, int argc, char *argv[])
+static char *handle_cli_database_put(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int res;
-	if (argc != 5)
-		return RESULT_SHOWUSAGE;
-	res = ast_db_put(argv[2], argv[3], argv[4]);
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database put";
+		e->usage =
+			"Usage: database put <family> <key> <value>\n"
+			"       Adds or updates an entry in the Asterisk database for\n"
+			"       a given family, key, and value.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 5)
+		return CLI_SHOWUSAGE;
+	res = ast_db_put(a->argv[2], a->argv[3], a->argv[4]);
 	if (res)  {
-		ast_cli(fd, "Failed to update entry\n");
+		ast_cli(a->fd, "Failed to update entry\n");
 	} else {
-		ast_cli(fd, "Updated database successfully\n");
+		ast_cli(a->fd, "Updated database successfully\n");
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int database_get(int fd, int argc, char *argv[])
+static char *handle_cli_database_get(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int res;
-	char tmp[256];
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-	res = ast_db_get(argv[2], argv[3], tmp, sizeof(tmp));
+	char tmp[MAX_DB_FIELD];
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database get";
+		e->usage =
+			"Usage: database get <family> <key>\n"
+			"       Retrieves an entry in the Asterisk database for a given\n"
+			"       family and key.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+	res = ast_db_get(a->argv[2], a->argv[3], tmp, sizeof(tmp));
 	if (res) {
-		ast_cli(fd, "Database entry not found.\n");
+		ast_cli(a->fd, "Database entry not found.\n");
 	} else {
-		ast_cli(fd, "Value: %s\n", tmp);
+		ast_cli(a->fd, "Value: %s\n", tmp);
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int database_del(int fd, int argc, char *argv[])
+static char *handle_cli_database_del(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int res;
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-	res = ast_db_del(argv[2], argv[3]);
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database del";
+		e->usage =
+			"Usage: database del <family> <key>\n"
+			"       Deletes an entry in the Asterisk database for a given\n"
+			"       family and key.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+	res = ast_db_del(a->argv[2], a->argv[3]);
 	if (res) {
-		ast_cli(fd, "Database entry does not exist.\n");
+		ast_cli(a->fd, "Database entry does not exist.\n");
 	} else {
-		ast_cli(fd, "Database entry removed.\n");
+		ast_cli(a->fd, "Database entry removed.\n");
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static int database_deltree(int fd, int argc, char *argv[])
+static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	int res;
-	if ((argc < 3) || (argc > 4))
-		return RESULT_SHOWUSAGE;
-	if (argc == 4) {
-		res = ast_db_deltree(argv[2], argv[3]);
-	} else {
-		res = ast_db_deltree(argv[2], NULL);
+	int num_deleted;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database deltree";
+		e->usage =
+			"Usage: database deltree <family> [keytree]\n"
+			"   OR: database deltree <family>[/keytree]\n"
+			"       Deletes a family or specific keytree within a family\n"
+			"       in the Asterisk database.  The two arguments may be\n"
+			"       separated by either a space or a slash.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
 	}
-	if (res) {
-		ast_cli(fd, "Database entries do not exist.\n");
+
+	if ((a->argc < 3) || (a->argc > 4))
+		return CLI_SHOWUSAGE;
+	if (a->argc == 4) {
+		num_deleted = ast_db_deltree(a->argv[2], a->argv[3]);
 	} else {
-		ast_cli(fd, "Database entries removed.\n");
+		num_deleted = ast_db_deltree(a->argv[2], NULL);
 	}
-	return RESULT_SUCCESS;
+	if (num_deleted < 0) {
+		ast_cli(a->fd, "Database unavailable.\n");
+	} else if (num_deleted == 0) {
+		ast_cli(a->fd, "Database entries do not exist.\n");
+	} else {
+		ast_cli(a->fd, "%d database entries removed.\n",num_deleted);
+	}
+	return CLI_SUCCESS;
 }
 
-static int database_show(int fd, int argc, char *argv[])
+static int db_show_cb(DBT *key, DBT *value, const char *filter, void *data)
 {
-	char prefix[256];
-	DBT key, data;
-	char *keys, *values;
-	int res;
-	int pass;
+	struct ast_cli_args *a = data;
+	const char *key_s = dbt_data2str_full(key, "<bad key>");
+	const char *value_s = dbt_data2str_full(value, "<bad value>");
 
-	if (argc == 4) {
+	if (keymatch(key_s, filter)) {
+		ast_cli(a->fd, "%-50s: %-25s\n", key_s, value_s);
+		return 1;
+	}
+
+	return 0;
+}
+
+static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	char prefix[MAX_DB_FIELD];
+	int counter = 0;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database show";
+		e->usage =
+			"Usage: database show [family [keytree]]\n"
+			"   OR: database show [family[/keytree]]\n"
+			"       Shows Asterisk database contents, optionally restricted\n"
+			"       to a given family, or family and keytree. The two arguments\n"
+			"       may be separated either by a space or by a slash.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc == 4) {
 		/* Family and key tree */
-		snprintf(prefix, sizeof(prefix), "/%s/%s", argv[2], argv[3]);
-	} else if (argc == 3) {
+		snprintf(prefix, sizeof(prefix), "/%s/%s", a->argv[2], a->argv[3]);
+	} else if (a->argc == 3) {
 		/* Family only */
-		snprintf(prefix, sizeof(prefix), "/%s", argv[2]);
-	} else if (argc == 2) {
+		snprintf(prefix, sizeof(prefix), "/%s", a->argv[2]);
+	} else if (a->argc == 2) {
 		/* Neither */
 		prefix[0] = '\0';
 	} else {
-		return RESULT_SHOWUSAGE;
+		return CLI_SHOWUSAGE;
 	}
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		ast_cli(fd, "Database unavailable\n");
-		return RESULT_SUCCESS;	
+
+	if((counter = process_db_keys(db_show_cb, a, prefix, 0)) < 0) {
+		ast_cli(a->fd, "Database unavailable\n");
+		return CLI_SUCCESS;
 	}
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	pass = 0;
-	while (!(res = astdb->seq(astdb, &key, &data, pass++ ? R_NEXT : R_FIRST))) {
-		if (key.size) {
-			keys = key.data;
-			keys[key.size - 1] = '\0';
-		} else {
-			keys = "<bad key>";
-		}
-		if (data.size) {
-			values = data.data;
-			values[data.size - 1]='\0';
-		} else {
-			values = "<bad value>";
-		}
-		if (keymatch(keys, prefix)) {
-				ast_cli(fd, "%-50s: %-25s\n", keys, values);
-		}
-	}
-	ast_mutex_unlock(&dblock);
-	return RESULT_SUCCESS;	
+
+	ast_cli(a->fd, "%d results found.\n", counter);
+	return CLI_SUCCESS;
 }
 
-static int database_showkey(int fd, int argc, char *argv[])
+static int db_showkey_cb(DBT *key, DBT *value, const char *filter, void *data)
 {
-	char suffix[256];
-	DBT key, data;
-	char *keys, *values;
-	int res;
-	int pass;
+	struct ast_cli_args *a = data;
+	const char *key_s = dbt_data2str_full(key, "<bad key>");
+	const char *value_s = dbt_data2str_full(value, "<bad value>");
 
-	if (argc == 3) {
+	if (subkeymatch(key_s, filter)) {
+		ast_cli(a->fd, "%-50s: %-25s\n", key_s, value_s);
+		return 1;
+	}
+
+	return 0;
+}
+
+static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	char suffix[MAX_DB_FIELD];
+	int counter = 0;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database showkey";
+		e->usage =
+			"Usage: database showkey <keytree>\n"
+			"       Shows Asterisk database contents, restricted to a given key.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc == 3) {
 		/* Key only */
-		snprintf(suffix, sizeof(suffix), "/%s", argv[2]);
+		snprintf(suffix, sizeof(suffix), "/%s", a->argv[2]);
 	} else {
-		return RESULT_SHOWUSAGE;
+		return CLI_SHOWUSAGE;
 	}
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
-		ast_cli(fd, "Database unavailable\n");
-		return RESULT_SUCCESS;	
+
+	if ((counter = process_db_keys(db_showkey_cb, a, suffix, 0)) < 0) {
+		ast_cli(a->fd, "Database unavailable\n");
+		return CLI_SUCCESS;
 	}
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	pass = 0;
-	while (!(res = astdb->seq(astdb, &key, &data, pass++ ? R_NEXT : R_FIRST))) {
-		if (key.size) {
-			keys = key.data;
-			keys[key.size - 1] = '\0';
-		} else {
-			keys = "<bad key>";
-		}
-		if (data.size) {
-			values = data.data;
-			values[data.size - 1]='\0';
-		} else {
-			values = "<bad value>";
-		}
-		if (subkeymatch(keys, suffix)) {
-				ast_cli(fd, "%-50s: %-25s\n", keys, values);
-		}
+
+	ast_cli(a->fd, "%d results found.\n", counter);
+	return CLI_SUCCESS;
+}
+
+static int db_gettree_cb(DBT *key, DBT *value, const char *filter, void *data)
+{
+	struct ast_db_entry **ret = data;
+	struct ast_db_entry *cur;
+	const char *key_s = dbt_data2str_full(key, "<bad key>");
+	const char *value_s = dbt_data2str_full(value, "<bad value>");
+	size_t key_slen = strlen(key_s) + 1, value_slen = strlen(value_s) + 1;
+
+	if (keymatch(key_s, filter) && (cur = ast_malloc(sizeof(*cur) + key_slen + value_slen))) {
+		cur->next = *ret;
+		cur->key = cur->data + value_slen;
+		strcpy(cur->data, value_s);
+		strcpy(cur->key, key_s);
+		*ret = cur;
+		return 1;
 	}
-	ast_mutex_unlock(&dblock);
-	return RESULT_SUCCESS;	
+
+	return 0;
 }
 
 struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
 {
-	char prefix[256];
-	DBT key, data;
-	char *keys, *values;
-	int values_len;
-	int res;
-	int pass;
-	struct ast_db_entry *last = NULL;
-	struct ast_db_entry *cur, *ret=NULL;
+	char prefix[MAX_DB_FIELD];
+	struct ast_db_entry *ret = NULL;
 
 	if (!ast_strlen_zero(family)) {
 		if (!ast_strlen_zero(keytree)) {
@@ -418,44 +644,13 @@ struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
 	} else {
 		prefix[0] = '\0';
 	}
-	ast_mutex_lock(&dblock);
-	if (dbinit()) {
-		ast_mutex_unlock(&dblock);
+
+	if (process_db_keys(db_gettree_cb, &ret, prefix, 0) < 0) {
 		ast_log(LOG_WARNING, "Database unavailable\n");
-		return NULL;	
+		return NULL;
 	}
-	memset(&key, 0, sizeof(key));
-	memset(&data, 0, sizeof(data));
-	pass = 0;
-	while (!(res = astdb->seq(astdb, &key, &data, pass++ ? R_NEXT : R_FIRST))) {
-		if (key.size) {
-			keys = key.data;
-			keys[key.size - 1] = '\0';
-		} else {
-			keys = "<bad key>";
-		}
-		if (data.size) {
-			values = data.data;
-			values[data.size - 1] = '\0';
-		} else {
-			values = "<bad value>";
-		}
-		values_len = strlen(values) + 1;
-		if (keymatch(keys, prefix) && (cur = ast_malloc(sizeof(*cur) + strlen(keys) + 1 + values_len))) {
-			cur->next = NULL;
-			cur->key = cur->data + values_len;
-			strcpy(cur->data, values);
-			strcpy(cur->key, keys);
-			if (last) {
-				last->next = cur;
-			} else {
-				ret = cur;
-			}
-			last = cur;
-		}
-	}
-	ast_mutex_unlock(&dblock);
-	return ret;	
+
+	return ret;
 }
 
 void ast_db_freetree(struct ast_db_entry *dbe)
@@ -464,63 +659,17 @@ void ast_db_freetree(struct ast_db_entry *dbe)
 	while (dbe) {
 		last = dbe;
 		dbe = dbe->next;
-		free(last);
+		ast_free(last);
 	}
 }
 
-static char database_show_usage[] =
-"Usage: database show [family [keytree]]\n"
-"       Shows Asterisk database contents, optionally restricted\n"
-"to a given family, or family and keytree.\n";
-
-static char database_showkey_usage[] =
-"Usage: database showkey <keytree>\n"
-"       Shows Asterisk database contents, restricted to a given key.\n";
-
-static char database_put_usage[] =
-"Usage: database put <family> <key> <value>\n"
-"       Adds or updates an entry in the Asterisk database for\n"
-"a given family, key, and value.\n";
-
-static char database_get_usage[] =
-"Usage: database get <family> <key>\n"
-"       Retrieves an entry in the Asterisk database for a given\n"
-"family and key.\n";
-
-static char database_del_usage[] =
-"Usage: database del <family> <key>\n"
-"       Deletes an entry in the Asterisk database for a given\n"
-"family and key.\n";
-
-static char database_deltree_usage[] =
-"Usage: database deltree <family> [keytree]\n"
-"       Deletes a family or specific keytree within a family\n"
-"in the Asterisk database.\n";
-
-struct ast_cli_entry cli_database[] = {
-	{ { "database", "show", NULL },
-	database_show, "Shows database contents",
-	database_show_usage },
-
-	{ { "database", "showkey", NULL },
-	database_showkey, "Shows database contents",
-	database_showkey_usage },
-
-	{ { "database", "get", NULL },
-	database_get, "Gets database value",
-	database_get_usage },
-
-	{ { "database", "put", NULL },
-	database_put, "Adds/updates database value",
-	database_put_usage },
-
-	{ { "database", "del", NULL },
-	database_del, "Removes database key/value",
-	database_del_usage },
-
-	{ { "database", "deltree", NULL },
-	database_deltree, "Removes database keytree/values",
-	database_deltree_usage },
+static struct ast_cli_entry cli_database[] = {
+	AST_CLI_DEFINE(handle_cli_database_show,    "Shows database contents"),
+	AST_CLI_DEFINE(handle_cli_database_showkey, "Shows database contents"),
+	AST_CLI_DEFINE(handle_cli_database_get,     "Gets database value"),
+	AST_CLI_DEFINE(handle_cli_database_put,     "Adds/updates database value"),
+	AST_CLI_DEFINE(handle_cli_database_del,     "Removes database key/value"),
+	AST_CLI_DEFINE(handle_cli_database_deltree, "Removes database keytree/values")
 };
 
 static int manager_dbput(struct mansession *s, const struct message *m)
@@ -539,7 +688,7 @@ static int manager_dbput(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	res = ast_db_put(family, key, (char *) S_OR(val, ""));
+	res = ast_db_put(family, key, S_OR(val, ""));
 	if (res) {
 		astman_send_error(s, m, "Failed to update entry");
 	} else {
@@ -554,7 +703,7 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 	char idText[256] = "";
 	const char *family = astman_get_header(m, "Family");
 	const char *key = astman_get_header(m, "Key");
-	char tmp[256];
+	char tmp[MAX_DB_FIELD];
 	int res;
 
 	if (ast_strlen_zero(family)) {
@@ -581,15 +730,171 @@ static int manager_dbget(struct mansession *s, const struct message *m)
 				"%s"
 				"\r\n",
 				family, key, tmp, idText);
+		astman_append(s, "Event: DBGetComplete\r\n"
+				"%s"
+				"\r\n",
+				idText);
 	}
 	return 0;
 }
 
+static int manager_dbdel(struct mansession *s, const struct message *m)
+{
+	const char *family = astman_get_header(m, "Family");
+	const char *key = astman_get_header(m, "Key");
+	int res;
+
+	if (ast_strlen_zero(family)) {
+		astman_send_error(s, m, "No family specified.");
+		return 0;
+	}
+
+	if (ast_strlen_zero(key)) {
+		astman_send_error(s, m, "No key specified.");
+		return 0;
+	}
+
+	res = ast_db_del(family, key);
+	if (res)
+		astman_send_error(s, m, "Database entry not found");
+	else
+		astman_send_ack(s, m, "Key deleted successfully");
+
+	return 0;
+}
+
+static int manager_dbdeltree(struct mansession *s, const struct message *m)
+{
+	const char *family = astman_get_header(m, "Family");
+	const char *key = astman_get_header(m, "Key");
+	int num_deleted;
+
+	if (ast_strlen_zero(family)) {
+		astman_send_error(s, m, "No family specified.");
+		return 0;
+	}
+
+	if (!ast_strlen_zero(key)) {
+		num_deleted = ast_db_deltree(family, key);
+	} else {
+		num_deleted = ast_db_deltree(family, NULL);
+	}
+
+	if (num_deleted < 0) {
+		astman_send_error(s, m, "Database unavailable");
+	} else if (num_deleted == 0) {
+		astman_send_error(s, m, "Database entry not found");
+	} else {
+		astman_send_ack(s, m, "Key tree deleted successfully");
+	}
+
+	return 0;
+}
+
+/*!
+ * \internal
+ * \brief Signal the astdb sync thread to do its thing.
+ *
+ * \note dblock is assumed to be held when calling this function.
+ */
+static void db_sync(void)
+{
+	ast_cond_signal(&dbcond);
+}
+
+/*!
+ * \internal
+ * \brief astdb sync thread
+ *
+ * This thread is in charge of syncing astdb to disk after a change.
+ * By pushing it off to this thread to take care of, this I/O bound operation
+ * will not block other threads from performing other critical processing.
+ * If changes happen rapidly, this thread will also ensure that the sync
+ * operations are rate limited.
+ */
+static void *db_sync_thread(void *data)
+{
+	ast_mutex_lock(&dblock);
+	for (;;) {
+		ast_cond_wait(&dbcond, &dblock);
+		if (doexit) {
+			/*
+			 * We were likely awakened just to exit.  Sync anyway just in
+			 * case.
+			 */
+			if (astdb) {
+				astdb->sync(astdb, 0);
+			}
+			ast_mutex_unlock(&dblock);
+			break;
+		}
+
+		ast_mutex_unlock(&dblock);
+		/*
+		 * Sleep so if we have a bunch of db puts in a row, they won't
+		 * get written one at a time to the db but in a batch.
+		 */
+		sleep(1);
+		ast_mutex_lock(&dblock);
+
+		/* The db should be successfully opened to get here. */
+		ast_assert(astdb != NULL);
+		astdb->sync(astdb, 0);
+
+		if (doexit) {
+			/* We were asked to exit while sleeping. */
+			ast_mutex_unlock(&dblock);
+			break;
+		}
+	}
+
+	return NULL;
+}
+
+static void astdb_shutdown(void)
+{
+	ast_cli_unregister_multiple(cli_database, ARRAY_LEN(cli_database));
+	ast_manager_unregister("DBGet");
+	ast_manager_unregister("DBPut");
+	ast_manager_unregister("DBDel");
+	ast_manager_unregister("DBDelTree");
+
+	ast_mutex_lock(&dblock);
+	doexit = 1;
+	db_sync();
+	ast_mutex_unlock(&dblock);
+
+	pthread_join(syncthread, NULL);
+
+#if defined(DEBUG_FD_LEAKS) && defined(close)
+/* DEBUG_FD_LEAKS causes conflicting define of close() in asterisk.h */
+#undef close
+#endif
+
+	if (astdb) {
+		astdb->close(astdb);
+		astdb = NULL;
+	}
+}
+
 int astdb_init(void)
 {
+	ast_cond_init(&dbcond, NULL);
+	if (ast_pthread_create_background(&syncthread, NULL, db_sync_thread, NULL)) {
+		return -1;
+	}
+
+	ast_mutex_lock(&dblock);
+	/* Ignore check_return warning from Coverity for dbinit below */
 	dbinit();
-	ast_cli_register_multiple(cli_database, sizeof(cli_database) / sizeof(struct ast_cli_entry));
-	ast_manager_register("DBGet", EVENT_FLAG_SYSTEM, manager_dbget, "Get DB Entry");
-	ast_manager_register("DBPut", EVENT_FLAG_SYSTEM, manager_dbput, "Put DB Entry");
+	ast_mutex_unlock(&dblock);
+
+	ast_cli_register_multiple(cli_database, ARRAY_LEN(cli_database));
+	ast_manager_register_xml("DBGet", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, manager_dbget);
+	ast_manager_register_xml("DBPut", EVENT_FLAG_SYSTEM, manager_dbput);
+	ast_manager_register_xml("DBDel", EVENT_FLAG_SYSTEM, manager_dbdel);
+	ast_manager_register_xml("DBDelTree", EVENT_FLAG_SYSTEM, manager_dbdeltree);
+
+	ast_register_atexit(astdb_shutdown);
 	return 0;
 }

@@ -17,10 +17,10 @@
 	<key>Umask</key>
 	<integer>7</integer><!-- 0007 -->
 	<key>Program</key>
-	<string>/usr/sbin/muted</string>
+	<string>__ASTERISK_SBIN_DIR__/muted</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/sbin/muted</string>
+		<string>__ASTERISK_SBIN_DIR__/muted</string>
 		<string>-f</string>
 	</array>
 	<key>StandardInPath</key>

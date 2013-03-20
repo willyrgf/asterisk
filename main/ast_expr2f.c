@@ -1,3 +1,5 @@
+#include "asterisk.h"
+
 #line 2 "ast_expr2f.c"
 
 #line 4 "ast_expr2f.c"
@@ -54,6 +56,7 @@ typedef int flex_int32_t;
 typedef unsigned char flex_uint8_t; 
 typedef unsigned short int flex_uint16_t;
 typedef unsigned int flex_uint32_t;
+#endif /* ! C99 */
 
 /* Limits of integral types. */
 #ifndef INT8_MIN
@@ -83,8 +86,6 @@ typedef unsigned int flex_uint32_t;
 #ifndef UINT32_MAX
 #define UINT32_MAX             (4294967295U)
 #endif
-
-#endif /* ! C99 */
 
 #endif /* ! FLEXINT_H */
 
@@ -351,8 +352,8 @@ static void yy_fatal_error (yyconst char msg[] ,yyscan_t yyscanner );
 	*yy_cp = '\0'; \
 	yyg->yy_c_buf_p = yy_cp;
 
-#define YY_NUM_RULES 36
-#define YY_END_OF_BUFFER 37
+#define YY_NUM_RULES 38
+#define YY_END_OF_BUFFER 39
 /* This struct is not used in this scanner,
    but its presence is necessary. */
 struct yy_trans_info
@@ -360,14 +361,15 @@ struct yy_trans_info
 	flex_int32_t yy_verify;
 	flex_int32_t yy_nxt;
 	};
-static yyconst flex_int16_t yy_accept[58] =
+static yyconst flex_int16_t yy_accept[63] =
     {   0,
-        0,    0,    0,    0,   33,   33,   37,   36,   25,   27,
-       19,   36,   29,   36,   17,    2,   22,   23,   15,   13,
-       14,   16,   28,   20,    9,    3,    8,   18,    1,   36,
-       32,   31,   33,   35,   35,   12,    0,   26,   29,    0,
-       24,    5,   28,   21,   11,    6,    7,   10,    4,    0,
-       32,   31,   33,    0,   34,   30,    0
+        0,    0,    0,    0,   35,   35,   39,   38,   27,   29,
+       21,   38,   31,   38,   19,    2,   24,   25,   17,   14,
+       15,   16,   18,   30,   22,   10,    3,    9,   20,    1,
+       38,   38,   34,   33,   35,   37,   37,   13,    0,   28,
+       31,    0,   26,    5,   31,   30,   23,   12,    6,    7,
+       11,    4,    8,    0,   34,   33,   35,    0,   36,   32,
+       30,    0
     } ;
 
 static yyconst flex_int32_t yy_ec[256] =
@@ -376,97 +378,101 @@ static yyconst flex_int32_t yy_ec[256] =
         1,    1,    2,    1,    1,    1,    1,    1,    1,    1,
         1,    1,    1,    1,    1,    1,    1,    1,    1,    1,
         1,    2,    4,    5,    6,    7,    8,    9,    6,   10,
-       11,   12,   13,    1,   14,    6,   15,   16,   16,   16,
-       16,   16,   16,   16,   16,   16,   16,   17,    6,   18,
-       19,   20,   21,    6,    6,    6,    6,    6,    6,    6,
+       11,   12,   13,   14,   15,   16,   17,   18,   18,   18,
+       18,   18,   18,   18,   18,   18,   18,   19,    6,   20,
+       21,   22,   23,    6,    6,    6,    6,    6,    6,    6,
         6,    6,    6,    6,    6,    6,    6,    6,    6,    6,
         6,    6,    6,    6,    6,    6,    6,    6,    6,    6,
         1,    6,    1,    6,    6,    1,    6,    6,    6,    6,
 
         6,    6,    6,    6,    6,    6,    6,    6,    6,    6,
         6,    6,    6,    6,    6,    6,    6,    6,    6,    6,
-        6,    6,   22,   23,   24,   25,    1,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
+        6,    6,   24,   25,   26,   27,    1,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
 
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26,   26,   26,   26,   26,   26,
-       26,   26,   26,   26,   26
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28,   28,   28,   28,   28,   28,
+       28,   28,   28,   28,   28
     } ;
 
-static yyconst flex_int32_t yy_meta[27] =
+static yyconst flex_int32_t yy_meta[29] =
     {   0,
-        1,    2,    2,    2,    1,    1,    1,    2,    2,    2,
-        2,    2,    2,    2,    2,    1,    2,    2,    2,    2,
-        2,    1,    2,    1,    1,    1
+        1,    2,    2,    2,    1,    3,    3,    2,    2,    2,
+        2,    2,    2,    1,    2,    3,    2,    3,    2,    2,
+        2,    2,    2,    1,    2,    1,    1,    3
     } ;
 
-static yyconst flex_int16_t yy_base[64] =
+static yyconst flex_int16_t yy_base[70] =
     {   0,
-        0,    0,    5,    6,   30,   56,   66,  114,  114,  114,
-       46,   59,   77,   38,  114,   50,  114,  114,  114,  114,
-      114,  114,   42,   36,   32,   13,   31,  114,   26,   17,
-      114,  114,   41,  114,   25,  114,   40,  114,    0,   22,
-      114,  114,    0,  114,  114,  114,  114,  114,  114,   18,
-      114,  114,   36,   12,  114,  114,  114,  103,  105,  107,
-      109,  111,   32
+        0,    0,    5,    6,   32,   60,   73,  130,  130,  130,
+       51,   66,   63,   45,  130,   59,  130,  130,  130,  130,
+      130,  130,  130,   83,   45,   42,   13,   41,  130,   32,
+       28,   17,  130,  130,   47,  130,   29,  130,   47,  130,
+       44,   25,  130,  130,   29,    0,  130,  130,  130,  130,
+      130,  130,  130,   18,  130,  130,   38,   12,  130,  130,
+        0,  130,  111,  114,  117,   32,  120,  123,  126
     } ;
 
-static yyconst flex_int16_t yy_def[64] =
+static yyconst flex_int16_t yy_def[70] =
     {   0,
-       57,    1,   58,   58,   59,   59,   57,   57,   57,   57,
-       57,   60,   57,   61,   57,   57,   57,   57,   57,   57,
-       57,   57,   13,   57,   57,   57,   57,   57,   57,   62,
-       57,   57,   63,   57,   57,   57,   60,   57,   13,   61,
-       57,   57,   23,   57,   57,   57,   57,   57,   57,   62,
-       57,   57,   63,   57,   57,   57,    0,   57,   57,   57,
-       57,   57,   57
+       62,    1,   63,   63,   64,   64,   62,   62,   62,   62,
+       62,   65,   66,   67,   62,   62,   62,   62,   62,   62,
+       62,   62,   62,   62,   62,   62,   62,   62,   62,   62,
+       62,   68,   62,   62,   69,   62,   62,   62,   65,   62,
+       66,   67,   62,   62,   41,   24,   62,   62,   62,   62,
+       62,   62,   62,   68,   62,   62,   69,   62,   62,   62,
+       45,    0,   62,   62,   62,   62,   62,   62,   62
     } ;
 
-static yyconst flex_int16_t yy_nxt[141] =
+static yyconst flex_int16_t yy_nxt[159] =
     {   0,
         8,    9,   10,   11,   12,   13,   14,   15,   16,   17,
-       18,   19,   20,   21,   22,   23,   24,   25,   26,   27,
-       28,    8,   29,    8,    8,   13,   31,   31,   32,   32,
-       33,   46,   53,   55,   33,   33,   35,   47,   51,   51,
-       52,   52,   54,   56,   38,   33,   55,   54,   49,   48,
-       45,   33,   44,   33,   33,   33,   33,   43,   42,   41,
-       33,   33,   35,   38,   36,   57,   57,   57,   57,   57,
-       57,   33,   57,   57,   57,   57,   57,   33,   57,   33,
-       33,   33,   39,   40,   57,   57,   57,   57,   57,   57,
-       57,   57,   39,   57,   57,   57,   57,   57,   57,   57,
+       18,   19,   20,   21,   22,   13,   23,   24,   25,   26,
+       27,   28,   29,    8,   30,    8,   31,   13,   33,   33,
+       34,   34,   35,   49,   41,   59,   35,   35,   37,   50,
+       55,   55,   56,   56,   58,   35,   61,   35,   60,   35,
+       42,   40,   59,   58,   53,   35,   52,   35,   35,   35,
+       35,   51,   48,   47,   35,   35,   37,   44,   43,   42,
+       40,   38,   62,   35,   62,   35,   62,   35,   62,   62,
+       62,   62,   62,   35,   62,   35,   35,   35,   41,   42,
+       62,   62,   62,   62,   62,   62,   62,   62,   45,   62,
 
-       57,   57,   39,   30,   30,   34,   34,   37,   37,   39,
-       39,   50,   50,    7,   57,   57,   57,   57,   57,   57,
-       57,   57,   57,   57,   57,   57,   57,   57,   57,   57,
-       57,   57,   57,   57,   57,   57,   57,   57,   57,   57
+       46,   62,   62,   62,   62,   62,   62,   62,   62,   62,
+       41,   32,   32,   32,   36,   36,   36,   39,   39,   39,
+       41,   41,   41,   54,   54,   54,   57,   62,   57,    7,
+       62,   62,   62,   62,   62,   62,   62,   62,   62,   62,
+       62,   62,   62,   62,   62,   62,   62,   62,   62,   62,
+       62,   62,   62,   62,   62,   62,   62,   62
     } ;
 
-static yyconst flex_int16_t yy_chk[141] =
+static yyconst flex_int16_t yy_chk[159] =
     {   0,
         1,    1,    1,    1,    1,    1,    1,    1,    1,    1,
         1,    1,    1,    1,    1,    1,    1,    1,    1,    1,
-        1,    1,    1,    1,    1,    1,    3,    4,    3,    4,
-        5,   26,   63,   54,    5,    5,    5,   26,   30,   50,
-       30,   50,   53,   40,   37,    5,   35,   33,   29,   27,
-       25,    5,   24,    5,    5,    5,    6,   23,   16,   14,
-        6,    6,    6,   12,   11,    7,    0,    0,    0,    0,
-        0,    6,    0,    0,    0,    0,    0,    6,    0,    6,
-        6,    6,   13,   13,    0,    0,    0,    0,    0,    0,
-        0,    0,   13,    0,    0,    0,    0,    0,    0,    0,
+        1,    1,    1,    1,    1,    1,    1,    1,    3,    4,
+        3,    4,    5,   27,   66,   58,    5,    5,    5,   27,
+       32,   54,   32,   54,   57,    5,   45,    5,   42,    5,
+       41,   39,   37,   35,   31,    5,   30,    5,    5,    5,
+        6,   28,   26,   25,    6,    6,    6,   16,   14,   13,
+       12,   11,    7,    6,    0,    6,    0,    6,    0,    0,
+        0,    0,    0,    6,    0,    6,    6,    6,   24,   24,
+        0,    0,    0,    0,    0,    0,    0,    0,   24,    0,
 
-        0,    0,   13,   58,   58,   59,   59,   60,   60,   61,
-       61,   62,   62,   57,   57,   57,   57,   57,   57,   57,
-       57,   57,   57,   57,   57,   57,   57,   57,   57,   57,
-       57,   57,   57,   57,   57,   57,   57,   57,   57,   57
+       24,    0,    0,    0,    0,    0,    0,    0,    0,    0,
+       24,   63,   63,   63,   64,   64,   64,   65,   65,   65,
+       67,   67,   67,   68,   68,   68,   69,    0,   69,   62,
+       62,   62,   62,   62,   62,   62,   62,   62,   62,   62,
+       62,   62,   62,   62,   62,   62,   62,   62,   62,   62,
+       62,   62,   62,   62,   62,   62,   62,   62
     } ;
 
 /* The intent behind this definition is that it'll catch
@@ -501,14 +507,29 @@ static yyconst flex_int16_t yy_chk[141] =
  * \brief Dialplan Expression Lexical Scanner
  */
 
-#include "asterisk.h"
-
-#if !defined(STANDALONE_AEL)
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-#endif
-
 #include <sys/types.h>
 #include <stdio.h>
+
+#if !defined(STANDALONE)
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+#else
+#ifndef __USE_ISOC99
+#define __USE_ISOC99 1
+#endif
+#endif
+
+#ifdef __USE_ISOC99
+#define FP___PRINTF "%.18Lg"
+#define FP___FMOD   fmodl
+#define FP___STRTOD  strtold
+#define FP___TYPE    long double
+#else
+#define FP___PRINTF "%.16g"
+#define FP___FMOD   fmod
+#define FP___STRTOD  strtod
+#define FP___TYPE    double
+#endif
+
 #include <stdlib.h>
 #include <string.h>
 #include <locale.h>
@@ -524,17 +545,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/ast_expr.h"
 #include "asterisk/logger.h"
+#ifndef STANDALONE
 #include "asterisk/strings.h"
+#include "asterisk/channel.h"
+#endif
+
+/* Conditionally redefine the macro from flex 2.5.35, in case someone uses flex <2.5.35 to regenerate this file. */
+#ifndef ECHO
+#define ECHO do { if (fwrite( yytext, yyleng, 1, yyout )) {} } while (0)
+#endif
 
 enum valtype {
-	AST_EXPR_integer, AST_EXPR_numeric_string, AST_EXPR_string
+	AST_EXPR_number, AST_EXPR_numeric_string, AST_EXPR_string
 } ;
 
 struct val {
 	enum valtype type;
 	union {
 		char *s;
-		quad_t i;
+		FP___TYPE i; /* long double or just double if it's a bad day */
 	} u;
 } ;
 
@@ -563,6 +592,7 @@ struct parse_io
 	char *string;
 	struct val *val;
 	yyscan_t scanner;
+	struct ast_channel *chan;
 };
  
 void ast_yyset_column(int column_no, yyscan_t yyscanner);
@@ -570,7 +600,7 @@ int ast_yyget_column(yyscan_t yyscanner);
 static int curlycount = 0;
 static char *expr2_token_subst(const char *mess);
 
-#line 574 "ast_expr2f.c"
+#line 602 "ast_expr2f.c"
 
 #define INITIAL 0
 #define var 1
@@ -667,6 +697,10 @@ int ast_yyget_lineno (yyscan_t yyscanner );
 
 void ast_yyset_lineno (int line_number ,yyscan_t yyscanner );
 
+int ast_yyget_column  (yyscan_t yyscanner );
+
+void ast_yyset_column (int column_no ,yyscan_t yyscanner );
+
 YYSTYPE * ast_yyget_lval (yyscan_t yyscanner );
 
 void ast_yyset_lval (YYSTYPE * yylval_param ,yyscan_t yyscanner );
@@ -728,7 +762,7 @@ static int input (yyscan_t yyscanner );
 	if ( YY_CURRENT_BUFFER_LVALUE->yy_is_interactive ) \
 		{ \
 		int c = '*'; \
-		size_t n; \
+		unsigned n; \
 		for ( n = 0; n < max_size && \
 			     (c = getc( yyin )) != EOF && c != '\n'; ++n ) \
 			buf[n] = (char) c; \
@@ -813,10 +847,10 @@ YY_DECL
 	register int yy_act;
     struct yyguts_t * yyg = (struct yyguts_t*)yyscanner;
 
-#line 107 "ast_expr2.fl"
+#line 130 "ast_expr2.fl"
 
 
-#line 820 "ast_expr2f.c"
+#line 852 "ast_expr2f.c"
 
     yylval = yylval_param;
 
@@ -879,13 +913,13 @@ yy_match:
 			while ( yy_chk[yy_base[yy_current_state] + yy_c] != yy_current_state )
 				{
 				yy_current_state = (int) yy_def[yy_current_state];
-				if ( yy_current_state >= 58 )
+				if ( yy_current_state >= 63 )
 					yy_c = yy_meta[(unsigned int) yy_c];
 				}
 			yy_current_state = yy_nxt[yy_base[yy_current_state] + (unsigned int) yy_c];
 			++yy_cp;
 			}
-		while ( yy_current_state != 57 );
+		while ( yy_current_state != 62 );
 		yy_cp = yyg->yy_last_accepting_cpos;
 		yy_current_state = yyg->yy_last_accepting_state;
 
@@ -907,122 +941,132 @@ do_action:	/* This label is used only to access EOF actions. */
 
 case 1:
 YY_RULE_SETUP
-#line 109 "ast_expr2.fl"
+#line 132 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_OR;}
 	YY_BREAK
 case 2:
 YY_RULE_SETUP
-#line 110 "ast_expr2.fl"
+#line 133 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_AND;}
 	YY_BREAK
 case 3:
 YY_RULE_SETUP
-#line 111 "ast_expr2.fl"
+#line 134 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_EQ;}
 	YY_BREAK
 case 4:
 YY_RULE_SETUP
-#line 112 "ast_expr2.fl"
+#line 135 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_OR;}
 	YY_BREAK
 case 5:
 YY_RULE_SETUP
-#line 113 "ast_expr2.fl"
+#line 136 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_AND;}
 	YY_BREAK
 case 6:
 YY_RULE_SETUP
-#line 114 "ast_expr2.fl"
+#line 137 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_EQ;}
 	YY_BREAK
 case 7:
 YY_RULE_SETUP
-#line 115 "ast_expr2.fl"
+#line 138 "ast_expr2.fl"
 { SET_COLUMNS; SET_STRING; return TOK_EQTILDE;}
 	YY_BREAK
 case 8:
 YY_RULE_SETUP
-#line 116 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_GT;}
+#line 139 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_TILDETILDE;}
 	YY_BREAK
 case 9:
 YY_RULE_SETUP
-#line 117 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_LT;}
+#line 140 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_GT;}
 	YY_BREAK
 case 10:
 YY_RULE_SETUP
-#line 118 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_GE;}
+#line 141 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_LT;}
 	YY_BREAK
 case 11:
 YY_RULE_SETUP
-#line 119 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_LE;}
+#line 142 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_GE;}
 	YY_BREAK
 case 12:
 YY_RULE_SETUP
-#line 120 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_NE;}
+#line 143 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_LE;}
 	YY_BREAK
 case 13:
 YY_RULE_SETUP
-#line 121 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_PLUS;}
+#line 144 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_NE;}
 	YY_BREAK
 case 14:
 YY_RULE_SETUP
-#line 122 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_MINUS;}
+#line 145 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_PLUS;}
 	YY_BREAK
 case 15:
 YY_RULE_SETUP
-#line 123 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_MULT;}
+#line 146 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_COMMA;}
 	YY_BREAK
 case 16:
 YY_RULE_SETUP
-#line 124 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_DIV;}
+#line 147 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_MINUS;}
 	YY_BREAK
 case 17:
 YY_RULE_SETUP
-#line 125 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_MOD;}
+#line 148 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_MULT;}
 	YY_BREAK
 case 18:
 YY_RULE_SETUP
-#line 126 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_COND;}
+#line 149 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_DIV;}
 	YY_BREAK
 case 19:
 YY_RULE_SETUP
-#line 127 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_COMPL;}
+#line 150 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_MOD;}
 	YY_BREAK
 case 20:
 YY_RULE_SETUP
-#line 128 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_COLON;}
+#line 151 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_COND;}
 	YY_BREAK
 case 21:
 YY_RULE_SETUP
-#line 129 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_COLONCOLON;}
+#line 152 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_COMPL;}
 	YY_BREAK
 case 22:
 YY_RULE_SETUP
-#line 130 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_LP;}
+#line 153 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_COLON;}
 	YY_BREAK
 case 23:
 YY_RULE_SETUP
-#line 131 "ast_expr2.fl"
-{ SET_COLUMNS; SET_STRING; return TOK_RP;}
+#line 154 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_COLONCOLON;}
 	YY_BREAK
 case 24:
 YY_RULE_SETUP
-#line 132 "ast_expr2.fl"
+#line 155 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_LP;}
+	YY_BREAK
+case 25:
+YY_RULE_SETUP
+#line 156 "ast_expr2.fl"
+{ SET_COLUMNS; SET_STRING; return TOK_RP;}
+	YY_BREAK
+case 26:
+YY_RULE_SETUP
+#line 157 "ast_expr2.fl"
 {
 		/* gather the contents of ${} expressions, with trailing stuff,
 		 * into a single TOKEN.
@@ -1033,26 +1077,26 @@ YY_RULE_SETUP
 		yymore();
 	}
 	YY_BREAK
-case 25:
+case 27:
 YY_RULE_SETUP
-#line 142 "ast_expr2.fl"
+#line 167 "ast_expr2.fl"
 {}
 	YY_BREAK
-case 26:
-/* rule 26 can match eol */
+case 28:
+/* rule 28 can match eol */
 YY_RULE_SETUP
-#line 143 "ast_expr2.fl"
+#line 168 "ast_expr2.fl"
 {SET_COLUMNS; SET_STRING; return TOKEN;}
 	YY_BREAK
-case 27:
-/* rule 27 can match eol */
+case 29:
+/* rule 29 can match eol */
 YY_RULE_SETUP
-#line 145 "ast_expr2.fl"
+#line 170 "ast_expr2.fl"
 {/* what to do with eol */}
 	YY_BREAK
-case 28:
+case 30:
 YY_RULE_SETUP
-#line 146 "ast_expr2.fl"
+#line 171 "ast_expr2.fl"
 {
 		SET_COLUMNS;
 		/* the original behavior of the expression parser was
@@ -1062,30 +1106,30 @@ YY_RULE_SETUP
 		return TOKEN;
 	}
 	YY_BREAK
-case 29:
-/* rule 29 can match eol */
+case 31:
+/* rule 31 can match eol */
 YY_RULE_SETUP
-#line 155 "ast_expr2.fl"
+#line 180 "ast_expr2.fl"
 {
 		SET_COLUMNS;
 		SET_STRING;
 		return TOKEN;
 	}
 	YY_BREAK
-case 30:
-/* rule 30 can match eol */
+case 32:
+/* rule 32 can match eol */
 YY_RULE_SETUP
-#line 161 "ast_expr2.fl"
+#line 186 "ast_expr2.fl"
 {
 		curlycount = 0;
 		BEGIN(var);
 		yymore();
 	}
 	YY_BREAK
-case 31:
-/* rule 31 can match eol */
+case 33:
+/* rule 33 can match eol */
 YY_RULE_SETUP
-#line 168 "ast_expr2.fl"
+#line 192 "ast_expr2.fl"
 {
 		curlycount--;
 		if (curlycount < 0) {
@@ -1096,18 +1140,18 @@ YY_RULE_SETUP
 		}
 	}
 	YY_BREAK
-case 32:
-/* rule 32 can match eol */
+case 34:
+/* rule 34 can match eol */
 YY_RULE_SETUP
-#line 178 "ast_expr2.fl"
+#line 202 "ast_expr2.fl"
 {
 		curlycount++;
 		yymore();
 	}
 	YY_BREAK
-case 33:
+case 35:
 YY_RULE_SETUP
-#line 184 "ast_expr2.fl"
+#line 208 "ast_expr2.fl"
 {
 		BEGIN(0);
 		SET_COLUMNS;
@@ -1115,19 +1159,19 @@ YY_RULE_SETUP
 		return TOKEN;
 	}
 	YY_BREAK
-case 34:
+case 36:
 YY_RULE_SETUP
-#line 191 "ast_expr2.fl"
+#line 215 "ast_expr2.fl"
 {
 		curlycount = 0;
 		BEGIN(var);
 		yymore();
 	}
 	YY_BREAK
-case 35:
-/* rule 35 can match eol */
+case 37:
+/* rule 37 can match eol */
 YY_RULE_SETUP
-#line 197 "ast_expr2.fl"
+#line 221 "ast_expr2.fl"
 {
 		char c = yytext[yyleng-1];
 		BEGIN(0);
@@ -1138,7 +1182,7 @@ YY_RULE_SETUP
 	}
 	YY_BREAK
 case YY_STATE_EOF(trail):
-#line 206 "ast_expr2.fl"
+#line 230 "ast_expr2.fl"
 {
 		BEGIN(0);
 		SET_COLUMNS;
@@ -1147,12 +1191,12 @@ case YY_STATE_EOF(trail):
 		/*actually, if an expr is only a variable ref, this could happen a LOT */
 	}
 	YY_BREAK
-case 36:
+case 38:
 YY_RULE_SETUP
-#line 214 "ast_expr2.fl"
+#line 238 "ast_expr2.fl"
 ECHO;
 	YY_BREAK
-#line 1156 "ast_expr2f.c"
+#line 1198 "ast_expr2f.c"
 case YY_STATE_EOF(INITIAL):
 case YY_STATE_EOF(var):
 	yyterminate();
@@ -1448,7 +1492,7 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 		while ( yy_chk[yy_base[yy_current_state] + yy_c] != yy_current_state )
 			{
 			yy_current_state = (int) yy_def[yy_current_state];
-			if ( yy_current_state >= 58 )
+			if ( yy_current_state >= 63 )
 				yy_c = yy_meta[(unsigned int) yy_c];
 			}
 		yy_current_state = yy_nxt[yy_base[yy_current_state] + (unsigned int) yy_c];
@@ -1477,11 +1521,11 @@ static int yy_get_next_buffer (yyscan_t yyscanner)
 	while ( yy_chk[yy_base[yy_current_state] + yy_c] != yy_current_state )
 		{
 		yy_current_state = (int) yy_def[yy_current_state];
-		if ( yy_current_state >= 58 )
+		if ( yy_current_state >= 63 )
 			yy_c = yy_meta[(unsigned int) yy_c];
 		}
 	yy_current_state = yy_nxt[yy_base[yy_current_state] + (unsigned int) yy_c];
-	yy_is_jam = (yy_current_state == 57);
+	yy_is_jam = (yy_current_state == 62);
 
 	return yy_is_jam ? 0 : yy_current_state;
 }
@@ -2328,7 +2372,7 @@ void *ast_yyrealloc  (void * ptr, yy_size_t  size , yyscan_t yyscanner)
 
 #define YYTABLES_NAME "yytables"
 
-#line 214 "ast_expr2.fl"
+#line 238 "ast_expr2.fl"
 
 
 
@@ -2343,24 +2387,21 @@ int ast_yyerror(const char *, YYLTYPE *, struct parse_io *); /* likewise */
 
 void ast_yyfree(void *ptr, yyscan_t yyscanner)
 {
-      if (ptr) /* the normal generated ast_yyfree func just frees its first arg;
-                    this get complaints on some systems, as sometimes this
-                    arg is a nil ptr! It's usually not fatal, but is irritating! */
-              free( (char *) ptr );
+    /* the normal generated ast_yyfree func just frees its first arg;
+     this get complaints on some systems, as sometimes this
+     arg is a nil ptr! It's usually not fatal, but is irritating! */
+	free( (char *) ptr );
 }
 
-int ast_expr(char *expr, char *buf, int length)
+int ast_expr(char *expr, char *buf, int length, struct ast_channel *chan)
 {
-	struct parse_io io;
+	struct parse_io io = { .string = expr, .chan = chan };
 	int return_value = 0;
-	
-	memset(&io, 0, sizeof(io));
-	io.string = expr;  /* to pass to the error routine */
-	
+
 	ast_yylex_init(&io.scanner);
-	
+
 	ast_yy_scan_string(expr, io.scanner);
-	
+
 	ast_yyparse ((void *) &io);
 
 	ast_yylex_destroy(io.scanner);
@@ -2371,17 +2412,20 @@ int ast_expr(char *expr, char *buf, int length)
 			return_value = 1;
 		}
 	} else {
-		if (io.val->type == AST_EXPR_integer) {
+		if (io.val->type == AST_EXPR_number) {
 			int res_length;
 
-			res_length = snprintf(buf, length, "%ld", (long int) io.val->u.i);
+			res_length = snprintf(buf, length, FP___PRINTF, io.val->u.i);
 			return_value = (res_length <= length) ? res_length : length;
 		} else {
-#if defined(STANDALONE) || defined(LOW_MEMORY) || defined(STANDALONE_AEL)
-			strncpy(buf, io.val->u.s, length - 1);
+			if (io.val->u.s)
+#if defined(STANDALONE) || defined(LOW_MEMORY) || defined(STANDALONE)
+				strncpy(buf, io.val->u.s, length - 1);
 #else /* !STANDALONE && !LOW_MEMORY */
-			ast_copy_string(buf, io.val->u.s, length);
+				ast_copy_string(buf, io.val->u.s, length);
 #endif /* STANDALONE || LOW_MEMORY */
+			else
+				buf[0] = 0;
 			return_value = strlen(buf);
 			free(io.val->u.s);
 		}
@@ -2389,6 +2433,32 @@ int ast_expr(char *expr, char *buf, int length)
 	}
 	return return_value;
 }
+
+#ifndef STANDALONE
+int ast_str_expr(struct ast_str **str, ssize_t maxlen, struct ast_channel *chan, char *expr)
+{
+	struct parse_io io = { .string = expr, .chan = chan };
+
+	ast_yylex_init(&io.scanner);
+	ast_yy_scan_string(expr, io.scanner);
+	ast_yyparse ((void *) &io);
+	ast_yylex_destroy(io.scanner);
+
+	if (!io.val) {
+		ast_str_set(str, maxlen, "0");
+	} else {
+		if (io.val->type == AST_EXPR_number) {
+			int res_length;
+			ast_str_set(str, maxlen, FP___PRINTF, io.val->u.i);
+		} else if (io.val->u.s) {
+			ast_str_set(str, maxlen, "%s", io.val->u.s);
+			free(io.val->u.s);
+		}
+		free(io.val);
+	}
+	return ast_str_strlen(*str);
+}
+#endif
 
 
 char extra_error_message[4095];
@@ -2408,7 +2478,7 @@ void  ast_expr_clear_extra_error_info(void)
        extra_error_message[0] = 0;
 }
 
-static char *expr2_token_equivs1[] = 
+static const char * const expr2_token_equivs1[] = 
 {
 	"TOKEN",
 	"TOK_COND",
@@ -2429,11 +2499,12 @@ static char *expr2_token_equivs1[] =
 	"TOK_COMPL",
 	"TOK_COLON",
 	"TOK_EQTILDE",
+	"TOK_COMMA",
 	"TOK_RP",
 	"TOK_LP"
 };
 
-static char *expr2_token_equivs2[] = 
+static const char * const expr2_token_equivs2[] = 
 {
 	"<token>",
 	"?",
@@ -2454,6 +2525,7 @@ static char *expr2_token_equivs2[] =
 	"!",
 	":",
 	"=~",
+	",",
 	")",
 	"("
 };
@@ -2464,7 +2536,8 @@ static char *expr2_token_subst(const char *mess)
 	/* calc a length, malloc, fill, and return; yyerror had better free it! */
 	int len=0,i;
 	const char *p;
-	char *res, *s,*t;
+	char *res, *s;
+	const char *t;
 	int expr2_token_equivs_entries = sizeof(expr2_token_equivs1)/sizeof(char*);
 
 	for (p=mess; *p; p++) {
@@ -2534,7 +2607,7 @@ int ast_yyerror (const char *s,  yyltype *loc, struct parse_io *parseio )
 			(extra_error_message_supplied?extra_error_message:""), s2, parseio->string,spacebuf2);
 #endif
 #ifndef STANDALONE
-	ast_log(LOG_WARNING,"If you have questions, please refer to doc/channelvariables.txt.\n");
+	ast_log(LOG_WARNING,"If you have questions, please refer to https://wiki.asterisk.org/wiki/display/AST/Channel+Variables\n");
 #endif
 	free(s2);
 	return(0);

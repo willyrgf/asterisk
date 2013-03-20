@@ -25,24 +25,23 @@
  * \author Russell Bryant <russell@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/time.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
+
+#include "asterisk/_private.h" /* prototype for ast_autoservice_init() */
 
 #include "asterisk/pbx.h"
 #include "asterisk/frame.h"
 #include "asterisk/sched.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/file.h"
 #include "asterisk/translate.h"
 #include "asterisk/manager.h"
@@ -80,7 +79,7 @@ static void *autoservice_run(void *ign)
 {
 	struct ast_frame hangup_frame = {
 		.frametype = AST_FRAME_CONTROL,
-		.subclass = AST_CONTROL_HANGUP,
+		.subclass.integer = AST_CONTROL_HANGUP,
 	};
 
 	for (;;) {
@@ -103,7 +102,7 @@ static void *autoservice_run(void *ign)
 		}
 
 		AST_LIST_TRAVERSE(&aslist, as, list) {
-			if (!as->chan->_softhangup) {
+			if (!ast_check_hangup(as->chan)) {
 				if (x < MAX_AUTOMONS) {
 					ents[x] = as;
 					mons[x++] = as->chan;
@@ -181,7 +180,6 @@ int ast_autoservice_start(struct ast_channel *chan)
 	int res = 0;
 	struct asent *as;
 
-	/* Check if the channel already has autoservice */
 	AST_LIST_LOCK(&aslist);
 	AST_LIST_TRAVERSE(&aslist, as, list) {
 		if (as->chan == chan) {
@@ -257,13 +255,13 @@ int ast_autoservice_stop(struct ast_channel *chan)
 		if (as->chan == chan) {
 			as->use_count--;
 			if (as->use_count < 1) {
-				AST_LIST_REMOVE_CURRENT(&aslist, list);
+				AST_LIST_REMOVE_CURRENT(list);
 				removed = as;
 			}
 			break;
 		}
 	}
-	AST_LIST_TRAVERSE_SAFE_END
+	AST_LIST_TRAVERSE_SAFE_END;
 
 	if (removed && asthread != AST_PTHREADT_NULL) {
 		pthread_kill(asthread, SIGURG);

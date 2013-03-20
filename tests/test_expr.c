@@ -28,6 +28,7 @@
 
 /*** MODULEINFO
 	<depend>TEST_FRAMEWORK</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
@@ -57,7 +58,7 @@ AST_TEST_DEFINE(expr_test)
 		{ "4 + (2 * 8)", "20" },
 		{ "4 + (2 * 8) ? 3 :: 6", "3" },
 		{ "4 + 8 / 2", "8" },
-		{ "4 + 8 / 3", "6" },
+		{ "FLOOR(4 + 8 / 3)", "6" }, /* Floating point op on 1.6 and higher, need FLOOR() to keep result sane */
 		{ "(4+8) / 3", "4" },
 		{ "4 + 8 % 3", "6" },
 		{ "4 + 9 % 3", "4" },
@@ -165,7 +166,7 @@ AST_TEST_DEFINE(expr_test)
 
 	for (i = 0; i < ARRAY_LEN(tests); i++) {
 		memset(buf, 0, sizeof(buf));
-		len = ast_expr(tests[i].input, buf, sizeof(buf));
+		len = ast_expr(tests[i].input, buf, sizeof(buf), NULL);
 		buf[len] = '\0';
 		if (strcmp(buf, tests[i].output)) {
 			ast_test_status_update(test, "Case %d: expression '%s' evaluated as '%s', but should have evaluated as '%s'\n", i + 1, tests[i].input, buf, tests[i].output);

@@ -6,14 +6,14 @@
 # Comments are indicated by a '#' character that begins a line, or follows
 # a space or tab character.  To be consistent with the configuration files
 # in Asterisk, comments can also be indicated by a semicolon.  However, the
-# multiline comments (;-- --;) used in Asterisk configuration files are not 
+# multiline comments (;-- --;) used in Asterisk configuration files are not
 # supported.  Semicolons can be escaped by a backslash.
 #
 
 # Obviously, you MUST specify at least a channel in the same format as you
 # would for the "Dial" application.  Only one channel name is permitted.
 #
-Channel: Zap/1
+Channel: DAHDI/1
 #
 # You can specify codecs for the call
 Codecs: alaw, speex, h264
@@ -40,7 +40,7 @@ Priority: 1
 # and its arguments to be run, instead of a context
 # extension and priority
 #
-#Application: VoicemailMain
+#Application: VoiceMailMain
 #Data: 1234
 
 #
@@ -72,12 +72,12 @@ Priority: 1
 #Set: file1=/tmp/to
 #Set: file2=/tmp/msg
 #Set: timestamp=20021023104500
-#Set: CDR(userfield|r)=42
+#Set: CDR(userfield,r)=42
 
 #
 # Setting Archive to yes the call file is never deleted, but is moved
-# in the subdir "outgoing_done" of the spool directory. In this case 
-# will be appended a line with "Status: value", where value can be 
+# in the subdir "outgoing_done" of the spool directory. In this case
+# will be appended a line with "Status: value", where value can be
 # Completed, Expired or Failed.
 #
 #Archive: yes

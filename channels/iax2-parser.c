@@ -23,22 +23,22 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <string.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
 
 #include "asterisk/frame.h"
 #include "asterisk/utils.h"
 #include "asterisk/unaligned.h"
+#include "asterisk/config.h"
 #include "asterisk/lock.h"
 #include "asterisk/threadstorage.h"
 
@@ -54,7 +54,7 @@ static int oframes = 0;
 static void frame_cache_cleanup(void *data);
 
 /*! \brief A per-thread cache of iax_frame structures */
-AST_THREADSTORAGE_CUSTOM(frame_cache, frame_cache_init, frame_cache_cleanup);
+AST_THREADSTORAGE_CUSTOM(frame_cache, NULL, frame_cache_cleanup);
 
 /*! \brief This is just so iax_frames, a list head struct for holding a list of
  *  iax_frame structures, is defined. */
@@ -88,7 +88,17 @@ static void dump_addr(char *output, int maxlen, void *value, int len)
 		memcpy(&sin, value, len);
 		snprintf(output, maxlen, "IPV4 %s:%d", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
 	} else {
-		snprintf(output, maxlen, "Invalid Address");
+		ast_copy_string(output, "Invalid Address", maxlen);
+	}
+}
+
+static void dump_string_hex(char *output, int maxlen, void *value, int len)
+{
+	int i = 0;
+
+	while (len-- && (i + 1) * 4 < maxlen) {
+		sprintf(output + (4 * i), "\\x%2.2x", *((unsigned char *)value + i));
+		i++;
 	}
 }
 
@@ -146,7 +156,7 @@ static void dump_byte(char *output, int maxlen, void *value, int len)
 
 static void dump_datetime(char *output, int maxlen, void *value, int len)
 {
-	struct tm tm;
+	struct ast_tm tm;
 	unsigned long val = (unsigned long) ntohl(get_unaligned_uint32(value));
 	if (len == (int)sizeof(unsigned int)) {
 		tm.tm_sec  = (val & 0x1f) << 1;
@@ -155,7 +165,7 @@ static void dump_datetime(char *output, int maxlen, void *value, int len)
 		tm.tm_mday = (val >> 16) & 0x1f;
 		tm.tm_mon  = ((val >> 21) & 0x0f) - 1;
 		tm.tm_year = ((val >> 25) & 0x7f) + 100;
-		strftime(output, maxlen, "%Y-%m-%d  %T", &tm); 
+		ast_strftime(output, maxlen, "%Y-%m-%d  %T", &tm); 
 	} else
 		ast_copy_string(output, "Invalid DATETIME format!", maxlen);
 }
@@ -208,6 +218,21 @@ static void dump_samprate(char *output, int maxlen, void *value, int len)
 
 }
 
+static void dump_versioned_codec(char *output, int maxlen, void *value, int len)
+{
+	char *version = (char *) value;
+	if (version[0] == 0) {
+		if (len == (int) (sizeof(format_t) + sizeof(char))) {
+			format_t codec = ntohll(get_unaligned_uint64(value + 1));
+			ast_copy_string(output, ast_getformatname(codec), maxlen);
+		} else {
+			ast_copy_string(output, "Invalid length!", maxlen);
+		}
+	} else {
+		ast_copy_string(output, "Unknown version!", maxlen);
+	}
+}
+
 static void dump_prov_ies(char *output, int maxlen, unsigned char *iedata, int len);
 static void dump_prov(char *output, int maxlen, void *value, int len)
 {
@@ -218,7 +243,7 @@ static struct iax2_ie {
 	int ie;
 	char *name;
 	void (*dump)(char *output, int maxlen, void *value, int len);
-} ies[] = {
+} infoelts[] = {
 	{ IAX_IE_CALLED_NUMBER, "CALLED NUMBER", dump_string },
 	{ IAX_IE_CALLING_NUMBER, "CALLING NUMBER", dump_string },
 	{ IAX_IE_CALLING_ANI, "ANI", dump_string },
@@ -227,13 +252,15 @@ static struct iax2_ie {
 	{ IAX_IE_USERNAME, "USERNAME", dump_string },
 	{ IAX_IE_PASSWORD, "PASSWORD", dump_string },
 	{ IAX_IE_CAPABILITY, "CAPABILITY", dump_int },
+	{ IAX_IE_CAPABILITY2, "CAPABILITY2", dump_versioned_codec },
 	{ IAX_IE_FORMAT, "FORMAT", dump_int },
+	{ IAX_IE_FORMAT2, "FORMAT2", dump_versioned_codec },
 	{ IAX_IE_LANGUAGE, "LANGUAGE", dump_string },
 	{ IAX_IE_VERSION, "VERSION", dump_short },
 	{ IAX_IE_ADSICPE, "ADSICPE", dump_short },
 	{ IAX_IE_DNID, "DNID", dump_string },
 	{ IAX_IE_AUTHMETHODS, "AUTHMETHODS", dump_short },
-	{ IAX_IE_CHALLENGE, "CHALLENGE", dump_string },
+	{ IAX_IE_CHALLENGE, "CHALLENGE", dump_string_hex },
 	{ IAX_IE_MD5_RESULT, "MD5 RESULT", dump_string },
 	{ IAX_IE_RSA_RESULT, "RSA RESULT", dump_string },
 	{ IAX_IE_APPARENT_ADDR, "APPARENT ADDRESS", dump_addr },
@@ -269,9 +296,12 @@ static struct iax2_ie {
 	{ IAX_IE_RR_DELAY, "RR_DELAY", dump_short },
 	{ IAX_IE_RR_DROPPED, "RR_DROPPED", dump_int },
 	{ IAX_IE_RR_OOO, "RR_OUTOFORDER", dump_int },
+	{ IAX_IE_VARIABLE, "VARIABLE", dump_string },
+	{ IAX_IE_OSPTOKEN, "OSPTOKEN" },
+	{ IAX_IE_CALLTOKEN, "CALLTOKEN" },
 };
 
-static struct iax2_ie prov_ies[] = {
+static const struct iax2_ie prov_ies[] = {
 	{ PROV_IE_USEDHCP, "USEDHCP" },
 	{ PROV_IE_IPADDR, "IPADDR", dump_ipaddr },
 	{ PROV_IE_SUBNET, "SUBNET", dump_ipaddr },
@@ -294,9 +324,9 @@ static struct iax2_ie prov_ies[] = {
 const char *iax_ie2str(int ie)
 {
 	int x;
-	for (x=0;x<(int)sizeof(ies) / (int)sizeof(ies[0]); x++) {
-		if (ies[x].ie == ie)
-			return ies[x].name;
+	for (x = 0; x < ARRAY_LEN(infoelts); x++) {
+		if (infoelts[x].ie == ie)
+			return infoelts[x].name;
 	}
 	return "Unknown IE";
 }
@@ -373,18 +403,18 @@ static void dump_ies(unsigned char *iedata, int len)
 			return;
 		}
 		found = 0;
-		for (x=0;x<(int)sizeof(ies) / (int)sizeof(ies[0]); x++) {
-			if (ies[x].ie == ie) {
-				if (ies[x].dump) {
-					ies[x].dump(interp, (int)sizeof(interp), iedata + 2, ielen);
-					snprintf(tmp, (int)sizeof(tmp), "   %-15.15s : %s\n", ies[x].name, interp);
+		for (x = 0; x < ARRAY_LEN(infoelts); x++) {
+			if (infoelts[x].ie == ie) {
+				if (infoelts[x].dump) {
+					infoelts[x].dump(interp, (int)sizeof(interp), iedata + 2, ielen);
+					snprintf(tmp, (int)sizeof(tmp), "   %-15.15s : %s\n", infoelts[x].name, interp);
 					outputf(tmp);
 				} else {
 					if (ielen)
 						snprintf(interp, (int)sizeof(interp), "%d bytes", ielen);
 					else
 						strcpy(interp, "Present");
-					snprintf(tmp, (int)sizeof(tmp), "   %-15.15s : %s\n", ies[x].name, interp);
+					snprintf(tmp, (int)sizeof(tmp), "   %-15.15s : %s\n", infoelts[x].name, interp);
 					outputf(tmp);
 				}
 				found++;
@@ -400,64 +430,141 @@ static void dump_ies(unsigned char *iedata, int len)
 	outputf("\n");
 }
 
-void iax_frame_subclass2str(int subclass, char *str, size_t len)
+void iax_frame_subclass2str(enum iax_frame_subclass subclass, char *str, size_t len)
 {
-	static const size_t copylen = 8;
-	const char *iaxs[] = {
-		"(0?)   ",
-		"NEW    ",
-		"PING   ",
-		"PONG   ",
-		"ACK    ",
-		"HANGUP ",
-		"REJECT ",
-		"ACCEPT ",
-		"AUTHREQ",
-		"AUTHREP",
-		"INVAL  ",
-		"LAGRQ  ",
-		"LAGRP  ",
-		"REGREQ ",
-		"REGAUTH",
-		"REGACK ",
-		"REGREJ ",
-		"REGREL ",
-		"VNAK   ",
-		"DPREQ  ",
-		"DPREP  ",
-		"DIAL   ",
-		"TXREQ  ",
-		"TXCNT  ",
-		"TXACC  ",
-		"TXREADY",
-		"TXREL  ",
-		"TXREJ  ",
-		"QUELCH ",
-		"UNQULCH",
-		"POKE   ",
-		"PAGE   ",
-		"MWI    ",
-		"UNSPRTD",
-		"TRANSFR",
-		"PROVISN",
-		"FWDWNLD",
-		"FWDATA ",
-		"TXMEDIA",
-		"RTKEY  ",
-		"CTOKEN ",
-	};
-	if ((copylen > len) || !subclass || (subclass < 0)) {
-		str[0] = '\0';
-	} else if (subclass < ARRAY_LEN(iaxs)) {
-		ast_copy_string(str, iaxs[subclass], len);
-	} else {
-		ast_copy_string(str, "Unknown", len);
+	const char *cmd = "Unknown";
+
+	/* if an error occurs here during compile, that means a new iax frame subclass
+	 * has been added to the iax_frame_subclass enum.  Add the new subclass to the
+	 * switch case and make sure to update it with a new string representation. */
+	switch (subclass) {
+	case IAX_COMMAND_NEW:
+		cmd = "NEW    ";
+		break;
+	case IAX_COMMAND_PING:
+		cmd = "PING   ";
+		break;
+	case IAX_COMMAND_PONG:
+		cmd = "PONG   ";
+		break;
+	case IAX_COMMAND_ACK:
+		cmd = "ACK    ";
+		break;
+	case IAX_COMMAND_HANGUP:
+		cmd = "HANGUP ";
+		break;
+	case IAX_COMMAND_REJECT:
+		cmd = "REJECT ";
+		break;
+	case IAX_COMMAND_ACCEPT:
+		cmd = "ACCEPT ";
+		break;
+	case IAX_COMMAND_AUTHREQ:
+		cmd = "AUTHREQ";
+		break;
+	case IAX_COMMAND_AUTHREP:
+		cmd = "AUTHREP";
+		break;
+	case IAX_COMMAND_INVAL:
+		cmd = "INVAL  ";
+		break;
+	case IAX_COMMAND_LAGRQ:
+		cmd = "LAGRQ  ";
+		break;
+	case IAX_COMMAND_LAGRP:
+		cmd = "LAGRP  ";
+		break;
+	case IAX_COMMAND_REGREQ:
+		cmd = "REGREQ ";
+		break;
+	case IAX_COMMAND_REGAUTH:
+		cmd = "REGAUTH";
+		break;
+	case IAX_COMMAND_REGACK:
+		cmd = "REGACK ";
+		break;
+	case IAX_COMMAND_REGREJ:
+		cmd = "REGREJ ";
+		break;
+	case IAX_COMMAND_REGREL:
+		cmd = "REGREL ";
+		break;
+	case IAX_COMMAND_VNAK:
+		cmd = "VNAK   ";
+		break;
+	case IAX_COMMAND_DPREQ:
+		cmd = "DPREQ  ";
+		break;
+	case IAX_COMMAND_DPREP:
+		cmd = "DPREP  ";
+		break;
+	case IAX_COMMAND_DIAL:
+		cmd = "DIAL   ";
+		break;
+	case IAX_COMMAND_TXREQ:
+		cmd = "TXREQ  ";
+		break;
+	case IAX_COMMAND_TXCNT:
+		cmd = "TXCNT  ";
+		break;
+	case IAX_COMMAND_TXACC:
+		cmd = "TXACC  ";
+		break;
+	case IAX_COMMAND_TXREADY:
+		cmd = "TXREADY";
+		break;
+	case IAX_COMMAND_TXREL:
+		cmd = "TXREL  ";
+		break;
+	case IAX_COMMAND_TXREJ:
+		cmd = "TXREJ  ";
+		break;
+	case IAX_COMMAND_QUELCH:
+		cmd = "QUELCH ";
+		break;
+	case IAX_COMMAND_UNQUELCH:
+		cmd = "UNQULCH";
+		break;
+	case IAX_COMMAND_POKE:
+		cmd = "POKE   ";
+		break;
+	case IAX_COMMAND_PAGE:
+		cmd = "PAGE   ";
+		break;
+	case IAX_COMMAND_MWI:
+		cmd = "MWI    ";
+		break;
+	case IAX_COMMAND_UNSUPPORT:
+		cmd = "UNSPRTD";
+		break;
+	case IAX_COMMAND_TRANSFER:
+		cmd = "TRANSFR";
+		break;
+	case IAX_COMMAND_PROVISION:
+		cmd = "PROVISN";
+		break;
+	case IAX_COMMAND_FWDOWNL:
+		cmd = "FWDWNLD";
+		break;
+	case IAX_COMMAND_FWDATA:
+		cmd = "FWDATA ";
+		break;
+	case IAX_COMMAND_TXMEDIA:
+		cmd = "TXMEDIA";
+		break;
+	case IAX_COMMAND_RTKEY:
+		cmd = "RTKEY  ";
+		break;
+	case IAX_COMMAND_CALLTOKEN:
+		cmd = "CTOKEN ";
+		break;
 	}
+	ast_copy_string(str, cmd, len);
 }
 
 void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, struct sockaddr_in *sin, int datalen)
 {
-	const char *frames[] = {
+	const char *framelist[] = {
 		"(0?)",
 		"DTMF_E ",
 		"VOICE  ",
@@ -471,47 +578,6 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		"CNG    ",
 		"MODEM  ",
 		"DTMF_B ",
-	};
-	const char *iaxs[] = {
-		"(0?)",
-		"NEW    ",
-		"PING   ",
-		"PONG   ",
-		"ACK    ",
-		"HANGUP ",
-		"REJECT ",
-		"ACCEPT ",
-		"AUTHREQ",
-		"AUTHREP",
-		"INVAL  ",
-		"LAGRQ  ",
-		"LAGRP  ",
-		"REGREQ ",
-		"REGAUTH",
-		"REGACK ",
-		"REGREJ ",
-		"REGREL ",
-		"VNAK   ",
-		"DPREQ  ",
-		"DPREP  ",
-		"DIAL   ",
-		"TXREQ  ",
-		"TXCNT  ",
-		"TXACC  ",
-		"TXREADY",
-		"TXREL  ",
-		"TXREJ  ",
-		"QUELCH ",
-		"UNQULCH",
-		"POKE   ",
-		"PAGE   ",
-		"MWI    ",
-		"UNSPRTD",
-		"TRANSFR",
-		"PROVISN",
-		"FWDWNLD",
-		"FWDATA ",
-		"TXMEDIA"
 	};
 	const char *cmds[] = {
 		"(0?)",
@@ -532,7 +598,13 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		"PROCDNG",
 		"HOLD   ",
 		"UNHOLD ",
-		"VIDUPDT", };
+		"VIDUPDT",
+		"T38    ",
+		"SRCUPDT",
+		"TXFER  ",
+		"CNLINE ",
+		"REDIR  ",
+	};
 	struct ast_iax2_full_hdr *fh;
 	char retries[20];
 	char class2[20];
@@ -570,24 +642,20 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		/* Don't mess with mini-frames */
 		return;
 	}
-	if (fh->type >= (int)sizeof(frames)/(int)sizeof(frames[0])) {
+	if (fh->type >= ARRAY_LEN(framelist)) {
 		snprintf(class2, sizeof(class2), "(%d?)", fh->type);
 		class = class2;
 	} else {
-		class = frames[(int)fh->type];
+		class = framelist[(int)fh->type];
 	}
 	if (fh->type == AST_FRAME_DTMF_BEGIN || fh->type == AST_FRAME_DTMF_END) {
 		sprintf(subclass2, "%c", fh->csub);
 		subclass = subclass2;
 	} else if (fh->type == AST_FRAME_IAX) {
-		if (fh->csub >= (int)sizeof(iaxs)/(int)sizeof(iaxs[0])) {
-			snprintf(subclass2, sizeof(subclass2), "(%d?)", fh->csub);
+			iax_frame_subclass2str((int)fh->csub, subclass2, sizeof(subclass2));
 			subclass = subclass2;
-		} else {
-			subclass = iaxs[(int)fh->csub];
-		}
 	} else if (fh->type == AST_FRAME_CONTROL) {
-		if (fh->csub >= (int)sizeof(cmds)/(int)sizeof(cmds[0])) {
+		if (fh->csub >= ARRAY_LEN(cmds)) {
 			snprintf(subclass2, sizeof(subclass2), "(%d?)", fh->csub);
 			subclass = subclass2;
 		} else {
@@ -630,6 +698,16 @@ int iax_ie_append_raw(struct iax_ie_data *ied, unsigned char ie, const void *dat
 int iax_ie_append_addr(struct iax_ie_data *ied, unsigned char ie, const struct sockaddr_in *sin)
 {
 	return iax_ie_append_raw(ied, ie, sin, (int)sizeof(struct sockaddr_in));
+}
+
+int iax_ie_append_versioned_uint64(struct iax_ie_data *ied, unsigned char ie, unsigned char version, uint64_t value)
+{
+	struct _local {
+		unsigned char version;
+		uint64_t value;
+	} __attribute__((packed)) newval = { version, };
+	put_unaligned_uint64(&newval.value, htonll(value));
+	return iax_ie_append_raw(ied, ie, &newval, (int) sizeof(newval));
 }
 
 int iax_ie_append_int(struct iax_ie_data *ied, unsigned char ie, unsigned int value) 
@@ -676,7 +754,9 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 	/* Parse data into information elements */
 	int len;
 	int ie;
-	char tmp[256];
+	char tmp[256], *tmp2;
+	struct ast_variable *var, *var2, *prev;
+	unsigned int count;
 	memset(ies, 0, (int)sizeof(struct iax_ies));
 	ies->msgcount = -1;
 	ies->firmwarever = -1;
@@ -720,15 +800,43 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 			if (len != (int)sizeof(unsigned int)) {
 				snprintf(tmp, (int)sizeof(tmp), "Expecting capability to be %d bytes long but was %d\n", (int)sizeof(unsigned int), len);
 				errorf(tmp);
-			} else
+			} else if (ies->capability == 0) { /* Don't overwrite capability2, if specified */
 				ies->capability = ntohl(get_unaligned_uint32(data + 2));
+			}
+			break;
+		case IAX_IE_CAPABILITY2:
+			{
+				int version = data[2];
+				if (version == 0) {
+					if (len != (int)sizeof(char) + sizeof(format_t)) {
+						snprintf(tmp, (int)sizeof(tmp), "Expecting capability to be %d bytes long but was %d\n", (int) (sizeof(format_t) + sizeof(char)), len);
+						errorf(tmp);
+					} else {
+						ies->capability = (format_t) ntohll(get_unaligned_uint64(data + 3));
+					}
+				} /* else unknown version */
+			}
 			break;
 		case IAX_IE_FORMAT:
 			if (len != (int)sizeof(unsigned int)) {
 				snprintf(tmp, (int)sizeof(tmp), "Expecting format to be %d bytes long but was %d\n", (int)sizeof(unsigned int), len);
 				errorf(tmp);
-			} else
+			} else if (ies->format == 0) { /* Don't overwrite format2, if specified */
 				ies->format = ntohl(get_unaligned_uint32(data + 2));
+			}
+			break;
+		case IAX_IE_FORMAT2:
+			{
+				int version = data[2];
+				if (version == 0) {
+					if (len != (int)sizeof(char) + sizeof(format_t)) {
+						snprintf(tmp, (int)sizeof(tmp), "Expecting format to be %d bytes long but was %d\n", (int) (sizeof(format_t) + sizeof(char)), len);
+						errorf(tmp);
+					} else {
+						ies->format = (format_t) ntohll(get_unaligned_uint64(data + 3));
+					}
+				} /* else unknown version */
+			}
 			break;
 		case IAX_IE_LANGUAGE:
 			ies->language = (char *)data + 2;
@@ -961,6 +1069,52 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 				ies->rr_ooo = ntohl(get_unaligned_uint32(data + 2));
 			}
 			break;
+		case IAX_IE_VARIABLE:
+			ast_copy_string(tmp, (char *)data + 2, len + 1);
+			tmp2 = strchr(tmp, '=');
+			if (tmp2)
+				*tmp2++ = '\0';
+			else
+				tmp2 = "";
+			{
+				struct ast_str *str = ast_str_create(16);
+				/* Existing variable or new variable? */
+				for (var2 = ies->vars, prev = NULL; var2; prev = var2, var2 = var2->next) {
+					if (strcmp(tmp, var2->name) == 0) {
+						ast_str_set(&str, 0, "%s%s", var2->value, tmp2);
+						var = ast_variable_new(tmp, ast_str_buffer(str), var2->file);
+						var->next = var2->next;
+						if (prev) {
+							prev->next = var;
+						} else {
+							ies->vars = var;
+						}
+						snprintf(tmp, sizeof(tmp), "Assigned (%p)%s to (%p)%s\n", var->name, var->name, var->value, var->value);
+						outputf(tmp);
+						ast_free(var2);
+						break;
+					}
+				}
+				ast_free(str);
+			}
+
+			if (!var2) {
+				var = ast_variable_new(tmp, tmp2, "");
+				snprintf(tmp, sizeof(tmp), "Assigned (%p)%s to (%p)%s\n", var->name, var->name, var->value, var->value);
+				outputf(tmp);
+				var->next = ies->vars;
+				ies->vars = var;
+			}
+			break;
+		case IAX_IE_OSPTOKEN:
+			if ((count = data[2]) < IAX_MAX_OSPBLOCK_NUM) {
+				ies->osptokenblock[count] = (char *)data + 2 + 1;
+				ies->ospblocklength[count] = len - 1;
+			} else {
+				snprintf(tmp, (int)sizeof(tmp), "Expected OSP token block index to be 0~%d but was %d\n", IAX_MAX_OSPBLOCK_NUM - 1, count);
+				errorf(tmp);
+			}
+			break;
 		case IAX_IE_CALLTOKEN:
 			if (len) {
 				ies->calltokendata = (unsigned char *) data + 2;
@@ -988,7 +1142,7 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 void iax_frame_wrap(struct iax_frame *fr, struct ast_frame *f)
 {
 	fr->af.frametype = f->frametype;
-	fr->af.subclass = f->subclass;
+	fr->af.subclass.codec = f->subclass.codec;
 	fr->af.mallocd = 0;				/* Our frame is static relative to the container */
 	fr->af.datalen = f->datalen;
 	fr->af.samples = f->samples;
@@ -996,7 +1150,7 @@ void iax_frame_wrap(struct iax_frame *fr, struct ast_frame *f)
 	fr->af.src = f->src;
 	fr->af.delivery.tv_sec = 0;
 	fr->af.delivery.tv_usec = 0;
-	fr->af.data = fr->afdata;
+	fr->af.data.ptr = fr->afdata;
 	fr->af.len = f->len;
 	if (fr->af.datalen) {
 		size_t copy_len = fr->af.datalen;
@@ -1007,12 +1161,12 @@ void iax_frame_wrap(struct iax_frame *fr, struct ast_frame *f)
 		}
 #if __BYTE_ORDER == __LITTLE_ENDIAN
 		/* We need to byte-swap slinear samples from network byte order */
-		if ((fr->af.frametype == AST_FRAME_VOICE) && (fr->af.subclass == AST_FORMAT_SLINEAR)) {
+		if ((fr->af.frametype == AST_FRAME_VOICE) && (fr->af.subclass.codec == AST_FORMAT_SLINEAR)) {
 			/* 2 bytes / sample for SLINEAR */
-			ast_swapcopy_samples(fr->af.data, f->data, copy_len / 2);
+			ast_swapcopy_samples(fr->af.data.ptr, f->data.ptr, copy_len / 2);
 		} else
 #endif
-			memcpy(fr->af.data, f->data, copy_len);
+			memcpy(fr->af.data.ptr, f->data.ptr, copy_len);
 	}
 }
 
@@ -1021,24 +1175,35 @@ struct iax_frame *iax_frame_new(int direction, int datalen, unsigned int cacheab
 	struct iax_frame *fr = NULL;
 
 #if !defined(LOW_MEMORY)
-	struct iax_frames *iax_frames;
+	struct iax_frames *iax_frames = NULL;
+	struct iax_frame *smallest = NULL;
 
 	/* Attempt to get a frame from this thread's cache */
 	if ((iax_frames = ast_threadstorage_get(&frame_cache, sizeof(*iax_frames)))) {
+		smallest = AST_LIST_FIRST(&iax_frames->list);
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&iax_frames->list, fr, list) {
 			if (fr->afdatalen >= datalen) {
 				size_t afdatalen = fr->afdatalen;
-				AST_LIST_REMOVE_CURRENT(&iax_frames->list, list);
+				AST_LIST_REMOVE_CURRENT(list);
 				iax_frames->size--;
 				memset(fr, 0, sizeof(*fr));
 				fr->afdatalen = afdatalen;
 				break;
+			} else if (smallest->afdatalen > fr->afdatalen) {
+				smallest = fr;
 			}
 		}
-		AST_LIST_TRAVERSE_SAFE_END
+		AST_LIST_TRAVERSE_SAFE_END;
 	}
 	if (!fr) {
-		if (!(fr = ast_calloc_cache(1, sizeof(*fr) + datalen)))
+		if (iax_frames && iax_frames->size >= FRAME_CACHE_MAX_SIZE && smallest) {
+			/* Make useless cache into something more useful */
+			AST_LIST_REMOVE(&iax_frames->list, smallest, list);
+			if (!(fr = ast_realloc(smallest, sizeof(*fr) + datalen))) {
+				AST_LIST_INSERT_TAIL(&iax_frames->list, smallest, list);
+				return NULL;
+			}
+		} else if (!(fr = ast_calloc_cache(1, sizeof(*fr) + datalen)))
 			return NULL;
 		fr->afdatalen = datalen;
 	}
@@ -1066,7 +1231,7 @@ struct iax_frame *iax_frame_new(int direction, int datalen, unsigned int cacheab
 void iax_frame_free(struct iax_frame *fr)
 {
 #if !defined(LOW_MEMORY)
-	struct iax_frames *iax_frames;
+	struct iax_frames *iax_frames = NULL;
 #endif
 
 	/* Note: does not remove from scheduler! */
@@ -1082,30 +1247,36 @@ void iax_frame_free(struct iax_frame *fr)
 
 #if !defined(LOW_MEMORY)
 	if (!fr->cacheable || !(iax_frames = ast_threadstorage_get(&frame_cache, sizeof(*iax_frames)))) {
-		free(fr);
+		ast_free(fr);
 		return;
 	}
 
 	if (iax_frames->size < FRAME_CACHE_MAX_SIZE) {
 		fr->direction = 0;
-		AST_LIST_INSERT_HEAD(&iax_frames->list, fr, list);
+		/* Pseudo-sort: keep smaller frames at the top of the list. This should
+		 * increase the chance that we pick the smallest applicable frame for use. */
+		if (AST_LIST_FIRST(&iax_frames->list) && AST_LIST_FIRST(&iax_frames->list)->afdatalen < fr->afdatalen) {
+			AST_LIST_INSERT_TAIL(&iax_frames->list, fr, list);
+		} else {
+			AST_LIST_INSERT_HEAD(&iax_frames->list, fr, list);
+		}
 		iax_frames->size++;
 		return;
 	}
 #endif
-	free(fr);
+	ast_free(fr);
 }
 
 #if !defined(LOW_MEMORY)
 static void frame_cache_cleanup(void *data)
 {
-	struct iax_frames *frames = data;
-	struct iax_frame *cur;
+	struct iax_frames *framelist = data;
+	struct iax_frame *current;
 
-	while ((cur = AST_LIST_REMOVE_HEAD(&frames->list, list)))
-		free(cur);
+	while ((current = AST_LIST_REMOVE_HEAD(&framelist->list, list)))
+		ast_free(current);
 
-	free(frames);
+	ast_free(framelist);
 }
 #endif
 

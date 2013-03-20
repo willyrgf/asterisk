@@ -25,93 +25,146 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+	<replacement>app_stack (GoSub)</replacement>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
 #include "asterisk/config.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
+#include "asterisk/app.h"
+
+/*** DOCUMENTATION
+	<application name="Macro" language="en_US">
+		<synopsis>
+			Macro Implementation.
+		</synopsis>
+		<syntax>
+			<parameter name="name" required="true">
+				<para>The name of the macro</para>
+			</parameter>
+			<parameter name="args">
+				<argument name="arg1" required="true" />
+				<argument name="arg2" multiple="true" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes a macro using the context macro-<replaceable>name</replaceable>,
+			jumping to the <literal>s</literal> extension of that context and executing each step,
+			then returning when the steps end.</para>
+			<para>The calling extension, context, and priority are stored in <variable>MACRO_EXTEN</variable>,
+			<variable>MACRO_CONTEXT</variable> and <variable>MACRO_PRIORITY</variable> respectively. Arguments
+			become <variable>ARG1</variable>, <variable>ARG2</variable>, etc in the macro context.</para>
+			<para>If you Goto out of the Macro context, the Macro will terminate and control will be returned
+			at the location of the Goto.</para>
+			<para>If <variable>MACRO_OFFSET</variable> is set at termination, Macro will attempt to continue
+			at priority MACRO_OFFSET + N + 1 if such a step exists, and N + 1 otherwise.</para>
+			<warning><para>Because of the way Macro is implemented (it executes the priorities contained within
+			it via sub-engine), and a fixed per-thread memory stack allowance, macros are limited to 7 levels
+			of nesting (macro calling macro calling macro, etc.); It may be possible that stack-intensive
+			applications in deeply nested macros could cause asterisk to crash earlier than this limit.
+			It is advised that if you need to deeply nest macro calls, that you use the Gosub application
+			(now allows arguments like a Macro) with explict Return() calls instead.</para></warning>
+			<warning><para>Use of the application <literal>WaitExten</literal> within a macro will not function
+			as expected. Please use the <literal>Read</literal> application in order to read DTMF from a channel
+			currently executing a macro.</para></warning>
+		</description>
+		<see-also>
+			<ref type="application">MacroExit</ref>
+			<ref type="application">Goto</ref>
+			<ref type="application">Gosub</ref>
+		</see-also>
+	</application>
+	<application name="MacroIf" language="en_US">
+		<synopsis>
+			Conditional Macro implementation.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="expr" required="true" />
+			<parameter name="destination" required="true" argsep=":">
+				<argument name="macroiftrue" required="true">
+					<argument name="macroiftrue" required="true" />
+					<argument name="arg1" multiple="true" />
+				</argument>
+				<argument name="macroiffalse">
+					<argument name="macroiffalse" required="true" />
+					<argument name="arg1" multiple="true" />
+				</argument>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes macro defined in <replaceable>macroiftrue</replaceable> if
+			<replaceable>expr</replaceable> is true (otherwise <replaceable>macroiffalse</replaceable>
+			if provided)</para>
+			<para>Arguments and return values as in application Macro()</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='Macro']/description/warning[2])" />
+		</description>
+		<see-also>
+			<ref type="application">GotoIf</ref>
+			<ref type="application">GosubIf</ref>
+			<ref type="function">IF</ref>
+		</see-also>
+	</application>
+	<application name="MacroExclusive" language="en_US">
+		<synopsis>
+			Exclusive Macro Implementation.
+		</synopsis>
+		<syntax>
+			<parameter name="name" required="true">
+				<para>The name of the macro</para>
+			</parameter>
+			<parameter name="arg1" />
+			<parameter name="arg2" multiple="true" />
+		</syntax>
+		<description>
+			<para>Executes macro defined in the context macro-<replaceable>name</replaceable>.
+			Only one call at a time may run the macro. (we'll wait if another call is busy
+			executing in the Macro)</para>
+			<para>Arguments and return values as in application Macro()</para>
+			<xi:include xpointer="xpointer(/docs/application[@name='Macro']/description/warning[2])" />
+		</description>
+		<see-also>
+			<ref type="application">Macro</ref>
+		</see-also>
+	</application>
+	<application name="MacroExit" language="en_US">
+		<synopsis>
+			Exit from Macro.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Causes the currently running macro to exit as if it had
+			ended normally by running out of priorities to execute.
+			If used outside a macro, will likely cause unexpected behavior.</para>
+		</description>
+		<see-also>
+			<ref type="application">Macro</ref>
+		</see-also>
+	</application>
+ ***/
 
 #define MAX_ARGS 80
 
 /* special result value used to force macro exit */
 #define MACRO_EXIT_RESULT 1024
 
-static char *descrip =
-"  Macro(macroname|arg1|arg2...): Executes a macro using the context\n"
-"'macro-<macroname>', jumping to the 's' extension of that context and\n"
-"executing each step, then returning when the steps end. \n"
-"The calling extension, context, and priority are stored in ${MACRO_EXTEN}, \n"
-"${MACRO_CONTEXT} and ${MACRO_PRIORITY} respectively.  Arguments become\n"
-"${ARG1}, ${ARG2}, etc in the macro context.\n"
-"If you Goto out of the Macro context, the Macro will terminate and control\n"
-"will be returned at the location of the Goto.\n"
-"If ${MACRO_OFFSET} is set at termination, Macro will attempt to continue\n"
-"at priority MACRO_OFFSET + N + 1 if such a step exists, and N + 1 otherwise.\n"
-"WARNING: Because of the way Macro is implemented (it executes the priorities\n"
-"         contained within it via sub-engine), and a fixed per-thread\n"
-"         memory stack allowance, macros are limited to 7 levels\n"
-"         of nesting (macro calling macro calling macro, etc.); It\n"
-"         may be possible that stack-intensive applications in deeply nested\n"
-"         macros could cause asterisk to crash earlier than this limit.\n"
-"NOTE: a bug existed in earlier versions of Asterisk that caused Macro not\n"
-"to reset its context and extension correctly upon exit.  This meant that\n"
-"the 'h' extension within a Macro sometimes would execute, when the dialplan\n"
-"exited while that Macro was running.  However, since this bug has been in\n"
-"Asterisk for so long, users started to depend upon this behavior.  Therefore,\n"
-"when a channel hangs up when in the midst of executing a Macro, the macro\n"
-"context will first be checked for an 'h' extension, followed by the main\n"
-"context from which the Macro was originally called.  This behavior in 1.4\n"
-"exists only for compatibility with earlier versions.  You are strongly\n"
-"encouraged to make use of the 'h' extension only in the context from which\n"
-"Macro was originally called.\n";
-
-static char *if_descrip =
-"  MacroIf(<expr>?macroname_a[|arg1][:macroname_b[|arg1]])\n"
-"Executes macro defined in <macroname_a> if <expr> is true\n"
-"(otherwise <macroname_b> if provided)\n"
-"Arguments and return values as in application macro()\n";
-
-static char *exclusive_descrip =
-"  MacroExclusive(macroname|arg1|arg2...):\n"
-"Executes macro defined in the context 'macro-macroname'\n"
-"Only one call at a time may run the macro.\n"
-"(we'll wait if another call is busy executing in the Macro)\n"
-"Arguments and return values as in application Macro()\n";
-
-static char *exit_descrip =
-"  MacroExit():\n"
-"Causes the currently running macro to exit as if it had\n"
-"ended normally by running out of priorities to execute.\n"
-"If used outside a macro, will likely cause unexpected\n"
-"behavior.\n";
-
 static char *app = "Macro";
 static char *if_app = "MacroIf";
 static char *exclusive_app = "MacroExclusive";
 static char *exit_app = "MacroExit";
 
-static char *synopsis = "Macro Implementation";
-static char *if_synopsis = "Conditional Macro Implementation";
-static char *exclusive_synopsis = "Exclusive Macro Implementation";
-static char *exit_synopsis = "Exit From Macro";
-
 static void macro_fixup(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan);
 
-struct ast_datastore_info macro_ds_info = {
+static const struct ast_datastore_info macro_ds_info = {
 	.type = "MACRO",
 	.chan_fixup = macro_fixup,
 };
@@ -169,7 +222,7 @@ static struct ast_exten *find_matching_priority(struct ast_context *c, const cha
 	return NULL;
 }
 
-static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
+static int _macro_exec(struct ast_channel *chan, const char *data, int exclusive)
 {
 	const char *s;
 	char *tmp;
@@ -189,26 +242,24 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	int offset, depth = 0, maxdepth = 7;
 	int setmacrocontext=0;
 	int autoloopflag, inhangup = 0;
+	struct ast_str *tmp_subst = NULL;
   
 	char *save_macro_exten;
 	char *save_macro_context;
 	char *save_macro_priority;
 	char *save_macro_offset;
-	struct ast_module_user *u;
 	struct ast_datastore *macro_store = ast_channel_datastore_find(chan, &macro_ds_info, NULL);
- 
+
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "Macro() requires arguments. See \"show application macro\" for help.\n");
+		ast_log(LOG_WARNING, "Macro() requires arguments. See \"core show application macro\" for help.\n");
 		return -1;
 	}
-
-	u = ast_module_user_add(chan);
 
 	do {
 		if (macro_store) {
 			break;
 		}
-		if (!(macro_store = ast_channel_datastore_alloc(&macro_ds_info, NULL))) {
+		if (!(macro_store = ast_datastore_alloc(&macro_ds_info, NULL))) {
 			ast_log(LOG_WARNING, "Unable to allocate new datastore.\n");
 			break;
 		}
@@ -218,62 +269,65 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	} while (0);
 
 	/* does the user want a deeper rabbit hole? */
-	s = pbx_builtin_getvar_helper(chan, "MACRO_RECURSION");
-	if (s)
+	ast_channel_lock(chan);
+	if ((s = pbx_builtin_getvar_helper(chan, "MACRO_RECURSION"))) {
 		sscanf(s, "%30d", &maxdepth);
-
+	}
+	
 	/* Count how many levels deep the rabbit hole goes */
-	s = pbx_builtin_getvar_helper(chan, "MACRO_DEPTH");
-	if (s)
+	if ((s = pbx_builtin_getvar_helper(chan, "MACRO_DEPTH"))) {
 		sscanf(s, "%30d", &depth);
+	}
+	
 	/* Used for detecting whether to return when a Macro is called from another Macro after hangup */
 	if (strcmp(chan->exten, "h") == 0)
 		pbx_builtin_setvar_helper(chan, "MACRO_IN_HANGUP", "1");
-	inhangupc = pbx_builtin_getvar_helper(chan, "MACRO_IN_HANGUP");
-	if (!ast_strlen_zero(inhangupc))
+	
+	if ((inhangupc = pbx_builtin_getvar_helper(chan, "MACRO_IN_HANGUP"))) {
 		sscanf(inhangupc, "%30d", &inhangup);
+	}
+	ast_channel_unlock(chan);
 
 	if (depth >= maxdepth) {
 		ast_log(LOG_ERROR, "Macro():  possible infinite loop detected.  Returning early.\n");
-		ast_module_user_remove(u);
 		return 0;
 	}
 	snprintf(depthc, sizeof(depthc), "%d", depth + 1);
-	pbx_builtin_setvar_helper(chan, "MACRO_DEPTH", depthc);
 
 	tmp = ast_strdupa(data);
 	rest = tmp;
-	macro = strsep(&rest, "|");
+	macro = strsep(&rest, ",");
 	if (ast_strlen_zero(macro)) {
 		ast_log(LOG_WARNING, "Invalid macro name specified\n");
-		ast_module_user_remove(u);
 		return 0;
 	}
 
 	snprintf(fullmacro, sizeof(fullmacro), "macro-%s", macro);
-	if (!ast_exists_extension(chan, fullmacro, "s", 1, chan->cid.cid_num)) {
+	if (!ast_exists_extension(chan, fullmacro, "s", 1,
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 		if (!ast_context_find(fullmacro)) 
 			ast_log(LOG_WARNING, "No such context '%s' for macro '%s'\n", fullmacro, macro);
 		else
 			ast_log(LOG_WARNING, "Context '%s' for macro '%s' lacks 's' extension, priority 1\n", fullmacro, macro);
-		ast_module_user_remove(u);
 		return 0;
 	}
 
 	/* If we are to run the macro exclusively, take the mutex */
 	if (exclusive) {
-		ast_log(LOG_DEBUG, "Locking macrolock for '%s'\n", fullmacro);
+		ast_debug(1, "Locking macrolock for '%s'\n", fullmacro);
 		ast_autoservice_start(chan);
 		if (ast_context_lockmacro(fullmacro)) {
 			ast_log(LOG_WARNING, "Failed to lock macro '%s' as in-use\n", fullmacro);
 			ast_autoservice_stop(chan);
-			ast_module_user_remove(u);
-
 			return 0;
 		}
 		ast_autoservice_stop(chan);
 	}
-	
+
+	if (!(tmp_subst = ast_str_create(16))) {
+		return -1;
+	}
+
 	/* Save old info */
 	oldpriority = chan->priority;
 	ast_copy_string(oldexten, chan->exten, sizeof(oldexten));
@@ -299,28 +353,34 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	save_macro_offset = ast_strdup(pbx_builtin_getvar_helper(chan, "MACRO_OFFSET"));
 	pbx_builtin_setvar_helper(chan, "MACRO_OFFSET", NULL);
 
+	pbx_builtin_setvar_helper(chan, "MACRO_DEPTH", depthc);
+
 	/* Setup environment for new run */
 	chan->exten[0] = 's';
 	chan->exten[1] = '\0';
 	ast_copy_string(chan->context, fullmacro, sizeof(chan->context));
 	chan->priority = 1;
 
-	while((cur = strsep(&rest, "|")) && (argc < MAX_ARGS)) {
-		const char *s;
+	ast_channel_lock(chan);
+	while((cur = strsep(&rest, ",")) && (argc < MAX_ARGS)) {
+		const char *argp;
   		/* Save copy of old arguments if we're overwriting some, otherwise
 	   	let them pass through to the other macro */
   		snprintf(varname, sizeof(varname), "ARG%d", argc);
-		s = pbx_builtin_getvar_helper(chan, varname);
-		if (s)
-			oldargs[argc] = ast_strdup(s);
+		if ((argp = pbx_builtin_getvar_helper(chan, varname))) {
+			oldargs[argc] = ast_strdup(argp);
+		}
 		pbx_builtin_setvar_helper(chan, varname, cur);
 		argc++;
 	}
+	ast_channel_unlock(chan);
 	autoloopflag = ast_test_flag(chan, AST_FLAG_IN_AUTOLOOP);
 	ast_set_flag(chan, AST_FLAG_IN_AUTOLOOP);
-	while(ast_exists_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num)) {
+	while (ast_exists_extension(chan, chan->context, chan->exten, chan->priority,
+		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 		struct ast_context *c;
 		struct ast_exten *e;
+		int foundx;
 		runningapp[0] = '\0';
 		runningdata[0] = '\0';
 
@@ -330,10 +390,11 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		} else {
 			for (c = ast_walk_contexts(NULL), e = NULL; c; c = ast_walk_contexts(c)) {
 				if (!strcmp(ast_get_context_name(c), chan->context)) {
-					if (ast_lock_context(c)) {
+					if (ast_rdlock_context(c)) {
 						ast_log(LOG_WARNING, "Unable to lock context?\n");
 					} else {
-						e = find_matching_priority(c, chan->exten, chan->priority, chan->cid.cid_num);
+						e = find_matching_priority(c, chan->exten, chan->priority,
+							S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL));
 						if (e) { /* This will only be undefined for pbx_realtime, which is majorly broken. */
 							ast_copy_string(runningapp, ast_get_extension_app(e), sizeof(runningapp));
 							ast_copy_string(runningdata, ast_get_extension_app_data(e), sizeof(runningdata));
@@ -349,98 +410,97 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		/* Reset the macro depth, if it was changed in the last iteration */
 		pbx_builtin_setvar_helper(chan, "MACRO_DEPTH", depthc);
 
-		if ((res = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority, chan->cid.cid_num))) {
+		res = ast_spawn_extension(chan, chan->context, chan->exten, chan->priority,
+			S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL),
+			&foundx, 1);
+		if (res) {
 			/* Something bad happened, or a hangup has been requested. */
 			if (((res >= '0') && (res <= '9')) || ((res >= 'A') && (res <= 'F')) ||
 		    	(res == '*') || (res == '#')) {
 				/* Just return result as to the previous application as if it had been dialed */
-				ast_log(LOG_DEBUG, "Oooh, got something to jump out with ('%c')!\n", res);
+				ast_debug(1, "Oooh, got something to jump out with ('%c')!\n", res);
 				break;
 			}
 			switch(res) {
 			case MACRO_EXIT_RESULT:
 				res = 0;
 				goto out;
-			case AST_PBX_KEEPALIVE:
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Spawn extension (%s,%s,%d) exited KEEPALIVE in macro %s on '%s'\n", chan->context, chan->exten, chan->priority, macro, chan->name);
-				else if (option_verbose > 1)
-					ast_verbose( VERBOSE_PREFIX_2 "Spawn extension (%s, %s, %d) exited KEEPALIVE in macro '%s' on '%s'\n", chan->context, chan->exten, chan->priority, macro, chan->name);
-				goto out;
 			default:
-				if (option_debug)
-					ast_log(LOG_DEBUG, "Spawn extension (%s,%s,%d) exited non-zero on '%s' in macro '%s'\n", chan->context, chan->exten, chan->priority, chan->name, macro);
-				else if (option_verbose > 1)
-					ast_verbose( VERBOSE_PREFIX_2 "Spawn extension (%s, %s, %d) exited non-zero on '%s' in macro '%s'\n", chan->context, chan->exten, chan->priority, chan->name, macro);
+				ast_debug(2, "Spawn extension (%s,%s,%d) exited non-zero on '%s' in macro '%s'\n", chan->context, chan->exten, chan->priority, chan->name, macro);
+				ast_verb(2, "Spawn extension (%s, %s, %d) exited non-zero on '%s' in macro '%s'\n", chan->context, chan->exten, chan->priority, chan->name, macro);
 				goto out;
 			}
 		}
 
-		ast_log(LOG_DEBUG, "Executed application: %s\n", runningapp);
+		ast_debug(1, "Executed application: %s\n", runningapp);
 
 		if (!strcasecmp(runningapp, "GOSUB")) {
 			gosub_level++;
-			ast_log(LOG_DEBUG, "Incrementing gosub_level\n");
+			ast_debug(1, "Incrementing gosub_level\n");
 		} else if (!strcasecmp(runningapp, "GOSUBIF")) {
-			char tmp2[1024] = "", *cond, *app, *app2 = tmp2;
-			pbx_substitute_variables_helper(chan, runningdata, tmp2, sizeof(tmp2) - 1);
+			char *cond, *app_arg;
+			char *app2;
+			ast_str_substitute_variables(&tmp_subst, 0, chan, runningdata);
+			app2 = ast_str_buffer(tmp_subst);
 			cond = strsep(&app2, "?");
-			app = strsep(&app2, ":");
+			app_arg = strsep(&app2, ":");
 			if (pbx_checkcondition(cond)) {
-				if (!ast_strlen_zero(app)) {
+				if (!ast_strlen_zero(app_arg)) {
 					gosub_level++;
-					ast_log(LOG_DEBUG, "Incrementing gosub_level\n");
+					ast_debug(1, "Incrementing gosub_level\n");
 				}
 			} else {
 				if (!ast_strlen_zero(app2)) {
 					gosub_level++;
-					ast_log(LOG_DEBUG, "Incrementing gosub_level\n");
+					ast_debug(1, "Incrementing gosub_level\n");
 				}
 			}
 		} else if (!strcasecmp(runningapp, "RETURN")) {
 			gosub_level--;
-			ast_log(LOG_DEBUG, "Decrementing gosub_level\n");
+			ast_debug(1, "Decrementing gosub_level\n");
 		} else if (!strcasecmp(runningapp, "STACKPOP")) {
 			gosub_level--;
-			ast_log(LOG_DEBUG, "Decrementing gosub_level\n");
+			ast_debug(1, "Decrementing gosub_level\n");
 		} else if (!strncasecmp(runningapp, "EXEC", 4)) {
 			/* Must evaluate args to find actual app */
-			char tmp2[1024] = "", *tmp3 = NULL;
-			pbx_substitute_variables_helper(chan, runningdata, tmp2, sizeof(tmp2) - 1);
+			char *tmp2, *tmp3 = NULL;
+			ast_str_substitute_variables(&tmp_subst, 0, chan, runningdata);
+			tmp2 = ast_str_buffer(tmp_subst);
 			if (!strcasecmp(runningapp, "EXECIF")) {
-				tmp3 = strchr(tmp2, '|');
-				if (tmp3)
+				if ((tmp3 = strchr(tmp2, '|'))) {
 					*tmp3++ = '\0';
-				if (!pbx_checkcondition(tmp2))
+				}
+				if (!pbx_checkcondition(tmp2)) {
 					tmp3 = NULL;
-			} else
+				}
+			} else {
 				tmp3 = tmp2;
+			}
 
-			if (tmp3)
-				ast_log(LOG_DEBUG, "Last app: %s\n", tmp3);
+			if (tmp3) {
+				ast_debug(1, "Last app: %s\n", tmp3);
+			}
 
 			if (tmp3 && !strncasecmp(tmp3, "GOSUB", 5)) {
 				gosub_level++;
-				ast_log(LOG_DEBUG, "Incrementing gosub_level\n");
+				ast_debug(1, "Incrementing gosub_level\n");
 			} else if (tmp3 && !strncasecmp(tmp3, "RETURN", 6)) {
 				gosub_level--;
-				ast_log(LOG_DEBUG, "Decrementing gosub_level\n");
+				ast_debug(1, "Decrementing gosub_level\n");
 			} else if (tmp3 && !strncasecmp(tmp3, "STACKPOP", 8)) {
 				gosub_level--;
-				ast_log(LOG_DEBUG, "Decrementing gosub_level\n");
+				ast_debug(1, "Decrementing gosub_level\n");
 			}
 		}
 
 		if (gosub_level == 0 && strcasecmp(chan->context, fullmacro)) {
-			if (option_verbose > 1)
-				ast_verbose(VERBOSE_PREFIX_2 "Channel '%s' jumping out of macro '%s'\n", chan->name, macro);
+			ast_verb(2, "Channel '%s' jumping out of macro '%s'\n", chan->name, macro);
 			break;
 		}
 
 		/* don't stop executing extensions when we're in "h" */
-		if (chan->_softhangup && !inhangup) {
-			ast_log(LOG_DEBUG, "Extension %s, macroexten %s, priority %d returned normally even though call was hung up\n",
-				chan->exten, chan->macroexten, chan->priority);
+		if (ast_check_hangup(chan) && !inhangup) {
+			ast_debug(1, "Extension %s, macroexten %s, priority %d returned normally even though call was hung up\n", chan->exten, chan->macroexten, chan->priority);
 			goto out;
 		}
 		chan->priority++;
@@ -460,7 +520,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 		snprintf(varname, sizeof(varname), "ARG%d", x);
   		if (oldargs[x]) {
 			pbx_builtin_setvar_helper(chan, varname, oldargs[x]);
-			free(oldargs[x]);
+			ast_free(oldargs[x]);
 		} else {
 			pbx_builtin_setvar_helper(chan, varname, NULL);
 		}
@@ -471,33 +531,16 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 	pbx_builtin_setvar_helper(chan, "MACRO_CONTEXT", save_macro_context);
 	pbx_builtin_setvar_helper(chan, "MACRO_PRIORITY", save_macro_priority);
 	if (save_macro_exten)
-		free(save_macro_exten);
+		ast_free(save_macro_exten);
 	if (save_macro_context)
-		free(save_macro_context);
+		ast_free(save_macro_context);
 	if (save_macro_priority)
-		free(save_macro_priority);
+		ast_free(save_macro_priority);
 
 	if (setmacrocontext) {
 		chan->macrocontext[0] = '\0';
 		chan->macroexten[0] = '\0';
 		chan->macropriority = 0;
-	}
-
-	/*!\note
-	 * This section is used to restore a behavior that we mistakenly
-	 * changed in issue #6176, then mistakenly reverted in #13962 and
-	 * #13363.  A corresponding change is made in main/pbx.c, where we
-	 * check this variable for existence, then look for the "h" extension
-	 * in that context.
-	 */
-	if (ast_check_hangup(chan) || res < 0) {
-		/* Don't need to lock the channel, as we aren't dereferencing emc.
-		 * The intent here is to grab the deepest context, without overwriting
-		 * in any above context. */
-		const char *emc = pbx_builtin_getvar_helper(chan, "EXIT_MACRO_CONTEXT");
-		if (!emc) {
-			pbx_builtin_setvar_helper(chan, "EXIT_MACRO_CONTEXT", fullmacro);
-		}
 	}
 
 	if (!strcasecmp(chan->context, fullmacro)) {
@@ -513,7 +556,7 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 			if (sscanf(offsets, "%30d", &offset) == 1) {
 				if (ast_exists_extension(chan, chan->context, chan->exten,
 					chan->priority + offset + 1,
-					chan->cid.cid_num)) {
+					S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
 					chan->priority += offset;
 				}
 			}
@@ -522,45 +565,38 @@ static int _macro_exec(struct ast_channel *chan, void *data, int exclusive)
 
 	pbx_builtin_setvar_helper(chan, "MACRO_OFFSET", save_macro_offset);
 	if (save_macro_offset)
-		free(save_macro_offset);
+		ast_free(save_macro_offset);
 
 	/* Unlock the macro */
 	if (exclusive) {
-		ast_log(LOG_DEBUG, "Unlocking macrolock for '%s'\n", fullmacro);
+		ast_debug(1, "Unlocking macrolock for '%s'\n", fullmacro);
 		if (ast_context_unlockmacro(fullmacro)) {
 			ast_log(LOG_ERROR, "Failed to unlock macro '%s' - that isn't good\n", fullmacro);
 			res = 0;
 		}
 	}
 	ast_channel_unlock(chan);
-	
-	ast_module_user_remove(u);
+	ast_free(tmp_subst);
 
 	return res;
 }
 
-static int macro_exec(struct ast_channel *chan, void *data)
+static int macro_exec(struct ast_channel *chan, const char *data)
 {
 	return _macro_exec(chan, data, 0);
 }
 
-static int macroexclusive_exec(struct ast_channel *chan, void *data)
+static int macroexclusive_exec(struct ast_channel *chan, const char *data)
 {
 	return _macro_exec(chan, data, 1);
 }
 
-static int macroif_exec(struct ast_channel *chan, void *data) 
+static int macroif_exec(struct ast_channel *chan, const char *data) 
 {
 	char *expr = NULL, *label_a = NULL, *label_b = NULL;
 	int res = 0;
-	struct ast_module_user *u;
 
-	u = ast_module_user_add(chan);
-
-	if (!(expr = ast_strdupa(data))) {
-		ast_module_user_remove(u);
-		return -1;
-	}
+	expr = ast_strdupa(data);
 
 	if ((label_a = strchr(expr, '?'))) {
 		*label_a = '\0';
@@ -576,12 +612,10 @@ static int macroif_exec(struct ast_channel *chan, void *data)
 	} else
 		ast_log(LOG_WARNING, "Invalid Syntax.\n");
 
-	ast_module_user_remove(u);
-
 	return res;
 }
 			
-static int macro_exit_exec(struct ast_channel *chan, void *data)
+static int macro_exit_exec(struct ast_channel *chan, const char *data)
 {
 	return MACRO_EXIT_RESULT;
 }
@@ -595,8 +629,6 @@ static int unload_module(void)
 	res |= ast_unregister_application(app);
 	res |= ast_unregister_application(exclusive_app);
 
-	ast_module_user_hangup_all();
-
 	return res;
 }
 
@@ -604,10 +636,10 @@ static int load_module(void)
 {
 	int res;
 
-	res = ast_register_application(exit_app, macro_exit_exec, exit_synopsis, exit_descrip);
-	res |= ast_register_application(if_app, macroif_exec, if_synopsis, if_descrip);
-	res |= ast_register_application(exclusive_app, macroexclusive_exec, exclusive_synopsis, exclusive_descrip);
-	res |= ast_register_application(app, macro_exec, synopsis, descrip);
+	res = ast_register_application_xml(exit_app, macro_exit_exec);
+	res |= ast_register_application_xml(if_app, macroif_exec);
+	res |= ast_register_application_xml(exclusive_app, macroexclusive_exec);
+	res |= ast_register_application_xml(app, macro_exec);
 
 	return res;
 }

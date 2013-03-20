@@ -30,13 +30,14 @@
  * \author Steve Underwood <steveu@coppice.org>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <math.h>
 
 #include "asterisk/plc.h"
@@ -180,10 +181,8 @@ int plc_fillin(plc_state_t *s, int16_t amp[], int len)
 	float old_weight;
 	float new_weight;
 	float gain;
-	int16_t *orig_amp;
 	int orig_len;
 
-	orig_amp = amp;
 	orig_len = len;
 	if (s->missing_samples == 0) {
 		/* As the gap in real speech starts we need to assess the last known pitch,

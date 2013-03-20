@@ -23,23 +23,21 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <sys/time.h>
 #include <sys/stat.h>
 #include <signal.h>
-#include <errno.h>
-#include <unistd.h>
 
+#include "asterisk/paths.h"	/* use ast_config_AST_DATA_DIR */
 #include "asterisk/sched.h"
-#include "asterisk/options.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/file.h"
 #include "asterisk/image.h"
 #include "asterisk/translate.h"
@@ -47,33 +45,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 
 /* XXX Why don't we just use the formats struct for this? */
-static AST_LIST_HEAD_STATIC(imagers, ast_imager);
+static AST_RWLIST_HEAD_STATIC(imagers, ast_imager);
 
 int ast_image_register(struct ast_imager *img)
 {
-	if (option_verbose > 1)
-		ast_verbose(VERBOSE_PREFIX_2 "Registered format '%s' (%s)\n", img->name, img->desc);
-	AST_LIST_LOCK(&imagers);
-	AST_LIST_INSERT_HEAD(&imagers, img, list);
-	AST_LIST_UNLOCK(&imagers);
+	AST_RWLIST_WRLOCK(&imagers);
+	AST_RWLIST_INSERT_HEAD(&imagers, img, list);
+	AST_RWLIST_UNLOCK(&imagers);
+	ast_verb(2, "Registered format '%s' (%s)\n", img->name, img->desc);
 	return 0;
 }
 
 void ast_image_unregister(struct ast_imager *img)
 {
-	struct ast_imager *i;
-	
-	AST_LIST_LOCK(&imagers);
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&imagers, i, list) {	
-		if (i == img) {
-			AST_LIST_REMOVE_CURRENT(&imagers, list);
-			break;
-		}
-	}
-	AST_LIST_TRAVERSE_SAFE_END
-	AST_LIST_UNLOCK(&imagers);
-	if (i && (option_verbose > 1))
-		ast_verbose(VERBOSE_PREFIX_2 "Unregistered format '%s' (%s)\n", img->name, img->desc);
+	AST_RWLIST_WRLOCK(&imagers);
+	img = AST_RWLIST_REMOVE(&imagers, img, list);
+	AST_RWLIST_UNLOCK(&imagers);
+
+	if (img)
+		ast_verb(2, "Unregistered format '%s' (%s)\n", img->name, img->desc);
 }
 
 int ast_supports_images(struct ast_channel *chan)
@@ -95,7 +85,7 @@ static int file_exists(char *filename)
 	return 0;
 }
 
-static void make_filename(char *buf, int len, char *filename, const char *preflang, char *ext)
+static void make_filename(char *buf, int len, const char *filename, const char *preflang, char *ext)
 {
 	if (filename[0] == '/') {
 		if (!ast_strlen_zero(preflang))
@@ -110,7 +100,7 @@ static void make_filename(char *buf, int len, char *filename, const char *prefla
 	}
 }
 
-struct ast_frame *ast_read_image(char *filename, const char *preflang, int format)
+struct ast_frame *ast_read_image(const char *filename, const char *preflang, int format)
 {
 	struct ast_imager *i;
 	char buf[256];
@@ -121,14 +111,14 @@ struct ast_frame *ast_read_image(char *filename, const char *preflang, int forma
 	int len=0;
 	struct ast_frame *f = NULL;
 	
-	AST_LIST_LOCK(&imagers);
-	AST_LIST_TRAVERSE(&imagers, i, list) {
+	AST_RWLIST_RDLOCK(&imagers);
+	AST_RWLIST_TRAVERSE(&imagers, i, list) {
 		if (i->format & format) {
 			char *stringp=NULL;
 			ast_copy_string(tmp, i->exts, sizeof(tmp));
-			stringp=tmp;
+			stringp = tmp;
 			e = strsep(&stringp, "|");
-			while(e) {
+			while (e) {
 				make_filename(buf, sizeof(buf), filename, preflang, e);
 				if ((len = file_exists(buf))) {
 					found = i;
@@ -152,7 +142,7 @@ struct ast_frame *ast_read_image(char *filename, const char *preflang, int forma
 			if (!found->identify || found->identify(fd)) {
 				/* Reset file pointer */
 				lseek(fd, 0, SEEK_SET);
-				f = found->read_image(fd,len); 
+				f = found->read_image(fd, len); 
 			} else
 				ast_log(LOG_WARNING, "%s does not appear to be a %s file\n", buf, found->name);
 			close(fd);
@@ -161,12 +151,12 @@ struct ast_frame *ast_read_image(char *filename, const char *preflang, int forma
 	} else
 		ast_log(LOG_WARNING, "Image file '%s' not found\n", filename);
 	
-	AST_LIST_UNLOCK(&imagers);
+	AST_RWLIST_UNLOCK(&imagers);
 	
 	return f;
 }
 
-int ast_send_image(struct ast_channel *chan, char *filename)
+int ast_send_image(struct ast_channel *chan, const char *filename)
 {
 	struct ast_frame *f;
 	int res = -1;
@@ -180,46 +170,49 @@ int ast_send_image(struct ast_channel *chan, char *filename)
 	return res;
 }
 
-static int show_image_formats_deprecated(int fd, int argc, char *argv[])
+static char *handle_core_show_image_formats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT "%10s %10s %50s %10s\n"
 #define FORMAT2 "%10s %10s %50s %10s\n"
 	struct ast_imager *i;
-	if (argc != 3)
-		return RESULT_SHOWUSAGE;
-	ast_cli(fd, FORMAT, "Name", "Extensions", "Description", "Format");
-	AST_LIST_TRAVERSE(&imagers, i, list)
-		ast_cli(fd, FORMAT2, i->name, i->exts, i->desc, ast_getformatname(i->format));
-	return RESULT_SUCCESS;
+	int count_fmt = 0;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show image formats";
+		e->usage =
+			"Usage: core show image formats\n"
+			"       Displays currently registered image formats (if any).\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	if (a->argc != 4)
+		return CLI_SHOWUSAGE;
+	ast_cli(a->fd, FORMAT, "Name", "Extensions", "Description", "Format");
+	ast_cli(a->fd, FORMAT, "----", "----------", "-----------", "------");
+	AST_RWLIST_RDLOCK(&imagers);
+	AST_RWLIST_TRAVERSE(&imagers, i, list) {
+		ast_cli(a->fd, FORMAT2, i->name, i->exts, i->desc, ast_getformatname(i->format));
+		count_fmt++;
+	}
+	AST_RWLIST_UNLOCK(&imagers);
+	ast_cli(a->fd, "\n%d image format%s registered.\n", count_fmt, count_fmt == 1 ? "" : "s");
+	return CLI_SUCCESS;
 }
 
-static int show_image_formats(int fd, int argc, char *argv[])
-{
-#define FORMAT "%10s %10s %50s %10s\n"
-#define FORMAT2 "%10s %10s %50s %10s\n"
-	struct ast_imager *i;
-	if (argc != 4)
-		return RESULT_SHOWUSAGE;
-	ast_cli(fd, FORMAT, "Name", "Extensions", "Description", "Format");
-	AST_LIST_TRAVERSE(&imagers, i, list)
-		ast_cli(fd, FORMAT2, i->name, i->exts, i->desc, ast_getformatname(i->format));
-	return RESULT_SUCCESS;
-}
-
-struct ast_cli_entry cli_show_image_formats_deprecated = {
-	{ "show", "image", "formats" },
-	show_image_formats_deprecated, NULL,
-	NULL };
-
-struct ast_cli_entry cli_image[] = {
-	{ { "core", "show", "image", "formats" },
-	show_image_formats, "Displays image formats",
-	"Usage: core show image formats\n"
-	"       displays currently registered image formats (if any)\n", NULL, &cli_show_image_formats_deprecated },
+static struct ast_cli_entry cli_image[] = {
+	AST_CLI_DEFINE(handle_core_show_image_formats, "Displays image formats")
 };
+
+static void image_shutdown(void)
+{
+	ast_cli_unregister_multiple(cli_image, ARRAY_LEN(cli_image));
+}
 
 int ast_image_init(void)
 {
-	ast_cli_register_multiple(cli_image, sizeof(cli_image) / sizeof(struct ast_cli_entry));
+	ast_cli_register_multiple(cli_image, ARRAY_LEN(cli_image));
+	ast_register_atexit(image_shutdown);
 	return 0;
 }

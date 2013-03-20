@@ -25,24 +25,15 @@
  * \ingroup formats
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
-#include <sys/time.h>
-#include <stdio.h>
-#include <errno.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/channel.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/sched.h"
+#include "asterisk/mod_format.h"
 #include "asterisk/module.h"
 #include "asterisk/endian.h"
 
@@ -58,10 +49,10 @@ static struct ast_frame *ilbc_read(struct ast_filestream *s, int *whennext)
 	int res;
 	/* Send a frame from the file to the appropriate channel */
 	s->fr.frametype = AST_FRAME_VOICE;
-	s->fr.subclass = AST_FORMAT_ILBC;
+	s->fr.subclass.codec = AST_FORMAT_ILBC;
 	s->fr.mallocd = 0;
 	AST_FRAME_SET_BUFFER(&s->fr, s->buf, AST_FRIENDLY_OFFSET, ILBC_BUF_SIZE);
-	if ((res = fread(s->fr.data, 1, s->fr.datalen, s->f)) != s->fr.datalen) {
+	if ((res = fread(s->fr.data.ptr, 1, s->fr.datalen, s->f)) != s->fr.datalen) {
 		if (res)
 			ast_log(LOG_WARNING, "Short read (%d) (%s)!\n", res, strerror(errno));
 		return NULL;
@@ -77,15 +68,15 @@ static int ilbc_write(struct ast_filestream *fs, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Asked to write non-voice frame!\n");
 		return -1;
 	}
-	if (f->subclass != AST_FORMAT_ILBC) {
-		ast_log(LOG_WARNING, "Asked to write non-iLBC frame (%d)!\n", f->subclass);
+	if (f->subclass.codec != AST_FORMAT_ILBC) {
+		ast_log(LOG_WARNING, "Asked to write non-iLBC frame (%s)!\n", ast_getformatname(f->subclass.codec));
 		return -1;
 	}
 	if (f->datalen % 50) {
 		ast_log(LOG_WARNING, "Invalid data length, %d, should be multiple of 50\n", f->datalen);
 		return -1;
 	}
-	if ((res = fwrite(f->data, 1, f->datalen, fs->f)) != f->datalen) {
+	if ((res = fwrite(f->data.ptr, 1, f->datalen, fs->f)) != f->datalen) {
 			ast_log(LOG_WARNING, "Bad write (%d/50): %s\n", res, strerror(errno));
 			return -1;
 	}
@@ -120,10 +111,19 @@ static int ilbc_seek(struct ast_filestream *fs, off_t sample_offset, int whence)
 
 static int ilbc_trunc(struct ast_filestream *fs)
 {
-	/* Truncate file to current length */
-	if (ftruncate(fileno(fs->f), ftello(fs->f)) < 0)
+	int fd;
+	off_t cur;
+
+	if ((fd = fileno(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine file descriptor for iLBC filestream %p: %s\n", fs, strerror(errno));
 		return -1;
-	return 0;
+	}
+	if ((cur = ftello(fs->f)) < 0) {
+		ast_log(AST_LOG_WARNING, "Unable to determine current position in iLBC filestream %p: %s\n", fs, strerror(errno));
+		return -1;
+	}
+	/* Truncate file to current length */
+	return ftruncate(fd, cur);
 }
 
 static off_t ilbc_tell(struct ast_filestream *fs)
@@ -146,15 +146,18 @@ static const struct ast_format ilbc_f = {
 
 static int load_module(void)
 {
-	return ast_format_register(&ilbc_f);
+	if (ast_format_register(&ilbc_f))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
 	return ast_format_unregister(ilbc_f.name);
-}	
+}
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_FIRST, "Raw iLBC data",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Raw iLBC data",
 	.load = load_module,
 	.unload = unload_module,
+	.load_pri = AST_MODPRI_APP_DEPEND
 );

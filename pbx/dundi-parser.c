@@ -22,24 +22,22 @@
  *
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
 #include <sys/socket.h>
-#include <string.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#include <unistd.h>
-#include <stdlib.h>
-#include <stdio.h>
 
 #include "asterisk/frame.h"
 #include "asterisk/utils.h"
 #include "asterisk/dundi.h"
 #include "dundi-parser.h"
-#include "asterisk/dundi.h"
 
 static void internaloutput(const char *str)
 {
@@ -53,23 +51,6 @@ static void internalerror(const char *str)
 
 static void (*outputf)(const char *str) = internaloutput;
 static void (*errorf)(const char *str) = internalerror;
-
-char *dundi_eid_to_str(char *s, int maxlen, dundi_eid *eid)
-{
-	int x;
-	char *os = s;
-	if (maxlen < 18) {
-		if (s && (maxlen > 0))
-			*s = '\0';
-	} else {
-		for (x=0;x<5;x++) {
-			sprintf(s, "%02x:", eid->eid[x]);
-			s += 3;
-		}
-		sprintf(s, "%02x", eid->eid[5]);
-	}
-	return os;
-}
 
 char *dundi_eid_to_str_short(char *s, int maxlen, dundi_eid *eid)
 {
@@ -87,26 +68,14 @@ char *dundi_eid_to_str_short(char *s, int maxlen, dundi_eid *eid)
 	return os;
 }
 
-int dundi_str_to_eid(dundi_eid *eid, char *s)
-{
-	unsigned int eid_int[6];
-	int x;
-	if (sscanf(s, "%2x:%2x:%2x:%2x:%2x:%2x", &eid_int[0], &eid_int[1], &eid_int[2],
-		 &eid_int[3], &eid_int[4], &eid_int[5]) != 6)
-		 	return -1;
-	for (x=0;x<6;x++)
-		eid->eid[x] = eid_int[x];
-	return 0;
-}
-
-int dundi_str_short_to_eid(dundi_eid *eid, char *s)
+int dundi_str_short_to_eid(dundi_eid *eid, const char *s)
 {
 	unsigned int eid_int[6];
 	int x;
 	if (sscanf(s, "%2x%2x%2x%2x%2x%2x", &eid_int[0], &eid_int[1], &eid_int[2],
 		 &eid_int[3], &eid_int[4], &eid_int[5]) != 6)
 		 	return -1;
-	for (x=0;x<6;x++)
+	for (x = 0; x < 6; x++)
 		eid->eid[x] = eid_int[x];
 	return 0;
 }
@@ -114,36 +83,28 @@ int dundi_str_short_to_eid(dundi_eid *eid, char *s)
 int dundi_eid_zero(dundi_eid *eid)
 {
 	int x;
-	for (x=0;x<sizeof(eid->eid) / sizeof(eid->eid[0]);x++)
+	for (x = 0; x < ARRAY_LEN(eid->eid); x++)
 		if (eid->eid[x]) return 0;
 	return 1;
 }
 
-int dundi_eid_cmp(dundi_eid *eid1, dundi_eid *eid2)
-{
-	return memcmp(eid1, eid2, sizeof(dundi_eid));
-}
-
 static void dump_string(char *output, int maxlen, void *value, int len)
 {
-	maxlen--;
-	if (maxlen > len)
-		maxlen = len;
-	strncpy(output, value, maxlen);
-	output[maxlen] = '\0';
+	if (maxlen > len + 1)
+		maxlen = len + 1;
+
+	snprintf(output, maxlen, "%s", (char *) value);
 }
 
 static void dump_cbypass(char *output, int maxlen, void *value, int len)
 {
-	maxlen--;
-	strncpy(output, "Bypass Caches", maxlen);
-	output[maxlen] = '\0';
+	snprintf(output, maxlen, "Bypass Caches");
 }
 
 static void dump_eid(char *output, int maxlen, void *value, int len)
 {
 	if (len == 6)
-		dundi_eid_to_str(output, maxlen, (dundi_eid *)value);
+		ast_eid_to_str(output, maxlen, (dundi_eid *)value);
 	else
 		snprintf(output, maxlen, "Invalid EID len %d", len);
 }
@@ -170,58 +131,71 @@ char *dundi_hint2str(char *buf, int bufsiz, int flags)
 
 static void dump_hint(char *output, int maxlen, void *value, int len)
 {
-	unsigned short flags;
-	char tmp[512];
 	char tmp2[256];
-	if (len < 2) {
-		strncpy(output, "<invalid contents>", maxlen);
+	char tmp3[256];
+	int datalen;
+	struct dundi_hint *hint;
+	if (len < sizeof(*hint)) {
+		snprintf(output, maxlen, "<invalid contents>");
 		return;
 	}
-	memcpy(&flags, value, sizeof(flags));
-	flags = ntohs(flags);
-	memset(tmp, 0, sizeof(tmp));
-	dundi_hint2str(tmp2, sizeof(tmp2), flags);
-	snprintf(tmp, sizeof(tmp), "[%s] ", tmp2);
-	memcpy(tmp + strlen(tmp), value + 2, len - 2);
-	strncpy(output, tmp, maxlen - 1);
+
+	hint = (struct dundi_hint *) value;;
+
+	datalen = len - offsetof(struct dundi_hint, data);
+	if (datalen > sizeof(tmp3) - 1)
+		datalen = sizeof(tmp3) - 1;
+
+	memcpy(tmp3, hint->data, datalen);
+	tmp3[datalen] = '\0';
+
+	dundi_hint2str(tmp2, sizeof(tmp2), ntohs(hint->flags));
+
+	if (ast_strlen_zero(tmp3))
+		snprintf(output, maxlen, "[%s]", tmp2);
+	else
+		snprintf(output, maxlen, "[%s] %s", tmp2, tmp3);
 }
 
 static void dump_cause(char *output, int maxlen, void *value, int len)
 {
-	static char *causes[] = {
+	static const char * const causes[] = {
 		"SUCCESS",
 		"GENERAL",
 		"DYNAMIC",
 		"NOAUTH" ,
 		};
-	char tmp[256];
 	char tmp2[256];
-	int mlen;
-	unsigned char cause;
-	if (len < 1) {
-		strncpy(output, "<invalid contents>", maxlen);
+	struct dundi_cause *cause;
+	int datalen;
+	int causecode;
+
+	if (len < sizeof(*cause)) {
+		snprintf(output, maxlen, "<invalid contents>");
 		return;
 	}
-	cause = *((unsigned char *)value);
-	memset(tmp2, 0, sizeof(tmp2));
-	mlen = len - 1;
-	if (mlen > 255)
-		mlen = 255;
-	memcpy(tmp2, value + 1, mlen);
-	if (cause < sizeof(causes) / sizeof(causes[0])) {
-		if (len > 1)
-			snprintf(tmp, sizeof(tmp), "%s: %s", causes[cause], tmp2);
+
+	cause = (struct dundi_cause*) value;
+	causecode = cause->causecode;
+
+	datalen = len - offsetof(struct dundi_cause, desc);
+	if (datalen > sizeof(tmp2) - 1)
+		datalen = sizeof(tmp2) - 1;
+
+	memcpy(tmp2, cause->desc, datalen);
+	tmp2[datalen] = '\0';
+
+	if (causecode < ARRAY_LEN(causes)) {
+		if (ast_strlen_zero(tmp2))
+			snprintf(output, maxlen, "%s", causes[causecode]);
 		else
-			snprintf(tmp, sizeof(tmp), "%s", causes[cause]);
+			snprintf(output, maxlen, "%s: %s", causes[causecode], tmp2);
 	} else {
-		if (len > 1)
-			snprintf(tmp, sizeof(tmp), "%d: %s", cause, tmp2);
+		if (ast_strlen_zero(tmp2))
+			snprintf(output, maxlen, "%d", causecode);
 		else
-			snprintf(tmp, sizeof(tmp), "%d", cause);
+			snprintf(output, maxlen, "%d: %s", causecode, tmp2);
 	}
-	
-	strncpy(output,tmp, maxlen);
-	output[maxlen] = '\0';
 }
 
 static void dump_int(char *output, int maxlen, void *value, int len)
@@ -229,7 +203,7 @@ static void dump_int(char *output, int maxlen, void *value, int len)
 	if (len == (int)sizeof(unsigned int))
 		snprintf(output, maxlen, "%lu", (unsigned long)ntohl(*((unsigned int *)value)));
 	else
-		snprintf(output, maxlen, "Invalid INT");
+		ast_copy_string(output, "Invalid INT", maxlen);
 }
 
 static void dump_short(char *output, int maxlen, void *value, int len)
@@ -237,7 +211,7 @@ static void dump_short(char *output, int maxlen, void *value, int len)
 	if (len == (int)sizeof(unsigned short))
 		snprintf(output, maxlen, "%d", ntohs(*((unsigned short *)value)));
 	else
-		snprintf(output, maxlen, "Invalid SHORT");
+		ast_copy_string(output, "Invalid SHORT", maxlen);
 }
 
 static void dump_byte(char *output, int maxlen, void *value, int len)
@@ -245,7 +219,7 @@ static void dump_byte(char *output, int maxlen, void *value, int len)
 	if (len == (int)sizeof(unsigned char))
 		snprintf(output, maxlen, "%d", *((unsigned char *)value));
 	else
-		snprintf(output, maxlen, "Invalid BYTE");
+		ast_copy_string(output, "Invalid BYTE", maxlen);
 }
 
 static char *proto2str(int proto, char *buf, int bufsiz)
@@ -315,17 +289,28 @@ static void dump_answer(char *output, int maxlen, void *value, int len)
 	char flags[40];
 	char eid_str[40];
 	char tmp[512]="";
-	if (len >= 10) {
-		answer = (struct dundi_answer *)(value);
-		memcpy(tmp, answer->data, (len >= 500) ? 500 : len - 10);
-		dundi_eid_to_str(eid_str, sizeof(eid_str), &answer->eid);
-		snprintf(output, maxlen, "[%s] %d <%s/%s> from [%s]", 
-			dundi_flags2str(flags, sizeof(flags), ntohs(answer->flags)), 
-			ntohs(answer->weight),
-			proto2str(answer->protocol, proto, sizeof(proto)), 
-				tmp, eid_str);
-	} else
-		strncpy(output, "Invalid Answer", maxlen - 1);
+	int datalen;
+
+	if (len < sizeof(*answer)) {
+		snprintf(output, maxlen, "Invalid Answer");
+		return;
+	}
+
+	answer = (struct dundi_answer *)(value);
+
+	datalen = len - offsetof(struct dundi_answer, data);
+	if (datalen > sizeof(tmp) - 1)
+		datalen = sizeof(tmp) - 1;
+
+	memcpy(tmp, answer->data, datalen);
+	tmp[datalen] = '\0';
+
+	ast_eid_to_str(eid_str, sizeof(eid_str), &answer->eid);
+	snprintf(output, maxlen, "[%s] %d <%s/%s> from [%s]", 
+		dundi_flags2str(flags, sizeof(flags), ntohs(answer->flags)), 
+		ntohs(answer->weight),
+		proto2str(answer->protocol, proto, sizeof(proto)), 
+			tmp, eid_str);
 }
 
 static void dump_encrypted(char *output, int maxlen, void *value, int len)
@@ -358,7 +343,7 @@ static struct dundi_ie {
 	int ie;
 	char *name;
 	void (*dump)(char *output, int maxlen, void *value, int len);
-} ies[] = {
+} infoelts[] = {
 	{ DUNDI_IE_EID, "ENTITY IDENT", dump_eid },
 	{ DUNDI_IE_CALLED_CONTEXT, "CALLED CONTEXT", dump_string },
 	{ DUNDI_IE_CALLED_NUMBER, "CALLED NUMBER", dump_string },
@@ -389,9 +374,9 @@ static struct dundi_ie {
 const char *dundi_ie2str(int ie)
 {
 	int x;
-	for (x=0;x<(int)sizeof(ies) / (int)sizeof(ies[0]); x++) {
-		if (ies[x].ie == ie)
-			return ies[x].name;
+	for (x = 0; x < ARRAY_LEN(infoelts); x++) {
+		if (infoelts[x].ie == ie)
+			return infoelts[x].name;
 	}
 	return "Unknown IE";
 }
@@ -418,18 +403,18 @@ static void dump_ies(unsigned char *iedata, int spaces, int len)
 			return;
 		}
 		found = 0;
-		for (x=0;x<(int)sizeof(ies) / (int)sizeof(ies[0]); x++) {
-			if (ies[x].ie == ie) {
-				if (ies[x].dump) {
-					ies[x].dump(interp, (int)sizeof(interp), iedata + 2, ielen);
-					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), ies[x].name, interp);
+		for (x = 0; x < ARRAY_LEN(infoelts); x++) {
+			if (infoelts[x].ie == ie) {
+				if (infoelts[x].dump) {
+					infoelts[x].dump(interp, (int)sizeof(interp), iedata + 2, ielen);
+					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), infoelts[x].name, interp);
 					outputf(tmp);
 				} else {
 					if (ielen)
 						snprintf(interp, (int)sizeof(interp), "%d bytes", ielen);
 					else
 						strcpy(interp, "Present");
-					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), ies[x].name, interp);
+					snprintf(tmp, (int)sizeof(tmp), "   %s%-15.15s : %s\n", (spaces ? "     " : "" ), infoelts[x].name, interp);
 					outputf(tmp);
 				}
 				found++;
@@ -473,15 +458,7 @@ void dundi_showframe(struct dundi_hdr *fhi, int rx, struct sockaddr_in *sin, int
 	char subclass2[20];
 	char *subclass;
 	char tmp[256];
-	char retries[20];
-	if (ntohs(fhi->dtrans) & DUNDI_FLAG_RETRANS)
-		strcpy(retries, "Yes");
-	else
-		strcpy(retries, "No");
-	if ((ntohs(fhi->strans) & DUNDI_FLAG_RESERVED)) {
-		/* Ignore frames with high bit set to 1 */
-		return;
-	}
+	const char *retries = "Yes";
 	if ((fhi->cmdresp & 0x3f) > (int)sizeof(commands)/(int)sizeof(char *)) {
 		snprintf(class2, (int)sizeof(class2), "(%d?)", fhi->cmdresp);
 		class = class2;
@@ -531,8 +508,10 @@ int dundi_ie_append_cause(struct dundi_ie_data *ied, unsigned char ie, unsigned 
 	ied->buf[ied->pos++] = ie;
 	ied->buf[ied->pos++] = datalen;
 	ied->buf[ied->pos++] = cause;
-	memcpy(ied->buf + ied->pos, data, datalen-1);
-	ied->pos += datalen-1;
+	if (data) {
+		memcpy(ied->buf + ied->pos, data, datalen-1);
+		ied->pos += datalen-1;
+	}
 	return 0;
 }
 
@@ -550,8 +529,10 @@ int dundi_ie_append_hint(struct dundi_ie_data *ied, unsigned char ie, unsigned s
 	flags = htons(flags);
 	memcpy(ied->buf + ied->pos, &flags, sizeof(flags));
 	ied->pos += 2;
-	memcpy(ied->buf + ied->pos, data, datalen-1);
-	ied->pos += datalen-2;
+	if (data) {
+		memcpy(ied->buf + ied->pos, data, datalen-2);
+		ied->pos += datalen-2;
+	}
 	return 0;
 }
 

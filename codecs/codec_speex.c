@@ -21,28 +21,26 @@
  *
  * \brief Translate between signed linear and Speex (Open Codec)
  *
- * http://www.speex.org
  * \note This work was motivated by Jeremy McNamara 
  * hacked to be configurable by anthm and bkw 9/28/2004
+ *
  * \ingroup codecs
+ *
+ * \extref The Speex library - http://www.speex.org
+ *
  */
 
 /*** MODULEINFO
 	<depend>speex</depend>
 	<depend>speex_preprocess</depend>
 	<use>speexdsp</use>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <stdio.h>
 #include <speex/speex.h>
 
 /* We require a post 1.1.8 version of Speex to enable preprocessing
@@ -51,18 +49,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <speex/speex_preprocess.h>
 #endif
 
-#include "asterisk/lock.h"
 #include "asterisk/translate.h"
 #include "asterisk/module.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/utils.h"
-
-/* Sample frame data */
-#include "slin_speex_ex.h"
-#include "speex_slin_ex.h"
 
 /* codec variables */
 static int quality = 3;
@@ -91,6 +81,10 @@ static float pp_dereverb_level = 0.3;
 #define	BUFFER_SAMPLES	8000
 #define	SPEEX_SAMPLES	160
 
+/* Sample frame data */
+#include "asterisk/slin.h"
+#include "ex_speex.h"
+
 struct speex_coder_pvt {
 	void *speex;
 	SpeexBits bits;
@@ -104,12 +98,11 @@ struct speex_coder_pvt {
 #endif
 };
 
-
-static int lintospeex_new(struct ast_trans_pvt *pvt)
+static int speex_encoder_construct(struct ast_trans_pvt *pvt, const SpeexMode *profile, int sampling_rate)
 {
 	struct speex_coder_pvt *tmp = pvt->pvt;
 
-	if (!(tmp->speex = speex_encoder_init(&speex_nb_mode)))
+	if (!(tmp->speex = speex_encoder_init(profile)))
 		return -1;
 
 	speex_bits_init(&tmp->bits);
@@ -118,7 +111,7 @@ static int lintospeex_new(struct ast_trans_pvt *pvt)
 	speex_encoder_ctl(tmp->speex, SPEEX_SET_COMPLEXITY, &complexity);
 #ifdef _SPEEX_TYPES_H
 	if (preproc) {
-		tmp->pp = speex_preprocess_state_init(tmp->framesize, 8000); /* XXX what is this 8000 ? */
+		tmp->pp = speex_preprocess_state_init(tmp->framesize, sampling_rate);
 		speex_preprocess_ctl(tmp->pp, SPEEX_PREPROCESS_SET_VAD, &pp_vad);
 		speex_preprocess_ctl(tmp->pp, SPEEX_PREPROCESS_SET_AGC, &pp_agc);
 		speex_preprocess_ctl(tmp->pp, SPEEX_PREPROCESS_SET_AGC_LEVEL, &pp_agc_level);
@@ -146,11 +139,21 @@ static int lintospeex_new(struct ast_trans_pvt *pvt)
 	return 0;
 }
 
-static int speextolin_new(struct ast_trans_pvt *pvt)
+static int lintospeex_new(struct ast_trans_pvt *pvt)
+{
+	return speex_encoder_construct(pvt, &speex_nb_mode, 8000);
+}
+
+static int lin16tospeexwb_new(struct ast_trans_pvt *pvt)
+{
+	return speex_encoder_construct(pvt, &speex_wb_mode, 16000);
+}
+
+static int speex_decoder_construct(struct ast_trans_pvt *pvt, const SpeexMode *profile)
 {
 	struct speex_coder_pvt *tmp = pvt->pvt;
 	
-	if (!(tmp->speex = speex_decoder_init(&speex_nb_mode)))
+	if (!(tmp->speex = speex_decoder_init(profile)))
 		return -1;
 
 	speex_bits_init(&tmp->bits);
@@ -161,34 +164,14 @@ static int speextolin_new(struct ast_trans_pvt *pvt)
 	return 0;
 }
 
-static struct ast_frame *lintospeex_sample(void)
+static int speextolin_new(struct ast_trans_pvt *pvt)
 {
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SLINEAR;
-	f.datalen = sizeof(slin_speex_ex);
-	/* Assume 8000 Hz */
-	f.samples = sizeof(slin_speex_ex)/2;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = slin_speex_ex;
-	return &f;
+	return speex_decoder_construct(pvt, &speex_nb_mode);
 }
 
-static struct ast_frame *speextolin_sample(void)
+static int speexwbtolin16_new(struct ast_trans_pvt *pvt)
 {
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SPEEX;
-	f.datalen = sizeof(speex_slin_ex);
-	/* All frames are 20 ms long */
-	f.samples = SPEEX_SAMPLES;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = speex_slin_ex;
-	return &f;
+	return speex_decoder_construct(pvt, &speex_wb_mode);
 }
 
 /*! \brief convert and store into outbuf */
@@ -200,7 +183,7 @@ static int speextolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	   the tail location.  Read in as many frames as there are */
 	int x;
 	int res;
-	int16_t *dst = (int16_t *)pvt->outbuf;
+	int16_t *dst = pvt->outbuf.i16;
 	/* XXX fout is a temporary buffer, may have different types */
 #ifdef _SPEEX_TYPES_H
 	spx_int16_t fout[1024];
@@ -227,7 +210,7 @@ static int speextolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	}
 
 	/* Read in bits */
-	speex_bits_read_from(&tmp->bits, f->data, f->datalen);
+	speex_bits_read_from(&tmp->bits, f->data.ptr, f->datalen);
 	for (;;) {
 #ifdef _SPEEX_TYPES_H
 		res = speex_decode_int(tmp->speex, &tmp->bits, fout);
@@ -256,7 +239,7 @@ static int lintospeex_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	/* XXX We should look at how old the rest of our stream is, and if it
 	   is too old, then we should overwrite it entirely, otherwise we can
 	   get artifacts of earlier talk that do not belong */
-	memcpy(tmp->buf + pvt->samples, f->data, f->datalen);
+	memcpy(tmp->buf + pvt->samples, f->data.ptr, f->datalen);
 	pvt->samples += f->samples;
 	return 0;
 }
@@ -323,7 +306,7 @@ static struct ast_frame *lintospeex_frameout(struct ast_trans_pvt *pvt)
 
 	/* Terminate bit stream */
 	speex_bits_pack(&tmp->bits, 15, 5);
-	datalen = speex_bits_write(&tmp->bits, pvt->outbuf, pvt->t->buf_size);
+	datalen = speex_bits_write(&tmp->bits, pvt->outbuf.c, pvt->t->buf_size);
 	return ast_trans_frameout(pvt, datalen, samples);
 }
 
@@ -353,7 +336,7 @@ static struct ast_translator speextolin = {
 	.newpvt = speextolin_new,
 	.framein = speextolin_framein,
 	.destroy = speextolin_destroy,
-	.sample = speextolin_sample,
+	.sample = speex_sample,
 	.desc_size = sizeof(struct speex_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
@@ -368,43 +351,69 @@ static struct ast_translator lintospeex = {
 	.framein = lintospeex_framein,
 	.frameout = lintospeex_frameout,
 	.destroy = lintospeex_destroy,
-	.sample = lintospeex_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct speex_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2, /* XXX maybe a lot less ? */
 };
 
-static void parse_config(void) 
+static struct ast_translator speexwbtolin16 = {
+	.name = "speexwbtolin16", 
+	.srcfmt = AST_FORMAT_SPEEX16,
+	.dstfmt =  AST_FORMAT_SLINEAR16,
+	.newpvt = speexwbtolin16_new,
+	.framein = speextolin_framein,
+	.destroy = speextolin_destroy,
+	.sample = speex16_sample,
+	.desc_size = sizeof(struct speex_coder_pvt),
+	.buffer_samples = BUFFER_SAMPLES,
+	.buf_size = BUFFER_SAMPLES * 2,
+	.native_plc = 1,
+};
+
+static struct ast_translator lin16tospeexwb = {
+	.name = "lin16tospeexwb", 
+	.srcfmt = AST_FORMAT_SLINEAR16,
+	.dstfmt = AST_FORMAT_SPEEX16,
+	.newpvt = lin16tospeexwb_new,
+	.framein = lintospeex_framein,
+	.frameout = lintospeex_frameout,
+	.destroy = lintospeex_destroy,
+	.sample = slin16_sample,
+	.desc_size = sizeof(struct speex_coder_pvt),
+	.buffer_samples = BUFFER_SAMPLES,
+	.buf_size = BUFFER_SAMPLES * 2, /* XXX maybe a lot less ? */
+};
+
+static int parse_config(int reload) 
 {
-	struct ast_config *cfg = ast_config_load("codecs.conf");
+	struct ast_flags config_flags = { reload ? CONFIG_FLAG_FILEUNCHANGED : 0 };
+	struct ast_config *cfg = ast_config_load("codecs.conf", config_flags);
 	struct ast_variable *var;
 	int res;
 	float res_f;
 
-	if (cfg == NULL)
-		return;
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEUNCHANGED || cfg == CONFIG_STATUS_FILEINVALID)
+		return 0;
 
 	for (var = ast_variable_browse(cfg, "speex"); var; var = var->next) {
 		if (!strcasecmp(var->name, "quality")) {
 			res = abs(atoi(var->value));
 			if (res > -1 && res < 11) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting Quality to %d\n",res);
+				ast_verb(3, "CODEC SPEEX: Setting Quality to %d\n",res);
 				quality = res;
 			} else 
 				ast_log(LOG_ERROR,"Error Quality must be 0-10\n");
 		} else if (!strcasecmp(var->name, "complexity")) {
 			res = abs(atoi(var->value));
 			if (res > -1 && res < 11) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting Complexity to %d\n",res);
+				ast_verb(3, "CODEC SPEEX: Setting Complexity to %d\n",res);
 				complexity = res;
 			} else 
 				ast_log(LOG_ERROR,"Error! Complexity must be 0-10\n");
 		} else if (!strcasecmp(var->name, "vbr_quality")) {
 			if (sscanf(var->value, "%30f", &res_f) == 1 && res_f >= 0 && res_f <= 10) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting VBR Quality to %f\n",res_f);
+				ast_verb(3, "CODEC SPEEX: Setting VBR Quality to %f\n",res_f);
 				vbr_quality = res_f;
 			} else
 				ast_log(LOG_ERROR,"Error! VBR Quality must be 0-10\n");
@@ -412,105 +421,95 @@ static void parse_config(void)
 			ast_log(LOG_ERROR,"Error! ABR Quality setting obsolete, set ABR to desired bitrate\n");
 		} else if (!strcasecmp(var->name, "enhancement")) {
 			enhancement = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Perceptual Enhancement Mode. [%s]\n",enhancement ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: Perceptual Enhancement Mode. [%s]\n",enhancement ? "on" : "off");
 		} else if (!strcasecmp(var->name, "vbr")) {
 			vbr = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: VBR Mode. [%s]\n",vbr ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: VBR Mode. [%s]\n",vbr ? "on" : "off");
 		} else if (!strcasecmp(var->name, "abr")) {
 			res = abs(atoi(var->value));
 			if (res >= 0) {
-				if (option_verbose > 2) {
 					if (res > 0)
-						ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting ABR target bitrate to %d\n",res);
+					ast_verb(3, "CODEC SPEEX: Setting ABR target bitrate to %d\n",res);
 					else
-						ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Disabling ABR\n");
-				}
+					ast_verb(3, "CODEC SPEEX: Disabling ABR\n");
 				abr = res;
 			} else 
 				ast_log(LOG_ERROR,"Error! ABR target bitrate must be >= 0\n");
 		} else if (!strcasecmp(var->name, "vad")) {
 			vad = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: VAD Mode. [%s]\n",vad ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: VAD Mode. [%s]\n",vad ? "on" : "off");
 		} else if (!strcasecmp(var->name, "dtx")) {
 			dtx = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: DTX Mode. [%s]\n",dtx ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: DTX Mode. [%s]\n",dtx ? "on" : "off");
 		} else if (!strcasecmp(var->name, "preprocess")) {
 			preproc = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Preprocessing. [%s]\n",preproc ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: Preprocessing. [%s]\n",preproc ? "on" : "off");
 		} else if (!strcasecmp(var->name, "pp_vad")) {
 			pp_vad = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Preprocessor VAD. [%s]\n",pp_vad ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: Preprocessor VAD. [%s]\n",pp_vad ? "on" : "off");
 		} else if (!strcasecmp(var->name, "pp_agc")) {
 			pp_agc = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Preprocessor AGC. [%s]\n",pp_agc ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: Preprocessor AGC. [%s]\n",pp_agc ? "on" : "off");
 		} else if (!strcasecmp(var->name, "pp_agc_level")) {
 			if (sscanf(var->value, "%30f", &res_f) == 1 && res_f >= 0) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting preprocessor AGC Level to %f\n",res_f);
+				ast_verb(3, "CODEC SPEEX: Setting preprocessor AGC Level to %f\n",res_f);
 				pp_agc_level = res_f;
 			} else
 				ast_log(LOG_ERROR,"Error! Preprocessor AGC Level must be >= 0\n");
 		} else if (!strcasecmp(var->name, "pp_denoise")) {
 			pp_denoise = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Preprocessor Denoise. [%s]\n",pp_denoise ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: Preprocessor Denoise. [%s]\n",pp_denoise ? "on" : "off");
 		} else if (!strcasecmp(var->name, "pp_dereverb")) {
 			pp_dereverb = ast_true(var->value) ? 1 : 0;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Preprocessor Dereverb. [%s]\n",pp_dereverb ? "on" : "off");
+			ast_verb(3, "CODEC SPEEX: Preprocessor Dereverb. [%s]\n",pp_dereverb ? "on" : "off");
 		} else if (!strcasecmp(var->name, "pp_dereverb_decay")) {
 			if (sscanf(var->value, "%30f", &res_f) == 1 && res_f >= 0) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting preprocessor Dereverb Decay to %f\n",res_f);
+				ast_verb(3, "CODEC SPEEX: Setting preprocessor Dereverb Decay to %f\n",res_f);
 				pp_dereverb_decay = res_f;
 			} else
 				ast_log(LOG_ERROR,"Error! Preprocessor Dereverb Decay must be >= 0\n");
 		} else if (!strcasecmp(var->name, "pp_dereverb_level")) {
 			if (sscanf(var->value, "%30f", &res_f) == 1 && res_f >= 0) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CODEC SPEEX: Setting preprocessor Dereverb Level to %f\n",res_f);
+				ast_verb(3, "CODEC SPEEX: Setting preprocessor Dereverb Level to %f\n",res_f);
 				pp_dereverb_level = res_f;
 			} else
 				ast_log(LOG_ERROR,"Error! Preprocessor Dereverb Level must be >= 0\n");
 		}
 	}
 	ast_config_destroy(cfg);
+	return 0;
 }
 
 static int reload(void) 
 {
-	parse_config();
-
-	return 0;
+	if (parse_config(1))
+		return AST_MODULE_LOAD_DECLINE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
-	int res;
+	int res = 0;
 
-	res = ast_unregister_translator(&lintospeex);
 	res |= ast_unregister_translator(&speextolin);
+	res |= ast_unregister_translator(&lintospeex);
+	res |= ast_unregister_translator(&speexwbtolin16);
+	res |= ast_unregister_translator(&lin16tospeexwb);
 
 	return res;
 }
 
 static int load_module(void)
 {
-	int res;
+	int res = 0;
 
-	parse_config();
-	res=ast_register_translator(&speextolin);
-	if (!res) 
-		res=ast_register_translator(&lintospeex);
-	else
-		ast_unregister_translator(&speextolin);
+	if (parse_config(0))
+		return AST_MODULE_LOAD_DECLINE;
+
+	res |= ast_register_translator(&speextolin);
+	res |= ast_register_translator(&lintospeex);
+	res |= ast_register_translator(&speexwbtolin16);
+	res |= ast_register_translator(&lin16tospeexwb);
 
 	return res;
 }

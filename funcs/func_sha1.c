@@ -20,25 +20,41 @@
  * \brief SHA1 digest related dialplan functions
  * 
  * \author Claude Patry <cpatry@gmail.com>
+ *
+ * \ingroup functions
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-
 #include "asterisk/module.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
-#include "asterisk/utils.h"
-#include "asterisk/app.h"
 
-static int sha1(struct ast_channel *chan, char *cmd, char *data,
+/*** DOCUMENTATION
+	<function name="SHA1" language="en_US">
+		<synopsis>
+			Computes a SHA1 digest.
+		</synopsis>
+		<syntax>
+			<parameter name="data" required="true">
+				<para>Input string</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Generate a SHA1 digest via the SHA1 algorythm.</para>
+			<para>Example:  Set(sha1hash=${SHA1(junky)})</para>
+			<para>Sets the asterisk variable sha1hash to the string <literal>60fa5675b9303eb62f99a9cd47f9f5837d18f9a0</literal>
+			which is known as his hash</para>	
+		</description>
+	</function>
+ ***/
+
+static int sha1(struct ast_channel *chan, const char *cmd, char *data,
 		char *buf, size_t len)
 {
 	*buf = '\0';
@@ -61,13 +77,8 @@ static int sha1(struct ast_channel *chan, char *cmd, char *data,
 
 static struct ast_custom_function sha1_function = {
 	.name = "SHA1",
-	.synopsis = "Computes a SHA1 digest",
-	.syntax = "SHA1(<data>)",
 	.read = sha1,
-	.desc = "Generate a SHA1 digest via the SHA1 algorythm.\n"
-		" Example:  Set(sha1hash=${SHA1(junky)})\n"
-		" Sets the asterisk variable sha1hash to the string '60fa5675b9303eb62f99a9cd47f9f5837d18f9a0'\n"
-		" which is known as his hash\n",
+	.read_max = 42,
 };
 
 static int unload_module(void)

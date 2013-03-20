@@ -16,7 +16,7 @@
 				; bindaddr if followed by colon and port
 				;  (e.g. bindaddr=192.168.0.1:4569)
 ;bindaddr=192.168.0.1		; more than once to bind to multiple
-;                               ; addresses, but the first will be the 
+;                               ; addresses, but the first will be the
 ;                               ; default
 ;
 ; Set iaxcompat to yes if you plan to use layered switches or
@@ -36,7 +36,7 @@
 ;
 ; For increased security against brute force password attacks
 ; enable "delayreject" which will delay the sending of authentication
-; reject for REGREQ or AUTHREP if there is a password.  
+; reject for REGREQ or AUTHREP if there is a password.
 ;
 ;delayreject=yes
 ;
@@ -51,12 +51,16 @@
 ;
 ;adsi=no
 ;
+; Perform an SRV lookup on outbound calls
+;
+;srvlookup=yes
+;
 ; You may specify a default account for Call Detail Records in addition
 ; to specifying on a per-user basis
 ;
 ;accountcode=lss0101
 ;
-; You may specify a global default language for users. 
+; You may specify a global default language for users.
 ; Can be specified also on a per-user basis
 ; If omitted, will fallback to english
 ;
@@ -107,7 +111,7 @@ disallow=lpc10			; Icky sound quality...  Mr. Roboto.
 ;
 ; forcejitterbuffer=yes|no: in the ideal world, when we bridge VoIP channels
 ; we don't want to do jitterbuffering on the switch, since the endpoints
-; can each handle this.  However, some endpoints may have poor jitterbuffers 
+; can each handle this.  However, some endpoints may have poor jitterbuffers
 ; themselves, so this option will force * to always jitterbuffer, even in this
 ; case.
 ;
@@ -129,14 +133,66 @@ disallow=lpc10			; Icky sound quality...  Mr. Roboto.
 ; returning this many interpolations. This prevents interpolating throughout
 ; a long silence.
 ;
+;
+; jittertargetextra: number of milliseconds by which the new jitter buffer
+; will pad its size. the default is 40, so without modification, the new
+; jitter buffer will set its size to the jitter value plus 40 milliseconds.
+; increasing this value may help if your network normally has low jitter,
+; but occasionally has spikes.
+;
 
 jitterbuffer=no
 forcejitterbuffer=no
 ;maxjitterbuffer=1000
 ;maxjitterinterps=10
 ;resyncthreshold=1000
+;jittertargetextra=40
 
-;trunkfreq=20			; How frequently to send trunk msgs (in ms)
+; Minimum and maximum amounts of time that IAX peers can request as
+; a registration expiration interval (in seconds).
+; minregexpire = 60
+; maxregexpire = 60
+;
+; Enable IAX2 encryption.  The default is no.
+;
+; encryption = yes
+;
+; Force encryption insures no connection is established unless both sides support
+; encryption.  By turning this option on, encryption is automatically turned on as well.
+;
+; forceencryption = yes
+
+; This option defines the maximum payload in bytes an IAX2 trunk can support at a given time.
+; The best way to explain this is to provide an example.  If the maximum number of calls
+; to be supported is 800, and each call transmits 20ms frames of audio using ulaw
+; ((8000hz / 1000ms) * 20ms * 1 byte per sample = 160 bytes per frame), the maximum load
+; in bytes is (160 bytes per frame) * (800 calls) = 128000 bytes total. Once this limit is
+; reached, calls may be dropped or begin to lose audio.  Depending on the codec in use and
+; number of channels to be supported this value may need to be raised, but in most cases the
+; default value is large enough.
+;
+; trunkmaxsize = 128000 ; defaults to 128000 bytes, which supports up to 800 calls of ulaw
+;                       ; at 20ms a frame.
+
+; With a large amount of traffic on IAX2 trunks, there is a risk of bad voice quality when
+; allowing the Linux system to handle fragmentation of UDP packets. Depending on the size of
+; each payload, allowing the O/S to handle fragmentation may not be very efficient. This
+; setting sets the maximum transmission unit for IAX2 UDP trunking. The default is 1240 bytes
+; which means if a trunk's payload is over 1240 bytes for every 20ms it will be broken into
+; multiple 1240 byte messages.  Zero disables this functionality and let's the O/S handle
+; fragmentation.
+;
+; trunkmtu = 1240 ; trunk data will be sent in 1240 byte messages.
+
+; trunkfreq sets how frequently trunk messages are sent in milliseconds. This value is 20ms by
+; default, which means the trunk will send all the date queued to it in the past 20ms.  By
+; increasing the time between sending trunk messages, the trunk's payload size will increase as
+; well.  Note, depending on the size set by trunkmtu, messages may be sent more often than
+; specified.  For example if a trunk's message size grows to the trunkmtu size before 20ms is
+; reached that message will be sent immediately.  Acceptable values are between 10ms and
+; 1000ms.
+;
+; trunkfreq=20     ; How frequently to send trunk msgs (in ms). This is 20ms by default.
 
 ; Should we send timestamps for the individual sub-frames within trunk frames?
 ; There is a small bandwidth use for these (less than 1kbps/call), but they
@@ -147,12 +203,9 @@ forcejitterbuffer=no
 ;
 ; trunktimestamps=yes
 ;
-; Minimum and maximum amounts of time that IAX peers can request as
-; a registration expiration interval (in seconds).
-; minregexpire = 60
-; maxregexpire = 60
-;
+
 ; IAX helper threads
+
 ; Establishes the number of iax helper threads to handle I/O.
 ; iaxthreadcount = 10
 ; Establishes the number of extra dynamic threads that may be spawned to handle I/O
@@ -176,7 +229,7 @@ forcejitterbuffer=no
 ; Sample Registration for iaxtel
 ;
 ; Visit http://www.iaxtel.com to register with iaxtel.  Replace "user"
-; and "pass" with your username and password for iaxtel.  Incoming 
+; and "pass" with your username and password for iaxtel.  Incoming
 ; calls arrive at the "s" extension of "default" context.
 ;
 ;register => user:pass@iaxtel.com
@@ -192,14 +245,24 @@ forcejitterbuffer=no
 ;
 ;register => FWDNumber:passwd@iax.fwdnet.net
 ;
+; Through the use of the res_stun_monitor module, Asterisk has the ability to detect when the
+; perceived external network address has changed.  When the stun_monitor is installed and
+; configured, chan_iax will renew all outbound registrations when the monitor detects any sort
+; of network change has occurred. By default this option is enabled, but only takes effect once
+; res_stun_monitor is configured.  If res_stun_monitor is enabled and you wish to not
+; generate all outbound registrations on a network change, use the option below to disable
+; this feature.
 ;
-; You can disable authentication debugging to reduce the amount of 
+; subscribe_network_change_event = yes ; on by default
+;
+; You can disable authentication debugging to reduce the amount of
 ; debugging traffic.
 ;
 ;authdebug=no
 ;
-; See doc/ip-tos.txt for a description of the tos parameters.
+; See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for a description of these parameters.
 ;tos=ef
+;cos=5
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy
 ; a NoOp priority 1 extension for a given peer who registers or unregisters
@@ -220,7 +283,7 @@ forcejitterbuffer=no
 autokill=yes
 ;
 ; codecpriority controls the codec negotiation of an inbound IAX call.
-; This option is inherited to all user entities.  It can also be defined 
+; This option is inherited to all user entities.  It can also be defined
 ; in each user entity separately which will override the setting in general.
 ;
 ; The valid values are:
@@ -251,6 +314,9 @@ autokill=yes
 			; just like friends added from the config file only on a
 			; as-needed basis? (yes|no)
 
+;rtsavesysname=yes    ; Save systemname in realtime database at registration
+                      ; Default = no
+
 ;rtupdate=yes		; Send registry updates to database using realtime? (yes|no)
 			; If set to yes, when a IAX2 peer registers successfully,
 			; the ip address, the origination port, the registration period,
@@ -267,6 +333,11 @@ autokill=yes
 ;rtignoreregexpire=yes	; When reading a peer from Realtime, if the peer's registration
 			; has expired based on its registration interval, used the stored
 			; address information regardless. (yes|no)
+
+;parkinglot=edvina		; Default parkinglot for IAX peers and users
+				; This can also be configured per device
+				; Parkinglots are defined in features.conf
+
 
 ;
 ; The following two options are used to disable call token validation for the
@@ -383,7 +454,7 @@ inkeys=freeworlddialup
 ; across the net.  "md5" uses a challenge/response md5 sum arrangement, but
 ; still requires both ends have plain text access to the secret.  "rsa" allows
 ; unidirectional secret knowledge through public/private keys.  If "rsa"
-; authentication is used, "inkeys" is a list of acceptable public keys on the 
+; authentication is used, "inkeys" is a list of acceptable public keys on the
 ; local system that can be used to authenticate the remote peer, separated by
 ; the ":" character.  "outkey" is a single, private key to use to authenticate
 ; to the other side.  Public keys are named /var/lib/asterisk/keys/<name>.pub
@@ -402,10 +473,13 @@ inkeys=freeworlddialup
 ;context=local
 ;auth=md5,plaintext,rsa
 ;secret=markpasswd
-;setvar=foo=bar
+;setvar=ATTENDED_TRANSFER_COMPLETE_SOUND=beep   ; This channel variable will
+                                                ; cause the given audio file to
+                                                ; be played upon completion of
+                                                ; an attended transfer.
 ;dbsecret=mysecrets/place	; Secrets can be stored in astdb, too
 ;transfer=no		; Disable IAX native transfer
-;transfer=mediaonly	; When doing IAX native transfers, transfer 
+;transfer=mediaonly	; When doing IAX native transfers, transfer
 			; only media stream
 ;jitterbuffer=yes	; Override global setting an enable jitter buffer
 ;			; for this user
@@ -416,6 +490,12 @@ inkeys=freeworlddialup
 ;accountcode=markster0101
 ;permit=209.16.236.73/255.255.255.0
 ;language=en		; Use english as default language
+;encryption=yes ; Enable IAX2 encryption.  The default is no.
+;keyrotate=off ; This is a compatibility option for older versions of
+;              ; IAX2 that do not support key rotation with encryption.
+;              ; This option will disable the IAX_COMMAND_RTENC message.
+;              ; default is on.
+;              ;
 ;
 ; Peers may also be specified, with a secret and
 ; a remote hostname.
@@ -438,8 +518,13 @@ host=216.207.245.47
 ;qualifyfreqnotok = 10000	; how frequently to ping the peer when it's
 				; either LAGGED or UNAVAILABLE, in milliseconds
 ;jitterbuffer=no		; Turn off jitter buffer for this peer
-
 ;
+;encryption=yes ; Enable IAX2 encryption.  The default is no.
+;keyrotate=off ; This is a compatibility option for older versions of
+;              ; IAX2 that do not support key rotation with encryption.
+;              ; This option will disable the IAX_COMMAND_RTENC message.
+;              ; default is on.
+;              ;
 ; Peers can remotely register as well, so that they can be mobile.  Default
 ; IP's can also optionally be given but are not required.  Caller*ID can be
 ; suggested to the other side as well if it is for example a phone instead of
@@ -480,3 +565,15 @@ host=216.207.245.47
 ;context=default
 ;permit=0.0.0.0/0.0.0.0
 
+;
+; With immediate=yes, an IAX phone or a phone on an IAXy acts as a hot-line
+; which goes immediately to the s extension when picked up.  Useful for
+; elevator phones, manual service, or other similar applications.
+;
+;[manual]
+;type=friend
+;host=dynamic
+;immediate=yes  ; go immediately to s extension when picked up
+;secret=moofoo	; when immediate=yes is specified, secret is required
+;context=number-please ; we start at the s extension in this context
+;

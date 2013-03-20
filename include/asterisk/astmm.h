@@ -18,6 +18,9 @@
 
 /*! \file
  * \brief Asterisk memory usage debugging
+ * This file provides headers for MALLOC_DEBUG, a define used for tracking down
+ * memory leaks.  It should never be \#included directly; always use the
+ * MALLOC_DEBUG definition in menuselect to activate those functions.
  */
 
 
@@ -27,6 +30,8 @@ extern "C" {
 
 #ifndef _ASTERISK_ASTMM_H
 #define _ASTERISK_ASTMM_H
+
+#ifndef STANDALONE
 
 #define __AST_DEBUG_MALLOC
 
@@ -56,10 +61,12 @@ void __ast_free(void *ptr, const char *file, int lineno, const char *func);
 void *__ast_realloc(void *ptr, size_t size, const char *file, int lineno, const char *func);
 char *__ast_strdup(const char *s, const char *file, int lineno, const char *func);
 char *__ast_strndup(const char *s, size_t n, const char *file, int lineno, const char *func);
-int __ast_asprintf(const char *file, int lineno, const char *func, char **strp, const char *format, ...) __attribute__((format(printf, 5, 6)));
-int __ast_vasprintf(char **strp, const char *format, va_list ap, const char *file, int lineno, const char *func) __attribute__((format(printf, 2, 0)));
-
-void __ast_mm_init(void);
+int __ast_asprintf(const char *file, int lineno, const char *func, char **strp, const char *format, ...)
+	__attribute__((format(printf, 5, 6)));
+int __ast_vasprintf(char **strp, const char *format, va_list ap, const char *file, int lineno, const char *func)
+	__attribute__((format(printf, 2, 0)));
+void __ast_mm_init_phase_1(void);
+void __ast_mm_init_phase_2(void);
 
 
 /* Provide our own definitions */
@@ -114,10 +121,12 @@ void __ast_mm_init(void);
 #define ast_vasprintf(a,b,c) \
 	__ast_vasprintf(a,b,c,__FILE__, __LINE__, __PRETTY_FUNCTION__)
 
-#ifdef __cplusplus
-}
-#endif
+#endif /* !STANDALONE */
 
 #else
 #error "NEVER INCLUDE astmm.h DIRECTLY!!"
 #endif /* _ASTERISK_ASTMM_H */
+
+#ifdef __cplusplus
+}
+#endif

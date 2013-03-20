@@ -30,14 +30,14 @@
 #ifndef _ABSTRACT_JB_H_
 #define _ABSTRACT_JB_H_
 
-#include <stdio.h>
 #include <sys/time.h>
+
+#include "asterisk/frame_defs.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
 #endif
 
-struct ast_channel;
 struct ast_frame;
 
 /* Configuration flags */
@@ -59,9 +59,11 @@ struct ast_jb_conf
 	/*! \brief Max size of the jitterbuffer implementation. */
 	long max_size;
 	/*! \brief Resynchronization threshold of the jitterbuffer implementation. */
- 	long resync_threshold;
+	long resync_threshold;
 	/*! \brief Name of the jitterbuffer implementation to be used. */
- 	char impl[AST_JB_IMPL_NAME_SIZE];
+	char impl[AST_JB_IMPL_NAME_SIZE];
+	/*! \brief amount of additional jitterbuffer adjustment */
+	long target_extra;
 };
 
 
@@ -71,6 +73,7 @@ struct ast_jb_conf
 #define AST_JB_CONF_FORCE "force"
 #define AST_JB_CONF_MAX_SIZE "maxsize"
 #define AST_JB_CONF_RESYNCH_THRESHOLD "resyncthreshold"
+#define AST_JB_CONF_TARGET_EXTRA "targetextra"
 #define AST_JB_CONF_IMPL "impl"
 #define AST_JB_CONF_LOG "log"
 
@@ -86,7 +89,7 @@ struct ast_jb
 	/*! \brief Jitterbuffer configuration. */
 	struct ast_jb_conf conf;
 	/*! \brief Jitterbuffer implementation to be used. */
-	struct ast_jb_impl *impl;
+	const struct ast_jb_impl *impl;
 	/*! \brief Jitterbuffer object, passed to the implementation. */
 	void *jbobj;
 	/*! \brief The time the jitterbuffer was created. */
@@ -94,7 +97,7 @@ struct ast_jb
 	/*! \brief The time the next frame should be played. */
 	long next;
 	/*! \brief Voice format of the last frame in. */
-	int last_format;
+	format_t last_format;
 	/*! \brief File for frame timestamp tracing. */
 	FILE *logfile;
 	/*! \brief Jitterbuffer internal state flags. */
@@ -113,7 +116,8 @@ struct ast_jb
  * appropriate internal jb flags to the channels, determining further behaviour
  * of the bridged jitterbuffers.
  *
- * \return zero if there are no jitter buffers in use, non-zero if there are
+ * \retval zero if there are no jitter buffers in use
+ * \retval non-zero if there are
  */
 int ast_jb_do_usecheck(struct ast_channel *c0, struct ast_channel *c1);
 
@@ -150,7 +154,8 @@ int ast_jb_get_when_to_wakeup(struct ast_channel *c0, struct ast_channel *c1, in
  * Dropped by the jb implementation frames are considered successfuly enqueued as
  * far as they should not be delivered at all.
  *
- * \return zero if the frame was queued, -1 if not.
+ * \retval 0 if the frame was queued
+ * \retval -1 if not
  */
 int ast_jb_put(struct ast_channel *chan, struct ast_frame *f);
 
@@ -183,15 +188,15 @@ void ast_jb_destroy(struct ast_channel *chan);
  * \param varname property name.
  * \param value property value.
  *
- * Called from a channel driver to build a jitterbuffer configuration tipically when
- * reading a configuration file. It is not neccessary for a channel driver to know
+ * Called from a channel driver to build a jitterbuffer configuration typically when
+ * reading a configuration file. It is not necessary for a channel driver to know
  * each of the jb configuration property names. The jitterbuffer itself knows them.
  * The channel driver can pass each config var it reads through this function. It will
  * return 0 if the variable was consumed from the jb conf.
  *
  * \return zero if the property was set to the configuration, -1 if not.
  */
-int ast_jb_read_conf(struct ast_jb_conf *conf, char *varname, char *value);
+int ast_jb_read_conf(struct ast_jb_conf *conf, const char *varname, const char *value);
 
 
 /*!

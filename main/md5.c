@@ -24,8 +24,6 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <string.h>		/* for memcpy() */
-
 #include "asterisk/endian.h"
 #include "asterisk/md5.h"
 
@@ -125,6 +123,7 @@ void MD5Final(unsigned char digest[16], struct MD5Context *ctx)
 {
 	unsigned count;
 	unsigned char *p;
+	uint32_t *in_buf;
 
 	/* Compute number of bytes mod 64 */
 	count = (ctx->bits[0] >> 3) & 0x3F;
@@ -153,13 +152,14 @@ void MD5Final(unsigned char digest[16], struct MD5Context *ctx)
 	byteReverse(ctx->in, 14);
 
 	/* Append length in bits and transform */
-	((uint32_t *) ctx->in)[14] = ctx->bits[0];
-	((uint32_t *) ctx->in)[15] = ctx->bits[1];
+	in_buf = (uint32_t *) ctx->in;
+	in_buf[14] = ctx->bits[0];
+	in_buf[15] = ctx->bits[1];
 
 	MD5Transform(ctx->buf, (uint32_t *) ctx->in);
 	byteReverse((unsigned char *) ctx->buf, 4);
 	memcpy(digest, ctx->buf, 16);
-	memset(ctx, 0, sizeof(ctx));	/* In case it's sensitive */
+	memset(ctx, 0, sizeof(*ctx));	/* In case it's sensitive */
 }
 
 #ifndef ASM_MD5

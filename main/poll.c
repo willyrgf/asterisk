@@ -80,14 +80,13 @@
 #include <string.h>						  /* string functions */
 #include <errno.h>
 
-#include "asterisk/poll-compat.h"							/* this package */
+#include "asterisk/utils.h"                            /* this package */
+#include "asterisk/poll-compat.h"                            /* this package */
 
-/*---------------------------------------------------------------------------*\
-				  Macros
-\*---------------------------------------------------------------------------*/
+unsigned int ast_FD_SETSIZE = FD_SETSIZE;
 
 #ifndef MAX
-#define MAX(a,b)	((a) > (b) ? (a) : (b))
+#define MAX(a,b)	a > b ? a : b
 #endif
 
 /*---------------------------------------------------------------------------*\
@@ -124,9 +123,9 @@ static int map_poll_spec(struct pollfd *pArray, unsigned long n_fds,
 		}
 
 		if (pCur->events & POLLPRI) {
-			/*
+			/*!\note
 			 * "Exception Occurred" notification desired.  (Exceptions
-			 * include out of band data.
+			 * include out of band data.)
 			 */
 			FD_SET(pCur->fd, pExceptSet);
 		}

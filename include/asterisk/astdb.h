@@ -36,8 +36,19 @@ struct ast_db_entry {
 /*!\brief Get key value specified by family/key */
 int ast_db_get(const char *family, const char *key, char *out, int outlen);
 
-/*!\brief Store value addressed by family/key*/
-int ast_db_put(const char *family, const char *key, char *value);
+/*!\brief Get key value specified by family/key as a heap allocated string.
+ *
+ * Given a \a family and \a key, sets \a out to a pointer to a heap
+ * allocated string.  In the event of an error, \a out will be set to
+ * NULL.  The string must be freed by calling ast_free().
+ *
+ * \retval -1 An error occurred
+ * \retval 0 Success
+ */
+int ast_db_get_allocated(const char *family, const char *key, char **out);
+
+/*!\brief Store value addressed by family/key */
+int ast_db_put(const char *family, const char *key, const char *value);
 
 /*!\brief Delete entry in astdb */
 int ast_db_del(const char *family, const char *key);
@@ -47,8 +58,8 @@ int ast_db_del(const char *family, const char *key);
  * only keytree is NULL, all entries within the family will be purged.
  * It is an error for keytree to have a value when family is NULL.
  *
- * \retval 0 Entries were deleted
  * \retval -1 An error occurred
+ * \retval >= 0 Number of records deleted
  */
 int ast_db_deltree(const char *family, const char *keytree);
 

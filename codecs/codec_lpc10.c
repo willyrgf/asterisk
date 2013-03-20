@@ -27,31 +27,24 @@
  * \ingroup codecs
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <stdio.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/translate.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/utils.h"
 
 #include "lpc10/lpc10.h"
 
 /* Sample frame data */
-#include "slin_lpc10_ex.h"
-#include "lpc10_slin_ex.h"
+#include "asterisk/slin.h"
+#include "ex_lpc10.h"
 
 /* We use a very strange format here...  I have no idea why...  The frames are 180
    samples long, which isn't even an even number of milliseconds...  Not only that
@@ -84,37 +77,6 @@ static int lpc10_dec_new(struct ast_trans_pvt *pvt)
 	struct lpc10_coder_pvt *tmp = pvt->pvt;
 
 	return (tmp->lpc10.dec = create_lpc10_decoder_state()) ? 0 : -1;
-}
-
-static struct ast_frame *lintolpc10_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SLINEAR;
-	f.datalen = sizeof(slin_lpc10_ex);
-	/* Assume 8000 Hz */
-	f.samples = LPC10_SAMPLES_PER_FRAME;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = slin_lpc10_ex;
-	return &f;
-}
-
-static struct ast_frame *lpc10tolin_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_LPC10;
-	f.datalen = sizeof(lpc10_slin_ex);
-	/* All frames are 22 ms long (maybe a little more -- why did he choose
-	   LPC10_SAMPLES_PER_FRAME sample frames anyway?? */
-	f.samples = LPC10_SAMPLES_PER_FRAME;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = lpc10_slin_ex;
-	return &f;
 }
 
 static void extract_bits(INT32 *bits, unsigned char *c)
@@ -151,7 +113,7 @@ static void build_bits(unsigned char *c, INT32 *bits)
 static int lpc10tolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct lpc10_coder_pvt *tmp = pvt->pvt;
-	int16_t *dst = (int16_t *)pvt->outbuf;
+	int16_t *dst = pvt->outbuf.i16;
 	int len = 0;
 
 	while (len + LPC10_BYTES_IN_COMPRESSED_FRAME <= f->datalen) {
@@ -162,7 +124,7 @@ static int lpc10tolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 			ast_log(LOG_WARNING, "Out of buffer space\n");
 			return -1;
 		}
-		extract_bits(bits, f->data + len);
+		extract_bits(bits, f->data.ptr + len);
 		if (lpc10_decode(bits, tmpbuf, tmp->lpc10.dec)) {
 			ast_log(LOG_WARNING, "Invalid lpc10 data\n");
 			return -1;
@@ -190,7 +152,7 @@ static int lintolpc10_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Out of buffer space\n");
 		return -1;
 	}
-	memcpy(tmp->buf + pvt->samples, f->data, f->datalen);
+	memcpy(tmp->buf + pvt->samples, f->data.ptr, f->datalen);
 	pvt->samples += f->samples;
 	return 0;
 }
@@ -211,7 +173,7 @@ static struct ast_frame *lintolpc10_frameout(struct ast_trans_pvt *pvt)
 		for (x=0;x<LPC10_SAMPLES_PER_FRAME;x++)
 			tmpbuf[x] = (float)tmp->buf[x + samples] / 32768.0;
 		lpc10_encode(tmpbuf, bits, tmp->lpc10.enc);
-		build_bits((unsigned char *) pvt->outbuf + datalen, bits);
+		build_bits(pvt->outbuf.uc + datalen, bits);
 		datalen += LPC10_BYTES_IN_COMPRESSED_FRAME;
 		samples += LPC10_SAMPLES_PER_FRAME;
 		pvt->samples -= LPC10_SAMPLES_PER_FRAME;
@@ -230,7 +192,7 @@ static void lpc10_destroy(struct ast_trans_pvt *arg)
 {
 	struct lpc10_coder_pvt *pvt = arg->pvt;
 	/* Enc and DEC are both just allocated, so they can be freed */
-	free(pvt->lpc10.enc);
+	ast_free(pvt->lpc10.enc);
 }
 
 static struct ast_translator lpc10tolin = {
@@ -240,7 +202,7 @@ static struct ast_translator lpc10tolin = {
 	.newpvt = lpc10_dec_new,
 	.framein = lpc10tolin_framein,
 	.destroy = lpc10_destroy,
-	.sample = lpc10tolin_sample,
+	.sample = lpc10_sample,
 	.desc_size = sizeof(struct lpc10_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
@@ -254,7 +216,7 @@ static struct ast_translator lintolpc10 = {
 	.framein = lintolpc10_framein,
 	.frameout = lintolpc10_frameout,
 	.destroy = lpc10_destroy,
-	.sample = lintolpc10_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof(struct lpc10_coder_pvt),
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = LPC10_BYTES_IN_COMPRESSED_FRAME * (1 + BUFFER_SAMPLES / LPC10_SAMPLES_PER_FRAME),
@@ -262,7 +224,7 @@ static struct ast_translator lintolpc10 = {
 
 static int reload(void)
 {
-        return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 
@@ -280,13 +242,14 @@ static int load_module(void)
 {
 	int res;
 
-	res=ast_register_translator(&lpc10tolin);
+	res = ast_register_translator(&lpc10tolin);
 	if (!res) 
-		res=ast_register_translator(&lintolpc10);
+		res = ast_register_translator(&lintolpc10);
 	else
 		ast_unregister_translator(&lpc10tolin);
-
-	return res;
+	if (res)
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "LPC10 2.4kbps Coder/Decoder",

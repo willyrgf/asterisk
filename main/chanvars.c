@@ -23,26 +23,33 @@
  * \author Mark Spencer <markster@digium.com> 
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
 #include "asterisk/chanvars.h"
-#include "asterisk/logger.h"
 #include "asterisk/strings.h"
 #include "asterisk/utils.h"
 
+#ifdef MALLOC_DEBUG
+struct ast_var_t *_ast_var_assign(const char *name, const char *value, const char *file, int lineno, const char *function)
+#else
 struct ast_var_t *ast_var_assign(const char *name, const char *value)
+#endif
 {	
 	struct ast_var_t *var;
 	int name_len = strlen(name) + 1;
 	int value_len = strlen(value) + 1;
 
+#ifdef MALLOC_DEBUG
+	if (!(var = __ast_calloc(sizeof(*var) + name_len + value_len, sizeof(char), file, lineno, function))) {
+#else
 	if (!(var = ast_calloc(sizeof(*var) + name_len + value_len, sizeof(char)))) {
+#endif
 		return NULL;
 	}
 
@@ -56,7 +63,7 @@ struct ast_var_t *ast_var_assign(const char *name, const char *value)
 void ast_var_delete(struct ast_var_t *var)
 {
 	if (var)
-		free(var);
+		ast_free(var);
 }
 
 const char *ast_var_name(const struct ast_var_t *var)

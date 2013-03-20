@@ -25,7 +25,7 @@ DOXYFILE_ENCODING      = UTF-8
 # The PROJECT_NAME tag is a single word (or a sequence of words surrounded 
 # by quotes) that should identify the project.
 
-PROJECT_NAME           = "Asterisk - the Open Source PBX"
+PROJECT_NAME           = "Asterisk - The Open Source Telephony Project"
 
 # The PROJECT_NUMBER tag can be used to enter a project or revision number. 
 # This could be handy for archiving the generated documentation or 
@@ -178,6 +178,7 @@ TAB_SIZE               = 3
 # You can put \n's in the value part of an alias to insert newlines.
 
 ALIASES                = "extref=\xrefitem extref \"ExtRef\" \"External references\""
+ALIASES += "AsteriskTrunkWarning=\note The information contained on this page may be out of date.  To make sure you get the most current information, please make sure that you are using the documentation generated from Asterisk trunk."
 
 # Set the OPTIMIZE_OUTPUT_FOR_C tag to YES if your project consists of C 
 # sources only. Doxygen will then generate output that is more tailored for C. 
@@ -463,20 +464,26 @@ WARN_LOGFILE           =
 # with spaces.
 
 INPUT                  = ./ \
-                         main \
-                         include \
-                         include/asterisk \
-                         channels \
-                         channels/misdn \
-                         funcs \
-                         main/stdtime \
+                         agi \
                          apps \
+                         bridges \
                          cdr \
+                         channels \
+                         channels/sip \
+                         channels/misdn \
                          codecs \
                          formats \
+                         funcs \
+                         include \
+                         include/asterisk \
+                         include/asterisk/doxygen \
+                         main \
+                         main/stdtime \
                          pbx \
-                         agi \
-                         res
+                         res \
+                         res/ael \
+                         res/ais \
+                         res/snmp
 
 # This tag can be used to specify the character encoding of the source files that 
 # doxygen parses. Internally doxygen uses the UTF-8 encoding, which is also the default 
@@ -1047,8 +1054,8 @@ INCLUDE_FILE_PATTERNS  =
 # instead of the = operator.
 
 PREDEFINED             = \
-			__GNUC__ \
-			__attribute__(x)=
+            __GNUC__ \
+            __attribute__(x)=
 
 # If the MACRO_EXPANSION and EXPAND_ONLY_PREDEF tags are set to YES then 
 # this tag can be used to specify a list of macro names that should be expanded. 
@@ -1056,39 +1063,51 @@ PREDEFINED             = \
 # Use the PREDEFINED tag if you want to use a different macro definition.
 
 EXPAND_AS_DEFINED      = \
-			AST_INLINE_API \
-			AST_DECLARE_STRING_FIELDS \
-			AST_STRING_FIELD \
-			AST_THREADSTORAGE \
-			AST_THREADSTORAGE_CUSTOM \
-			AST_MODULE_INFO \
-			AST_MODULE_INFO_STANDARD \
-			__AST_MUTEX_DEFINE \
-			AST_MUTEX_DEFINE_STATIC \
-			AST_MUTEX_DEFINE_STATIC_NOTRACKING \
-			__AST_RWLOCK_DEFINE \
-			AST_RWLOCK_DEFINE_STATIC \
-			AST_LIST_HEAD \
-			AST_RWLIST_HEAD \
-			AST_LIST_HEAD_NOLOCK \
-			AST_LIST_HEAD_STATIC \
-			AST_RWLIST_HEAD_STATIC \
-			AST_LIST_HEAD_NOLOCK_STATIC \
-			AST_LIST_ENTRY \
-			AST_RWLIST_ENTRY \
-			__ASTOBJ_HASH \
-			ASTOBJ_COMPONENTS_NOLOCK_FULL \
-			ASTOBJ_COMPONENTS_NOLOCK \
-			ASTOBJ_COMPONENTS_FULL \
-			ASTOBJ_COMPONENTS \
-			AST_IVR_DECLARE_MENU \
-			AST_DECLARE_APP_ARGS \
-			AST_APP_ARG \
-			BEGIN_OPTIONS \
-			END_OPTIONS \
-			AST_APP_OPTIONS \
-			AST_APP_OPTION \
-			AST_APP_OPTION_ARG
+            AST_INLINE_API \
+            AST_DECLARE_STRING_FIELDS \
+            AST_STRING_FIELD \
+            AST_THREADSTORAGE \
+            AST_THREADSTORAGE_CUSTOM \
+            AST_MODULE_INFO \
+            AST_MODULE_INFO_STANDARD \
+            __AST_MUTEX_DEFINE \
+            AST_MUTEX_DEFINE_STATIC \
+            AST_MUTEX_DEFINE_STATIC_NOTRACKING \
+            __AST_RWLOCK_DEFINE \
+            AST_RWLOCK_DEFINE_STATIC \
+            AST_LIST_HEAD \
+            AST_RWLIST_HEAD \
+            AST_LIST_HEAD_NOLOCK \
+            AST_LIST_HEAD_STATIC \
+            AST_RWLIST_HEAD_STATIC \
+            AST_LIST_HEAD_NOLOCK_STATIC \
+            AST_LIST_ENTRY \
+            AST_RWLIST_ENTRY \
+            __ASTOBJ_HASH \
+            ASTOBJ_COMPONENTS_NOLOCK_FULL \
+            ASTOBJ_COMPONENTS_NOLOCK \
+            ASTOBJ_COMPONENTS_FULL \
+            ASTOBJ_COMPONENTS \
+            AST_IVR_DECLARE_MENU \
+            AST_DECLARE_APP_ARGS \
+            AST_DEFINE_APP_ARGS_TYPE \
+            AST_APP_ARG \
+            BEGIN_OPTIONS \
+            END_OPTIONS \
+            AST_APP_OPTIONS \
+            AST_APP_OPTION \
+            AST_APP_OPTION_ARG \
+            AST_DLLIST_HEAD \
+            AST_DLLIST_HEAD_STATIC \
+            AST_DLLIST_HEAD_NOLOCK \
+            AST_DLLIST_HEAD_NOLOCK_STATIC \
+            AST_RWDLLIST_HEAD \
+            AST_RWDLLIST_HEAD_STATIC \
+            AST_DLLIST_ENTRY \
+            AST_RWDLLIST_ENTRY \
+            AST_CLI_DEFINE \
+            AST_OPTIONAL_API \
+            AST_OPTIONAL_API_ATTR
 
 # If the SKIP_FUNCTION_MACROS tag is set to YES (the default) then 
 # doxygen's preprocessor will remove all function-like macros that are alone 

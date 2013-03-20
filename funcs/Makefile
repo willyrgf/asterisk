@@ -9,24 +9,19 @@
 # the GNU General Public License
 #
 
--include ../menuselect.makeopts ../menuselect.makedeps
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps
 
+MODULE_PREFIX=func
 MENUSELECT_CATEGORY=FUNCS
 MENUSELECT_DESCRIPTION=Dialplan Functions
-
-ALL_C_MODS:=$(patsubst %.c,%,$(wildcard func_*.c))
-ALL_CC_MODS:=$(patsubst %.cc,%,$(wildcard func_*.cc))
-
-C_MODS:=$(filter-out $(MENUSELECT_FUNCS),$(ALL_C_MODS))
-CC_MODS:=$(filter-out $(MENUSELECT_FUNCS),$(ALL_CC_MODS))
-
-LOADABLE_MODS:=$(C_MODS) $(CC_MODS)
-
-ifneq ($(findstring funcs,$(MENUSELECT_EMBED)),)
-  EMBEDDED_MODS:=$(LOADABLE_MODS)
-  LOADABLE_MODS:=
-endif
 
 all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
+
+# the SPRINTF() function in func_sprintf accepts format specifiers
+# and thus passes them to snprintf() as non-literal strings; the compiler
+# can't check the string and arguments to ensure they match, so this
+# warning must be disabled; for safety reasons, SPRINTF() is kept in
+# a separate module so that as little code as possible is left unchecked
+func_sprintf.o: _ASTCFLAGS+=-Wno-format-nonliteral

@@ -23,17 +23,76 @@
  *
  * \brief Audiohook inheritance function
  *
- * \author \verbatim Mark Michelson <mmichelson@digium.com> \endverbatim
+ * \author Mark Michelson <mmichelson@digium.com>
  *
  * \ingroup functions
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
+#include "asterisk/datastore.h"
 #include "asterisk/channel.h"
+#include "asterisk/logger.h"
 #include "asterisk/audiohook.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
+
+/*** DOCUMENTATION
+ 	<function name = "AUDIOHOOK_INHERIT" language="en_US">
+		<synopsis>
+			Set whether an audiohook may be inherited to another channel
+		</synopsis>
+		<syntax>
+			<parameter name="source" required="true">
+				<para>The built-in sources in Asterisk are</para>
+				<enumlist>
+					<enum name="MixMonitor" />
+					<enum name="Chanspy" />
+					<enum name="Volume" />
+					<enum name="Speex" />
+					<enum name="pitch_shift" />
+					<enum name="JACK_HOOK" />
+					<enum name="Mute" />
+				</enumlist>
+				<para>Note that the names are not case-sensitive</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>By enabling audiohook inheritance on the channel, you are giving
+			permission for an audiohook to be inherited by a descendent channel.
+			Inheritance may be be disabled at any point as well.</para>
+
+			<para>Example scenario:</para>
+			<para>exten => 2000,1,MixMonitor(blah.wav)</para>
+			<para>exten => 2000,n,Set(AUDIOHOOK_INHERIT(MixMonitor)=yes)</para>
+			<para>exten => 2000,n,Dial(SIP/2000)</para>
+			<para>
+			</para>
+			<para>exten => 4000,1,Dial(SIP/4000)</para>
+			<para>
+			</para>
+			<para>exten => 5000,1,MixMonitor(blah2.wav)</para>
+			<para>exten => 5000,n,Dial(SIP/5000)</para>
+			<para>
+			</para>
+			<para>In this basic dialplan scenario, let's consider the following sample calls</para>
+			<para>Call 1: Caller dials 2000. The person who answers then executes an attended</para>
+			<para>        transfer to 4000.</para>
+			<para>Result: Since extension 2000 set MixMonitor to be inheritable, after the</para>
+			<para>        transfer to 4000 has completed, the call will continue to be recorded
+			to blah.wav</para>
+			<para>
+			</para>
+			<para>Call 2: Caller dials 5000. The person who answers then executes an attended</para>
+			<para>        transfer to 4000.</para>
+			<para>Result: Since extension 5000 did not set MixMonitor to be inheritable, the</para>
+			<para>        recording will stop once the call has been transferred to 4000.</para>
+		</description>
+	</function>
+ ***/
 
 struct inheritable_audiohook {
 	AST_LIST_ENTRY(inheritable_audiohook) list;
@@ -66,16 +125,12 @@ static void audiohook_inheritance_fixup(void *data, struct ast_channel *old_chan
 	struct inheritable_audiohook *audiohook = NULL;
 	struct audiohook_inheritance_datastore *datastore = data;
 
-	if (option_debug > 1) {
-		ast_log(LOG_DEBUG, "inheritance fixup occurring for channels %s(%p) and %s(%p)", old_chan->name, old_chan, new_chan->name, new_chan);
-	}
+	ast_debug(2, "inheritance fixup occurring for channels %s(%p) and %s(%p)", old_chan->name, old_chan, new_chan->name, new_chan);
 
 	AST_LIST_TRAVERSE(&datastore->allowed_list, audiohook, list) {
 		ast_audiohook_move_by_source(old_chan, new_chan, audiohook->source);
-		if (option_debug > 2) {
-			ast_log(LOG_DEBUG, "Moved audiohook %s from %s(%p) to %s(%p)\n",
-				audiohook->source, old_chan->name, old_chan, new_chan->name, new_chan);
-		}
+		ast_debug(3, "Moved audiohook %s from %s(%p) to %s(%p)\n",
+			audiohook->source, old_chan->name, old_chan, new_chan->name, new_chan);
 	}
 	return;
 }
@@ -107,12 +162,12 @@ static struct audiohook_inheritance_datastore *setup_inheritance_datastore(struc
 	struct ast_datastore *datastore = NULL;
 	struct audiohook_inheritance_datastore *audiohook_inheritance_datastore = NULL;
 
-	if (!(datastore = ast_channel_datastore_alloc(&audiohook_inheritance_info, NULL))) {
+	if (!(datastore = ast_datastore_alloc(&audiohook_inheritance_info, NULL))) {
 		return NULL;
 	}
 
 	if (!(audiohook_inheritance_datastore = ast_calloc(1, sizeof(*audiohook_inheritance_datastore)))) {
-		ast_channel_datastore_free(datastore);
+		ast_datastore_free(datastore);
 		return NULL;
 	}
 
@@ -142,9 +197,7 @@ static int setup_inheritable_audiohook(struct audiohook_inheritance_datastore *a
 
 	strcpy(inheritable_audiohook->source, source);
 	AST_LIST_INSERT_TAIL(&audiohook_inheritance_datastore->allowed_list, inheritable_audiohook, list);
-	if (option_debug > 2) {
-		ast_log(LOG_DEBUG, "Set audiohook %s to be inheritable\n", source);
-	}
+	ast_debug(3, "Set audiohook %s to be inheritable\n", source);
 	return 0;
 }
 
@@ -157,7 +210,7 @@ static int setup_inheritable_audiohook(struct audiohook_inheritance_datastore *a
  * \param data The audiohook source for which we are setting inheritance permissions
  * \param value The value indicating the permission for audiohook inheritance
  */
-static int func_inheritance_write(struct ast_channel *chan, char *function, char *data, const char *value)
+static int func_inheritance_write(struct ast_channel *chan, const char *function, char *data, const char *value)
 {
 	int allow;
 	struct ast_datastore *datastore = NULL;
@@ -183,9 +236,7 @@ static int func_inheritance_write(struct ast_channel *chan, char *function, char
 		ast_channel_unlock(chan);
 		/* In the case where we cannot find the datastore, we can take a few shortcuts */
 		if (!allow) {
-			if (option_debug) {
-				ast_log(LOG_DEBUG, "Audiohook %s is already set to not be inheritable on channel %s\n", data, chan->name);
-			}
+			ast_debug(1, "Audiohook %s is already set to not be inheritable on channel %s\n", data, chan->name);
 			return 0;
 		} else if (!(inheritance_datastore = setup_inheritance_datastore(chan))) {
 			ast_log(LOG_WARNING, "Unable to set up audiohook inheritance datastore on channel %s\n", chan->name);
@@ -203,15 +254,11 @@ static int func_inheritance_write(struct ast_channel *chan, char *function, char
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&inheritance_datastore->allowed_list, inheritable_audiohook, list) {
 		if (!strcasecmp(inheritable_audiohook->source, data)) {
 			if (allow) {
-				if (option_debug > 1) {
-					ast_log(LOG_DEBUG, "Audiohook source %s is already set up to be inherited from channel %s\n", data, chan->name);
-				}
+				ast_debug(2, "Audiohook source %s is already set up to be inherited from channel %s\n", data, chan->name);
 				return 0;
 			} else {
-				if (option_debug > 1) {
-					ast_log(LOG_DEBUG, "Removing inheritability of audiohook %s from channel %s\n", data, chan->name);
-				}
-				AST_LIST_REMOVE_CURRENT(&inheritance_datastore->allowed_list, list);
+				ast_debug(2, "Removing inheritability of audiohook %s from channel %s\n", data, chan->name);
+				AST_LIST_REMOVE_CURRENT(list);
 				ast_free(inheritable_audiohook);
 				return 0;
 			}
@@ -228,43 +275,13 @@ static int func_inheritance_write(struct ast_channel *chan, char *function, char
 	if (allow) {
 		return setup_inheritable_audiohook(inheritance_datastore, data);
 	} else {
-		if (option_debug) {
-			ast_log(LOG_DEBUG, "Audiohook %s is already set to not be inheritable on channel %s\n", data, chan->name);
-		}
+		ast_debug(1, "Audiohook %s is already set to not be inheritable on channel %s\n", data, chan->name);
 		return 0;
 	}
 }
 
 static struct ast_custom_function inheritance_function = {
 	.name = "AUDIOHOOK_INHERIT",
-	.synopsis = "Set whether an audiohook may be inherited to another channel",
-	.syntax = "AUDIOHOOK_INHERIT(source)",
-	.desc =
-		"By enabling audiohook inheritance on the channel, you are giving\n"
-		"permission for an audiohook to be inherited by a descendent channel.\n"
-		"Inheritance may be be disabled at any point as well.\n"
-		"\n"
-		"	Example scenario:\n"
-		"	exten => 2000,1,MixMonitor(blah.wav)\n"
-		"	exten => 2000,n,Set(AUDIOHOOK_INHERIT(MixMonitor)=yes)\n"
-		"	exten => 2000,n,Dial(SIP/2000)\n"
-		"\n"
-		"	exten => 4000,1,Dial(SIP/4000)\n"
-		"\n"
-		"	exten => 5000,1,MixMonitor(blah2.wav)\n"
-		"	exten => 5000,n,Dial(SIP/5000)\n"
-		"\n"
-		"	In this basic dialplan scenario, let's consider the following sample calls\n"
-		"	Call 1: Caller dials 2000. The person who answers then executes an attended\n"
-		"	        transfer to 4000.\n"
-		"	Result: Since extension 2000 set MixMonitor to be inheritable, after the\n"
-		"	        transfer to 400 has completed, the call will continue to be recorded\n"
-		"           to blah.wav\n"
-		"\n"
-		"	Call 2: Caller dials 5000. The person who answers then executes an attended\n"
-		"	        transfer to 4000.\n"
-		"	Result: Since extension 5000 did not set MixMonitor to be inheritable, the\n"
-		"	        recording will stop once the call has been transferred to 4000.\n",
 	.write = func_inheritance_write,
 };
 

@@ -23,22 +23,23 @@
 /*! \file
  *
  * \brief Common implementation-independent jitterbuffer stuff.
- * 
+ *
  * \author Slav Klenov <slav@securax.org>
+ *
+ *
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-
 #include "asterisk/frame.h"
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/term.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 
 #include "asterisk/abstract_jb.h"
@@ -92,7 +93,7 @@ struct ast_jb_impl
 
 /* Implementation functions */
 /* fixed */
-static void * jb_create_fixed(struct ast_jb_conf *general_config, long resynch_threshold);
+static void *jb_create_fixed(struct ast_jb_conf *general_config, long resynch_threshold);
 static void jb_destroy_fixed(void *jb);
 static int jb_put_first_fixed(void *jb, struct ast_frame *fin, long now);
 static int jb_put_fixed(void *jb, struct ast_frame *fin, long now);
@@ -113,8 +114,7 @@ static void jb_force_resynch_adaptive(void *jb);
 static void jb_empty_and_reset_adaptive(void *jb);
 
 /* Available jb implementations */
-static struct ast_jb_impl avail_impl[] = 
-{
+static const struct ast_jb_impl avail_impl[] = {
 	{
 		.name = "fixed",
 		.create = jb_create_fixed,
@@ -153,13 +153,13 @@ enum {
 };
 
 /* Translations between impl and abstract return codes */
-static int fixed_to_abstract_code[] =
+static const int fixed_to_abstract_code[] =
 	{JB_IMPL_OK, JB_IMPL_DROP, JB_IMPL_INTERP, JB_IMPL_NOFRAME};
-static int adaptive_to_abstract_code[] =
+static const int adaptive_to_abstract_code[] =
 	{JB_IMPL_OK, JB_IMPL_NOFRAME, JB_IMPL_NOFRAME, JB_IMPL_INTERP, JB_IMPL_DROP, JB_IMPL_OK};
 
 /* JB_GET actions (used only for the frames log) */
-static char *jb_get_actions[] = {"Delivered", "Dropped", "Interpolated", "No"};
+static const char * const jb_get_actions[] = {"Delivered", "Dropped", "Interpolated", "No"};
 
 /*! \brief Macros for the frame log files */
 #define jb_framelog(...) do { \
@@ -184,14 +184,15 @@ static void jb_choose_impl(struct ast_channel *chan)
 {
 	struct ast_jb *jb = &chan->jb;
 	struct ast_jb_conf *jbconf = &jb->conf;
-	struct ast_jb_impl *test_impl;
-	int i, avail_impl_count = sizeof(avail_impl) / sizeof(avail_impl[0]);
-	
+	const struct ast_jb_impl *test_impl;
+	int i, avail_impl_count = ARRAY_LEN(avail_impl);
+
 	jb->impl = &avail_impl[default_impl];
-	
-	if (ast_strlen_zero(jbconf->impl))
+
+	if (ast_strlen_zero(jbconf->impl)) {
 		return;
-		
+	}
+
 	for (i = 0; i < avail_impl_count; i++) {
 		test_impl = &avail_impl[i];
 		if (!strcasecmp(jbconf->impl, test_impl->name)) {
@@ -232,14 +233,14 @@ int ast_jb_do_usecheck(struct ast_channel *c0, struct ast_channel *c1)
 			}
 			ast_set_flag(jb0, JB_TIMEBASE_INITIALIZED);
 		}
-	
+
 		if (!c0_jb_created) {
 			jb_choose_impl(c0);
 		}
 
 		inuse = 1;
 	}
-	
+
 	/* Determine whether audio going to c1 needs a jitter buffer */
 	if (((!c1_wants_jitter && c0_creates_jitter) || (c1_force_jb && c0_creates_jitter)) && c1_jb_enabled) {
 		ast_set_flag(jb1, JB_USE);
@@ -251,7 +252,7 @@ int ast_jb_do_usecheck(struct ast_channel *c0, struct ast_channel *c1)
 			}
 			ast_set_flag(jb1, JB_TIMEBASE_INITIALIZED);
 		}
-		
+
 		if (!c1_jb_created) {
 			jb_choose_impl(c1);
 		}
@@ -272,32 +273,32 @@ int ast_jb_get_when_to_wakeup(struct ast_channel *c0, struct ast_channel *c1, in
 	int c1_jb_is_created = ast_test_flag(jb1, JB_CREATED);
 	int wait, wait0, wait1;
 	struct timeval tv_now;
-	
+
 	if (time_left == 0) {
 		/* No time left - the bridge will be retried */
 		/* TODO: Test disable this */
 		/*return 0;*/
 	}
-	
+
 	if (time_left < 0) {
 		time_left = INT_MAX;
 	}
-	
+
 	gettimeofday(&tv_now, NULL);
-	
+
 	wait0 = (c0_use_jb && c0_jb_is_created) ? jb0->next - get_now(jb0, &tv_now) : time_left;
 	wait1 = (c1_use_jb && c1_jb_is_created) ? jb1->next - get_now(jb1, &tv_now) : time_left;
-	
+
 	wait = wait0 < wait1 ? wait0 : wait1;
 	wait = wait < time_left ? wait : time_left;
-	
+
 	if (wait == INT_MAX) {
 		wait = -1;
 	} else if (wait < 1) {
 		/* don't let wait=0, because this can cause the pbx thread to loop without any sleeping at all */
 		wait = 1;
 	}
-	
+
 	return wait;
 }
 
@@ -305,11 +306,11 @@ int ast_jb_get_when_to_wakeup(struct ast_channel *c0, struct ast_channel *c1, in
 int ast_jb_put(struct ast_channel *chan, struct ast_frame *f)
 {
 	struct ast_jb *jb = &chan->jb;
-	struct ast_jb_impl *jbimpl = jb->impl;
+	const struct ast_jb_impl *jbimpl = jb->impl;
 	void *jbobj = jb->jbobj;
 	struct ast_frame *frr;
 	long now = 0;
-	
+
 	if (!ast_test_flag(jb, JB_USE))
 		return -1;
 
@@ -318,7 +319,7 @@ int ast_jb_put(struct ast_channel *chan, struct ast_frame *f)
 			jb_framelog("JB_PUT {now=%ld}: Received DTMF frame. Force resynching jb...\n", now);
 			jbimpl->force_resync(jbobj);
 		}
-		
+
 		return -1;
 	}
 
@@ -353,7 +354,7 @@ int ast_jb_put(struct ast_channel *chan, struct ast_frame *f)
 			jb_framelog("JB_PUT {now=%ld}: Dropped frame with ts=%ld and len=%ld\n", now, frr->ts, frr->len);
 			ast_frfree(frr);
 			/*return -1;*/
-			/* TODO: Check this fix - should return 0 here, because the dropped frame shouldn't 
+			/* TODO: Check this fix - should return 0 here, because the dropped frame shouldn't
 			   be delivered at all */
 			return 0;
 		}
@@ -375,10 +376,10 @@ void ast_jb_get_and_deliver(struct ast_channel *c0, struct ast_channel *c1)
 	int c0_jb_is_created = ast_test_flag(jb0, JB_CREATED);
 	int c1_use_jb = ast_test_flag(jb1, JB_USE);
 	int c1_jb_is_created = ast_test_flag(jb1, JB_CREATED);
-	
+
 	if (c0_use_jb && c0_jb_is_created)
 		jb_get_and_deliver(c0);
-	
+
 	if (c1_use_jb && c1_jb_is_created)
 		jb_get_and_deliver(c1);
 }
@@ -387,38 +388,39 @@ void ast_jb_get_and_deliver(struct ast_channel *c0, struct ast_channel *c1)
 static void jb_get_and_deliver(struct ast_channel *chan)
 {
 	struct ast_jb *jb = &chan->jb;
-	struct ast_jb_impl *jbimpl = jb->impl;
+	const struct ast_jb_impl *jbimpl = jb->impl;
 	void *jbobj = jb->jbobj;
 	struct ast_frame *f, finterp = { .frametype = AST_FRAME_VOICE, };
 	long now;
 	int interpolation_len, res;
-	
+
 	now = get_now(jb, NULL);
 	jb->next = jbimpl->next(jbobj);
 	if (now < jb->next) {
 		jb_framelog("\tJB_GET {now=%ld}: now < next=%ld\n", now, jb->next);
 		return;
 	}
-	
+
 	while (now >= jb->next) {
 		interpolation_len = ast_codec_interp_len(jb->last_format);
-		
+
 		res = jbimpl->get(jbobj, &f, now, interpolation_len);
-		
-		switch(res) {
+
+		switch (res) {
 		case JB_IMPL_OK:
 			/* deliver the frame */
 			ast_write(chan, f);
+			/* Fall through intentionally */
 		case JB_IMPL_DROP:
 			jb_framelog("\tJB_GET {now=%ld}: %s frame with ts=%ld and len=%ld\n",
 				now, jb_get_actions[res], f->ts, f->len);
-			jb->last_format = f->subclass;
+			jb->last_format = f->subclass.codec;
 			ast_frfree(f);
 			break;
 		case JB_IMPL_INTERP:
 			/* interpolate a frame */
 			f = &finterp;
-			f->subclass = jb->last_format;
+			f->subclass.codec = jb->last_format;
 			f->samples  = interpolation_len * 8;
 			f->src  = "JB interpolation";
 			f->delivery = ast_tvadd(jb->timebase, ast_samp2tv(jb->next, 1000));
@@ -429,7 +431,7 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 			break;
 		case JB_IMPL_NOFRAME:
 			ast_log(LOG_WARNING,
-				"JB_IMPL_NOFRAME is retuned from the %s jb when now=%ld >= next=%ld, jbnext=%ld!\n",
+				"JB_IMPL_NOFRAME is returned from the %s jb when now=%ld >= next=%ld, jbnext=%ld!\n",
 				jbimpl->name, now, jb->next, jbimpl->next(jbobj));
 			jb_framelog("\tJB_GET {now=%ld}: No frame for now!?\n", now);
 			return;
@@ -438,7 +440,7 @@ static void jb_get_and_deliver(struct ast_channel *chan)
 			ast_assert("JB type unknown" == NULL);
 			break;
 		}
-		
+
 		jb->next = jbimpl->next(jbobj);
 	}
 }
@@ -448,7 +450,7 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 {
 	struct ast_jb *jb = &chan->jb;
 	struct ast_jb_conf *jbconf = &jb->conf;
-	struct ast_jb_impl *jbimpl = jb->impl;
+	const struct ast_jb_impl *jbimpl = jb->impl;
 	void *jbobj;
 	struct ast_channel *bridged;
 	long now;
@@ -461,10 +463,10 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 		ast_log(LOG_WARNING, "Failed to create jitterbuffer on channel '%s'\n", chan->name);
 		return -1;
 	}
-	
+
 	now = get_now(jb, NULL);
 	res = jbimpl->put_first(jbobj, frr, now);
-	
+
 	/* The result of putting the first frame should not differ from OK. However, its possible
 	   some implementations (i.e. adaptive's when resynch_threshold is specified) to drop it. */
 	if (res != JB_IMPL_OK) {
@@ -474,51 +476,59 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 		return -1;
 		*/
 	}
-	
+
 	/* Init next */
 	jb->next = jbimpl->next(jbobj);
-	
+
 	/* Init last format for a first time. */
-	jb->last_format = frr->subclass;
-	
+	jb->last_format = frr->subclass.codec;
+
 	/* Create a frame log file */
 	if (ast_test_flag(jbconf, AST_JB_LOG)) {
+		char safe_logfile[30] = "/tmp/logfile-XXXXXX";
+		int safe_fd;
 		snprintf(name2, sizeof(name2), "%s", chan->name);
-		tmp = strchr(name2, '/');
-		if (tmp)
+		if ((tmp = strchr(name2, '/'))) {
 			*tmp = '#';
-		
+		}
+
 		bridged = ast_bridged_channel(chan);
 		/* We should always have bridged chan if a jitterbuffer is in use */
 		ast_assert(bridged != NULL);
 
 		snprintf(name1, sizeof(name1), "%s", bridged->name);
-		tmp = strchr(name1, '/');
-		if (tmp)
+		if ((tmp = strchr(name1, '/'))) {
 			*tmp = '#';
-		
+		}
+
 		snprintf(logfile_pathname, sizeof(logfile_pathname),
 			"/tmp/ast_%s_jb_%s--%s.log", jbimpl->name, name1, name2);
-		jb->logfile = fopen(logfile_pathname, "w+b");
-		
-		if (!jb->logfile)
-			ast_log(LOG_WARNING, "Failed to create frame log file with pathname '%s'\n", logfile_pathname);
-		
-		if (res == JB_IMPL_OK)
+		unlink(logfile_pathname);
+		safe_fd = mkstemp(safe_logfile);
+		if (safe_fd < 0 || link(safe_logfile, logfile_pathname) || unlink(safe_logfile) || !(jb->logfile = fdopen(safe_fd, "w+b"))) {
+			ast_log(LOG_ERROR, "Failed to create frame log file with pathname '%s': %s\n", logfile_pathname, strerror(errno));
+			jb->logfile = NULL;
+			if (safe_fd > -1) {
+				close(safe_fd);
+			}
+		}
+
+		if (res == JB_IMPL_OK) {
 			jb_framelog("JB_PUT_FIRST {now=%ld}: Queued frame with ts=%ld and len=%ld\n",
 				now, frr->ts, frr->len);
-		else
+		} else {
 			jb_framelog("JB_PUT_FIRST {now=%ld}: Dropped frame with ts=%ld and len=%ld\n",
 				now, frr->ts, frr->len);
+		}
 	}
 
-	if (option_verbose > 2) 
-		ast_verbose(VERBOSE_PREFIX_3 "%s jitterbuffer created on channel %s\n", jbimpl->name, chan->name);
-	
+	ast_verb(3, "%s jitterbuffer created on channel %s\n", jbimpl->name, chan->name);
+
 	/* Free the frame if it has not been queued in the jb */
-	if (res != JB_IMPL_OK)
+	if (res != JB_IMPL_OK) {
 		ast_frfree(frr);
-	
+	}
+
 	return 0;
 }
 
@@ -526,7 +536,7 @@ static int create_jb(struct ast_channel *chan, struct ast_frame *frr)
 void ast_jb_destroy(struct ast_channel *chan)
 {
 	struct ast_jb *jb = &chan->jb;
-	struct ast_jb_impl *jbimpl = jb->impl;
+	const struct ast_jb_impl *jbimpl = jb->impl;
 	void *jbobj = jb->jbobj;
 	struct ast_frame *f;
 
@@ -534,48 +544,48 @@ void ast_jb_destroy(struct ast_channel *chan)
 		fclose(jb->logfile);
 		jb->logfile = NULL;
 	}
-	
+
 	if (ast_test_flag(jb, JB_CREATED)) {
 		/* Remove and free all frames still queued in jb */
 		while (jbimpl->remove(jbobj, &f) == JB_IMPL_OK) {
 			ast_frfree(f);
 		}
-		
+
 		jbimpl->destroy(jbobj);
 		jb->jbobj = NULL;
-		
+
 		ast_clear_flag(jb, JB_CREATED);
 
-		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_3 "%s jitterbuffer destroyed on channel %s\n", jbimpl->name, chan->name);
+		ast_verb(3, "%s jitterbuffer destroyed on channel %s\n", jbimpl->name, chan->name);
 	}
 }
 
 
-static long get_now(struct ast_jb *jb, struct timeval *tv)
+static long get_now(struct ast_jb *jb, struct timeval *when)
 {
 	struct timeval now;
 
-	if (!tv) {
-		tv = &now;
-		gettimeofday(tv, NULL);
+	if (!when) {
+		when = &now;
+		gettimeofday(when, NULL);
 	}
 
-	return ast_tvdiff_ms(*tv, jb->timebase);
+	return ast_tvdiff_ms(*when, jb->timebase);
 }
 
 
-int ast_jb_read_conf(struct ast_jb_conf *conf, char *varname, char *value)
+int ast_jb_read_conf(struct ast_jb_conf *conf, const char *varname, const char *value)
 {
 	int prefixlen = sizeof(AST_JB_CONF_PREFIX) - 1;
-	char *name;
+	const char *name;
 	int tmp;
-	
-	if (strncasecmp(AST_JB_CONF_PREFIX, varname, prefixlen))
+
+	if (strncasecmp(AST_JB_CONF_PREFIX, varname, prefixlen)) {
 		return -1;
-	
+	}
+
 	name = varname + prefixlen;
-	
+
 	if (!strcasecmp(name, AST_JB_CONF_ENABLE)) {
 		ast_set2_flag(conf, ast_true(value), AST_JB_ENABLED);
 	} else if (!strcasecmp(name, AST_JB_CONF_FORCE)) {
@@ -589,12 +599,16 @@ int ast_jb_read_conf(struct ast_jb_conf *conf, char *varname, char *value)
 	} else if (!strcasecmp(name, AST_JB_CONF_IMPL)) {
 		if (!ast_strlen_zero(value))
 			snprintf(conf->impl, sizeof(conf->impl), "%s", value);
+	} else if (!strcasecmp(name, AST_JB_CONF_TARGET_EXTRA)) {
+		if (sscanf(value, "%30d", &tmp) == 1) {
+			conf->target_extra = tmp;
+		}
 	} else if (!strcasecmp(name, AST_JB_CONF_LOG)) {
 		ast_set2_flag(conf, ast_true(value), AST_JB_LOG);
 	} else {
 		return -1;
 	}
-	
+
 	return 0;
 }
 
@@ -644,7 +658,7 @@ static void * jb_create_fixed(struct ast_jb_conf *general_config, long resynch_t
 static void jb_destroy_fixed(void *jb)
 {
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
-	
+
 	/* destroy the jb */
 	fixed_jb_destroy(fixedjb);
 }
@@ -654,9 +668,9 @@ static int jb_put_first_fixed(void *jb, struct ast_frame *fin, long now)
 {
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
 	int res;
-	
+
 	res = fixed_jb_put_first(fixedjb, fin, fin->len, fin->ts, now);
-	
+
 	return fixed_to_abstract_code[res];
 }
 
@@ -665,9 +679,9 @@ static int jb_put_fixed(void *jb, struct ast_frame *fin, long now)
 {
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
 	int res;
-	
+
 	res = fixed_jb_put(fixedjb, fin, fin->len, fin->ts, now);
-	
+
 	return fixed_to_abstract_code[res];
 }
 
@@ -677,10 +691,10 @@ static int jb_get_fixed(void *jb, struct ast_frame **fout, long now, long interp
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
 	struct fixed_jb_frame frame;
 	int res;
-	
+
 	res = fixed_jb_get(fixedjb, &frame, now, interpl);
 	*fout = frame.data;
-	
+
 	return fixed_to_abstract_code[res];
 }
 
@@ -688,7 +702,7 @@ static int jb_get_fixed(void *jb, struct ast_frame **fout, long now, long interp
 static long jb_next_fixed(void *jb)
 {
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
-	
+
 	return fixed_jb_next(fixedjb);
 }
 
@@ -698,10 +712,10 @@ static int jb_remove_fixed(void *jb, struct ast_frame **fout)
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
 	struct fixed_jb_frame frame;
 	int res;
-	
+
 	res = fixed_jb_remove(fixedjb, &frame);
 	*fout = frame.data;
-	
+
 	return fixed_to_abstract_code[res];
 }
 
@@ -709,7 +723,7 @@ static int jb_remove_fixed(void *jb, struct ast_frame **fout)
 static void jb_force_resynch_fixed(void *jb)
 {
 	struct fixed_jb *fixedjb = (struct fixed_jb *) jb;
-	
+
 	fixed_jb_set_force_resynch(fixedjb);
 }
 
@@ -735,9 +749,10 @@ static void *jb_create_adaptive(struct ast_jb_conf *general_config, long resynch
 		jbconf.max_jitterbuf = general_config->max_size;
 		jbconf.resync_threshold = general_config->resync_threshold;
 		jbconf.max_contig_interp = 10;
+		jbconf.target_extra = general_config->target_extra;
 		jb_setconf(adaptivejb, &jbconf);
 	}
-	
+
 	return adaptivejb;
 }
 
@@ -745,7 +760,7 @@ static void *jb_create_adaptive(struct ast_jb_conf *general_config, long resynch
 static void jb_destroy_adaptive(void *jb)
 {
 	jitterbuf *adaptivejb = (jitterbuf *) jb;
-	
+
 	jb_destroy(adaptivejb);
 }
 
@@ -765,9 +780,9 @@ static int jb_put_adaptive(void *jb, struct ast_frame *fin, long now)
 {
 	jitterbuf *adaptivejb = (jitterbuf *) jb;
 	int res;
-	
+
 	res = jb_put(adaptivejb, fin, JB_TYPE_VOICE, fin->len, fin->ts, now);
-	
+
 	return adaptive_to_abstract_code[res];
 }
 
@@ -777,10 +792,10 @@ static int jb_get_adaptive(void *jb, struct ast_frame **fout, long now, long int
 	jitterbuf *adaptivejb = (jitterbuf *) jb;
 	jb_frame frame;
 	int res;
-	
+
 	res = jb_get(adaptivejb, &frame, now, interpl);
 	*fout = frame.data;
-	
+
 	return adaptive_to_abstract_code[res];
 }
 
@@ -788,7 +803,7 @@ static int jb_get_adaptive(void *jb, struct ast_frame **fout, long now, long int
 static long jb_next_adaptive(void *jb)
 {
 	jitterbuf *adaptivejb = (jitterbuf *) jb;
-	
+
 	return jb_next(adaptivejb);
 }
 
@@ -798,10 +813,10 @@ static int jb_remove_adaptive(void *jb, struct ast_frame **fout)
 	jitterbuf *adaptivejb = (jitterbuf *) jb;
 	jb_frame frame;
 	int res;
-	
+
 	res = jb_getall(adaptivejb, &frame);
 	*fout = frame.data;
-	
+
 	return adaptive_to_abstract_code[res];
 }
 

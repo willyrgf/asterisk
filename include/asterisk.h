@@ -2,7 +2,7 @@
  * Asterisk -- A telephony toolkit for Linux.
  *
  * General Definitions for Asterisk top level program
- * 
+ *
  * Copyright (C) 1999-2006, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
@@ -20,13 +20,21 @@
 
 #include "asterisk/autoconfig.h"
 
-#if !defined(NO_MALLOC_DEBUG) && !defined(STANDALONE_AEL) && defined(MALLOC_DEBUG)
+#if !defined(NO_MALLOC_DEBUG) && !defined(STANDALONE) && !defined(STANDALONE2) && defined(MALLOC_DEBUG)
 #include "asterisk/astmm.h"
 #endif
 
 #include "asterisk/compat.h"
 
-#include "asterisk/paths.h"
+/* Default to allowing the umask or filesystem ACLs to determine actual file
+ * creation permissions
+ */
+#ifndef AST_DIR_MODE
+#define AST_DIR_MODE 0777
+#endif
+#ifndef AST_FILE_MODE
+#define AST_FILE_MODE 0666
+#endif
 
 #define DEFAULT_LANGUAGE "en"
 
@@ -35,23 +43,22 @@
 #define	setpriority	__PLEASE_USE_ast_set_priority_INSTEAD_OF_setpriority__
 #define	sched_setscheduler	__PLEASE_USE_ast_set_priority_INSTEAD_OF_sched_setscheduler__
 
-#if defined(DEBUG_FD_LEAKS) && !defined(STANDALONE) && !defined(STANDALONE_AEL)
+#if defined(DEBUG_FD_LEAKS) && !defined(STANDALONE) && !defined(STANDALONE2) && !defined(STANDALONE_AEL)
 /* These includes are all about ordering */
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
-#include <unistd.h>
 #include <fcntl.h>
 
 #define	open(a,...)	__ast_fdleak_open(__FILE__,__LINE__,__PRETTY_FUNCTION__, a, __VA_ARGS__)
-#define pipe(a)	__ast_fdleak_pipe(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
+#define pipe(a)		__ast_fdleak_pipe(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 #define socket(a,b,c)	__ast_fdleak_socket(a, b, c, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 #define close(a)	__ast_fdleak_close(a)
 #define	fopen(a,b)	__ast_fdleak_fopen(a, b, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 #define	fclose(a)	__ast_fdleak_fclose(a)
 #define	dup2(a,b)	__ast_fdleak_dup2(a, b, __FILE__,__LINE__,__PRETTY_FUNCTION__)
-#define dup(a)	__ast_fdleak_dup(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
+#define dup(a)		__ast_fdleak_dup(a, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -69,93 +76,22 @@ int __ast_fdleak_dup(int oldfd, const char *file, int line, const char *func);
 #endif
 #endif
 
-/* provided in asterisk.c */
-extern char ast_config_AST_CONFIG_DIR[PATH_MAX];
-extern char ast_config_AST_CONFIG_FILE[PATH_MAX];
-extern char ast_config_AST_MODULE_DIR[PATH_MAX];
-extern char ast_config_AST_SPOOL_DIR[PATH_MAX];
-extern char ast_config_AST_MONITOR_DIR[PATH_MAX];
-extern char ast_config_AST_VAR_DIR[PATH_MAX];
-extern char ast_config_AST_DATA_DIR[PATH_MAX];
-extern char ast_config_AST_LOG_DIR[PATH_MAX];
-extern char ast_config_AST_AGI_DIR[PATH_MAX];
-extern char ast_config_AST_DB[PATH_MAX];
-extern char ast_config_AST_KEY_DIR[PATH_MAX];
-extern char ast_config_AST_PID[PATH_MAX];
-extern char ast_config_AST_SOCKET[PATH_MAX];
-extern char ast_config_AST_RUN_DIR[PATH_MAX];
-extern char ast_config_AST_CTL_PERMISSIONS[PATH_MAX];
-extern char ast_config_AST_CTL_OWNER[PATH_MAX];
-extern char ast_config_AST_CTL_GROUP[PATH_MAX];
-extern char ast_config_AST_CTL[PATH_MAX];
-extern char ast_config_AST_SYSTEM_NAME[20];
-
 int ast_set_priority(int);			/*!< Provided by asterisk.c */
-int load_modules(unsigned int);			/*!< Provided by loader.c */
-int load_pbx(void);				/*!< Provided by pbx.c */
-int init_logger(void);				/*!< Provided by logger.c */
-void close_logger(void);			/*!< Provided by logger.c */
-int reload_logger(int);				/*!< Provided by logger.c */
-int init_framer(void);				/*!< Provided by frame.c */
-int ast_term_init(void);			/*!< Provided by term.c */
-int astdb_init(void);				/*!< Provided by db.c */
-void ast_channels_init(void);			/*!< Provided by channel.c */
-void ast_builtins_init(void);			/*!< Provided by cli.c */
-int dnsmgr_init(void);				/*!< Provided by dnsmgr.c */ 
-void dnsmgr_start_refresh(void);		/*!< Provided by dnsmgr.c */
-int dnsmgr_reload(void);			/*!< Provided by dnsmgr.c */
-void threadstorage_init(void);			/*!< Provided by threadstorage.c */
-int astobj2_init(void);				/*! Provided by astobj2.c */
-void ast_autoservice_init(void);    /*!< Provided by autoservice.c */
 int ast_fd_init(void);				/*!< Provided by astfd.c */
-int ast_test_init(void);                        /*!< Provided by test.c */
 int ast_pbx_init(void);                         /*!< Provided by pbx.c */
-
-/* Many headers need 'ast_channel' to be defined */
-struct ast_channel;
-
-/* Many headers need 'ast_module' to be defined */
-struct ast_module;
-
-/*!
- * \brief Reload asterisk modules.
- * \param name the name of the module to reload
- *
- * This function reloads the specified module, or if no modules are specified,
- * it will reload all loaded modules.
- *
- * \note Modules are reloaded using their reload() functions, not unloading
- * them and loading them again.
- * 
- * \return Zero if the specified module was not found, 1 if the module was
- * found but cannot be reloaded, -1 if a reload operation is already in
- * progress, and 2 if the specfied module was found and reloaded.
- */
-int ast_module_reload(const char *name);
-
-/*!
- * \brief Process reload requests received during startup.
- *
- * This function requests that the loader execute the pending reload requests
- * that were queued during server startup.
- *
- * \note This function will do nothing if the server has not completely started
- *       up.  Once called, the reload queue is emptied, and further invocations
- *       will have no affect.
- */
-void ast_process_pending_reloads(void);
 
 /*!
  * \brief Register a function to be executed before Asterisk exits.
  * \param func The callback function to use.
  *
- * \return Zero on success, -1 on error.
+ * \retval 0 on success.
+ * \retval -1 on error.
  */
 int ast_register_atexit(void (*func)(void));
 
-/*!   
+/*!
  * \brief Unregister a function registered with ast_register_atexit().
- * \param func The callback function to unregister.   
+ * \param func The callback function to unregister.
  */
 void ast_unregister_atexit(void (*func)(void));
 
@@ -163,7 +99,7 @@ void ast_unregister_atexit(void (*func)(void));
 /*!
  * \brief Register the version of a source code file with the core.
  * \param file the source file name
- * \param version the version string (typically a CVS revision keyword string)
+ * \param version the version string (typically a SVN revision keyword string)
  * \return nothing
  *
  * This function should not be called directly, but instead the
@@ -182,10 +118,18 @@ void ast_register_file_version(const char *file, const char *version);
  */
 void ast_unregister_file_version(const char *file);
 
+/*! \brief Find version for given module name
+ * \param file Module name (i.e. chan_sip.so)
+ * \return version string or NULL if the module is not found
+ */
+const char *ast_file_version_find(const char *file);
+
+char *ast_complete_source_filename(const char *partial, int n);
+
 /*!
  * \brief Register/unregister a source code file with the core.
  * \param file the source file name
- * \param version the version string (typically a CVS revision keyword string)
+ * \param version the version string (typically a SVN revision keyword string)
  *
  * This macro will place a file-scope constructor and destructor into the
  * source of the module using it; this will cause the version of this file
@@ -199,8 +143,8 @@ void ast_unregister_file_version(const char *file);
  * \endcode
  *
  * \note The dollar signs above have been protected with backslashes to keep
- * CVS from modifying them in this file; under normal circumstances they would
- * not be present and CVS would expand the Revision keyword into the file's
+ * SVN from modifying them in this file; under normal circumstances they would
+ * not be present and SVN would expand the Revision keyword into the file's
  * revision number.
  */
 #ifdef MTX_PROFILE
@@ -237,10 +181,10 @@ void ast_unregister_file_version(const char *file);
  *
  * (note, this must be documented a lot more)
  * ast_add_profile allocates a generic 'counter' with a given name,
- * which can be shown with the command 'show profile <name>'
+ * which can be shown with the command 'core show profile &lt;name&gt;'
  *
  * The counter accumulates positive or negative values supplied by
- * ast_add_profile(), dividing them by the 'scale' value passed in the
+ * \see ast_add_profile(), dividing them by the 'scale' value passed in the
  * create call, and also counts the number of 'events'.
  * Values can also be taked by the TSC counter on ia32 architectures,
  * in which case you can mark the start of an event calling ast_mark(id, 1)
@@ -255,5 +199,28 @@ int64_t ast_mark(int, int start1_stop0);
 #define ast_profile(a, b) do { } while (0)
 #define ast_mark(a, b) do { } while (0)
 #endif /* LOW_MEMORY */
+
+/*! \brief
+ * Definition of various structures that many asterisk files need,
+ * but only because they need to know that the type exists.
+ *
+ */
+
+struct ast_channel;
+struct ast_frame;
+struct ast_module;
+struct ast_variable;
+struct ast_str;
+
+#ifdef bzero
+#undef bzero
+#endif
+
+#ifdef bcopy
+#undef bcopy
+#endif
+
+#define bzero  0x__dont_use_bzero__use_memset_instead""
+#define bcopy  0x__dont_use_bcopy__use_memmove_instead()
 
 #endif /* _ASTERISK_H */

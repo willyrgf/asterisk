@@ -28,26 +28,16 @@
 
 /*** MODULEINFO
 	<depend>gsm</depend>
+	<support_level>core</support_level>
  ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <string.h>
-#include <stdio.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/translate.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/utils.h"
 
 #ifdef HAVE_GSM_HEADER
@@ -58,14 +48,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "../formats/msgsm.h"
 
-/* Sample frame data */
-#include "slin_gsm_ex.h"
-#include "gsm_slin_ex.h"
-
 #define BUFFER_SAMPLES	8000
 #define GSM_SAMPLES	160
 #define	GSM_FRAME_LEN	33
 #define	MSGSM_FRAME_LEN	65
+
+/* Sample frame data */
+#include "asterisk/slin.h"
+#include "ex_gsm.h"
 
 struct gsm_translator_pvt {	/* both gsm2lin and lin2gsm */
 	gsm gsm;
@@ -79,42 +69,12 @@ static int gsm_new(struct ast_trans_pvt *pvt)
 	return (tmp->gsm = gsm_create()) ? 0 : -1;
 }
 
-static struct ast_frame *lintogsm_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SLINEAR;
-	f.datalen = sizeof(slin_gsm_ex);
-	/* Assume 8000 Hz */
-	f.samples = sizeof(slin_gsm_ex)/2;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = slin_gsm_ex;
-	return &f;
-}
-
-static struct ast_frame *gsmtolin_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_GSM;
-	f.datalen = sizeof(gsm_slin_ex);
-	/* All frames are 20 ms long */
-	f.samples = GSM_SAMPLES;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = gsm_slin_ex;
-	return &f;
-}
-
 /*! \brief decode and store in outbuf. */
 static int gsmtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	struct gsm_translator_pvt *tmp = pvt->pvt;
 	int x;
-	int16_t *dst = (int16_t *)pvt->outbuf;
+	int16_t *dst = pvt->outbuf.i16;
 	/* guess format from frame len. 65 for MSGSM, 33 for regular GSM */
 	int flen = (f->datalen % MSGSM_FRAME_LEN == 0) ?
 		MSGSM_FRAME_LEN : GSM_FRAME_LEN;
@@ -130,10 +90,10 @@ static int gsmtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 			/* XXX what's the point here! we should just work
 			 * on the full format.
 			 */
-			conv65(f->data + x, data);
+			conv65(f->data.ptr + x, data);
 		} else {
 			len = GSM_SAMPLES;
-			src = f->data + x;
+			src = f->data.ptr + x;
 		}
 		/* XXX maybe we don't need to check */
 		if (pvt->samples + len > BUFFER_SAMPLES) {	
@@ -170,7 +130,7 @@ static int lintogsm_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 		ast_log(LOG_WARNING, "Out of buffer space\n");
 		return -1;
 	}
-	memcpy(tmp->buf + pvt->samples, f->data, f->datalen);
+	memcpy(tmp->buf + pvt->samples, f->data.ptr, f->datalen);
 	pvt->samples += f->samples;
 	return 0;
 }
@@ -187,7 +147,7 @@ static struct ast_frame *lintogsm_frameout(struct ast_trans_pvt *pvt)
 		return NULL;
 	while (pvt->samples >= GSM_SAMPLES) {
 		/* Encode a frame of data */
-		gsm_encode(tmp->gsm, tmp->buf + samples, (gsm_byte *) pvt->outbuf + datalen);
+		gsm_encode(tmp->gsm, tmp->buf + samples, (gsm_byte *) pvt->outbuf.c + datalen);
 		datalen += GSM_FRAME_LEN;
 		samples += GSM_SAMPLES;
 		pvt->samples -= GSM_SAMPLES;
@@ -214,7 +174,7 @@ static struct ast_translator gsmtolin = {
 	.newpvt = gsm_new,
 	.framein = gsmtolin_framein,
 	.destroy = gsm_destroy_stuff,
-	.sample = gsmtolin_sample,
+	.sample = gsm_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
 	.desc_size = sizeof (struct gsm_translator_pvt ),
@@ -228,7 +188,7 @@ static struct ast_translator lintogsm = {
 	.framein = lintogsm_framein,
 	.frameout = lintogsm_frameout,
 	.destroy = gsm_destroy_stuff,
-	.sample = lintogsm_sample,
+	.sample = slin8_sample,
 	.desc_size = sizeof (struct gsm_translator_pvt ),
 	.buf_size = (BUFFER_SAMPLES * GSM_FRAME_LEN + GSM_SAMPLES - 1)/GSM_SAMPLES,
 };
@@ -236,7 +196,7 @@ static struct ast_translator lintogsm = {
 /*! \brief standard module glue */
 static int reload(void)
 {
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
@@ -259,8 +219,9 @@ static int load_module(void)
 		res=ast_register_translator(&lintogsm);
 	else
 		ast_unregister_translator(&gsmtolin);
-
-	return res;
+	if (res) 
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "GSM Coder/Decoder",

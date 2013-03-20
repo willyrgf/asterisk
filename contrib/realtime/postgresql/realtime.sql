@@ -39,7 +39,7 @@ callgroup character varying(10),
 callerid character varying(80),
 canreinvite character varying(3) DEFAULT 'yes',
 context character varying(80),
-defaultip character varying(15),
+defaultip character varying(45),
 dtmfmode character varying(7),
 fromuser character varying(80),
 fromdomain character varying(80),
@@ -65,10 +65,14 @@ disallow character varying(100) DEFAULT 'all',
 allow character varying(100) DEFAULT 'g729;ilbc;gsm;ulaw;alaw',
 musiconhold character varying(100),
 regseconds bigint DEFAULT 0::bigint NOT NULL,
-ipaddr character varying(15) DEFAULT '' NOT NULL,
+ipaddr character varying(45) DEFAULT '' NOT NULL,
 regexten character varying(80) DEFAULT '' NOT NULL,
 cancallforward character varying(3) DEFAULT 'yes',
-lastms integer DEFAULT -1 NOT NULL
+lastms integer DEFAULT 0 NOT NULL,
+defaultuser character varying(80),
+fullcontact character varying(80),
+regserver character varying(30),
+useragent character varying(40)
 );
 
 drop table voicemail_users;

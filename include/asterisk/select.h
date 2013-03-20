@@ -23,10 +23,11 @@
 #ifndef __AST_SELECT_H
 #define __AST_SELECT_H
 
-#include "asterisk/autoconfig.h"
+#include <sys/time.h>
 #include <sys/select.h>
 #include <errno.h>
-#include "asterisk/utils.h"
+
+#include "asterisk/compat.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -80,12 +81,9 @@ typedef struct {
 static inline int ast_select(int nfds, ast_fdset *rfds, ast_fdset *wfds, ast_fdset *efds, struct timeval *tvp)
 {
 #ifdef __linux__
-	ast_assert((unsigned int) nfds <= ast_FD_SETSIZE);
 	return select(nfds, (fd_set *) rfds, (fd_set *) wfds, (fd_set *) efds, tvp);
 #else
 	int save_errno = 0;
-
-	ast_assert((unsigned int) nfds <= ast_FD_SETSIZE);
 	if (tvp) {
 		struct timeval tv, tvstart, tvend, tvlen;
 		int res;

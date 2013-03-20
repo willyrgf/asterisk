@@ -21,35 +21,49 @@
  * 
  * \author Claude Patry <cpatry@gmail.com>
  * \author Tilghman Lesher ( http://asterisk.drunkcoder.com/ )
+ * \ingroup functions
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <string.h>
-#include <stdio.h>
-#include <sys/types.h>
-
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
-static int acf_rand_exec(struct ast_channel *chan, char *cmd,
+/*** DOCUMENTATION
+	<function name="RAND" language="en_US">
+		<synopsis>
+			Choose a random number in a range.			
+		</synopsis>
+		<syntax>
+			<parameter name="min" />
+			<parameter name="max" />
+		</syntax>
+		<description>
+			<para>Choose a random number between <replaceable>min</replaceable> and <replaceable>max</replaceable>. 
+			<replaceable>min</replaceable> defaults to <literal>0</literal>, if not specified, while <replaceable>max</replaceable> defaults 
+			to <literal>RAND_MAX</literal> (2147483647 on many systems).</para>
+			<para>Example:  Set(junky=${RAND(1,8)});
+			Sets junky to a random number between 1 and 8, inclusive.</para>
+		</description>
+	</function>
+ ***/
+static int acf_rand_exec(struct ast_channel *chan, const char *cmd,
 			 char *parse, char *buffer, size_t buflen)
 {
-	struct ast_module_user *u;
 	int min_int, response_int, max_int;
 	AST_DECLARE_APP_ARGS(args,
 			     AST_APP_ARG(min);
 			     AST_APP_ARG(max);
 	);
-
-	u = ast_module_user_add(chan);
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
@@ -64,29 +78,20 @@ static int acf_rand_exec(struct ast_channel *chan, char *cmd,
 
 		max_int = min_int;
 		min_int = tmp;
-		ast_log(LOG_DEBUG, "max<min\n");
+		ast_debug(1, "max<min\n");
 	}
 
 	response_int = min_int + (ast_random() % (max_int - min_int + 1));
-	ast_log(LOG_DEBUG, "%d was the lucky number in range [%d,%d]\n",
-		response_int, min_int, max_int);
+	ast_debug(1, "%d was the lucky number in range [%d,%d]\n", response_int, min_int, max_int);
 	snprintf(buffer, buflen, "%d", response_int);
-
-	ast_module_user_remove(u);
 
 	return 0;
 }
 
 static struct ast_custom_function acf_rand = {
 	.name = "RAND",
-	.synopsis = "Choose a random number in a range",
-	.syntax = "RAND([min][|max])",
-	.desc =
-		"Choose a random number between min and max.  Min defaults to 0, if not\n"
-		"specified, while max defaults to RAND_MAX (2147483647 on many systems).\n"
-		"  Example:  Set(junky=${RAND(1|8)}); \n"
-		"  Sets junky to a random number between 1 and 8, inclusive.\n",
 	.read = acf_rand_exec,
+	.read_max = 12,
 };
 
 static int unload_module(void)

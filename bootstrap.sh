@@ -9,21 +9,35 @@ check_for_app() {
 	fi
 }
 
-# On FreeBSD, multiple autoconf/automake versions have different names.
-# On linux, envitonment variables tell which one to use.
+# On FreeBSD and OpenBSD, multiple autoconf/automake versions have different names.
+# On Linux, environment variables tell which one to use.
 
-uname -s | grep -q FreeBSD
-if [ $? = 0 ] ; then	# FreeBSD case
-	MY_AC_VER=259
-	MY_AM_VER=19
-else	# linux case
-	MY_AC_VER=
-	MY_AM_VER=
-	AUTOCONF_VERSION=2.60
-	AUTOMAKE_VERSION=1.9
-	export AUTOCONF_VERSION
-	export AUTOMAKE_VERSION
-fi
+case `uname -sr` in
+	'FreeBSD 4'*)	# FreeBSD 4.x has a different naming
+		MY_AC_VER=259
+		MY_AM_VER=19
+		;;
+	OpenBSD*)
+		export AUTOCONF_VERSION=2.63
+		export AUTOMAKE_VERSION=1.9
+		;;
+	*'BSD'*)
+		MY_AC_VER=-2.62
+		MY_AM_VER=-1.9
+		;;
+	*'SunOS '*)
+		MY_AC_VER=
+		MY_AM_VER=-1.9
+		;;
+	*)
+		MY_AC_VER=
+		MY_AM_VER=
+		AUTOCONF_VERSION=2.60
+		AUTOMAKE_VERSION=1.9
+		export AUTOCONF_VERSION
+		export AUTOMAKE_VERSION
+		;;
+esac
 
 check_for_app autoconf${MY_AC_VER}
 check_for_app autoheader${MY_AC_VER}

@@ -12,10 +12,14 @@
  * \brief SNMP Agent / SubAgent support for Asterisk
  *
  * \author Thorsten Lockert <tholo@voop.as>
+ *
+ * \extref Uses the Net-SNMP libraries available at
+ *	 http://net-snmp.sourceforge.net/
  */
 
 /*** MODULEINFO
 	<depend>netsnmp</depend>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -24,8 +28,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
-#include "asterisk/logger.h"
-#include "asterisk/options.h"
 
 #include "snmp/agent.h"
 
@@ -33,20 +35,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 int res_snmp_agentx_subagent;
 int res_snmp_dont_stop;
-int res_snmp_enabled;
+static int res_snmp_enabled;
 
 static pthread_t thread = AST_PTHREADT_NULL;
 
+/*!
+ * \brief Load res_snmp.conf config file
+ * \return 1 on load, 0 file does not exist
+*/
 static int load_config(void)
 {
 	struct ast_variable *var;
 	struct ast_config *cfg;
+	struct ast_flags config_flags = { 0 };
 	char *cat;
 
 	res_snmp_enabled = 0;
 	res_snmp_agentx_subagent = 1;
-	cfg = ast_config_load("res_snmp.conf");
-	if (!cfg) {
+	cfg = ast_config_load("res_snmp.conf", config_flags);
+	if (cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_WARNING, "Could not load res_snmp.conf\n");
 		return 0;
 	}
@@ -92,7 +99,7 @@ static int load_module(void)
 	if(!load_config())
 		return AST_MODULE_LOAD_DECLINE;
 
-	ast_verbose(VERBOSE_PREFIX_1 "Loading [Sub]Agent Module\n");
+	ast_verb(1, "Loading [Sub]Agent Module\n");
 
 	res_snmp_dont_stop = 1;
 	if (res_snmp_enabled)
@@ -103,7 +110,7 @@ static int load_module(void)
 
 static int unload_module(void)
 {
-	ast_verbose(VERBOSE_PREFIX_1 "Unloading [Sub]Agent Module\n");
+	ast_verb(1, "Unloading [Sub]Agent Module\n");
 
 	res_snmp_dont_stop = 0;
 	return ((thread != AST_PTHREADT_NULL) ? pthread_join(thread, NULL) : 0);

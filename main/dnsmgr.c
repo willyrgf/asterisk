@@ -21,21 +21,22 @@
  * \brief Background DNS update manager
  *
  * \author Kevin P. Fleming <kpfleming@digium.com> 
+ *
+ * \bug There is a minor race condition.  In the event that an IP address
+ * of a dnsmgr managed host changes, there is the potential for the consumer
+ * of that address to access the in_addr data at the same time that the dnsmgr
+ * thread is in the middle of updating it to the new address.
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <resolv.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <stdlib.h>
+#include "asterisk/_private.h"
 #include <regex.h>
 #include <signal.h>
 
@@ -43,27 +44,35 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/utils.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/sched.h"
-#include "asterisk/options.h"
 #include "asterisk/cli.h"
+#include "asterisk/manager.h"
+#include "asterisk/acl.h"
 
 static struct sched_context *sched;
 static int refresh_sched = -1;
 static pthread_t refresh_thread = AST_PTHREADT_NULL;
 
 struct ast_dnsmgr_entry {
-	/*! where we will store the resulting address */
-	struct in_addr *result;
+	/*! where we will store the resulting IP address and port number */
+	struct ast_sockaddr *result;
+	/*! SRV record to lookup, if provided. Composed of service, protocol, and domain name: _Service._Proto.Name */
+	char *service;
+	/*! Address family to filter DNS responses. */
+	unsigned int family;
 	/*! Set to 1 if the entry changes */
-	int changed:1;
+	unsigned int changed:1;
+	/*! Data to pass back to update_func */
+	void *data;
+	/*! The callback function to execute on address update */
+	dns_update_func update_func;
 	ast_mutex_t lock;
-	AST_LIST_ENTRY(ast_dnsmgr_entry) list;
+	AST_RWLIST_ENTRY(ast_dnsmgr_entry) list;
 	/*! just 1 here, but we use calloc to allocate the correct size */
 	char name[1];
 };
 
-static AST_LIST_HEAD_STATIC(entry_list, ast_dnsmgr_entry);
+static AST_RWLIST_HEAD_STATIC(entry_list, ast_dnsmgr_entry);
 
 AST_MUTEX_DEFINE_STATIC(refresh_lock);
 
@@ -84,22 +93,34 @@ static struct refresh_info master_refresh_info = {
 	.verbose = 0,
 };
 
-struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct in_addr *result)
+struct ast_dnsmgr_entry *ast_dnsmgr_get_family(const char *name, struct ast_sockaddr *result, const char *service, unsigned int family)
 {
 	struct ast_dnsmgr_entry *entry;
+	int total_size = sizeof(*entry) + strlen(name) + (service ? strlen(service) + 1 : 0);
 
-	if (!result || ast_strlen_zero(name) || !(entry = ast_calloc(1, sizeof(*entry) + strlen(name))))
+	if (!result || ast_strlen_zero(name) || !(entry = ast_calloc(1, total_size))) {
 		return NULL;
+	}
 
 	entry->result = result;
 	ast_mutex_init(&entry->lock);
 	strcpy(entry->name, name);
+	if (service) {
+		entry->service = ((char *) entry) + sizeof(*entry) + strlen(name);
+		strcpy(entry->service, service);
+	}
+	entry->family = family;
 
-	AST_LIST_LOCK(&entry_list);
-	AST_LIST_INSERT_HEAD(&entry_list, entry, list);
-	AST_LIST_UNLOCK(&entry_list);
+	AST_RWLIST_WRLOCK(&entry_list);
+	AST_RWLIST_INSERT_HEAD(&entry_list, entry, list);
+	AST_RWLIST_UNLOCK(&entry_list);
 
 	return entry;
+}
+
+struct ast_dnsmgr_entry *ast_dnsmgr_get(const char *name, struct ast_sockaddr *result, const char *service)
+{
+	return ast_dnsmgr_get_family(name, result, service, 0);
 }
 
 void ast_dnsmgr_release(struct ast_dnsmgr_entry *entry)
@@ -107,47 +128,63 @@ void ast_dnsmgr_release(struct ast_dnsmgr_entry *entry)
 	if (!entry)
 		return;
 
-	AST_LIST_LOCK(&entry_list);
-	AST_LIST_REMOVE(&entry_list, entry, list);
-	AST_LIST_UNLOCK(&entry_list);
-	if (option_verbose > 3)
-		ast_verbose(VERBOSE_PREFIX_4 "removing dns manager for '%s'\n", entry->name);
+	AST_RWLIST_WRLOCK(&entry_list);
+	AST_RWLIST_REMOVE(&entry_list, entry, list);
+	AST_RWLIST_UNLOCK(&entry_list);
+	ast_verb(6, "removing dns manager for '%s'\n", entry->name);
 
 	ast_mutex_destroy(&entry->lock);
-	free(entry);
+	ast_free(entry);
 }
 
-int ast_dnsmgr_lookup(const char *name, struct in_addr *result, struct ast_dnsmgr_entry **dnsmgr)
+static int internal_dnsmgr_lookup(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service, dns_update_func func, void *data)
 {
-	struct ast_hostent ahp;
-	struct hostent *hp;
+	unsigned int family;
 
-	if (ast_strlen_zero(name) || !result || !dnsmgr)
+	if (ast_strlen_zero(name) || !result || !dnsmgr) {
 		return -1;
+	}
 
-	if (*dnsmgr && !strcasecmp((*dnsmgr)->name, name))
+	if (*dnsmgr && !strcasecmp((*dnsmgr)->name, name)) {
 		return 0;
+	}
 
-	if (option_verbose > 3)
-		ast_verbose(VERBOSE_PREFIX_4 "doing dnsmgr_lookup for '%s'\n", name);
+	/* Lookup address family filter. */
+	family = result->ss.ss_family;
 
-	/* if it's actually an IP address and not a name,
-	   there's no need for a managed lookup */
-	if (inet_aton(name, result))
+	/*
+	 * If it's actually an IP address and not a name, there's no
+	 * need for a managed lookup.
+	 */
+	if (ast_sockaddr_parse(result, name, PARSE_PORT_FORBID)) {
 		return 0;
+	}
+
+	ast_verb(6, "doing dnsmgr_lookup for '%s'\n", name);
 
 	/* do a lookup now but add a manager so it will automagically get updated in the background */
-	if ((hp = ast_gethostbyname(name, &ahp)))
-		memcpy(result, hp->h_addr, sizeof(result));
-	
+	ast_get_ip_or_srv(result, name, service);
+
 	/* if dnsmgr is not enable don't bother adding an entry */
-	if (!enabled)
+	if (!enabled) {
 		return 0;
-	
-	if (option_verbose > 2)
-		ast_verbose(VERBOSE_PREFIX_2 "adding dns manager for '%s'\n", name);
-	*dnsmgr = ast_dnsmgr_get(name, result);
+	}
+
+	ast_verb(6, "adding dns manager for '%s'\n", name);
+	*dnsmgr = ast_dnsmgr_get_family(name, result, service, family);
+	(*dnsmgr)->update_func = func;
+	(*dnsmgr)->data = data;
 	return !*dnsmgr;
+}
+
+int ast_dnsmgr_lookup(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service)
+{
+	return internal_dnsmgr_lookup(name, result, dnsmgr, service, NULL, NULL);
+}
+
+int ast_dnsmgr_lookup_cb(const char *name, struct ast_sockaddr *result, struct ast_dnsmgr_entry **dnsmgr, const char *service, dns_update_func func, void *data)
+{
+	return internal_dnsmgr_lookup(name, result, dnsmgr, service, func, data);
 }
 
 /*
@@ -155,31 +192,38 @@ int ast_dnsmgr_lookup(const char *name, struct in_addr *result, struct ast_dnsmg
  */
 static int dnsmgr_refresh(struct ast_dnsmgr_entry *entry, int verbose)
 {
-	struct ast_hostent ahp;
-	struct hostent *hp;
-	char iabuf[INET_ADDRSTRLEN];
-	char iabuf2[INET_ADDRSTRLEN];
-	struct in_addr tmp;
+	struct ast_sockaddr tmp = { .len = 0, };
 	int changed = 0;
-        
-	ast_mutex_lock(&entry->lock);
-	if (verbose && (option_verbose > 2))
-		ast_verbose(VERBOSE_PREFIX_2 "refreshing '%s'\n", entry->name);
 
-	if ((hp = ast_gethostbyname(entry->name, &ahp))) {
-		/* check to see if it has changed, do callback if requested (where de callback is defined ????) */
-		memcpy(&tmp, hp->h_addr, sizeof(tmp));
-		if (tmp.s_addr != entry->result->s_addr) {
-			ast_copy_string(iabuf, ast_inet_ntoa(*entry->result), sizeof(iabuf));
-			ast_copy_string(iabuf2, ast_inet_ntoa(tmp), sizeof(iabuf2));
-			ast_log(LOG_NOTICE, "host '%s' changed from %s to %s\n", 
-				entry->name, iabuf, iabuf2);
-			memcpy(entry->result, hp->h_addr, sizeof(entry->result));
-			changed = entry->changed = 1;
-		} 
-		
+	ast_mutex_lock(&entry->lock);
+
+	if (verbose) {
+		ast_verb(6, "refreshing '%s'\n", entry->name);
 	}
+
+	tmp.ss.ss_family = entry->family;
+	if (!ast_get_ip_or_srv(&tmp, entry->name, entry->service)) {
+		if (!ast_sockaddr_port(&tmp)) {
+			ast_sockaddr_set_port(&tmp, ast_sockaddr_port(entry->result));
+		}
+		if (ast_sockaddr_cmp(&tmp, entry->result)) {
+			const char *old_addr = ast_strdupa(ast_sockaddr_stringify(entry->result));
+			const char *new_addr = ast_strdupa(ast_sockaddr_stringify(&tmp));
+
+			if (entry->update_func) {
+				entry->update_func(entry->result, &tmp, entry->data);
+			} else {
+				ast_log(LOG_NOTICE, "dnssrv: host '%s' changed from %s to %s\n",
+						entry->name, old_addr, new_addr);
+
+				ast_sockaddr_copy(entry->result, &tmp);
+				changed = entry->changed = 1;
+			}
+		}
+	}
+
 	ast_mutex_unlock(&entry->lock);
+
 	return changed;
 }
 
@@ -228,16 +272,15 @@ static int refresh_list(const void *data)
 		return -1;
 	}
 
-	if (option_verbose > 2)
-		ast_verbose(VERBOSE_PREFIX_2 "Refreshing DNS lookups.\n");
-	AST_LIST_LOCK(info->entries);
-	AST_LIST_TRAVERSE(info->entries, entry, list) {
+	ast_verb(6, "Refreshing DNS lookups.\n");
+	AST_RWLIST_RDLOCK(info->entries);
+	AST_RWLIST_TRAVERSE(info->entries, entry, list) {
 		if (info->regex_present && regexec(&info->filter, entry->name, 0, NULL, 0))
 		    continue;
 
 		dnsmgr_refresh(entry, info->verbose);
 	}
-	AST_LIST_UNLOCK(info->entries);
+	AST_RWLIST_UNLOCK(info->entries);
 
 	ast_mutex_unlock(&refresh_lock);
 
@@ -255,85 +298,121 @@ void dnsmgr_start_refresh(void)
 
 static int do_reload(int loading);
 
-static int handle_cli_reload(int fd, int argc, char *argv[])
+static char *handle_cli_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dnsmgr reload";
+		e->usage = 
+			"Usage: dnsmgr reload\n"
+			"       Reloads the DNS manager configuration.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
 
 	do_reload(0);
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static int handle_cli_refresh(int fd, int argc, char *argv[])
+static char *handle_cli_refresh(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct refresh_info info = {
 		.entries = &entry_list,
 		.verbose = 1,
 	};
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dnsmgr refresh";
+		e->usage = 
+			"Usage: dnsmgr refresh [pattern]\n"
+			"       Peforms an immediate refresh of the managed DNS entries.\n"
+			"       Optional regular expression pattern is used to filter the entries to refresh.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
 
-	if(!enabled) {
-		ast_cli(fd, "DNS Manager is disabled.\n");
+	if (!enabled) {
+		ast_cli(a->fd, "DNS Manager is disabled.\n");
 		return 0;
 	}
 
-	if (argc > 3)
-		return RESULT_SHOWUSAGE;
+	if (a->argc > 3) {
+		return CLI_SHOWUSAGE;
+	}
 
-	if (argc == 3) {
-		if (regcomp(&info.filter, argv[2], REG_EXTENDED | REG_NOSUB))
-			return RESULT_SHOWUSAGE;
-		else
+	if (a->argc == 3) {
+		if (regcomp(&info.filter, a->argv[2], REG_EXTENDED | REG_NOSUB)) {
+			return CLI_SHOWUSAGE;
+		} else {
 			info.regex_present = 1;
+		}
 	}
 
 	refresh_list(&info);
 
-	if (info.regex_present)
+	if (info.regex_present) {
 		regfree(&info.filter);
+	}
 
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static int handle_cli_status(int fd, int argc, char *argv[])
+static char *handle_cli_status(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int count = 0;
 	struct ast_dnsmgr_entry *entry;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "dnsmgr status";
+		e->usage = 
+			"Usage: dnsmgr status\n"
+			"       Displays the DNS manager status.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;	
+	}
 
-	if (argc > 2)
-		return RESULT_SHOWUSAGE;
+	if (a->argc > 2)
+		return CLI_SHOWUSAGE;
 
-	ast_cli(fd, "DNS Manager: %s\n", enabled ? "enabled" : "disabled");
-	ast_cli(fd, "Refresh Interval: %d seconds\n", refresh_interval);
-	AST_LIST_LOCK(&entry_list);
-	AST_LIST_TRAVERSE(&entry_list, entry, list)
+	ast_cli(a->fd, "DNS Manager: %s\n", enabled ? "enabled" : "disabled");
+	ast_cli(a->fd, "Refresh Interval: %d seconds\n", refresh_interval);
+	AST_RWLIST_RDLOCK(&entry_list);
+	AST_RWLIST_TRAVERSE(&entry_list, entry, list)
 		count++;
-	AST_LIST_UNLOCK(&entry_list);
-	ast_cli(fd, "Number of entries: %d\n", count);
+	AST_RWLIST_UNLOCK(&entry_list);
+	ast_cli(a->fd, "Number of entries: %d\n", count);
 
-	return 0;
+	return CLI_SUCCESS;
 }
 
-static struct ast_cli_entry cli_reload = {
-	{ "dnsmgr", "reload", NULL },
-	handle_cli_reload, "Reloads the DNS manager configuration",
-	"Usage: dnsmgr reload\n"
-	"       Reloads the DNS manager configuration.\n"
-};
+static struct ast_cli_entry cli_reload = AST_CLI_DEFINE(handle_cli_reload, "Reloads the DNS manager configuration");
+static struct ast_cli_entry cli_refresh = AST_CLI_DEFINE(handle_cli_refresh, "Performs an immediate refresh");
+static struct ast_cli_entry cli_status = AST_CLI_DEFINE(handle_cli_status, "Display the DNS manager status");
 
-static struct ast_cli_entry cli_refresh = {
-	{ "dnsmgr", "refresh", NULL },
-	handle_cli_refresh, "Performs an immediate refresh",
-	"Usage: dnsmgr refresh [pattern]\n"
-	"       Peforms an immediate refresh of the managed DNS entries.\n"
-	"       Optional regular expression pattern is used to filter the entries to refresh.\n",
-};
+static void dnsmgr_shutdown(void)
+{
+	ast_cli_unregister(&cli_reload);
+	ast_cli_unregister(&cli_status);
+	ast_cli_unregister(&cli_refresh);
 
-static struct ast_cli_entry cli_status = {
-	{ "dnsmgr", "status", NULL },
-	handle_cli_status, "Display the DNS manager status",
-	"Usage: dnsmgr status\n"
-	"       Displays the DNS manager status.\n"
-};
+	/* Destroy refresh thread. */
+	ast_mutex_lock(&refresh_lock);
+	if (refresh_thread != AST_PTHREADT_NULL) {
+		/* wake up the thread so it will exit */
+		pthread_cancel(refresh_thread);
+		pthread_kill(refresh_thread, SIGURG);
+		pthread_join(refresh_thread, NULL);
+		refresh_thread = AST_PTHREADT_NULL;
+	}
+	ast_mutex_unlock(&refresh_lock);
+
+	sched_context_destroy(sched);
+}
 
 int dnsmgr_init(void)
 {
@@ -344,6 +423,9 @@ int dnsmgr_init(void)
 	ast_cli_register(&cli_reload);
 	ast_cli_register(&cli_status);
 	ast_cli_register(&cli_refresh);
+
+	ast_register_atexit(dnsmgr_shutdown);
+
 	return do_reload(1);
 }
 
@@ -355,11 +437,17 @@ int dnsmgr_reload(void)
 static int do_reload(int loading)
 {
 	struct ast_config *config;
+	struct ast_flags config_flags = { loading ? 0 : CONFIG_FLAG_FILEUNCHANGED };
 	const char *interval_value;
 	const char *enabled_value;
 	int interval;
 	int was_enabled;
 	int res = -1;
+
+	config = ast_config_load2("dnsmgr.conf", "dnsmgr", config_flags);
+	if (config == CONFIG_STATUS_FILEMISSING || config == CONFIG_STATUS_FILEUNCHANGED || config == CONFIG_STATUS_FILEINVALID) {
+		return 0;
+	}
 
 	/* ensure that no refresh cycles run while the reload is in progress */
 	ast_mutex_lock(&refresh_lock);
@@ -371,7 +459,7 @@ static int do_reload(int loading)
 
 	AST_SCHED_DEL(sched, refresh_sched);
 
-	if ((config = ast_config_load("dnsmgr.conf"))) {
+	if (config) {
 		if ((enabled_value = ast_variable_retrieve(config, "general", "enable"))) {
 			enabled = ast_true(enabled_value);
 		}
@@ -415,6 +503,7 @@ static int do_reload(int loading)
 		res = 0;
 
 	ast_mutex_unlock(&refresh_lock);
+	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: DNSmgr\r\nStatus: %s\r/nMessage: DNSmgr reload Requested\r\n", enabled ? "Enabled" : "Disabled");
 
 	return res;
 }

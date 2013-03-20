@@ -26,108 +26,98 @@
  *
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
  
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/image.h"
-#include "asterisk/options.h"
 #include "asterisk/app.h"
 
-static const char *app = "SendText";
+/*** DOCUMENTATION
+	<application name="SendText" language="en_US">
+		<synopsis>
+			Send a Text Message.
+		</synopsis>
+		<syntax>
+			<parameter name="text" required="true" />
+		</syntax>
+		<description>
+			<para>Sends <replaceable>text</replaceable> to current channel (callee).</para>
+			<para>Result of transmission will be stored in the <variable>SENDTEXTSTATUS</variable></para>
+			<variablelist>
+				<variable name="SENDTEXTSTATUS">
+					<value name="SUCCESS">
+						Transmission succeeded.
+					</value>
+					<value name="FAILURE">
+						Transmission failed.
+					</value>
+					<value name="UNSUPPORTED">
+						Text transmission not supported by channel.
+					</value>
+				</variable>
+			</variablelist>
+			<note><para>At this moment, text is supposed to be 7 bit ASCII in most channels.</para></note>
+		</description>
+		<see-also>
+			<ref type="application">SendImage</ref>
+			<ref type="application">SendURL</ref>
+		</see-also>
+	</application>
+ ***/
 
-static const char *synopsis = "Send a Text Message";
+static const char * const app = "SendText";
 
-static const char *descrip = 
-"  SendText(text[|options]): Sends text to current channel (callee).\n"
-"Result of transmission will be stored in the SENDTEXTSTATUS\n"
-"channel variable:\n"
-"      SUCCESS      Transmission succeeded\n"
-"      FAILURE      Transmission failed\n"
-"      UNSUPPORTED  Text transmission not supported by channel\n"
-"\n"
-"At this moment, text is supposed to be 7 bit ASCII in most channels.\n"
-"The option string many contain the following character:\n"
-"'j' -- jump to n+101 priority if the channel doesn't support\n"
-"       text transport\n";
-
-
-static int sendtext_exec(struct ast_channel *chan, void *data)
+static int sendtext_exec(struct ast_channel *chan, const char *data)
 {
-	int res = 0;
-	struct ast_module_user *u;
 	char *status = "UNSUPPORTED";
-	char *parse = NULL;
-	int priority_jump = 0;
-	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(text);
-		AST_APP_ARG(options);
-	);
-		
-	u = ast_module_user_add(chan);	
+	struct ast_str *str;
 
 	/* NOT ast_strlen_zero, because some protocols (e.g. SIP) MUST be able to
 	 * send a zero-length message. */
 	if (!data) {
-		ast_log(LOG_WARNING, "SendText requires an argument (text[|options])\n");
-		ast_module_user_remove(u);
+		ast_log(LOG_WARNING, "SendText requires an argument (text)\n");
 		return -1;
-	} else
-		parse = ast_strdupa(data);
-	
-	AST_STANDARD_APP_ARGS(args, parse);
-
-	if (args.options) {
-		if (strchr(args.options, 'j'))
-			priority_jump = 1;
 	}
+
+	if (!(str = ast_str_alloca(strlen(data) + 1))) {
+		return -1;
+	}
+
+	ast_str_get_encoded_str(&str, -1, data);
 
 	ast_channel_lock(chan);
 	if (!chan->tech->send_text) {
 		ast_channel_unlock(chan);
-		pbx_builtin_setvar_helper(chan, "SENDTEXTSTATUS", status);
 		/* Does not support transport */
-		if (priority_jump || ast_opt_priority_jumping)
-			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
-		ast_module_user_remove(u);
+		pbx_builtin_setvar_helper(chan, "SENDTEXTSTATUS", status);
 		return 0;
 	}
 	status = "FAILURE";
-	res = ast_sendtext(chan, args.text);
-	if (!res)
+	if (!ast_sendtext(chan, ast_str_buffer(str))) {
 		status = "SUCCESS";
+	}
 	ast_channel_unlock(chan);
 	pbx_builtin_setvar_helper(chan, "SENDTEXTSTATUS", status);
-	ast_module_user_remove(u);
 	return 0;
 }
 
 static int unload_module(void)
 {
-	int res;
-	
-	res = ast_unregister_application(app);
-	
-	ast_module_user_hangup_all();
-
-	return res;	
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, sendtext_exec, synopsis, descrip);
+	return ast_register_application_xml(app, sendtext_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Send Text Applications");

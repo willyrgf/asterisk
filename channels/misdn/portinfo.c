@@ -1,4 +1,11 @@
+/*! \file
+ * \brief Interface to mISDN - port info
+ * \author Christian Richter <crich@beronet.com>
+ */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
 
 #include "isdn_lib.h"
 #include "isdn_lib_intern.h"

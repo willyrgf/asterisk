@@ -18,63 +18,96 @@
 */
 
 /*! \file
- * 
+ *
  * \brief Check if Channel is Available
- * 
+ *
  * \author Mark Spencer <markster@digium.com>
  * \author James Golovich <james@gnuinter.net>
 
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <errno.h>
 #include <sys/ioctl.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/app.h"
 #include "asterisk/devicestate.h"
-#include "asterisk/options.h"
 
-static char *app = "ChanIsAvail";
+static const char app[] = "ChanIsAvail";
 
-static char *synopsis = "Check channel availability";
+/*** DOCUMENTATION
+	<application name="ChanIsAvail" language="en_US">
+		<synopsis>
+			Check channel availability
+		</synopsis>
+		<syntax>
+			<parameter name="Technology/Resource" required="true" argsep="&amp;">
+				<argument name="Technology2/Resource2" multiple="true">
+					<para>Optional extra devices to check</para>
+					<para>If you need more then one enter them as
+					Technology2/Resource2&amp;Technology3/Resourse3&amp;.....</para>
+				</argument>
+				<para>Specification of the device(s) to check.  These must be in the format of 
+				<literal>Technology/Resource</literal>, where <replaceable>Technology</replaceable>
+				represents a particular channel driver, and <replaceable>Resource</replaceable>
+				represents a resource available to that particular channel driver.</para>
+			</parameter>
+			<parameter name="options" required="false">
+				<optionlist>
+					<option name="a">
+						<para>Check for all available channels, not only the first one</para>
+					</option>
+					<option name="s">
+						<para>Consider the channel unavailable if the channel is in use at all</para>
+					</option>
+					<option name="t" implies="s">
+						<para>Simply checks if specified channels exist in the channel list</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>This application will check to see if any of the specified channels are available.</para>
+			<para>This application sets the following channel variables:</para>
+			<variablelist>
+				<variable name="AVAILCHAN">
+					<para>The name of the available channel, if one exists</para>
+				</variable>
+				<variable name="AVAILORIGCHAN">
+					<para>The canonical channel name that was used to create the channel</para>
+				</variable>
+				<variable name="AVAILSTATUS">
+					<para>The device state for the device</para>
+				</variable>
+				<variable name="AVAILCAUSECODE">
+				        <para>The cause code returned when requesting the channel</para>
+				</variable>	
+			</variablelist>
+		</description>
+	</application>
+ ***/
 
-static char *descrip = 
-"  ChanIsAvail(Technology/resource[&Technology2/resource2...][|options]): \n"
-"This application will check to see if any of the specified channels are\n"
-"available. Note that the AVAILSTATUS variable is used for both device state\n"
-"and cause code. It is therefore possible for it to give a value that may\n"
-"indicate a device is available when it is not. It is suggested that the\n"
-"AVAILORIGCHAN variable is used instead to see whether a device is available\n"
-"or not.\n"
-"The following variables will be set by this application:\n"
-"  ${AVAILCHAN}     - the name of the available channel, if one exists\n"
-"  ${AVAILORIGCHAN} - the canonical channel name that was used to create the channel\n"
-"  ${AVAILSTATUS}   - the status code for the available channel\n"
-"  Options:\n"
-"    s - Consider the channel unavailable if the channel is in use at all\n"
-"    j - Support jumping to priority n+101 if no channel is available\n";
-
-
-static int chanavail_exec(struct ast_channel *chan, void *data)
+static int chanavail_exec(struct ast_channel *chan, const char *data)
 {
-	int res=-1, inuse=-1, option_state=0, priority_jump=0;
+	int inuse=-1, option_state=0, string_compare=0, option_all_avail=0;
 	int status;
-	struct ast_module_user *u;
 	char *info, tmp[512], trychan[512], *peers, *tech, *number, *rest, *cur;
+	struct ast_str *tmp_availchan = ast_str_alloca(2048);
+	struct ast_str *tmp_availorig = ast_str_alloca(2048);
+	struct ast_str *tmp_availstat = ast_str_alloca(2048);
+	struct ast_str *tmp_availcause = ast_str_alloca(2048);
 	struct ast_channel *tempchan;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(reqchans);
@@ -82,21 +115,24 @@ static int chanavail_exec(struct ast_channel *chan, void *data)
 	);
 
 	if (ast_strlen_zero(data)) {
-		ast_log(LOG_WARNING, "ChanIsAvail requires an argument (Zap/1&Zap/2)\n");
+		ast_log(LOG_WARNING, "ChanIsAvail requires an argument (DAHDI/1&DAHDI/2)\n");
 		return -1;
 	}
 
-	u = ast_module_user_add(chan);
-
-	info = ast_strdupa(data); 
+	info = ast_strdupa(data);
 
 	AST_STANDARD_APP_ARGS(args, info);
 
 	if (args.options) {
-		if (strchr(args.options, 's'))
+		if (strchr(args.options, 'a')) {
+			option_all_avail = 1;
+		}
+		if (strchr(args.options, 's')) {
 			option_state = 1;
-		if (strchr(args.options, 'j'))
-			priority_jump = 1;
+		}
+		if (strchr(args.options, 't')) {
+			string_compare = 1;
+		}
 	}
 	peers = args.reqchans;
 	if (peers) {
@@ -112,67 +148,67 @@ static int chanavail_exec(struct ast_channel *chan, void *data)
 			number = strchr(tech, '/');
 			if (!number) {
 				ast_log(LOG_WARNING, "ChanIsAvail argument takes format ([technology]/[device])\n");
-				ast_module_user_remove(u);
 				return -1;
 			}
 			*number = '\0';
 			number++;
-			
-			if (option_state) {
+
+			status = AST_DEVICE_UNKNOWN;
+
+			if (string_compare) {
+				/* ast_parse_device_state checks for "SIP/1234" as a channel name.
+				   ast_device_state will ask the SIP driver for the channel state. */
+
+				snprintf(trychan, sizeof(trychan), "%s/%s",cur,number);
+				status = inuse = ast_parse_device_state(trychan);
+			} else if (option_state) {
 				/* If the pbx says in use then don't bother trying further.
-				   This is to permit testing if someone's on a call, even if the 
-	 			   channel can permit more calls (ie callwaiting, sip calls, etc).  */
-                               
+				   This is to permit testing if someone's on a call, even if the
+				   channel can permit more calls (ie callwaiting, sip calls, etc).  */
+
 				snprintf(trychan, sizeof(trychan), "%s/%s",cur,number);
 				status = inuse = ast_device_state(trychan);
 			}
-			if ((inuse <= 1) && (tempchan = ast_request(tech, chan->nativeformats, number, &status))) {
-					pbx_builtin_setvar_helper(chan, "AVAILCHAN", tempchan->name);
-					/* Store the originally used channel too */
+			snprintf(tmp, sizeof(tmp), "%d", status);
+			ast_str_append(&tmp_availstat, 0, "%s%s", ast_str_strlen(tmp_availstat) ? "&" : "", tmp);
+			if ((inuse <= 1) && (tempchan = ast_request(tech, chan->nativeformats, chan, number, &status))) {
+					ast_str_append(&tmp_availchan, 0, "%s%s", ast_str_strlen(tmp_availchan) ? "&" : "", tempchan->name);
+					
 					snprintf(tmp, sizeof(tmp), "%s/%s", tech, number);
-					pbx_builtin_setvar_helper(chan, "AVAILORIGCHAN", tmp);
+					ast_str_append(&tmp_availorig, 0, "%s%s", ast_str_strlen(tmp_availorig) ? "&" : "", tmp);
+
 					snprintf(tmp, sizeof(tmp), "%d", status);
-					pbx_builtin_setvar_helper(chan, "AVAILSTATUS", tmp);
+					ast_str_append(&tmp_availcause, 0, "%s%s", ast_str_strlen(tmp_availcause) ? "&" : "", tmp);
+
 					ast_hangup(tempchan);
 					tempchan = NULL;
-					res = 1;
-					break;
-			} else {
-				snprintf(tmp, sizeof(tmp), "%d", status);
-				pbx_builtin_setvar_helper(chan, "AVAILSTATUS", tmp);
+
+					if (!option_all_avail) {
+						break;
+					}
 			}
 			cur = rest;
 		} while (cur);
 	}
-	if (res < 1) {
-		pbx_builtin_setvar_helper(chan, "AVAILCHAN", "");
-		pbx_builtin_setvar_helper(chan, "AVAILORIGCHAN", "");
-		if (priority_jump || ast_opt_priority_jumping) {
-			if (ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101)) {
-				ast_module_user_remove(u);
-				return -1;
-			}
-		}
-	}
 
-	ast_module_user_remove(u);
+	pbx_builtin_setvar_helper(chan, "AVAILCHAN", ast_str_buffer(tmp_availchan));
+	/* Store the originally used channel too */
+	pbx_builtin_setvar_helper(chan, "AVAILORIGCHAN", ast_str_buffer(tmp_availorig));
+	pbx_builtin_setvar_helper(chan, "AVAILSTATUS", ast_str_buffer(tmp_availstat));
+	pbx_builtin_setvar_helper(chan, "AVAILCAUSECODE", ast_str_buffer(tmp_availcause));
+
 	return 0;
 }
 
 static int unload_module(void)
 {
-	int res = 0;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-	
-	return res;
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, chanavail_exec, synopsis, descrip);
+	return ast_register_application_xml(app, chanavail_exec) ?
+		AST_MODULE_LOAD_DECLINE : AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Check channel availability");

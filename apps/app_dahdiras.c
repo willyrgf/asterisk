@@ -27,7 +27,7 @@
 
 /*** MODULEINFO
 	<depend>dahdi</depend>
-	<depend>working_fork</depend>
+	<support_level>extended</support_level>
  ***/
 
 #include "asterisk.h"
@@ -42,47 +42,39 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <signal.h>
 #endif /* __linux__ */
 
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <stdio.h>
 #include <fcntl.h>
 
-#include "asterisk/dahdi_compat.h"
-
-#ifdef HAVE_CAP
-#include <sys/capability.h>
-#endif /* HAVE_CAP */
+#include <dahdi/user.h>
 
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/options.h"
+#include "asterisk/app.h"
 
-static char *dahdi_app = "DAHDIRAS";
-static char *zap_app = "ZapRAS";
+/*** DOCUMENTATION
+	<application name="DAHDIRAS" language="en_US">
+		<synopsis>
+			Executes DAHDI ISDN RAS application.
+		</synopsis>
+		<syntax>
+			<parameter name="args" required="true">
+				<para>A list of parameters to pass to the pppd daemon,
+				separated by <literal>,</literal> characters.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes a RAS server using pppd on the given channel.
+			The channel must be a clear channel (i.e. PRI source) and a DAHDI
+			channel to be able to use this function (No modem emulation is included).</para>
+			<para>Your pppd must be patched to be DAHDI aware.</para>
+		</description>
+	</application>
 
-static char *dahdi_synopsis = "Executes DAHDI ISDN RAS application";
-static char *zap_synopsis = "Executes Zaptel ISDN RAS application";
+ ***/
 
-static char *dahdi_descrip =
-"  DAHDIRAS(args): Executes a RAS server using pppd on the given channel.\n"
-"The channel must be a clear channel (i.e. PRI source) and a DAHDI\n"
-"channel to be able to use this function (no modem emulation is included).\n"
-"Your pppd must have the DAHDI plugin available. Arguments should be\n"
-"separated by | characters.\n";
-
-static char *zap_descrip =
-"  ZapRAS(args): Executes a RAS server using pppd on the given channel.\n"
-"The channel must be a clear channel (i.e. PRI source) and a Zaptel\n"
-"channel to be able to use this function (no modem emulation is included).\n"
-"Your pppd must have the Zaptel plugin available. Arguments should be\n"
-"separated by | characters.\n";
+static const char app[] = "DAHDIRAS";
 
 #define PPP_MAX_ARGS	32
 #define PPP_EXEC	"/usr/sbin/pppd"
@@ -90,42 +82,17 @@ static char *zap_descrip =
 static pid_t spawn_ras(struct ast_channel *chan, char *args)
 {
 	pid_t pid;
-	int x;	
 	char *c;
 
 	char *argv[PPP_MAX_ARGS];
 	int argc = 0;
 	char *stringp=NULL;
-	sigset_t fullset, oldset;
-#ifdef HAVE_CAP
-	cap_t cap;
-#endif
-
-	sigfillset(&fullset);
-	pthread_sigmask(SIG_BLOCK, &fullset, &oldset);
 
 	/* Start by forking */
-	pid = fork();
+	pid = ast_safe_fork(1);
 	if (pid) {
-		pthread_sigmask(SIG_SETMASK, &oldset, NULL);
 		return pid;
 	}
-
-#ifdef HAVE_CAP
-	cap = cap_from_text("cap_net_admin-eip");
-
-	if (cap_set_proc(cap)) {
-		/* Careful with order! Logging cannot happen after we close FDs */
-		ast_log(LOG_WARNING, "Unable to remove capabilities.\n");
-	}
-	cap_free(cap);
-#endif
-
-	/* Restore original signal handlers */
-	for (x=0;x<NSIG;x++)
-		signal(x, SIG_DFL);
-
-	pthread_sigmask(SIG_UNBLOCK, &fullset, NULL);
 
 	/* Execute RAS on File handles */
 	dup2(chan->fds[0], STDIN_FILENO);
@@ -135,8 +102,7 @@ static pid_t spawn_ras(struct ast_channel *chan, char *args)
 		ast_set_priority(0);
 
 	/* Close other file descriptors */
-	for (x=STDERR_FILENO + 1;x<1024;x++) 
-		close(x);
+	ast_close_fds_above_n(STDERR_FILENO);
 
 	/* Reset all arguments */
 	memset(argv, 0, sizeof(argv));
@@ -148,18 +114,14 @@ static pid_t spawn_ras(struct ast_channel *chan, char *args)
 
 	/* And all the other arguments */
 	stringp=args;
-	c = strsep(&stringp, "|");
+	c = strsep(&stringp, ",");
 	while(c && strlen(c) && (argc < (PPP_MAX_ARGS - 4))) {
 		argv[argc++] = c;
-		c = strsep(&stringp, "|");
+		c = strsep(&stringp, ",");
 	}
 
 	argv[argc++] = "plugin";
-#ifdef HAVE_ZAPTEL
-	argv[argc++] = "zaptel.so";
-#else
 	argv[argc++] = "dahdi.so";
-#endif
 	argv[argc++] = "stdin";
 
 	/* Finally launch PPP */
@@ -191,8 +153,8 @@ static void run_ras(struct ast_channel *chan, char *args)
 			res = wait4(pid, &status, WNOHANG, NULL);
 			if (!res) {
 				/* Check for hangup */
-				if (chan->_softhangup && !signalled) {
-					ast_log(LOG_DEBUG, "Channel '%s' hungup.  Signalling RAS at %d to die...\n", chan->name, pid);
+				if (ast_check_hangup(chan) && !signalled) {
+					ast_debug(1, "Channel '%s' hungup.  Signalling RAS at %d to die...\n", chan->name, pid);
 					kill(pid, SIGTERM);
 					signalled=1;
 				}
@@ -203,15 +165,13 @@ static void run_ras(struct ast_channel *chan, char *args)
 			if (res < 0) {
 				ast_log(LOG_WARNING, "wait4 returned %d: %s\n", res, strerror(errno));
 			}
-			if (option_verbose > 2) {
-				if (WIFEXITED(status)) {
-					ast_verbose(VERBOSE_PREFIX_3 "RAS on %s terminated with status %d\n", chan->name, WEXITSTATUS(status));
-				} else if (WIFSIGNALED(status)) {
-					ast_verbose(VERBOSE_PREFIX_3 "RAS on %s terminated with signal %d\n", 
-						 chan->name, WTERMSIG(status));
-				} else {
-					ast_verbose(VERBOSE_PREFIX_3 "RAS on %s terminated weirdly.\n", chan->name);
-				}
+			if (WIFEXITED(status)) {
+				ast_verb(3, "RAS on %s terminated with status %d\n", chan->name, WEXITSTATUS(status));
+			} else if (WIFSIGNALED(status)) {
+				ast_verb(3, "RAS on %s terminated with signal %d\n", 
+					 chan->name, WTERMSIG(status));
+			} else {
+				ast_verb(3, "RAS on %s terminated weirdly.\n", chan->name);
 			}
 			/* Throw back into audio mode */
 			x = 1;
@@ -225,82 +185,53 @@ static void run_ras(struct ast_channel *chan, char *args)
 			break;
 		}
 	}
+	ast_safe_fork_cleanup();
 }
 
-static int exec(struct ast_channel *chan, void *data)
+static int dahdiras_exec(struct ast_channel *chan, const char *data)
 {
 	int res=-1;
 	char *args;
-	struct ast_module_user *u;
-	struct dahdi_params ztp;
+	struct dahdi_params dahdip;
 
 	if (!data) 
 		data = "";
-
-	u = ast_module_user_add(chan);
 
 	args = ast_strdupa(data);
 	
 	/* Answer the channel if it's not up */
 	if (chan->_state != AST_STATE_UP)
 		ast_answer(chan);
-	if (strcasecmp(chan->tech->type, dahdi_chan_name)) {
-		if (option_verbose > 1)
-			ast_verbose(VERBOSE_PREFIX_2 "Channel %s is not a %s channel\n", chan->name, dahdi_chan_name);
+	if (strcasecmp(chan->tech->type, "DAHDI")) {
+		/* If it's not a DAHDI channel, we're done.  Wait a couple of
+		   seconds and then hangup... */
+		ast_verb(2, "Channel %s is not a DAHDI channel\n", chan->name);
 		sleep(2);
 	} else {
-		memset(&ztp, 0, sizeof(ztp));
-		if (ioctl(chan->fds[0], DAHDI_GET_PARAMS, &ztp)) {
-			ast_log(LOG_WARNING, "Unable to get parameters\n");
-		} else if (ztp.sigtype != DAHDI_SIG_CLEAR) {
-			if (option_verbose > 1)
-				ast_verbose(VERBOSE_PREFIX_2 "Channel %s is not a clear channel\n", chan->name);
+		memset(&dahdip, 0, sizeof(dahdip));
+		if (ioctl(chan->fds[0], DAHDI_GET_PARAMS, &dahdip)) {
+			ast_log(LOG_WARNING, "Unable to get DAHDI parameters\n");
+		} else if (dahdip.sigtype != DAHDI_SIG_CLEAR) {
+			ast_verb(2, "Channel %s is not a clear channel\n", chan->name);
 		} else {
 			/* Everything should be okay.  Run PPP. */
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "Starting RAS on %s\n", chan->name);
+			ast_verb(3, "Starting RAS on %s\n", chan->name);
 			/* Execute RAS */
 			run_ras(chan, args);
 		}
 	}
-	ast_module_user_remove(u);
 	return res;
-}
-
-static int exec_warn(struct ast_channel *chan, void *data)
-{
-	ast_log(LOG_WARNING, "Use of the command %s is deprecated, please use %s instead.\n", zap_app, dahdi_app);
-
-	return exec(chan, data);
 }
 
 static int unload_module(void) 
 {
-	int res = 0;
-
-	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
-		res |= ast_unregister_application(dahdi_app);
-	}
-
-	res |= ast_unregister_application(zap_app);
-	
-	ast_module_user_hangup_all();
-
-	return res;
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	int res = 0;
-
-	if (*dahdi_chan_mode == CHAN_DAHDI_PLUS_ZAP_MODE) {
-		res |= ast_register_application(dahdi_app, exec, dahdi_synopsis, dahdi_descrip);
-	}
-
-	res |= ast_register_application(zap_app, exec_warn, zap_synopsis, zap_descrip);
-
-	return res;
+	return ((ast_register_application_xml(app, dahdiras_exec)) ? AST_MODULE_LOAD_FAILURE : AST_MODULE_LOAD_SUCCESS);
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "DAHDI RAS Application");
+AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "DAHDI ISDN Remote Access Server");
 

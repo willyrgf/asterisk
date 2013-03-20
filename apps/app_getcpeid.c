@@ -25,32 +25,34 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-
 #include "asterisk/lock.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/adsi.h"
-#include "asterisk/options.h"
 
+/*** DOCUMENTATION
+	<application name="GetCPEID" language="en_US">
+		<synopsis>
+			Get ADSI CPE ID.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>Obtains and displays ADSI CPE ID and other information in order
+			to properly setup <filename>dahdi.conf</filename> for on-hook operations.</para>
+		</description>
+	</application>
+ ***/
 static char *app = "GetCPEID";
-
-static char *synopsis = "Get ADSI CPE ID";
-
-static char *descrip =
-"  GetCPEID: Obtains and displays ADSI CPE ID and other information in order\n"
-"to properly setup chan_dahdi.conf for on-hook operations.\n";
-
 
 static int cpeid_setstatus(struct ast_channel *chan, char *stuff[], int voice)
 {
@@ -63,10 +65,9 @@ static int cpeid_setstatus(struct ast_channel *chan, char *stuff[], int voice)
 	return ast_adsi_print(chan, tmp, justify, voice);
 }
 
-static int cpeid_exec(struct ast_channel *chan, void *idata)
+static int cpeid_exec(struct ast_channel *chan, const char *idata)
 {
 	int res=0;
-	struct ast_module_user *u;
 	unsigned char cpeid[4];
 	int gotgeometry = 0;
 	int gotcpeid = 0;
@@ -74,10 +75,8 @@ static int cpeid_exec(struct ast_channel *chan, void *idata)
 	char *data[4];
 	unsigned int x;
 
-	u = ast_module_user_add(chan);
-
 	for (x = 0; x < 4; x++)
-		data[x] = alloca(80);
+		data[x] = ast_alloca(80);
 
 	strcpy(data[0], "** CPE Info **");
 	strcpy(data[1], "Identifying CPE...");
@@ -88,8 +87,7 @@ static int cpeid_exec(struct ast_channel *chan, void *idata)
 		res = ast_adsi_get_cpeid(chan, cpeid, 0);
 		if (res > 0) {
 			gotcpeid = 1;
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "Got CPEID of '%02x:%02x:%02x:%02x' on '%s'\n", cpeid[0], cpeid[1], cpeid[2], cpeid[3], chan->name);
+			ast_verb(3, "Got CPEID of '%02x:%02x:%02x:%02x' on '%s'\n", cpeid[0], cpeid[1], cpeid[2], cpeid[3], chan->name);
 		}
 		if (res > -1) {
 			strcpy(data[1], "Measuring CPE...");
@@ -97,8 +95,7 @@ static int cpeid_exec(struct ast_channel *chan, void *idata)
 			cpeid_setstatus(chan, data, 0);
 			res = ast_adsi_get_cpeinfo(chan, &width, &height, &buttons, 0);
 			if (res > -1) {
-				if (option_verbose > 2)
-					ast_verbose(VERBOSE_PREFIX_3 "CPE has %d lines, %d columns, and %d buttons on '%s'\n", height, width, buttons, chan->name);
+				ast_verb(3, "CPE has %d lines, %d columns, and %d buttons on '%s'\n", height, width, buttons, chan->name);
 				gotgeometry = 1;
 			}
 		}
@@ -125,24 +122,22 @@ static int cpeid_exec(struct ast_channel *chan, void *idata)
 			ast_adsi_unload_session(chan);
 		}
 	}
-	ast_module_user_remove(u);
+
 	return res;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-
-	ast_module_user_hangup_all();
-
-	return res;	
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, cpeid_exec, synopsis, descrip);
+	return ast_register_application_xml(app, cpeid_exec);
 }
 
-AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Get ADSI CPE ID");
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Get ADSI CPE ID",
+		.load = load_module,
+		.unload = unload_module,
+		.nonoptreq = "res_adsi",
+		);

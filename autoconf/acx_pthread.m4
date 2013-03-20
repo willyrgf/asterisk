@@ -46,7 +46,8 @@ dnl @author Steven G. Johnson <stevenj@alum.mit.edu>
 dnl @version 2006-05-29
 dnl @license GPLWithACException
 
-AC_DEFUN([ACX_PTHREAD], [
+AC_DEFUN([ACX_PTHREAD],
+[
 AC_REQUIRE([AC_CANONICAL_HOST])
 AC_LANG_SAVE
 AC_LANG_C

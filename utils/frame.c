@@ -968,7 +968,7 @@ int workloop( FILE *theinfile, FILE *theoutfile,
   return TRUE;      /* Input file done with, no errors. */
 }
 
-int __attribute__((format(printf, 1, 2))) chat( const char *format, ...)
+int __attribute__((format(printf,1,2))) chat( const char *format, ...)
 {
     va_list ap;
     int result = 0;
@@ -982,8 +982,7 @@ int __attribute__((format(printf, 1, 2))) chat( const char *format, ...)
     return result;
 }
 
-
-int __attribute__((format(printf, 1, 2))) inform( const char *format, ...)
+int __attribute__((format(printf,1,2))) inform( const char *format, ...)
 {
     va_list ap;
     int result = 0;
@@ -997,7 +996,7 @@ int __attribute__((format(printf, 1, 2))) inform( const char *format, ...)
     return result;
 }
 
-int __attribute__((format(printf, 1, 2))) error( const char *format, ...)
+int __attribute__((format(printf,1,2))) error( const char *format, ...)
 {
     va_list ap;
     int result;
@@ -1008,7 +1007,7 @@ int __attribute__((format(printf, 1, 2))) error( const char *format, ...)
     return result;
 }
 
-void __attribute__((format(printf, 1, 2))) fatalerror( const char *format, ...)
+void __attribute__((format(printf,1,2))) fatalerror( const char *format, ...)
 {
     va_list ap;
 
@@ -1024,7 +1023,7 @@ void fatalperror( const char *string)
   myexit( 1);
 }
 
-int __attribute__((format(printf, 1, 2))) say( const char *format, ...)
+int __attribute__((format(printf,1,2))) say( const char *format, ...)
 {
     va_list ap;
     int result;
@@ -1067,7 +1066,7 @@ double double2db( double value)
   return 6.0 * log( value / 32767) / log( 2);
 }
 
-void readawaysamples( FILE *in, size_t size)
+void readawaysamples( FILE *input, size_t size)
 {
   short *buffer;
   int samplesread, count;
@@ -1082,8 +1081,8 @@ void readawaysamples( FILE *in, size_t size)
       else
 	count = size;
 
-      samplesread = fread( buffer, sizeof(*buffer), count, in);
-      if (ferror( in) != 0)
+      samplesread = fread( buffer, sizeof(*buffer), count, input);
+      if (ferror( input) != 0)
 	fatalperror("Error reading input file");
       size -= samplesread;
     }

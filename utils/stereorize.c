@@ -10,6 +10,10 @@
  *
  ****************************************************************************/
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -156,4 +160,7 @@ int main( int argcount, char *args[])
       }
    }
    /* That was an endless loop. This point is never reached. */
+   free(leftsample);
+   free(rightsample);
+   free(stereosample);
 }

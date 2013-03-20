@@ -1,10 +1,8 @@
+/* A Bison parser, made by GNU Bison 2.5.  */
 
-/* A Bison parser, made by GNU Bison 2.4.1.  */
-
-/* Skeleton interface for Bison's Yacc-like parsers in C
+/* Bison interface for Yacc-like parsers in C
    
-      Copyright (C) 1984, 1989, 1990, 2000, 2001, 2002, 2003, 2004, 2005, 2006
-   Free Software Foundation, Inc.
+      Copyright (C) 1984, 1989-1990, 2000-2011 Free Software Foundation, Inc.
    
    This program is free software: you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -39,27 +37,29 @@
    /* Put the tokens into the symbol table, so that GDB and other debuggers
       know about them.  */
    enum yytokentype {
-     TOK_COLONCOLON = 258,
-     TOK_COND = 259,
-     TOK_OR = 260,
-     TOK_AND = 261,
-     TOK_NE = 262,
-     TOK_LE = 263,
-     TOK_GE = 264,
-     TOK_LT = 265,
-     TOK_GT = 266,
-     TOK_EQ = 267,
-     TOK_MINUS = 268,
-     TOK_PLUS = 269,
-     TOK_MOD = 270,
-     TOK_DIV = 271,
-     TOK_MULT = 272,
-     TOK_COMPL = 273,
-     TOK_EQTILDE = 274,
-     TOK_COLON = 275,
-     TOK_LP = 276,
-     TOK_RP = 277,
-     TOKEN = 278
+     TOK_COMMA = 258,
+     TOK_COLONCOLON = 259,
+     TOK_COND = 260,
+     TOK_OR = 261,
+     TOK_AND = 262,
+     TOK_NE = 263,
+     TOK_LE = 264,
+     TOK_GE = 265,
+     TOK_LT = 266,
+     TOK_GT = 267,
+     TOK_EQ = 268,
+     TOK_MINUS = 269,
+     TOK_PLUS = 270,
+     TOK_MOD = 271,
+     TOK_DIV = 272,
+     TOK_MULT = 273,
+     TOK_COMPL = 274,
+     TOK_TILDETILDE = 275,
+     TOK_EQTILDE = 276,
+     TOK_COLON = 277,
+     TOK_LP = 278,
+     TOK_RP = 279,
+     TOKEN = 280
    };
 #endif
 
@@ -69,15 +69,16 @@
 typedef union YYSTYPE
 {
 
-/* Line 1676 of yacc.c  */
-#line 147 "ast_expr2.y"
+/* Line 2068 of yacc.c  */
+#line 345 "ast_expr2.y"
 
 	struct val *val;
+	struct expr_node *arglist;
 
 
 
-/* Line 1676 of yacc.c  */
-#line 81 "ast_expr2.h"
+/* Line 2068 of yacc.c  */
+#line 82 "ast_expr2.h"
 } YYSTYPE;
 # define YYSTYPE_IS_TRIVIAL 1
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */

@@ -28,60 +28,77 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-
-#include "asterisk/options.h"
 #include "asterisk/file.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/astdb.h"
 #include "asterisk/lock.h"
-#include "asterisk/options.h"
 
-/*! \todo XXX Remove this application after 1.4 is relased */
-static char *d_descrip =
-"  DBdel(family/key): This application will delete a key from the Asterisk\n"
-"database.\n"
-"  This application has been DEPRECATED in favor of the DB_DELETE function.\n";
+/*** DOCUMENTATION
+	<application name="DBdel" language="en_US">
+		<synopsis>
+			Delete a key from the asterisk database.
+		</synopsis>
+		<syntax argsep="/">
+			<parameter name="family" required="true" />
+			<parameter name="key" required="true" />
+		</syntax>
+		<description>
+			<para>This application will delete a <replaceable>key</replaceable> from the Asterisk
+			database.</para>
+			<note><para>This application has been DEPRECATED in favor of the DB_DELETE function.</para></note>
+		</description>
+		<see-also>
+			<ref type="function">DB_DELETE</ref>
+			<ref type="application">DBdeltree</ref>
+			<ref type="function">DB</ref>
+		</see-also>
+	</application>
+	<application name="DBdeltree" language="en_US">
+		<synopsis>
+			Delete a family or keytree from the asterisk database.
+		</synopsis>
+		<syntax argsep="/">
+			<parameter name="family" required="true" />
+			<parameter name="keytree" />
+		</syntax>
+		<description>
+			<para>This application will delete a <replaceable>family</replaceable> or <replaceable>keytree</replaceable>
+			from the Asterisk database.</para>
+		</description>
+		<see-also>
+			<ref type="function">DB_DELETE</ref>
+			<ref type="application">DBdel</ref>
+			<ref type="function">DB</ref>
+		</see-also>
+	</application>
+ ***/
 
-static char *dt_descrip =
-"  DBdeltree(family[/keytree]): This application will delete a family or keytree\n"
-"from the Asterisk database\n";
+static const char d_app[] = "DBdel";
+static const char dt_app[] = "DBdeltree";
 
-static char *d_app = "DBdel";
-static char *dt_app = "DBdeltree";
-
-static char *d_synopsis = "Delete a key from the database";
-static char *dt_synopsis = "Delete a family or keytree from the database";
-
-
-static int deltree_exec(struct ast_channel *chan, void *data)
+static int deltree_exec(struct ast_channel *chan, const char *data)
 {
 	char *argv, *family, *keytree;
-	struct ast_module_user *u;
-
-	u = ast_module_user_add(chan);
 
 	argv = ast_strdupa(data);
 
 	if (strchr(argv, '/')) {
 		family = strsep(&argv, "/");
 		keytree = strsep(&argv, "\0");
-			if (!family || !keytree) {
-				ast_log(LOG_DEBUG, "Ignoring; Syntax error in argument\n");
-				ast_module_user_remove(u);
-				return 0;
-			}
+		if (!family || !keytree) {
+			ast_debug(1, "Ignoring; Syntax error in argument\n");
+			return 0;
+		}
 		if (ast_strlen_zero(keytree))
 			keytree = 0;
 	} else {
@@ -89,30 +106,23 @@ static int deltree_exec(struct ast_channel *chan, void *data)
 		keytree = 0;
 	}
 
-	if (option_verbose > 2)	{
-		if (keytree)
-			ast_verbose(VERBOSE_PREFIX_3 "DBdeltree: family=%s, keytree=%s\n", family, keytree);
-		else
-			ast_verbose(VERBOSE_PREFIX_3 "DBdeltree: family=%s\n", family);
+	if (keytree) {
+		ast_verb(3, "DBdeltree: family=%s, keytree=%s\n", family, keytree);
+	} else {
+		ast_verb(3, "DBdeltree: family=%s\n", family);
 	}
 
-	if (ast_db_deltree(family, keytree)) {
-		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_3 "DBdeltree: Error deleting key from database.\n");
+	if (ast_db_deltree(family, keytree) < 0) {
+		ast_verb(3, "DBdeltree: Error deleting key from database.\n");
 	}
-
-	ast_module_user_remove(u);
 
 	return 0;
 }
 
-static int del_exec(struct ast_channel *chan, void *data)
+static int del_exec(struct ast_channel *chan, const char *data)
 {
 	char *argv, *family, *key;
-	struct ast_module_user *u;
 	static int deprecation_warning = 0;
-
-	u = ast_module_user_add(chan);
 
 	if (!deprecation_warning) {
 		deprecation_warning = 1;
@@ -125,22 +135,16 @@ static int del_exec(struct ast_channel *chan, void *data)
 		family = strsep(&argv, "/");
 		key = strsep(&argv, "\0");
 		if (!family || !key) {
-			ast_log(LOG_DEBUG, "Ignoring; Syntax error in argument\n");
-			ast_module_user_remove(u);
+			ast_debug(1, "Ignoring; Syntax error in argument\n");
 			return 0;
 		}
-		if (option_verbose > 2)
-			ast_verbose(VERBOSE_PREFIX_3 "DBdel: family=%s, key=%s\n", family, key);
-		if (ast_db_del(family, key)) {
-			if (option_verbose > 2)
-				ast_verbose(VERBOSE_PREFIX_3 "DBdel: Error deleting key from database.\n");
-		}
+		ast_verb(3, "DBdel: family=%s, key=%s\n", family, key);
+		if (ast_db_del(family, key))
+			ast_verb(3, "DBdel: Error deleting key from database.\n");
 	} else {
-		ast_log(LOG_DEBUG, "Ignoring, no parameters\n");
+		ast_debug(1, "Ignoring, no parameters\n");
 	}
 
-	ast_module_user_remove(u);
-	
 	return 0;
 }
 
@@ -158,9 +162,9 @@ static int load_module(void)
 {
 	int retval;
 
-	retval = ast_register_application(d_app, del_exec, d_synopsis, d_descrip);
-	retval |= ast_register_application(dt_app, deltree_exec, dt_synopsis, dt_descrip);
-	
+	retval = ast_register_application_xml(d_app, del_exec);
+	retval |= ast_register_application_xml(dt_app, deltree_exec);
+
 	return retval;
 }
 

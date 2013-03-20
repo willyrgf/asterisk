@@ -24,60 +24,88 @@
  * 
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
  
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
-#include "asterisk/translate.h"
-#include "asterisk/image.h"
-#include "asterisk/options.h"
+#include "asterisk/app.h"
+#include "asterisk/channel.h"
+
+/*** DOCUMENTATION
+	<application name="SendURL" language="en_US">
+		<synopsis>
+			Send a URL.
+		</synopsis>
+		<syntax>
+			<parameter name="URL" required="true" />
+			<parameter name="option">
+				<optionlist>
+					<option name="w">
+						<para>Execution will wait for an acknowledgement that the
+						URL has been loaded before continuing.</para>
+					</option>
+				</optionlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Requests client go to <replaceable>URL</replaceable> (IAX2) or sends the
+			URL to the client (other channels).</para>
+			<para>Result is returned in the <variable>SENDURLSTATUS</variable> channel variable:</para>
+			<variablelist>
+				<variable name="SENDURLSTATUS">
+					<value name="SUCCESS">
+						URL successfully sent to client.
+					</value>
+					<value name="FAILURE">
+						Failed to send URL.
+					</value>
+					<value name="NOLOAD">
+						Client failed to load URL (wait enabled).
+					</value>
+					<value name="UNSUPPORTED">
+						Channel does not support URL transport.
+					</value>
+				</variable>
+			</variablelist>
+			<para>SendURL continues normally if the URL was sent correctly or if the channel
+			does not support HTML transport.  Otherwise, the channel is hung up.</para>
+		</description>
+		<see-also>
+			<ref type="application">SendImage</ref>
+			<ref type="application">SendText</ref>
+		</see-also>
+	</application>
+ ***/
 
 static char *app = "SendURL";
 
-static char *synopsis = "Send a URL";
+enum option_flags {
+	OPTION_WAIT = (1 << 0),
+};
 
-static char *descrip = 
-"  SendURL(URL[|option]): Requests client go to URL (IAX2) or sends the \n"
-"URL to the client (other channels).\n"
-"Result is returned in the SENDURLSTATUS channel variable:\n"
-"    SUCCESS       URL successfully sent to client\n"
-"    FAILURE       Failed to send URL\n"
-"    NOLOAD        Client failed to load URL (wait enabled)\n"
-"    UNSUPPORTED   Channel does not support URL transport\n"
-"\n"
-"If the option 'wait' is specified, execution will wait for an\n"
-"acknowledgement that the URL has been loaded before continuing\n"
-"\n"
-"If jumping is specified as an option (the 'j' flag), the client does not\n"
-"support Asterisk \"html\" transport, and there exists a step with priority\n"
-"n + 101, then execution will continue at that step.\n"
-"\n"
-"SendURL continues normally if the URL was sent correctly or if the channel\n"
-"does not support HTML transport.  Otherwise, the channel is hung up.\n";
+AST_APP_OPTIONS(app_opts,{
+	AST_APP_OPTION('w', OPTION_WAIT),
+});
 
-
-static int sendurl_exec(struct ast_channel *chan, void *data)
+static int sendurl_exec(struct ast_channel *chan, const char *data)
 {
 	int res = 0;
-	struct ast_module_user *u;
 	char *tmp;
-	char *options;
-	int local_option_wait=0;
-	int local_option_jump = 0;
 	struct ast_frame *f;
-	char *stringp=NULL;
 	char *status = "FAILURE";
+	char *opts[0];
+	struct ast_flags flags = { 0 };
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(url);
+		AST_APP_ARG(options);
+	);
 	
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "SendURL requires an argument (URL)\n");
@@ -85,34 +113,24 @@ static int sendurl_exec(struct ast_channel *chan, void *data)
 		return -1;
 	}
 
-	u = ast_module_user_add(chan);
-
 	tmp = ast_strdupa(data);
 
-	stringp=tmp;
-	strsep(&stringp, "|");
-	options = strsep(&stringp, "|");
-	if (options && !strcasecmp(options, "wait"))
-		local_option_wait = 1;
-	if (options && !strcasecmp(options, "j"))
-		local_option_jump = 1;
+	AST_STANDARD_APP_ARGS(args, tmp);
+	if (args.argc == 2)
+		ast_app_parse_options(app_opts, &flags, opts, args.options);
 	
 	if (!ast_channel_supports_html(chan)) {
 		/* Does not support transport */
-		if (local_option_jump || ast_opt_priority_jumping)
-			 ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
 		pbx_builtin_setvar_helper(chan, "SENDURLSTATUS", "UNSUPPORTED");
-		ast_module_user_remove(u);
 		return 0;
 	}
-	res = ast_channel_sendurl(chan, tmp);
+	res = ast_channel_sendurl(chan, args.url);
 	if (res == -1) {
 		pbx_builtin_setvar_helper(chan, "SENDURLSTATUS", "FAILURE");
-		ast_module_user_remove(u);
 		return res;
 	}
 	status = "SUCCESS";
-	if (local_option_wait) {
+	if (ast_test_flag(&flags, OPTION_WAIT)) {
 		for(;;) {
 			/* Wait for an event */
 			res = ast_waitfor(chan, -1);
@@ -125,7 +143,7 @@ static int sendurl_exec(struct ast_channel *chan, void *data)
 				break;
 			}
 			if (f->frametype == AST_FRAME_HTML) {
-				switch(f->subclass) {
+				switch (f->subclass.integer) {
 				case AST_HTML_LDCOMPLETE:
 					res = 0;
 					ast_frfree(f);
@@ -134,15 +152,13 @@ static int sendurl_exec(struct ast_channel *chan, void *data)
 					break;
 				case AST_HTML_NOSUPPORT:
 					/* Does not support transport */
-					status ="UNSUPPORTED";
-					if (local_option_jump || ast_opt_priority_jumping)
-			 			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
+					status = "UNSUPPORTED";
 					res = 0;
 					ast_frfree(f);
 					goto out;
 					break;
 				default:
-					ast_log(LOG_WARNING, "Don't know what to do with HTML subclass %d\n", f->subclass);
+					ast_log(LOG_WARNING, "Don't know what to do with HTML subclass %d\n", f->subclass.integer);
 				};
 			}
 			ast_frfree(f);
@@ -150,24 +166,17 @@ static int sendurl_exec(struct ast_channel *chan, void *data)
 	} 
 out:	
 	pbx_builtin_setvar_helper(chan, "SENDURLSTATUS", status);
-	ast_module_user_remove(u);
 	return res;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(app);
-	
-	ast_module_user_hangup_all();
-
-	return res;	
+	return ast_unregister_application(app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(app, sendurl_exec, synopsis, descrip);
+	return ast_register_application_xml(app, sendurl_exec);
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Send URL Applications");

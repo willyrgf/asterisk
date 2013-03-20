@@ -36,6 +36,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "asterisk.h"
 #include "config.h"
 #if !defined(lint) && !defined(SCCSID)
 __RCSID("$NetBSD: readline.c,v 1.21 2002/03/18 16:20:36 christos Exp $");
@@ -548,6 +549,7 @@ _history_expand_command(const char *command, size_t cmdlen, char **result)
 						from = strdup(search);
 					else {
 						from = NULL;
+						free(line);
 						return (-1);
 					}
 				}
@@ -608,8 +610,13 @@ _history_expand_command(const char *command, size_t cmdlen, char **result)
 		end = max - ((end < -1) ? 1 : 0);
 
 	/* check boundaries ... */
-	if (start > max || end > max || start > end)
+	if (start > max || end > max || start > end) {
+		for (i = 0; i <= max; i++) {
+			free(arr[i]);
+		}
+		free(arr), arr = (char **) NULL;
 		return (-1);
+	}
 
 	for (i = 0; i <= max; i++) {
 		char *temp;

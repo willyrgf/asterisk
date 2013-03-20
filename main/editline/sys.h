@@ -69,27 +69,19 @@ typedef void	*ioctl_t;
 
 #include <stdio.h>
 
-#ifndef HAVE_STRLCAT
-#define	strlcat libedit_strlcat
-size_t	strlcat(char *dst, const char *src, size_t size);
-#endif
-
-#ifndef HAVE_STRLCPY
-#define	strlcpy libedit_strlcpy
-size_t	strlcpy(char *dst, const char *src, size_t size);
-#endif
-
 #ifndef HAVE_FGETLN
 #define	fgetln libedit_fgetln
 char	*fgetln(FILE *fp, size_t *len);
 #endif
 
 #ifndef HAVE_STRLCPY
+#undef strlcpy /* We define this in top-level Asterisk to point towards ast_copy_string */
 #define	strlcpy libedit_strlcpy
 size_t strlcpy(char *dst, const char *src, size_t siz);
 #endif
 
 #ifndef HAVE_STRLCAT
+#undef strlcat /* We define this in top-level Asterisk to point towards the ast_str_* APIs */
 #define	strlcat libedit_strlcat
 size_t strlcat(char *dst, const char *src, size_t siz);
 #endif
@@ -100,7 +92,7 @@ size_t strlcat(char *dst, const char *src, size_t siz);
 #ifdef SUNOS
 # undef REGEX
 # undef REGEXP
-# include <malloc.h>
+/* # include <malloc.h> XXX Removed for Solaris build XXX */
 typedef void (*sig_t)(int);
 # ifdef __GNUC__
 /*

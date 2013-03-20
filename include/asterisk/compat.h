@@ -11,23 +11,98 @@
 
 /*! \file
  * \brief General Definitions for Asterisk top level program
+ * Included by asterisk.h to handle platform-specific issues
+ * especially those related to header files.
  */
+
+#include "asterisk/compiler.h"
 
 #ifndef _COMPAT_H
 #define _COMPAT_H
 
-#include "asterisk/autoconfig.h"
-#include "asterisk/compiler.h"
+#ifndef __STDC_VERSION__
+/* flex output wants to find this defined. */
+#define	__STDC_VERSION__ 0
+#endif
+
+#ifdef HAVE_INTTYPES_H
 #include <inttypes.h>
+#endif
+
+#ifdef HAVE_LIMITS_H
+#include <limits.h>
+#endif
+
+#ifdef HAVE_UNISTD_H
+#include <unistd.h>
+#endif
+
+#ifdef HAVE_STDDEF_H
+#include <stddef.h>
+#endif
+
+#ifdef HAVE_STDINT_H
+#include <stdint.h>
+#endif
+
+#ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
+#endif
+
 #include <stdarg.h>
 
+#ifdef HAVE_STDLIB_H
+#include <stdlib.h>
+#endif
+
+#ifdef HAVE_ALLOCA_H
+#include <alloca.h>    /* not necessarily present - could be in stdlib */
+#elif defined(HAVE_ALLOCA) && defined(__MINGW32__)
+#include <malloc.h>    /* see if it is here... */
+#endif
+
+#include <stdio.h>	/* this is always present */
+
+#ifdef HAVE_STRING_H
+#include <string.h>
+#endif
+
+#ifndef AST_POLL_COMPAT
+#include <sys/poll.h>
+#else
+#include "asterisk/poll-compat.h"
+#endif
+
+#ifndef HAVE_LLONG_MAX
+#define	LLONG_MAX	9223372036854775807LL
+#endif
+
+#ifndef HAVE_CLOSEFROM
+void closefrom(int lowfd);
+#endif
+
 #if !defined(HAVE_ASPRINTF) && !defined(__AST_DEBUG_MALLOC)
-int asprintf(char **str, const char *fmt, ...);
+int __attribute__((format(printf, 2, 3))) asprintf(char **str, const char *fmt, ...);
+#endif
+
+#ifndef HAVE_FFSLL
+int ffsll(long long n);
 #endif
 
 #ifndef HAVE_GETLOADAVG
 int getloadavg(double *list, int nelem);
+#endif
+
+#ifndef HAVE_HTONLL
+uint64_t htonll(uint64_t host64);
+#endif
+
+#ifndef HAVE_MKDTEMP
+char *mkdtemp(char *template_s);
+#endif
+
+#ifndef HAVE_NTOHLL
+uint64_t ntohll(uint64_t net64);
 #endif
 
 #ifndef HAVE_SETENV
@@ -59,20 +134,17 @@ int unsetenv(const char *name);
 #endif
 
 #if !defined(HAVE_VASPRINTF) && !defined(__AST_DEBUG_MALLOC)
-int vasprintf(char **strp, const char *fmt, va_list ap);
+int __attribute__((format(printf, 2, 0))) vasprintf(char **strp, const char *fmt, va_list ap);
 #endif
 
 #ifndef HAVE_TIMERSUB
 void timersub(struct timeval *tvend, struct timeval *tvstart, struct timeval *tvdiff);
 #endif
 
-#ifndef HAVE_STRLCAT
-size_t strlcat(char *dst, const char *src, size_t siz) attribute_deprecated;
-#endif
+#define	strlcat	__use__ast_str__functions_not__strlcat__
+#define	strlcpy	__use__ast_copy_string__not__strlcpy__
 
-#ifndef HAVE_STRLCPY
-size_t strlcpy(char *dst, const char *src, size_t siz) attribute_deprecated;
-#endif
+#include <errno.h>
 
 #ifdef SOLARIS
 #define __BEGIN_DECLS
@@ -137,11 +209,19 @@ typedef unsigned long long uint64_t;
 #if defined(__Darwin__) || defined(__CYGWIN__)
 #define GLOB_ABORTED GLOB_ABEND
 #endif
-
+#include <glob.h>
 #if !defined(HAVE_GLOB_NOMAGIC) || !defined(HAVE_GLOB_BRACE)
 #define MY_GLOB_FLAGS   GLOB_NOCHECK
 #else
 #define MY_GLOB_FLAGS   (GLOB_NOMAGIC | GLOB_BRACE)
+#endif
+
+#ifndef HAVE_ROUNDF
+#ifdef HAVE_ROUND
+#define roundf(x) ((float)round(x))
+#else
+float roundf(float x);
+#endif
 #endif
 
 #endif

@@ -97,6 +97,11 @@ public:
 	virtual PBoolean HandleSignalPDU(H323SignalPDU &pdu);
 	PBoolean EmbedTunneledInfo(H323SignalPDU &pdu);
 #endif
+#ifdef H323_H450
+	virtual void OnReceivedLocalCallHold(int linkedId);
+	virtual void OnReceivedLocalCallRetrieve(int linkedId);
+#endif
+	void MyHoldCall(BOOL localHold);
 
 	PString sourceAliases;
 	PString destAliases;
@@ -115,11 +120,12 @@ public:
 	int tunnelOptions;
 #endif
 
+	unsigned holdHandling;
 	unsigned progressSetup;
 	unsigned progressAlert;
 	int cause;
 
-	RTP_DataFrame::PayloadTypes dtmfCodec;
+	RTP_DataFrame::PayloadTypes dtmfCodec[2];
 	int dtmfMode;
 };
 
@@ -156,20 +162,26 @@ protected:
 	WORD remotePort;
 };
 
-/**
- * The MyProcess is a necessary descendant PProcess class so that the H323EndPoint
- * objected to be created from within that class. (Solves the who owns main() problem).
- */
-class MyProcess : public PProcess
+#ifdef H323_H450
+
+#if VERSION(OPENH323_MAJOR, OPENH323_MINOR, OPENH323_BUILD) > VERSION(1,19,4)
+#include <h450/h450pdu.h>
+#else
+#include <h450pdu.h>
+#endif
+
+class MyH4504Handler : public H4504Handler
 {
-	PCLASSINFO(MyProcess, PProcess);
+	PCLASSINFO(MyH4504Handler, H4504Handler);
 
 public:
-	MyProcess();
-	~MyProcess();
-	void Main();
-};
+	MyH4504Handler(MyH323Connection &_conn, H450xDispatcher &_disp);
+	virtual void OnReceivedLocalCallHold(int linkedId);
+	virtual void OnReceivedLocalCallRetrieve(int linkedId);
 
-#include "compat_h323.h"
+private:
+	MyH323Connection *conn;
+};
+#endif
 
 #endif /* !defined AST_H323_H */

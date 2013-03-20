@@ -17,16 +17,23 @@
 /*
  * Function implementing astobj2 objects.
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/_private.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/utils.h"
 #include "asterisk/cli.h"
+#define REF_FILE "/tmp/refs"
 
 /*!
- * astobj2 objects are always prepended this data structure,
+ * astobj2 objects are always preceded by this data structure,
  * which contains a lock, a reference counter,
  * the flags and a pointer to a destructor.
  * The refcount is used to decide when it is time to
@@ -58,7 +65,7 @@ struct astobj2 {
 };
 
 #ifdef AST_DEVMODE
-#define AO2_DEBUG 1
+/* #define AO2_DEBUG 1 */
 #endif
 
 #ifdef AO2_DEBUG
@@ -80,18 +87,18 @@ void ao2_bt(void) {}
 
 void ao2_bt(void)
 {
-    int c, i;
+	int c, i;
 #define N1	20
-    void *addresses[N1];
-    char **strings;
+	void *addresses[N1];
+	char **strings;
 
-    c = backtrace(addresses, N1);
-    strings = backtrace_symbols(addresses,c);
-    ast_verbose("backtrace returned: %d\n", c);
-    for(i = 0; i < c; i++) {
-        ast_verbose("%d: %p %s\n", i, addresses[i], strings[i]);
-    }
-    free(strings);
+	c = backtrace(addresses, N1);
+	strings = ast_bt_get_symbols(addresses,c);
+	ast_verbose("backtrace returned: %d\n", c);
+	for(i = 0; i < c; i++) {
+		ast_verbose("%d: %p %s\n", i, addresses[i], strings[i]);
+	}
+	free(strings);
 }
 #endif
 
@@ -110,13 +117,25 @@ static inline struct astobj2 *INTERNAL_OBJ(void *user_data)
 	}
 
 	p = (struct astobj2 *) ((char *) user_data - sizeof(*p));
-	if (AO2_MAGIC != (p->priv_data.magic) ) {
-		ast_log(LOG_ERROR, "bad magic number 0x%x for %p\n", p->priv_data.magic, p);
-		p = NULL;
+	if (AO2_MAGIC != p->priv_data.magic) {
+		if (p->priv_data.magic) {
+			ast_log(LOG_ERROR, "bad magic number 0x%x for object %p\n",
+				p->priv_data.magic, user_data);
+		} else {
+			ast_log(LOG_ERROR,
+				"bad magic number for object %p. Object is likely destroyed.\n",
+				user_data);
+		}
+		return NULL;
 	}
 
 	return p;
 }
+
+enum ao2_callback_type {
+	DEFAULT,
+	WITH_DATA,
+};
 
 /*!
  * \brief convert from a pointer _p to an astobj2 object
@@ -125,26 +144,16 @@ static inline struct astobj2 *INTERNAL_OBJ(void *user_data)
  */
 #define EXTERNAL_OBJ(_p)	((_p) == NULL ? NULL : (_p)->user_data)
 
-#ifdef DEBUG_THREADS
-/* Need to override the macros defined in astobj2.h */
-#undef ao2_lock
-#undef ao2_trylock
-#undef ao2_unlock
-#endif
+/* the underlying functions common to debug and non-debug versions */
 
-int ao2_lock(void *user_data)
-{
-	struct astobj2 *p = INTERNAL_OBJ(user_data);
-
-	if (p == NULL)
-		return -1;
-
-#ifdef AO2_DEBUG
-	ast_atomic_fetchadd_int(&ao2.total_locked, 1);
-#endif
-
-	return ast_mutex_lock(&p->priv_data.lock);
-}
+static int internal_ao2_ref(void *user_data, const int delta);
+static struct ao2_container *internal_ao2_container_alloc(struct ao2_container *c, const uint n_buckets, ao2_hash_fn *hash_fn,
+							  ao2_callback_fn *cmp_fn);
+static struct bucket_entry *internal_ao2_link(struct ao2_container *c, void *user_data, const char *file, int line, const char *func);
+static void *internal_ao2_callback(struct ao2_container *c,
+				   const enum search_flags flags, void *cb_fn, void *arg, void *data, enum ao2_callback_type type,
+				   char *tag, char *file, int line, const char *funcname);
+static void *internal_ao2_iterator_next(struct ao2_iterator *a, struct bucket_entry **q);
 
 int __ao2_lock(void *user_data, const char *file, const char *func, int line, const char *var)
 {
@@ -157,67 +166,7 @@ int __ao2_lock(void *user_data, const char *file, const char *func, int line, co
 	ast_atomic_fetchadd_int(&ao2.total_locked, 1);
 #endif
 
-#ifndef DEBUG_THREADS
-	return ast_mutex_lock(&p->priv_data.lock);
-#else
 	return __ast_pthread_mutex_lock(file, line, func, var, &p->priv_data.lock);
-#endif
-}
-
-int ao2_trylock(void *user_data)
-{
-	struct astobj2 *p = INTERNAL_OBJ(user_data);
-	int res;
-
-	if (p == NULL)
-		return -1;
-
-	res = ast_mutex_trylock(&p->priv_data.lock);
-
-#ifdef AO2_DEBUG
-	if (!res) {
-		ast_atomic_fetchadd_int(&ao2.total_locked, 1);
-	}
-#endif
-
-	return res;
-}
-
-int __ao2_trylock(void *user_data, const char *file, const char *func, int line, const char *var)
-{
-	struct astobj2 *p = INTERNAL_OBJ(user_data);
-	int res;
-
-	if (p == NULL)
-		return -1;
-
-#ifndef DEBUG_THREADS
-	res = ast_mutex_trylock(&p->priv_data.lock);
-#else
-	res = __ast_pthread_mutex_trylock(file, line, func, var, &p->priv_data.lock);
-#endif
-
-#ifdef AO2_DEBUG
-	if (!res) {
-		ast_atomic_fetchadd_int(&ao2.total_locked, 1);
-	}
-#endif
-
-	return res;
-}
-
-int ao2_unlock(void *user_data)
-{
-	struct astobj2 *p = INTERNAL_OBJ(user_data);
-
-	if (p == NULL)
-		return -1;
-
-#ifdef AO2_DEBUG
-	ast_atomic_fetchadd_int(&ao2.total_locked, -1);
-#endif
-
-	return ast_mutex_unlock(&p->priv_data.lock);
 }
 
 int __ao2_unlock(void *user_data, const char *file, const char *func, int line, const char *var)
@@ -231,21 +180,75 @@ int __ao2_unlock(void *user_data, const char *file, const char *func, int line, 
 	ast_atomic_fetchadd_int(&ao2.total_locked, -1);
 #endif
 
-#ifndef DEBUG_THREADS
-	return ast_mutex_unlock(&p->priv_data.lock);
-#else
 	return __ast_pthread_mutex_unlock(file, line, func, var, &p->priv_data.lock);
+}
+
+int __ao2_trylock(void *user_data, const char *file, const char *func, int line, const char *var)
+{
+	struct astobj2 *p = INTERNAL_OBJ(user_data);
+	int ret;
+	
+	if (p == NULL)
+		return -1;
+	ret = __ast_pthread_mutex_trylock(file, line, func, var, &p->priv_data.lock);
+
+#ifdef AO2_DEBUG
+	if (!ret)
+		ast_atomic_fetchadd_int(&ao2.total_locked, 1);
 #endif
+	return ret;
+}
+
+void *ao2_object_get_lockaddr(void *obj)
+{
+	struct astobj2 *p = INTERNAL_OBJ(obj);
+	
+	if (p == NULL)
+		return NULL;
+
+	return &p->priv_data.lock;
 }
 
 /*
  * The argument is a pointer to the user portion.
  */
-int ao2_ref(void *user_data, const int delta)
+
+
+int __ao2_ref_debug(void *user_data, const int delta, const char *tag, const char *file, int line, const char *funcname)
 {
+	struct astobj2 *obj = INTERNAL_OBJ(user_data);
+	
+	if (obj == NULL)
+		return -1;
+
+	if (delta != 0) {
+		FILE *refo = fopen(REF_FILE, "a");
+		if (refo) {
+			fprintf(refo, "%p %s%d   %s:%d:%s (%s) [@%d]\n", user_data, (delta < 0 ? "" : "+"),
+				delta, file, line, funcname, tag, obj ? obj->priv_data.ref_counter : -1);
+			fclose(refo);
+		}
+	}
+	if (obj->priv_data.ref_counter + delta == 0 && obj->priv_data.destructor_fn != NULL) { /* this isn't protected with lock; just for o/p */
+		FILE *refo = fopen(REF_FILE, "a");
+		if (refo) {
+			fprintf(refo, "%p **call destructor** %s:%d:%s (%s)\n", user_data, file, line, funcname, tag);
+			fclose(refo);
+		}
+	}
+	return internal_ao2_ref(user_data, delta);
+}
+
+int __ao2_ref(void *user_data, const int delta)
+{
+	return internal_ao2_ref(user_data, delta);
+}
+
+static int internal_ao2_ref(void *user_data, const int delta)
+{
+	struct astobj2 *obj = INTERNAL_OBJ(user_data);
 	int current_value;
 	int ret;
-	struct astobj2 *obj = INTERNAL_OBJ(user_data);
 
 	if (obj == NULL)
 		return -1;
@@ -267,8 +270,9 @@ int ao2_ref(void *user_data, const int delta)
 		ast_log(LOG_ERROR, "refcount %d on object %p\n", current_value, user_data);
 
 	if (current_value <= 0) { /* last reference, destroy the object */
-		if (obj->priv_data.destructor_fn != NULL) 
+		if (obj->priv_data.destructor_fn != NULL) {
 			obj->priv_data.destructor_fn(user_data);
+		}
 
 		ast_mutex_destroy(&obj->priv_data.lock);
 #ifdef AO2_DEBUG
@@ -278,8 +282,8 @@ int ao2_ref(void *user_data, const int delta)
 		/* for safety, zero-out the astobj2 header and also the
 		 * first word of the user-data, which we make sure is always
 		 * allocated. */
-		bzero(obj, sizeof(struct astobj2 *) + sizeof(void *) );
-		free(obj);
+		memset(obj, '\0', sizeof(struct astobj2 *) + sizeof(void *) );
+		ast_free(obj);
 	}
 
 	return ret;
@@ -289,7 +293,7 @@ int ao2_ref(void *user_data, const int delta)
  * We always alloc at least the size of a void *,
  * for debugging purposes.
  */
-void *ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
+static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, const char *file, int line, const char *funcname)
 {
 	/* allocation */
 	struct astobj2 *obj;
@@ -297,7 +301,11 @@ void *ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 	if (data_size < sizeof(void *))
 		data_size = sizeof(void *);
 
+#if defined(__AST_DEBUG_MALLOC)
+	obj = __ast_calloc(1, sizeof(*obj) + data_size, file, line, funcname);
+#else
 	obj = ast_calloc(1, sizeof(*obj) + data_size);
+#endif
 
 	if (obj == NULL)
 		return NULL;
@@ -318,11 +326,40 @@ void *ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
 	return EXTERNAL_OBJ(obj);
 }
 
+void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, char *tag,
+			const char *file, int line, const char *funcname, int ref_debug)
+{
+	/* allocation */
+	void *obj;
+	FILE *refo;
+
+	if ((obj = internal_ao2_alloc(data_size, destructor_fn, file, line, funcname)) == NULL) {
+		return NULL;
+	}
+
+	if (ref_debug && (refo = fopen(REF_FILE, "a"))) {
+		fprintf(refo, "%p =1   %s:%d:%s (%s)\n", obj, file, line, funcname, tag);
+		fclose(refo);
+	}
+
+	/* return a pointer to the user data */
+	return obj;
+}
+
+void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn)
+{
+	return internal_ao2_alloc(data_size, destructor_fn, __FILE__, __LINE__, __FUNCTION__);
+}
+
+
 /* internal callback to destroy a container. */
 static void container_destruct(void *c);
 
+/* internal callback to destroy a container. */
+static void container_destruct_debug(void *c);
+
 /* each bucket in the container is a tailq. */
-AST_LIST_HEAD_NOLOCK(bucket, bucket_list);
+AST_LIST_HEAD_NOLOCK(bucket, bucket_entry);
 
 /*!
  * A container; stores the hash and callback functions, information on
@@ -341,14 +378,14 @@ AST_LIST_HEAD_NOLOCK(bucket, bucket_list);
  *
  * \todo Linking and unlink objects is typically expensive, as it
  * involves a malloc() of a small object which is very inefficient.
- * To optimize this, we allocate larger arrays of bucket_list's
+ * To optimize this, we allocate larger arrays of bucket_entry's
  * when we run out of them, and then manage our own freelist.
  * This will be more efficient as we can do the freelist management while
  * we hold the lock (that we need anyways).
  */
 struct ao2_container {
-	ao2_hash_fn hash_fn;
-	ao2_callback_fn cmp_fn;
+	ao2_hash_fn *hash_fn;
+	ao2_callback_fn *cmp_fn;
 	int n_buckets;
 	/*! Number of elements in the container */
 	int elements;
@@ -375,21 +412,17 @@ static int hash_zero(const void *user_obj, const int flags)
 /*
  * A container is just an object, after all!
  */
-struct ao2_container *
-ao2_container_alloc(const unsigned int n_buckets, ao2_hash_fn hash_fn,
-		ao2_callback_fn cmp_fn)
+static struct ao2_container *internal_ao2_container_alloc(struct ao2_container *c, const unsigned int n_buckets, ao2_hash_fn *hash_fn,
+							  ao2_callback_fn *cmp_fn)
 {
 	/* XXX maybe consistency check on arguments ? */
 	/* compute the container size */
-	size_t container_size = sizeof(struct ao2_container) + n_buckets * sizeof(struct bucket);
-
-	struct ao2_container *c = ao2_alloc(container_size, container_destruct);
 
 	if (!c)
 		return NULL;
 	
 	c->version = 1;	/* 0 is a reserved value here */
-	c->n_buckets = n_buckets;
+	c->n_buckets = hash_fn ? n_buckets : 1;
 	c->hash_fn = hash_fn ? hash_fn : hash_zero;
 	c->cmp_fn = cmp_fn;
 
@@ -398,6 +431,32 @@ ao2_container_alloc(const unsigned int n_buckets, ao2_hash_fn hash_fn,
 #endif
 
 	return c;
+}
+
+struct ao2_container *__ao2_container_alloc_debug(const unsigned int n_buckets, ao2_hash_fn *hash_fn,
+						  ao2_callback_fn *cmp_fn, char *tag, char *file, int line,
+						  const char *funcname, int ref_debug)
+{
+	/* XXX maybe consistency check on arguments ? */
+	/* compute the container size */
+	const unsigned int num_buckets = hash_fn ? n_buckets : 1;
+	size_t container_size = sizeof(struct ao2_container) + num_buckets * sizeof(struct bucket);
+	struct ao2_container *c = __ao2_alloc_debug(container_size, container_destruct_debug, tag, file, line, funcname, ref_debug);
+
+	return internal_ao2_container_alloc(c, num_buckets, hash_fn, cmp_fn);
+}
+
+struct ao2_container *__ao2_container_alloc(const unsigned int n_buckets, ao2_hash_fn *hash_fn,
+					    ao2_callback_fn *cmp_fn)
+{
+	/* XXX maybe consistency check on arguments ? */
+	/* compute the container size */
+
+	const unsigned int num_buckets = hash_fn ? n_buckets : 1;
+	size_t container_size = sizeof(struct ao2_container) + num_buckets * sizeof(struct bucket);
+	struct ao2_container *c = __ao2_alloc(container_size, container_destruct);
+
+	return internal_ao2_container_alloc(c, num_buckets, hash_fn, cmp_fn);
 }
 
 /*!
@@ -413,8 +472,8 @@ int ao2_container_count(struct ao2_container *c)
  * used within a bucket.
  * XXX \todo this should be private to the container code
  */
-struct bucket_list {
-	AST_LIST_ENTRY(bucket_list) entry;
+struct bucket_entry {
+	AST_LIST_ENTRY(bucket_entry) entry;
 	int version;
 	struct astobj2 *astobj;		/* pointer to internal data */
 }; 
@@ -422,14 +481,15 @@ struct bucket_list {
 /*
  * link an object to a container
  */
-void *__ao2_link(struct ao2_container *c, void *user_data, int iax2_hack)
+
+static struct bucket_entry *internal_ao2_link(struct ao2_container *c, void *user_data, const char *file, int line, const char *func)
 {
 	int i;
 	/* create a new list entry */
-	struct bucket_list *p;
+	struct bucket_entry *p;
 	struct astobj2 *obj = INTERNAL_OBJ(user_data);
-	
-	if (!obj)
+
+	if (obj == NULL)
 		return NULL;
 
 	if (INTERNAL_OBJ(c) == NULL)
@@ -445,14 +505,32 @@ void *__ao2_link(struct ao2_container *c, void *user_data, int iax2_hack)
 	i %= c->n_buckets;
 	p->astobj = obj;
 	p->version = ast_atomic_fetchadd_int(&c->version, 1);
-	if (iax2_hack)
-		AST_LIST_INSERT_HEAD(&c->buckets[i], p, entry);
-	else
-		AST_LIST_INSERT_TAIL(&c->buckets[i], p, entry);
+	AST_LIST_INSERT_TAIL(&c->buckets[i], p, entry);
 	ast_atomic_fetchadd_int(&c->elements, 1);
-	ao2_ref(user_data, +1);
-	ao2_unlock(c);
-	
+
+	/* the last two operations (ao2_ref, ao2_unlock) must be done by the calling func */
+	return p;
+}
+
+void *__ao2_link_debug(struct ao2_container *c, void *user_data, char *tag, char *file, int line, const char *funcname)
+{
+	struct bucket_entry *p = internal_ao2_link(c, user_data, file, line, funcname);
+
+	if (p) {
+		__ao2_ref_debug(user_data, +1, tag, file, line, funcname);
+		ao2_unlock(c);
+	}
+	return p;
+}
+
+void *__ao2_link(struct ao2_container *c, void *user_data)
+{
+	struct bucket_entry *p = internal_ao2_link(c, user_data, __FILE__, __LINE__, __PRETTY_FUNCTION__);
+
+	if (p) {
+		__ao2_ref(user_data, +1);
+		ao2_unlock(c);
+	}
 	return p;
 }
 
@@ -466,14 +544,25 @@ int ao2_match_by_addr(void *user_data, void *arg, int flags)
 
 /*
  * Unlink an object from the container
- * and destroy the associated * ao2_bucket_list structure.
+ * and destroy the associated * bucket_entry structure.
  */
-void *ao2_unlink(struct ao2_container *c, void *user_data)
+void *__ao2_unlink_debug(struct ao2_container *c, void *user_data, char *tag,
+			 char *file, int line, const char *funcname)
 {
 	if (INTERNAL_OBJ(user_data) == NULL)	/* safety check on the argument */
 		return NULL;
 
-	ao2_callback(c, OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA, ao2_match_by_addr, user_data);
+	__ao2_callback_debug(c, OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA, ao2_match_by_addr, user_data, tag, file, line, funcname);
+
+	return NULL;
+}
+
+void *__ao2_unlink(struct ao2_container *c, void *user_data)
+{
+	if (INTERNAL_OBJ(user_data) == NULL)	/* safety check on the argument */
+		return NULL;
+
+	__ao2_callback(c, OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA, ao2_match_by_addr, user_data);
 
 	return NULL;
 }
@@ -487,37 +576,74 @@ static int cb_true(void *user_data, void *arg, int flags)
 }
 
 /*!
+ * \brief similar to cb_true, but is an ao2_callback_data_fn instead
+ */
+static int cb_true_data(void *user_data, void *arg, void *data, int flags)
+{
+	return CMP_MATCH;
+}
+
+/*!
  * Browse the container using different stategies accoding the flags.
  * \return Is a pointer to an object or to a list of object if OBJ_MULTIPLE is 
  * specified.
+ * Luckily, for debug purposes, the added args (tag, file, line, funcname)
+ * aren't an excessive load to the system, as the callback should not be
+ * called as often as, say, the ao2_ref func is called.
  */
-void *ao2_callback(struct ao2_container *c,
-	const enum search_flags flags,
-	ao2_callback_fn cb_fn, void *arg)
+static void *internal_ao2_callback(struct ao2_container *c,
+				   const enum search_flags flags, void *cb_fn, void *arg, void *data, enum ao2_callback_type type,
+				   char *tag, char *file, int line, const char *funcname)
 {
 	int i, start, last;	/* search boundaries */
 	void *ret = NULL;
+	ao2_callback_fn *cb_default = NULL;
+	ao2_callback_data_fn *cb_withdata = NULL;
+	struct ao2_container *multi_container = NULL;
+	struct ao2_iterator *multi_iterator = NULL;
 
 	if (INTERNAL_OBJ(c) == NULL)	/* safety check on the argument */
 		return NULL;
 
+	/*
+	 * This logic is used so we can support OBJ_MULTIPLE with OBJ_NODATA
+	 * turned off.  This if statement checks for the special condition
+	 * where multiple items may need to be returned.
+	 */
 	if ((flags & (OBJ_MULTIPLE | OBJ_NODATA)) == OBJ_MULTIPLE) {
-		ast_log(LOG_WARNING, "multiple data return not implemented yet (flags %x)\n", flags);
-		return NULL;
+		/* we need to return an ao2_iterator with the results,
+		 * as there could be more than one. the iterator will
+		 * hold the only reference to a container that has all the
+		 * matching objects linked into it, so when the iterator
+		 * is destroyed, the container will be automatically
+		 * destroyed as well.
+		 */
+		if (!(multi_container = __ao2_container_alloc(1, NULL, NULL))) {
+			return NULL;
+		}
+		if (!(multi_iterator = ast_calloc(1, sizeof(*multi_iterator)))) {
+			ao2_ref(multi_container, -1);
+			return NULL;
+		}
 	}
 
 	/* override the match function if necessary */
-#if 0
-	/* Removing this slightly changes the meaning of OBJ_POINTER, but makes it
-	 * do what I want it to.  I'd like to hint to ao2_callback that the arg is
-	 * of the same object type, so it can be passed to the hash function.
-	 * However, I don't want to imply that this is the object being searched for. */
-	if (flags & OBJ_POINTER)
-		cb_fn = match_by_addr;
-	else
-#endif
-	if (cb_fn == NULL)	/* if NULL, match everything */
-		cb_fn = cb_true;
+	if (cb_fn == NULL) { /* if NULL, match everything */
+		if (type == WITH_DATA) {
+			cb_withdata = cb_true_data;
+		} else {
+			cb_default = cb_true;
+		}
+	} else {
+		/* We do this here to avoid the per object casting penalty (even though
+		   that is probably optimized away anyway). */
+		if (type == WITH_DATA) {
+			cb_withdata = cb_fn;
+		} else {
+			cb_default = cb_fn;
+		}
+	}
+
 	/*
 	 * XXX this can be optimized.
 	 * If we have a hash function and lookup by pointer,
@@ -543,10 +669,16 @@ void *ao2_callback(struct ao2_container *c,
 
 	for (; i < last ; i++) {
 		/* scan the list with prev-cur pointers */
-		struct bucket_list *cur;
+		struct bucket_entry *cur;
 
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&c->buckets[i], cur, entry) {
-			int match = cb_fn(EXTERNAL_OBJ(cur->astobj), arg, flags) & (CMP_MATCH | CMP_STOP);
+			int match = (CMP_MATCH | CMP_STOP);
+
+			if (type == WITH_DATA) {
+				match &= cb_withdata(EXTERNAL_OBJ(cur->astobj), arg, data, flags);
+			} else {
+				match &= cb_default(EXTERNAL_OBJ(cur->astobj), arg, flags);
+			}
 
 			/* we found the object, performing operations according flags */
 			if (match == 0) {	/* no match, no stop, continue */
@@ -555,43 +687,63 @@ void *ao2_callback(struct ao2_container *c,
 				i = last;
 				break;
 			}
+
 			/* we have a match (CMP_MATCH) here */
 			if (!(flags & OBJ_NODATA)) {	/* if must return the object, record the value */
 				/* it is important to handle this case before the unlink */
 				ret = EXTERNAL_OBJ(cur->astobj);
-				ao2_ref(ret, 1);
+				if (!(flags & (OBJ_UNLINK | OBJ_MULTIPLE))) {
+					if (tag)
+						__ao2_ref_debug(ret, 1, tag, file, line, funcname);
+					else
+						__ao2_ref(ret, 1);
+				}
+			}
+
+			/* If we are in OBJ_MULTIPLE mode and OBJ_NODATE is off, 
+			 * link the object into the container that will hold the results.
+			 */
+			if (ret && (multi_container != NULL)) {
+				if (tag) {
+					__ao2_link_debug(multi_container, ret, tag, file, line, funcname);
+				} else {
+					__ao2_link(multi_container, ret);
+				}
+				ret = NULL;
 			}
 
 			if (flags & OBJ_UNLINK) {	/* must unlink */
-				struct bucket_list *x = cur;
-
 				/* we are going to modify the container, so update version */
 				ast_atomic_fetchadd_int(&c->version, 1);
-				AST_LIST_REMOVE_CURRENT(&c->buckets[i], entry);
-				/* update number of elements and version */
+				AST_LIST_REMOVE_CURRENT(entry);
+				/* update number of elements */
 				ast_atomic_fetchadd_int(&c->elements, -1);
-				ao2_ref(EXTERNAL_OBJ(x->astobj), -1);
-				free(x);	/* free the link record */
+
+				/* - When unlinking and not returning the result, (OBJ_NODATA), the ref from the container
+				 * must be decremented.
+				 * - When unlinking with OBJ_MULTIPLE the ref from the original container
+				 * must be decremented regardless if OBJ_NODATA is used. This is because the result is
+				 * returned in a new container that already holds its own ref for the object. If the ref
+				 * from the original container is not accounted for here a memory leak occurs. */
+				if (flags & (OBJ_NODATA | OBJ_MULTIPLE)) {
+					if (tag)
+						__ao2_ref_debug(EXTERNAL_OBJ(cur->astobj), -1, tag, file, line, funcname);
+					else
+						__ao2_ref(EXTERNAL_OBJ(cur->astobj), -1);
+				}
+				ast_free(cur);	/* free the link record */
 			}
 
-			if ((match & CMP_STOP) || (flags & OBJ_MULTIPLE) == 0) {
-				/* We found the only match we need */
-				i = last;	/* force exit from outer loop */
+			if ((match & CMP_STOP) || !(flags & OBJ_MULTIPLE)) {
+				/* We found our only (or last) match, so force an exit from
+				   the outside loop. */
+				i = last;
 				break;
 			}
-			if (!(flags & OBJ_NODATA)) {
-#if 0	/* XXX to be completed */
-				/*
-				 * This is the multiple-return case. We need to link
-				 * the object in a list. The refcount is already increased.
-				 */
-#endif
-			}
 		}
-		AST_LIST_TRAVERSE_SAFE_END
+		AST_LIST_TRAVERSE_SAFE_END;
 
 		if (ret) {
-			/* This assumes OBJ_MULTIPLE with !OBJ_NODATA is still not implemented */
 			break;
 		}
 
@@ -602,15 +754,57 @@ void *ao2_callback(struct ao2_container *c,
 		}
 	}
 	ao2_unlock(c);
-	return ret;
+
+	/* if multi_container was created, we are returning multiple objects */
+	if (multi_container != NULL) {
+		*multi_iterator = ao2_iterator_init(multi_container,
+						    AO2_ITERATOR_DONTLOCK | AO2_ITERATOR_UNLINK | AO2_ITERATOR_MALLOCD);
+		ao2_ref(multi_container, -1);
+		return multi_iterator;
+	} else {
+		return ret;
+	}
+}
+
+void *__ao2_callback_debug(struct ao2_container *c,
+			   const enum search_flags flags,
+			   ao2_callback_fn *cb_fn, void *arg,
+			   char *tag, char *file, int line, const char *funcname)
+{
+	return internal_ao2_callback(c,flags, cb_fn, arg, NULL, DEFAULT, tag, file, line, funcname);
+}
+
+void *__ao2_callback(struct ao2_container *c, const enum search_flags flags,
+		     ao2_callback_fn *cb_fn, void *arg)
+{
+	return internal_ao2_callback(c,flags, cb_fn, arg, NULL, DEFAULT, NULL, NULL, 0, NULL);
+}
+
+void *__ao2_callback_data_debug(struct ao2_container *c,
+				const enum search_flags flags,
+				ao2_callback_data_fn *cb_fn, void *arg, void *data,
+				char *tag, char *file, int line, const char *funcname)
+{
+	return internal_ao2_callback(c, flags, cb_fn, arg, data, WITH_DATA, tag, file, line, funcname);
+}
+
+void *__ao2_callback_data(struct ao2_container *c, const enum search_flags flags,
+			  ao2_callback_data_fn *cb_fn, void *arg, void *data)
+{
+	return internal_ao2_callback(c, flags, cb_fn, arg, data, WITH_DATA, NULL, NULL, 0, NULL);
 }
 
 /*!
  * the find function just invokes the default callback with some reasonable flags.
  */
-void *ao2_find(struct ao2_container *c, void *arg, enum search_flags flags)
+void *__ao2_find_debug(struct ao2_container *c, void *arg, enum search_flags flags, char *tag, char *file, int line, const char *funcname)
 {
-	return ao2_callback(c, flags, c->cmp_fn, arg);
+	return __ao2_callback_debug(c, flags, c->cmp_fn, arg, tag, file, line, funcname);
+}
+
+void *__ao2_find(struct ao2_container *c, void *arg, enum search_flags flags)
+{
+	return __ao2_callback(c, flags, c->cmp_fn, arg);
 }
 
 /*!
@@ -634,18 +828,24 @@ struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags)
 void ao2_iterator_destroy(struct ao2_iterator *i)
 {
 	ao2_ref(i->c, -1);
-	i->c = NULL;
+	if (i->flags & AO2_ITERATOR_MALLOCD) {
+		ast_free(i);
+	} else {
+		i->c = NULL;
+	}
 }
 
 /*
  * move to the next element in the container.
  */
-void * ao2_iterator_next(struct ao2_iterator *a)
+static void *internal_ao2_iterator_next(struct ao2_iterator *a, struct bucket_entry **q)
 {
 	int lim;
-	struct bucket_list *p = NULL;
+	struct bucket_entry *p = NULL;
 	void *ret = NULL;
 
+	*q = NULL;
+	
 	if (INTERNAL_OBJ(a->c) == NULL)
 		return NULL;
 
@@ -655,8 +855,8 @@ void * ao2_iterator_next(struct ao2_iterator *a)
 	/* optimization. If the container is unchanged and
 	 * we have a pointer, try follow it
 	 */
-	if (a->c->version == a->c_version && (p = a->obj) ) {
-		if ( (p = AST_LIST_NEXT(p, entry)) )
+	if (a->c->version == a->c_version && (p = a->obj)) {
+		if ((p = AST_LIST_NEXT(p, entry)))
 			goto found;
 		/* nope, start from the next bucket */
 		a->bucket++;
@@ -682,12 +882,57 @@ void * ao2_iterator_next(struct ao2_iterator *a)
 
 found:
 	if (p) {
-		a->version = p->version;
-		a->obj = p;
-		a->c_version = a->c->version;
 		ret = EXTERNAL_OBJ(p->astobj);
+		if (a->flags & AO2_ITERATOR_UNLINK) {
+			/* we are going to modify the container, so update version */
+			ast_atomic_fetchadd_int(&a->c->version, 1);
+			AST_LIST_REMOVE(&a->c->buckets[a->bucket], p, entry);
+			/* update number of elements */
+			ast_atomic_fetchadd_int(&a->c->elements, -1);
+			a->version = 0;
+			a->obj = NULL;
+			a->c_version = a->c->version;
+			ast_free(p);
+		} else {
+			a->version = p->version;
+			a->obj = p;
+			a->c_version = a->c->version;
+			/* inc refcount of returned object */
+			*q = p;
+		}
+	}
+
+	return ret;
+}
+
+void *__ao2_iterator_next_debug(struct ao2_iterator *a, char *tag, char *file, int line, const char *funcname)
+{
+	struct bucket_entry *p;
+	void *ret = NULL;
+
+	ret = internal_ao2_iterator_next(a, &p);
+	
+	if (p) {
 		/* inc refcount of returned object */
-		ao2_ref(ret, 1);
+		__ao2_ref_debug(ret, 1, tag, file, line, funcname);
+	}
+
+	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
+		ao2_unlock(a->c);
+
+	return ret;
+}
+
+void *__ao2_iterator_next(struct ao2_iterator *a)
+{
+	struct bucket_entry *p = NULL;
+	void *ret = NULL;
+
+	ret = internal_ao2_iterator_next(a, &p);
+	
+	if (p) {
+		/* inc refcount of returned object */
+		__ao2_ref(ret, 1);
 	}
 
 	if (!(a->flags & AO2_ITERATOR_DONTLOCK))
@@ -701,7 +946,13 @@ found:
  */
 static int cd_cb(void *obj, void *arg, int flag)
 {
-	ao2_ref(obj, -1);
+	__ao2_ref(obj, -1);
+	return 0;
+}
+	
+static int cd_cb_debug(void *obj, void *arg, int flag)
+{
+	__ao2_ref_debug(obj, -1, "deref object via container destroy",  __FILE__, __LINE__, __PRETTY_FUNCTION__);
 	return 0;
 }
 	
@@ -710,13 +961,33 @@ static void container_destruct(void *_c)
 	struct ao2_container *c = _c;
 	int i;
 
-	ao2_callback(c, OBJ_UNLINK, cd_cb, NULL);
+	__ao2_callback(c, OBJ_UNLINK, cd_cb, NULL);
 
 	for (i = 0; i < c->n_buckets; i++) {
-		struct bucket_list *cur;
+		struct bucket_entry *current;
 
-		while ((cur = AST_LIST_REMOVE_HEAD(&c->buckets[i], entry))) {
-			ast_free(cur);
+		while ((current = AST_LIST_REMOVE_HEAD(&c->buckets[i], entry))) {
+			ast_free(current);
+		}
+	}
+
+#ifdef AO2_DEBUG
+	ast_atomic_fetchadd_int(&ao2.total_containers, -1);
+#endif
+}
+
+static void container_destruct_debug(void *_c)
+{
+	struct ao2_container *c = _c;
+	int i;
+
+	__ao2_callback_debug(c, OBJ_UNLINK, cd_cb_debug, NULL, "container_destruct_debug called", __FILE__, __LINE__, __PRETTY_FUNCTION__);
+
+	for (i = 0; i < c->n_buckets; i++) {
+		struct bucket_entry *current;
+
+		while ((current = AST_LIST_REMOVE_HEAD(&c->buckets[i], entry))) {
+			ast_free(current);
 		}
 	}
 
@@ -728,54 +999,75 @@ static void container_destruct(void *_c)
 #ifdef AO2_DEBUG
 static int print_cb(void *obj, void *arg, int flag)
 {
-	int *fd = arg;
+	struct ast_cli_args *a = (struct ast_cli_args *) arg;
 	char *s = (char *)obj;
 
-	ast_cli(*fd, "string <%s>\n", s);
+	ast_cli(a->fd, "string <%s>\n", s);
 	return 0;
 }
 
 /*
  * Print stats
  */
-static int handle_astobj2_stats(int fd, int argc, char *argv[])
+static char *handle_astobj2_stats(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	ast_cli(fd, "Objects    : %d\n", ao2.total_objects);
-	ast_cli(fd, "Containers : %d\n", ao2.total_containers);
-	ast_cli(fd, "Memory     : %d\n", ao2.total_mem);
-	ast_cli(fd, "Locked     : %d\n", ao2.total_locked);
-	ast_cli(fd, "Refs       : %d\n", ao2.total_refs);
-	return 0;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "astobj2 show stats";
+		e->usage = "Usage: astobj2 show stats\n"
+			   "       Show astobj2 show stats\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+	ast_cli(a->fd, "Objects    : %d\n", ao2.total_objects);
+	ast_cli(a->fd, "Containers : %d\n", ao2.total_containers);
+	ast_cli(a->fd, "Memory     : %d\n", ao2.total_mem);
+	ast_cli(a->fd, "Locked     : %d\n", ao2.total_locked);
+	ast_cli(a->fd, "Refs       : %d\n", ao2.total_refs);
+	return CLI_SUCCESS;
 }
 
 /*
  * This is testing code for astobj
  */
-static int handle_astobj2_test(int fd, int argc, char *argv[])
+static char *handle_astobj2_test(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct ao2_container *c1;
 	int i, lim;
 	char *obj;
 	static int prof_id = -1;
+	struct ast_cli_args fake_args = { a->fd, 0, NULL };
 
-	if (argc != 3) {
-		return RESULT_SHOWUSAGE;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "astobj2 test";
+		e->usage = "Usage: astobj2 test <num>\n"
+			   "       Runs astobj2 test. Creates 'num' objects,\n"
+			   "       and test iterators, callbacks and may be other stuff\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3) {
+		return CLI_SHOWUSAGE;
 	}
 
 	if (prof_id == -1)
 		prof_id = ast_add_profile("ao2_alloc", 0);
 
-	ast_cli(fd, "argc %d argv %s %s %s\n", argc, argv[0], argv[1], argv[2]);
-	lim = atoi(argv[2]);
-	ast_cli(fd, "called astobj_test\n");
+	ast_cli(a->fd, "argc %d argv %s %s %s\n", a->argc, a->argv[0], a->argv[1], a->argv[2]);
+	lim = atoi(a->argv[2]);
+	ast_cli(a->fd, "called astobj_test\n");
 
-	handle_astobj2_stats(fd, 0, NULL);
+	handle_astobj2_stats(e, CLI_HANDLER, &fake_args);
 	/*
 	 * allocate a container with no default callback, and no hash function.
 	 * No hash means everything goes in the same bucket.
 	 */
-	c1 = ao2_container_alloc(100, NULL /* no callback */, NULL /* no hash */);
-	ast_cli(fd, "container allocated as %p\n", c1);
+	c1 = ao2_t_container_alloc(100, NULL /* no callback */, NULL /* no hash */,"test");
+	ast_cli(a->fd, "container allocated as %p\n", c1);
 
 	/*
 	 * fill the container with objects.
@@ -784,53 +1076,56 @@ static int handle_astobj2_test(int fd, int argc, char *argv[])
 	 */
 	for (i = 0; i < lim; i++) {
 		ast_mark(prof_id, 1 /* start */);
-		obj = ao2_alloc(80, NULL);
+		obj = ao2_t_alloc(80, NULL,"test");
 		ast_mark(prof_id, 0 /* stop */);
-		ast_cli(fd, "object %d allocated as %p\n", i, obj);
+		ast_cli(a->fd, "object %d allocated as %p\n", i, obj);
 		sprintf(obj, "-- this is obj %d --", i);
 		ao2_link(c1, obj);
-		ao2_ref(obj, -1);
+		/* At this point, the refcount on obj is 2 due to the allocation
+		 * and linking. We can go ahead and reduce the refcount by 1
+		 * right here so that when the container is unreffed later, the
+		 * objects will be freed
+		 */
+		ao2_t_ref(obj, -1, "test");
 	}
-	ast_cli(fd, "testing callbacks\n");
-	ao2_callback(c1, 0, print_cb, &fd);
-
-	ast_cli(fd, "testing iterators, remove every second object\n");
+	ast_cli(a->fd, "testing callbacks\n");
+	ao2_t_callback(c1, 0, print_cb, a, "test callback");
+	ast_cli(a->fd, "testing iterators, remove every second object\n");
 	{
 		struct ao2_iterator ai;
 		int x = 0;
 
 		ai = ao2_iterator_init(c1, 0);
-		while ( (obj = ao2_iterator_next(&ai)) ) {
-			ast_cli(fd, "iterator on <%s>\n", obj);
+		while ( (obj = ao2_t_iterator_next(&ai,"test")) ) {
+			ast_cli(a->fd, "iterator on <%s>\n", obj);
 			if (x++ & 1)
-				ao2_unlink(c1, obj);
-			ao2_ref(obj, -1);
+				ao2_t_unlink(c1, obj,"test");
+			ao2_t_ref(obj, -1,"test");
 		}
 		ao2_iterator_destroy(&ai);
-		ast_cli(fd, "testing iterators again\n");
+		ast_cli(a->fd, "testing iterators again\n");
 		ai = ao2_iterator_init(c1, 0);
-		while ( (obj = ao2_iterator_next(&ai)) ) {
-			ast_cli(fd, "iterator on <%s>\n", obj);
-			ao2_ref(obj, -1);
+		while ( (obj = ao2_t_iterator_next(&ai,"test")) ) {
+			ast_cli(a->fd, "iterator on <%s>\n", obj);
+			ao2_t_ref(obj, -1,"test");
 		}
 		ao2_iterator_destroy(&ai);
 	}
-	ast_cli(fd, "testing callbacks again\n");
-	ao2_callback(c1, 0, print_cb, &fd);
+	ast_cli(a->fd, "testing callbacks again\n");
+	ao2_t_callback(c1, 0, print_cb, a, "test callback");
 
 	ast_verbose("now you should see an error message:\n");
-	ao2_ref(&i, -1);	/* i is not a valid object so we print an error here */
+	ao2_t_ref(&i, -1, "");	/* i is not a valid object so we print an error here */
 
-	ast_cli(fd, "destroy container\n");
-	ao2_ref(c1, -1);	/* destroy container */
-	handle_astobj2_stats(fd, 0, NULL);
-	return 0;
+	ast_cli(a->fd, "destroy container\n");
+	ao2_t_ref(c1, -1, "");	/* destroy container */
+	handle_astobj2_stats(e, CLI_HANDLER, &fake_args);
+	return CLI_SUCCESS;
 }
 
 static struct ast_cli_entry cli_astobj2[] = {
-	{ { "astobj2", "stats", NULL },
-	handle_astobj2_stats, "Print astobj2 statistics", },
-	{ { "astobj2", "test", NULL } , handle_astobj2_test, "Test astobj2", },
+	AST_CLI_DEFINE(handle_astobj2_stats, "Print astobj2 statistics"),
+	AST_CLI_DEFINE(handle_astobj2_test, "Test astobj2"),
 };
 #endif /* AO2_DEBUG */
 

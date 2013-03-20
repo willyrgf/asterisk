@@ -31,7 +31,8 @@ extern "C" {
 
 #define AST_CACHE_DIR_LEN 	512
 #define AST_FILENAME_MAX	80
-#define AST_CHANNEL_NAME	80
+#define AST_CHANNEL_NAME    80  /*!< Max length of an ast_channel name */
+
 
 /*! \ingroup main_options */
 enum ast_option_flags {
@@ -57,8 +58,6 @@ enum ast_option_flags {
 	AST_OPT_FLAG_FULLY_BOOTED = (1 << 9),
 	/*! Trascode via signed linear */
 	AST_OPT_FLAG_TRANSCODE_VIA_SLIN = (1 << 10),
-	/*! Enable priority jumping in applications */
-	AST_OPT_FLAG_PRIORITY_JUMPING = (1 << 11),
 	/*! Dump core on a seg fault */
 	AST_OPT_FLAG_DUMP_CORE = (1 << 12),
 	/*! Cache sound files */
@@ -81,10 +80,22 @@ enum ast_option_flags {
 	AST_OPT_FLAG_ALWAYS_FORK = (1 << 21),
 	/*! Disable log/verbose output to remote consoles */
 	AST_OPT_FLAG_MUTE = (1 << 22),
+	/*! There is a per-module debug setting */
+	AST_OPT_FLAG_DEBUG_MODULE = (1 << 23),
+	/*! There is a per-module verbose setting */
+	AST_OPT_FLAG_VERBOSE_MODULE = (1 << 24),
+	/*! Terminal colors should be adjusted for a light-colored background */
+	AST_OPT_FLAG_LIGHT_BACKGROUND = (1 << 25),
+	/*! Count Initiated seconds in CDR's */
+	AST_OPT_FLAG_INITIATED_SECONDS = (1 << 26),
+	/*! Force black background */
+	AST_OPT_FLAG_FORCE_BLACK_BACKGROUND = (1 << 27),
+	/*! Hide remote console connect messages on console */
+	AST_OPT_FLAG_HIDE_CONSOLE_CONNECT = (1 << 28),
+	/*! Protect the configuration file path with a lock */
+	AST_OPT_FLAG_LOCK_CONFIG_DIR = (1 << 29),
 	/*! Generic PLC */
-	AST_OPT_FLAG_GENERIC_PLC = (1 << 23),
-	/*! Send the FullyBooted AMI event when all modules are loaded */
-	AST_OPT_FLAG_SEND_FULLYBOOTED = (1 << 24),
+	AST_OPT_FLAG_GENERIC_PLC = (1 << 30),
 };
 
 /*! These are the options that set by default when Asterisk starts */
@@ -105,7 +116,6 @@ enum ast_option_flags {
 #define ast_opt_no_color		ast_test_flag(&ast_options, AST_OPT_FLAG_NO_COLOR)
 #define ast_fully_booted		ast_test_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED)
 #define ast_opt_transcode_via_slin	ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSCODE_VIA_SLIN)
-#define ast_opt_priority_jumping	ast_test_flag(&ast_options, AST_OPT_FLAG_PRIORITY_JUMPING)
 #define ast_opt_dump_core		ast_test_flag(&ast_options, AST_OPT_FLAG_DUMP_CORE)
 #define ast_opt_cache_record_files	ast_test_flag(&ast_options, AST_OPT_FLAG_CACHE_RECORD_FILES)
 #define ast_opt_timestamp		ast_test_flag(&ast_options, AST_OPT_FLAG_TIMESTAMP)
@@ -117,30 +127,46 @@ enum ast_option_flags {
 #define ast_opt_internal_timing		ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING)
 #define ast_opt_always_fork		ast_test_flag(&ast_options, AST_OPT_FLAG_ALWAYS_FORK)
 #define ast_opt_mute			ast_test_flag(&ast_options, AST_OPT_FLAG_MUTE)
+#define ast_opt_dbg_module		ast_test_flag(&ast_options, AST_OPT_FLAG_DEBUG_MODULE)
+#define ast_opt_verb_module		ast_test_flag(&ast_options, AST_OPT_FLAG_VERBOSE_MODULE)
+#define ast_opt_light_background	ast_test_flag(&ast_options, AST_OPT_FLAG_LIGHT_BACKGROUND)
+#define ast_opt_force_black_background	ast_test_flag(&ast_options, AST_OPT_FLAG_FORCE_BLACK_BACKGROUND)
+#define ast_opt_hide_connect		ast_test_flag(&ast_options, AST_OPT_FLAG_HIDE_CONSOLE_CONNECT)
+#define ast_opt_lock_confdir		ast_test_flag(&ast_options, AST_OPT_FLAG_LOCK_CONFIG_DIR)
 #define ast_opt_generic_plc         ast_test_flag(&ast_options, AST_OPT_FLAG_GENERIC_PLC)
-#define ast_opt_send_fullybooted	ast_test_flag(&ast_options, AST_OPT_FLAG_SEND_FULLYBOOTED)
 
 extern struct ast_flags ast_options;
 
+enum ast_compat_flags {
+	AST_COMPAT_DELIM_PBX_REALTIME = (1 << 0),
+	AST_COMPAT_DELIM_RES_AGI = (1 << 1),
+	AST_COMPAT_APP_SET = (1 << 2),
+};
+
+#define	ast_compat_pbx_realtime	ast_test_flag(&ast_compat, AST_COMPAT_DELIM_PBX_REALTIME)
+#define ast_compat_res_agi	ast_test_flag(&ast_compat, AST_COMPAT_DELIM_RES_AGI)
+#define	ast_compat_app_set	ast_test_flag(&ast_compat, AST_COMPAT_APP_SET)
+
+extern struct ast_flags ast_compat;
+
 extern int option_verbose;
+extern int option_maxfiles;		/*!< Max number of open file handles (files, sockets) */
 extern int option_debug;		/*!< Debugging */
 extern int option_maxcalls;		/*!< Maximum number of simultaneous channels */
 extern double option_maxload;
+#if defined(HAVE_SYSINFO)
+extern long option_minmemfree;		/*!< Minimum amount of free system memory - stop accepting calls if free memory falls below this watermark */
+#endif
 extern char defaultlanguage[];
 
-extern time_t ast_startuptime;
-extern time_t ast_lastreloadtime;
+extern struct timeval ast_startuptime;
+extern struct timeval ast_lastreloadtime;
 extern pid_t ast_mainpid;
 
 extern char record_cache_dir[AST_CACHE_DIR_LEN];
-extern char debug_filename[AST_FILENAME_MAX];
-extern const char *dahdi_chan_name;
-extern const size_t *dahdi_chan_name_len;
-extern const enum dahdi_chan_modes {
-	CHAN_ZAP_MODE,
-	CHAN_DAHDI_PLUS_ZAP_MODE,
-} *dahdi_chan_mode;
-	
+extern char dahdi_chan_name[AST_CHANNEL_NAME];
+extern int dahdi_chan_name_len;
+
 extern int ast_language_is_prefix;
 
 #if defined(__cplusplus) || defined(c_plusplus)

@@ -23,40 +23,32 @@
  * \ingroup codecs
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/translate.h"
-#include "asterisk/channel.h"
 #include "asterisk/alaw.h"
 #include "asterisk/utils.h"
 
 #define BUFFER_SAMPLES   8096	/* size for the translation buffers */
 
-/* Sample frame data (Mu data is okay) */
-
-#include "slin_ulaw_ex.h"
-#include "ulaw_slin_ex.h"
+/* Sample frame data */
+#include "asterisk/slin.h"
+#include "ex_alaw.h"
 
 /*! \brief decode frame into lin and fill output buffer. */
 static int alawtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	int i = f->samples;
-	unsigned char *src = f->data;
-	int16_t *dst = (int16_t *)pvt->outbuf + pvt->samples;
+	unsigned char *src = f->data.ptr;
+	int16_t *dst = pvt->outbuf.i16 + pvt->samples;
 
 	pvt->samples += i;
 	pvt->datalen += i * 2;	/* 2 bytes/sample */
@@ -71,8 +63,8 @@ static int alawtolin_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 static int lintoalaw_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 {
 	int i = f->samples;
-	char *dst = pvt->outbuf + pvt->samples;
-	int16_t *src = f->data;
+	char *dst = pvt->outbuf.c + pvt->samples;
+	int16_t *src = f->data.ptr;
 
 	pvt->samples += i;
 	pvt->datalen += i;	/* 1 byte/sample */
@@ -83,42 +75,12 @@ static int lintoalaw_framein(struct ast_trans_pvt *pvt, struct ast_frame *f)
 	return 0;
 }
 
-/*! \brief alawToLin_Sample */
-static struct ast_frame *alawtolin_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_ALAW;
-	f.datalen = sizeof(ulaw_slin_ex);
-	f.samples = sizeof(ulaw_slin_ex);
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = ulaw_slin_ex;
-	return &f;
-}
-
-/*! \brief LinToalaw_Sample */
-static struct ast_frame *lintoalaw_sample(void)
-{
-	static struct ast_frame f;
-	f.frametype = AST_FRAME_VOICE;
-	f.subclass = AST_FORMAT_SLINEAR;
-	f.datalen = sizeof(slin_ulaw_ex);
-	f.samples = sizeof(slin_ulaw_ex) / 2;
-	f.mallocd = 0;
-	f.offset = 0;
-	f.src = __PRETTY_FUNCTION__;
-	f.data = slin_ulaw_ex;
-	return &f;
-}
-
 static struct ast_translator alawtolin = {
 	.name = "alawtolin",
 	.srcfmt = AST_FORMAT_ALAW,
 	.dstfmt = AST_FORMAT_SLINEAR,
 	.framein = alawtolin_framein,
-	.sample = alawtolin_sample,
+	.sample = alaw_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES * 2,
 };
@@ -128,7 +90,7 @@ static struct ast_translator lintoalaw = {
 	.srcfmt = AST_FORMAT_SLINEAR,
 	.dstfmt = AST_FORMAT_ALAW,
 	.framein = lintoalaw_framein,
-	.sample = lintoalaw_sample,
+	.sample = slin8_sample,
 	.buffer_samples = BUFFER_SAMPLES,
 	.buf_size = BUFFER_SAMPLES,
 };
@@ -137,7 +99,7 @@ static struct ast_translator lintoalaw = {
 
 static int reload(void)
 {
-	return 0;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
@@ -159,8 +121,9 @@ static int load_module(void)
 		res = ast_register_translator(&lintoalaw);
 	else
 		ast_unregister_translator(&alawtolin);
-
-	return res;
+	if (res)
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "A-law Coder/Decoder",

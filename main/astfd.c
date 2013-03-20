@@ -23,6 +23,10 @@
  * \author Tilghman Lesher <tlesher@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 #ifdef DEBUG_FD_LEAKS
@@ -95,7 +99,11 @@ int __ast_fdleak_open(const char *file, int line, const char *func, const char *
 				flags & O_NONBLOCK ? "|O_NONBLOCK" : "",
 				flags & O_TRUNC ? "|O_TRUNC" : "",
 				flags & O_RDWR ? "|O_RDWR" : "",
+#if O_RDONLY == 0
+				!(flags & (O_WRONLY | O_RDWR)) ? "|O_RDONLY" : "",
+#else
 				flags & O_RDONLY ? "|O_RDONLY" : "",
+#endif
 				flags & O_WRONLY ? "|O_WRONLY" : "",
 				"");
 			flags &= ~(O_CREAT | O_APPEND | O_EXCL | O_NONBLOCK | O_TRUNC | O_RDWR | O_RDONLY | O_WRONLY);
@@ -232,30 +240,39 @@ int __ast_fdleak_dup(int oldfd, const char *file, int line, const char *func)
 	return res;
 }
 
-static int handle_show_fd(int fd, int argc, char *argv[])
+static char *handle_show_fd(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int i;
 	char line[24];
 	struct rlimit rl;
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "core show fd";
+		e->usage =
+			"Usage: core show fd\n"
+			"       List all file descriptors currently in use and where\n"
+			"       each was opened, and with what command.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
 	getrlimit(RLIMIT_FSIZE, &rl);
 	if (rl.rlim_cur == RLIM_INFINITY || rl.rlim_max == RLIM_INFINITY) {
 		ast_copy_string(line, "unlimited", sizeof(line));
 	} else {
 		snprintf(line, sizeof(line), "%d/%d", (int) rl.rlim_cur, (int) rl.rlim_max);
 	}
-	ast_cli(fd, "Current maxfiles: %s\n", line);
+	ast_cli(a->fd, "Current maxfiles: %s\n", line);
 	for (i = 0; i < 1024; i++) {
 		if (fdleaks[i].isopen) {
 			snprintf(line, sizeof(line), "%d", fdleaks[i].line);
-			ast_cli(fd, "%5d %15s:%-7.7s (%-25s): %s(%s)\n", i, fdleaks[i].file, line, fdleaks[i].function, fdleaks[i].callname, fdleaks[i].callargs);
+			ast_cli(a->fd, "%5d %15s:%-7.7s (%-25s): %s(%s)\n", i, fdleaks[i].file, line, fdleaks[i].function, fdleaks[i].callname, fdleaks[i].callargs);
 		}
 	}
-	return RESULT_SUCCESS;
+	return CLI_SUCCESS;
 }
 
-static struct ast_cli_entry cli_show_fd =
-	{ { "core", "show", "fd", NULL },
-	handle_show_fd, "Show open file descriptors" };
+static struct ast_cli_entry cli_show_fd = AST_CLI_DEFINE(handle_show_fd, "Show open file descriptors");
 
 int ast_fd_init(void)
 {

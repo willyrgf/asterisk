@@ -29,26 +29,26 @@
  * \note Funding provided by nic.at
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
 #include <netinet/in.h>
 #include <arpa/nameser.h>
+#ifdef __APPLE__
 #if __APPLE_CC__ >= 1495
 #include <arpa/nameser_compat.h>
 #endif
+#endif
 #include <resolv.h>
-#include <stdio.h>
-#include <string.h>
-#include <unistd.h>
 
 #include "asterisk/channel.h"
-#include "asterisk/logger.h"
 #include "asterisk/srv.h"
 #include "asterisk/dns.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/linkedlists.h"
 
@@ -68,6 +68,8 @@ struct srv_entry {
 
 struct srv_context {
 	unsigned int have_weights:1;
+	struct srv_entry *prev;
+	unsigned int num_records;
 	AST_LIST_HEAD_NOLOCK(srv_entries, srv_entry) entries;
 };
 
@@ -130,7 +132,7 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 		if (current->priority <= entry->priority)
 			continue;
 
-		AST_LIST_INSERT_BEFORE_CURRENT(&c->entries, entry, list);
+		AST_LIST_INSERT_BEFORE_CURRENT(entry, list);
 		entry = NULL;
 		break;
 	}
@@ -141,7 +143,7 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 	if (entry)
 		AST_LIST_INSERT_TAIL(&c->entries, entry, list);
 
-	return 1;
+	return 0;
 }
 
 /* Do the bizarre SRV record weight-handling algorithm
@@ -165,8 +167,7 @@ static void process_weights(struct srv_context *context)
 			if (current->priority != cur_priority)
 				break;
 
-			AST_LIST_REMOVE_CURRENT(&context->entries, list);
-			AST_LIST_INSERT_TAIL(&temp_list, current, list);
+			AST_LIST_MOVE_CURRENT(&temp_list, list);
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
 
@@ -188,8 +189,7 @@ static void process_weights(struct srv_context *context)
 				if (current->weight < random_weight)
 					continue;
 
-				AST_LIST_REMOVE_CURRENT(&temp_list, list);
-				AST_LIST_INSERT_TAIL(&newlist, current, list);
+				AST_LIST_MOVE_CURRENT(&newlist, list);
 				break;
 			}
 			AST_LIST_TRAVERSE_SAFE_END;
@@ -203,22 +203,82 @@ static void process_weights(struct srv_context *context)
 	AST_LIST_APPEND_LIST(&context->entries, &newlist, list);
 }
 
+int ast_srv_lookup(struct srv_context **context, const char *service, const char **host, unsigned short *port)
+{
+	struct srv_entry *cur;
+
+	if (*context == NULL) {
+		if (!(*context = ast_calloc(1, sizeof(struct srv_context)))) {
+			return -1;
+		}
+		AST_LIST_HEAD_INIT_NOLOCK(&(*context)->entries);
+
+		if ((ast_search_dns(*context, service, C_IN, T_SRV, srv_callback)) < 0) {
+			ast_free(*context);
+			*context = NULL;
+			return -1;
+		}
+
+		if ((*context)->have_weights) {
+			process_weights(*context);
+		}
+
+		(*context)->prev = AST_LIST_FIRST(&(*context)->entries);
+		*host = (*context)->prev->host;
+		*port = (*context)->prev->port;
+		AST_LIST_TRAVERSE(&(*context)->entries, cur, list) {
+			++((*context)->num_records);
+		}
+		return 0;
+	}
+
+	if (((*context)->prev = AST_LIST_NEXT((*context)->prev, list))) {
+		/* Retrieve next item in result */
+		*host = (*context)->prev->host;
+		*port = (*context)->prev->port;
+		return 0;
+	} else {
+		/* No more results */
+		while ((cur = AST_LIST_REMOVE_HEAD(&(*context)->entries, list))) {
+			ast_free(cur);
+		}
+		ast_free(*context);
+		*context = NULL;
+		return 1;
+	}
+}
+
+void ast_srv_cleanup(struct srv_context **context)
+{
+	const char *host;
+	unsigned short port;
+
+	if (*context) {
+		/* We have a context to clean up. */
+		while (!(ast_srv_lookup(context, NULL, &host, &port))) {
+		}
+	}
+}
+
 int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, const char *service)
 {
 	struct srv_context context = { .entries = AST_LIST_HEAD_NOLOCK_INIT_VALUE };
 	struct srv_entry *current;
 	int ret;
 
-	if (chan && ast_autoservice_start(chan) < 0)
+	if (chan && ast_autoservice_start(chan) < 0) {
 		return -1;
+	}
 
 	ret = ast_search_dns(&context, service, C_IN, T_SRV, srv_callback);
 
-	if (context.have_weights)
+	if (context.have_weights) {
 		process_weights(&context);
+	}
 
-	if (chan)
+	if (chan) {
 		ret |= ast_autoservice_stop(chan);
+	}
 
 	/* TODO: there could be a "." entry in the returned list of
 	   answers... if so, this requires special handling */
@@ -230,17 +290,47 @@ int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, co
 		ast_copy_string(host, current->host, hostlen);
 		*port = current->port;
 		ast_free(current);
-		if (option_verbose > 3) {
-			ast_verbose(VERBOSE_PREFIX_3 "ast_get_srv: SRV lookup for '%s' mapped to host %s, port %d\n",
+		ast_verb(4, "ast_get_srv: SRV lookup for '%s' mapped to host %s, port %d\n",
 				    service, host, *port);
-		}
 	} else {
 		host[0] = '\0';
 		*port = -1;
 	}
 
-	while ((current = AST_LIST_REMOVE_HEAD(&context.entries, list)))
+	while ((current = AST_LIST_REMOVE_HEAD(&context.entries, list))) {
 		ast_free(current);
+	}
 
 	return ret;
+}
+
+unsigned int ast_srv_get_record_count(struct srv_context *context)
+{
+	return context->num_records;
+}
+
+int ast_srv_get_nth_record(struct srv_context *context, int record_num, const char **host,
+		unsigned short *port, unsigned short *priority, unsigned short *weight)
+{
+	int i = 1;
+	int res = -1;
+	struct srv_entry *entry;
+
+	if (record_num < 1 || record_num > context->num_records) {
+		return res;
+	}
+
+	AST_LIST_TRAVERSE(&context->entries, entry, list) {
+		if (i == record_num) {
+			*host = entry->host;
+			*port = entry->port;
+			*priority = entry->priority;
+			*weight = entry->weight;
+			res = 0;
+			break;
+		}
+		++i;
+	}
+
+	return res;
 }

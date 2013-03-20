@@ -1,24 +1,45 @@
+/*
+ * XXX this file probably need a fair amount of cleanup, at the very least:
+ *
+ * - documenting its purpose;
+ * - removing all unnecessary headers and other stuff from the sources
+ *   it was copied from;
+ * - fixing the formatting
+ */
+
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
 #include "asterisk.h"
 
-#include <sys/types.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
 #include <locale.h>
 #include <ctype.h>
-#include <errno.h>
 #include <regex.h>
 #include <limits.h>
 
-#include "asterisk/ast_expr.h"
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include "asterisk/channel.h"
+#include "asterisk/ast_expr.h"
 #include "asterisk/module.h"
 #include "asterisk/app.h"
+#include "asterisk/lock.h"
+#include "asterisk/hashtab.h"
 #include "asterisk/ael_structs.h"
+#include "asterisk/extconf.h"
+
+int option_debug = 0;
+int option_verbose = 0;
+#if !defined(LOW_MEMORY)
+void ast_register_file_version(const char *file, const char *version) { }
+void ast_unregister_file_version(const char *file) { }
+#endif
+
+struct ast_flags ast_compat = { 7 };
 
 /*** MODULEINFO
-  	<depend>pbx_ael</depend>
+  	<depend>res_ael_share</depend>
  ***/
 
 struct namelist
@@ -77,8 +98,11 @@ struct namelist *globalvars_last;
 
 int conts=0, extens=0, priors=0;
 char last_exten[18000];
-char ast_config_AST_CONFIG_DIR[PATH_MAX];
-char ast_config_AST_VAR_DIR[PATH_MAX];
+
+static char config_dir[PATH_MAX];
+static char var_dir[PATH_MAX];
+const char *ast_config_AST_CONFIG_DIR = config_dir;
+const char *ast_config_AST_VAR_DIR = var_dir;
 
 void ast_cli_register_multiple(void);
 int ast_add_extension2(struct ast_context *con,
@@ -87,7 +111,7 @@ int ast_add_extension2(struct ast_context *con,
 					   const char *registrar);
 void pbx_builtin_setvar(void *chan, void *data);
 struct ast_context * ast_context_create(void **extcontexts, const char *name, const char *registrar);
-struct ast_context * ast_context_find_or_create(void **extcontexts, const char *name, const char *registrar);
+struct ast_context * ast_context_find_or_create(void **extcontexts, void *tab, const char *name, const char *registrar);
 void ast_context_add_ignorepat2(struct ast_context *con, const char *value, const char *registrar);
 void ast_context_add_include2(struct ast_context *con, const char *value, const char *registrar);
 void ast_context_add_switch2(struct ast_context *con, const char *value, const char *data, int eval, const char *registrar);
@@ -98,7 +122,7 @@ void ast_cli_unregister_multiple(void);
 void ast_context_destroy(void);
 void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...);
 char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
-void ast_verbose(const char *fmt, ...);
+void __ast_verbose(const char *file, int line, const char *func, const char *fmt, ...);
 struct ast_app *pbx_findapp(const char *app);
 void filter_leading_space_from_exprs(char *str);
 void filter_newlines(char *str);
@@ -109,10 +133,63 @@ static int dump_extensions = 0;
 static int FIRST_TIME = 0;
 static FILE *dumpfile;
 
+void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
+{
+	        va_list vars;
+		        va_start(vars,fmt);
+			
+			        printf("LOG: lev:%d file:%s  line:%d func: %s  ",
+						                   level, file, line, function);
+				        vprintf(fmt, vars);
+					        fflush(stdout);
+						        va_end(vars);
+}
+
+struct ast_exten *pbx_find_extension(struct ast_channel *chan,
+									 struct ast_context *bypass,
+									 struct pbx_find_info *q,
+									 const char *context, 
+									 const char *exten, 
+									 int priority,
+									 const char *label, 
+									 const char *callerid, 
+									 enum ext_match_t action);
+
+struct ast_exten *pbx_find_extension(struct ast_channel *chan,
+									 struct ast_context *bypass,
+									 struct pbx_find_info *q,
+									 const char *context, 
+									 const char *exten, 
+									 int priority,
+									 const char *label, 
+									 const char *callerid, 
+									 enum ext_match_t action)
+{
+	return localized_find_extension(bypass, q, context, exten, priority, label, callerid, action);
+}
+
 struct ast_app *pbx_findapp(const char *app)
 {
 	return (struct ast_app*)1; /* so as not to trigger an error */
 }
+
+struct ast_custom_function *ast_custom_function_find(const char *name);
+
+
+struct ast_custom_function *ast_custom_function_find(const char *name)
+{
+	return 0; /* in "standalone" mode, functions are just not avail */
+}
+
+#if !defined(LOW_MEMORY)
+int ast_add_profile(const char *x, uint64_t scale)
+{
+	if (!no_comp)
+		printf("Executed ast_add_profile();\n");
+
+	return 0;
+}
+#endif
 
 int ast_loader_register(int (*updater)(void))
 {
@@ -176,8 +253,6 @@ int ast_add_extension2(struct ast_context *con,
 
 	if( dump_extensions && dumpfile ) {
 		struct namelist *n;
-		char *data2,*data3=0;
-		int commacount = 0;
 
 		if( FIRST_TIME ) {
 			FIRST_TIME = 0;
@@ -211,43 +286,15 @@ int ast_add_extension2(struct ast_context *con,
 		if( data ) {
 			filter_newlines((char*)data);
 			filter_leading_space_from_exprs((char*)data);
+			/* in previous versions, commas were converted to '|' to separate
+			   args in app calls, but now, commas are used. There used to be
+			   code here to insert backslashes (escapes) before any commas
+			   that may have been embedded in the app args. This code is no more. */
 
-			/* compiling turns commas into vertical bars in the app data, and also removes the backslash from before escaped commas;
-			   we have to restore the escaping backslash in front of any commas; the vertical bars are OK to leave as-is */
-			for (data2 = data; *data2; data2++) {
-				if (*data2 == ',')
-					commacount++;  /* we need to know how much bigger the string will grow-- one backslash for each comma  */
-			}
-			if (commacount) 
-			{
-				char *d3,*d4;
-				
-				data2 = (char*)malloc(strlen(data)+commacount+1);
-				data3 = data;
-				d3 = data;
-				d4 = data2;
-				while (*d3) {
-					if (*d3 == ',') {
-						*d4++ = '\\'; /* put a backslash in front of each comma */
-						*d4++ = *d3++;
-					} else
-						*d4++ = *d3++;  /* or just copy the char */
-				}
-				*d4++ = 0;  /* cap off the new string */
-				data = data2;
-			} else
-				data2 = 0;
-			
 			if( strcmp(label,"(null)") != 0  )
 				fprintf(dumpfile,"exten => %s,%d(%s),%s(%s)\n", extension, priority, label, application, (char*)data);
 			else
 				fprintf(dumpfile,"exten => %s,%d,%s(%s)\n", extension, priority, application, (char*)data);
-
-			if (data2) {
-				free(data2);
-				data2 = 0;
-				data = data3; /* restore data to pre-messedup state */
-			}
 
 		} else {
 
@@ -259,8 +306,7 @@ int ast_add_extension2(struct ast_context *con,
 	}
 	
 	/* since add_extension2 is responsible for the malloc'd data stuff */
-	if( data )
-		free(data);
+	free(data);
 	return 0;
 }
 
@@ -292,7 +338,7 @@ struct ast_context * ast_context_create(void **extcontexts, const char *name, co
 	return x;
 }
 
-struct ast_context * ast_context_find_or_create(void **extcontexts, const char *name, const char *registrar)
+struct ast_context * ast_context_find_or_create(void **extcontexts, void *tab, const char *name, const char *registrar)
 {
 	struct ast_context *x = calloc(1, sizeof(*x));
 	if (!x)
@@ -379,54 +425,34 @@ void ast_context_destroy(void)
 		printf("Executed ast_context_destroy();\n");
 }
 
-void ast_log(int level, const char *file, int line, const char *function, const char *fmt, ...)
+const char *ast_get_context_name(struct ast_context *con);
+const char *ast_get_context_name(struct ast_context *con)
 {
-        va_list vars;
-        va_start(vars,fmt);
-	if( !quiet || level > 2 ) {
-    	    printf("LOG: lev:%d file:%s  line:%d func: %s  ",
-                   level, file, line, function);
-            vprintf(fmt, vars);
-            fflush(stdout);
-            va_end(vars);
-	}
+	return con ? con->name : NULL;
 }
 
-void ast_verbose(const char *fmt, ...)
+struct ast_exten *ast_walk_context_extensions(struct ast_context *con, struct ast_exten *exten);
+struct ast_exten *ast_walk_context_extensions(struct ast_context *con, struct ast_exten *exten)
 {
-        va_list vars;
-        va_start(vars,fmt);
-
-        printf("VERBOSE: ");
-        vprintf(fmt, vars);
-        fflush(stdout);
-        va_end(vars);
+	return NULL;
 }
 
-char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
+struct ast_include *ast_walk_context_includes(struct ast_context *con, struct ast_include *inc);
+struct ast_include *ast_walk_context_includes(struct ast_context *con, struct ast_include *inc)
 {
-        char *dataPut = start;
-        int inEscape = 0;
-        int inQuotes = 0;
+	return NULL;
+}
 
-        for (; *start; start++) {
-                if (inEscape) {
-                        *dataPut++ = *start;       /* Always goes verbatim */
-                        inEscape = 0;
-                } else {
-                        if (*start == '\\') {
-                                inEscape = 1;      /* Do not copy \ into the data */
-                        } else if (*start == '\'') {
-                                inQuotes = 1-inQuotes;   /* Do not copy ' into the data */
-                        } else {
-                                /* Replace , with |, unless in quotes */
-                                *dataPut++ = inQuotes ? *start : ((*start==find) ? replace_with : *start);
-                        }
-                }
-        }
-        if (start != dataPut)
-                *dataPut = 0;
-        return dataPut;
+struct ast_ignorepat *ast_walk_context_ignorepats(struct ast_context *con, struct ast_ignorepat *ip);
+struct ast_ignorepat *ast_walk_context_ignorepats(struct ast_context *con, struct ast_ignorepat *ip)
+{
+	return NULL;
+}
+
+struct ast_sw *ast_walk_context_switches(struct ast_context *con, struct ast_sw *sw);
+struct ast_sw *ast_walk_context_switches(struct ast_context *con, struct ast_sw *sw)
+{
+	return NULL;
 }
 
 void filter_leading_space_from_exprs(char *str)
@@ -467,7 +493,8 @@ void filter_newlines(char *str)
 
 
 extern struct module_symbols mod_data;
-extern int ael_external_load_module(void);
+int ael_external_load_module(void);
+
 
 int main(int argc, char **argv)
 {
@@ -499,12 +526,14 @@ int main(int argc, char **argv)
 	}
 
 	if( use_curr_dir ) {
-		strcpy(ast_config_AST_CONFIG_DIR, ".");
+		strcpy(config_dir, ".");
+		localized_use_local_dir();
 	}
 	else {
-		strcpy(ast_config_AST_CONFIG_DIR, "/etc/asterisk");
+		strcpy(config_dir, "/etc/asterisk");
+		localized_use_conf_dir();
 	}
-	strcpy(ast_config_AST_VAR_DIR, "/var/lib/asterisk");
+	strcpy(var_dir, "/var/lib/asterisk");
 	
 	if( dump_extensions ) {
 		dumpfile = fopen("extensions.conf.aeldump","w");
@@ -562,3 +591,61 @@ int main(int argc, char **argv)
 	
     return 0;
 }
+
+int ast_hashtab_compare_contexts(const void *ah_a, const void *ah_b);
+
+int ast_hashtab_compare_contexts(const void *ah_a, const void *ah_b)
+{
+	return 0;
+}
+
+unsigned int ast_hashtab_hash_contexts(const void *obj);
+
+unsigned int ast_hashtab_hash_contexts(const void *obj)
+{
+	return 0;
+}
+
+#ifdef DEBUG_THREADS
+#if !defined(LOW_MEMORY)
+void ast_mark_lock_acquired(void *lock_addr)
+{
+}
+#ifdef HAVE_BKTR
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
+{
+}
+
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt)
+{
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	return 0;
+}
+
+char **ast_bt_get_symbols(void **addresses, size_t num_frames)
+{
+	char **foo = calloc(num_frames, sizeof(char *) + 1);
+	if (foo) {
+		int i;
+		for (i = 0; i < num_frames; i++) {
+			foo[i] = (char *) foo + sizeof(char *) * num_frames;
+		}
+	}
+	return foo;
+}
+#else
+void ast_remove_lock_info(void *lock_addr)
+{
+}
+
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+	int line_num, const char *func, const char *lock_name, void *lock_addr)
+{
+}
+#endif /* HAVE_BKTR */
+#endif /* !defined(LOW_MEMORY) */
+#endif /* DEBUG_THREADS */

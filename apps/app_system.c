@@ -25,80 +25,111 @@
  * \ingroup applications
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-
-#include "asterisk/lock.h"
-#include "asterisk/file.h"
-#include "asterisk/logger.h"
-#include "asterisk/channel.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/app.h"
-#include "asterisk/options.h"
+#include "asterisk/channel.h"	/* autoservice */
+#include "asterisk/strings.h"
+#include "asterisk/threadstorage.h"
+
+/*** DOCUMENTATION
+	<application name="System" language="en_US">
+		<synopsis>
+			Execute a system command.
+		</synopsis>
+		<syntax>
+			<parameter name="command" required="true">
+				<para>Command to execute</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes a command  by  using  system(). If the command
+			fails, the console should report a fallthrough.</para>
+			<para>Result of execution is returned in the <variable>SYSTEMSTATUS</variable> channel variable:</para>
+			<variablelist>
+				<variable name="SYSTEMSTATUS">
+					<value name="FAILURE">
+						Could not execute the specified command.
+					</value>
+					<value name="SUCCESS">
+						Specified command successfully executed.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+	<application name="TrySystem" language="en_US">
+		<synopsis>
+			Try executing a system command.
+		</synopsis>
+		<syntax>
+			<parameter name="command" required="true">
+				<para>Command to execute</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Executes a command  by  using  system().</para>
+			<para>Result of execution is returned in the <variable>SYSTEMSTATUS</variable> channel variable:</para>
+			<variablelist>
+				<variable name="SYSTEMSTATUS">
+					<value name="FAILURE">
+						Could not execute the specified command.
+					</value>
+					<value name="SUCCESS">
+						Specified command successfully executed.
+					</value>
+					<value name="APPERROR">
+						Specified command successfully executed, but returned error code.
+					</value>
+				</variable>
+			</variablelist>
+		</description>
+	</application>
+
+ ***/
+
+AST_THREADSTORAGE(buf_buf);
 
 static char *app = "System";
 
 static char *app2 = "TrySystem";
 
-static char *synopsis = "Execute a system command";
-
-static char *synopsis2 = "Try executing a system command";
-
 static char *chanvar = "SYSTEMSTATUS";
 
-static char *descrip =
-"  System(command): Executes a command  by  using  system(). If the command\n"
-"fails, the console should report a fallthrough. \n"
-"Result of execution is returned in the SYSTEMSTATUS channel variable:\n"
-"   FAILURE	Could not execute the specified command\n"
-"   SUCCESS	Specified command successfully executed\n"
-"\n"
-"Old behaviour:\n"
-"If the command itself executes but is in error, and if there exists\n"
-"a priority n + 101, where 'n' is the priority of the current instance,\n"
-"then  the  channel  will  be  setup to continue at that priority level.\n"
-"Note that this jump functionality has been deprecated and will only occur\n"
-"if the global priority jumping option is enabled in extensions.conf.\n";
-
-static char *descrip2 =
-"  TrySystem(command): Executes a command  by  using  system().\n"
-"on any situation.\n"
-"Result of execution is returned in the SYSTEMSTATUS channel variable:\n"
-"   FAILURE	Could not execute the specified command\n"
-"   SUCCESS	Specified command successfully executed\n"
-"   APPERROR	Specified command successfully executed, but returned error code\n"
-"\n"
-"Old behaviour:\nIf  the command itself executes but is in error, and if\n"
-"there exists a priority n + 101, where 'n' is the priority of the current\n"
-"instance, then  the  channel  will  be  setup  to continue at that\n"
-"priority level.  Otherwise, System will terminate.\n";
-
-
-static int system_exec_helper(struct ast_channel *chan, void *data, int failmode)
+static int system_exec_helper(struct ast_channel *chan, const char *data, int failmode)
 {
-	int res=0;
-	struct ast_module_user *u;
-	
+	int res = 0;
+	struct ast_str *buf = ast_str_thread_get(&buf_buf, 16);
+	char *cbuf;
+
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "System requires an argument(command)\n");
 		pbx_builtin_setvar_helper(chan, chanvar, "FAILURE");
 		return failmode;
 	}
 
-	u = ast_module_user_add(chan);
-
 	ast_autoservice_start(chan);
 
 	/* Do our thing here */
-	res = ast_safe_system((char *)data);
+	ast_str_get_encoded_str(&buf, 0, (char *) data);
+	cbuf = ast_str_buffer(buf);
+
+	if (strchr("\"'", cbuf[0]) && cbuf[ast_str_strlen(buf) - 1] == cbuf[0]) {
+		cbuf[ast_str_strlen(buf) - 1] = '\0';
+		cbuf++;
+		ast_log(LOG_NOTICE, "It is not necessary to quote the argument to the System application.\n");
+	}
+
+	res = ast_safe_system(cbuf);
+
 	if ((res < 0) && (errno != ECHILD)) {
 		ast_log(LOG_WARNING, "Unable to execute '%s'\n", (char *)data);
 		pbx_builtin_setvar_helper(chan, chanvar, "FAILURE");
@@ -110,9 +141,6 @@ static int system_exec_helper(struct ast_channel *chan, void *data, int failmode
 	} else {
 		if (res < 0) 
 			res = 0;
-		if (ast_opt_priority_jumping && res)
-			ast_goto_if_exists(chan, chan->context, chan->exten, chan->priority + 101);
-
 		if (res != 0)
 			pbx_builtin_setvar_helper(chan, chanvar, "APPERROR");
 		else
@@ -122,17 +150,15 @@ static int system_exec_helper(struct ast_channel *chan, void *data, int failmode
 
 	ast_autoservice_stop(chan);
 
-	ast_module_user_remove(u);
-
 	return res;
 }
 
-static int system_exec(struct ast_channel *chan, void *data)
+static int system_exec(struct ast_channel *chan, const char *data)
 {
 	return system_exec_helper(chan, data, -1);
 }
 
-static int trysystem_exec(struct ast_channel *chan, void *data)
+static int trysystem_exec(struct ast_channel *chan, const char *data)
 {
 	return system_exec_helper(chan, data, 0);
 }
@@ -143,8 +169,6 @@ static int unload_module(void)
 
 	res = ast_unregister_application(app);
 	res |= ast_unregister_application(app2);
-	
-	ast_module_user_hangup_all();
 
 	return res;
 }
@@ -153,8 +177,8 @@ static int load_module(void)
 {
 	int res;
 
-	res = ast_register_application(app2, trysystem_exec, synopsis2, descrip2);
-	res |= ast_register_application(app, system_exec, synopsis, descrip);
+	res = ast_register_application_xml(app2, trysystem_exec);
+	res |= ast_register_application_xml(app, system_exec);
 
 	return res;
 }

@@ -23,72 +23,84 @@
   fields in structures without requiring them to be allocated
   as fixed-size buffers or requiring individual allocations for
   for each field.
-  
-  Using this functionality is quite simple... an example structure
+
+  Using this functionality is quite simple. An example structure
   with three fields is defined like this:
   
   \code
   struct sample_fields {
 	  int x1;
 	  AST_DECLARE_STRING_FIELDS(
-		  AST_STRING_FIELD(name);
-		  AST_STRING_FIELD(address);
-		  AST_STRING_FIELD(password);
+		  AST_STRING_FIELD(foo);
+		  AST_STRING_FIELD(bar);
+		  AST_STRING_FIELD(blah);
 	  );
 	  long x2;
   };
   \endcode
   
-  When an instance of this structure is allocated, the fields
-  (and the pool of storage for them) must be initialized:
+  When an instance of this structure is allocated (either statically or
+  dynamically), the fields and the pool of storage for them must be
+  initialized:
   
   \code
-  struct sample_fields *sample;
+  struct sample_fields *x;
   
-  sample = calloc(1, sizeof(*sample));
-  if (sample) {
-	  if (ast_string_field_init(sample, 256)) {
-		  free(sample);
-		  sample = NULL;
-	  }
-  }
-  
-  if (!sample) {
-  ...
+  x = ast_calloc(1, sizeof(*x));
+  if (x == NULL || ast_string_field_init(x, 252)) {
+	if (x)
+		ast_free(x);
+	x = NULL;
+  	... handle error
   }
   \endcode
+
+  Fields will default to pointing to an empty string, and will revert to
+  that when ast_string_field_set() is called with a NULL argument.
+  A string field will \b never contain NULL.
+
+  ast_string_field_init(x, 0) will reset fields to the
+  initial value while keeping the pool allocated.
   
-  Fields will default to pointing to an empty string, and will
-  revert to that when ast_string_field_free() is called. This means
-  that a string field will \b never contain NULL.
-  
-  Using the fields is much like using regular 'char *' fields
-  in the structure, except that writing into them must be done
-  using wrapper macros defined in this file.
-  
-  Storing simple values into fields can be done using ast_string_field_set();
-  more complex values (using printf-style format strings) can be stored
-  using ast_string_field_build().
-  
+  Reading the fields is much like using 'const char * const' fields in the
+  structure: you cannot write to the field or to the memory it points to.
+
+  Writing to the fields must be done using the wrapper macros listed below;
+  and assignments are always by value (i.e. strings are copied):
+  * ast_string_field_set() stores a simple value;
+  * ast_string_field_build() builds the string using a printf-style format;
+  * ast_string_field_build_va() is the varargs version of the above (for
+    portability reasons it uses two vararg arguments);
+  * variants of these function allow passing a pointer to the field
+    as an argument.
+
+  \code
+  ast_string_field_set(x, foo, "infinite loop");
+  ast_string_field_set(x, foo, NULL); // set to an empty string
+  ast_string_field_ptr_set(x, &x->bar, "right way");
+
+  ast_string_field_build(x, blah, "%d %s", zipcode, city);
+  ast_string_field_ptr_build(x, &x->blah, "%d %s", zipcode, city);
+
+  ast_string_field_build_va(x, bar, fmt, args1, args2)
+  ast_string_field_ptr_build_va(x, &x->bar, fmt, args1, args2)
+  \endcode
+
   When the structure instance is no longer needed, the fields
   and their storage pool must be freed:
   
   \code
-  ast_string_field_free_memory(sample);
-  free(sample);
+  ast_string_field_free_memory(x);
+  ast_free(x);
   \endcode
+
+  This completes the API description.
 */
 
 #ifndef _ASTERISK_STRINGFIELDS_H
 #define _ASTERISK_STRINGFIELDS_H
 
-#include <string.h>
-#include <stdarg.h>
-#include <stddef.h>
-
 #include "asterisk/inline_api.h"
-#include "asterisk/compiler.h"
-#include "asterisk/compat.h"
 
 /*!
   \internal
@@ -96,46 +108,67 @@
 
   Don't declare instances of this type directly; use the AST_STRING_FIELD()
   macro instead.
+
+  In addition to the string itself, the amount of space allocated for the
+  field is stored in the two bytes immediately preceding it.
 */
 typedef const char * ast_string_field;
+
+/* the type of storage used to track how many bytes were allocated for a field */
+
+typedef uint16_t ast_string_field_allocation;
 
 /*!
   \internal
   \brief A constant empty string used for fields that have no other value
 */
-extern const char __ast_string_field_empty[];
+extern const char *__ast_string_field_empty;
 
 /*!
   \internal
   \brief Structure used to hold a pool of space for string fields
+  \note base is aligned so base+used can stay aligned by incrementing used with
+        aligned numbers only
 */
 struct ast_string_field_pool {
 	struct ast_string_field_pool *prev;	/*!< pointer to the previous pool, if any */
-	char base[0];				/*!< storage space for the fields */
+	size_t size;				/*!< the total size of the pool */
+	size_t used;				/*!< the space used in the pool */
+	size_t active;				/*!< the amount of space actively in use by fields */
+	char base[0] __attribute__((aligned(__alignof__(ast_string_field_allocation)))); /*!< storage space for the fields */
 };
 
 /*!
   \internal
-  \brief Structure used to manage the storage for a set of string fields
+  \brief Structure used to manage the storage for a set of string fields.
 */
 struct ast_string_field_mgr {
-	struct ast_string_field_pool *pool;	/*!< the address of the pool's structure */
-	size_t size;				/*!< the total size of the current pool */
-	size_t space;				/*!< the space available in the current pool */
-	size_t used;				/*!< the space used in the current pool */
+	ast_string_field last_alloc;			/*!< the last field allocated */
+ 	struct ast_string_field_pool *embedded_pool;	/*!< pointer to the embedded pool, if any */
+#if defined(__AST_DEBUG_MALLOC)
+	const char *owner_file;				/*!< filename of owner */
+	const char *owner_func;				/*!< function name of owner */
+	int owner_line;					/*!< line number of owner */
+#endif
 };
 
 /*!
   \internal
-  \brief Initialize a field pool manager and fields
+  \brief Attempt to 'grow' an already allocated field to a larger size
   \param mgr Pointer to the pool manager structure
-  \param size Amount of storage to allocate
-  \param fields Pointer to the first entry of the field array
-  \param num_fields Number of fields in the array
+  \param needed Amount of space needed for this field
+  \param ptr Pointer to a field within the structure
   \return 0 on success, non-zero on failure
+
+  This function will attempt to increase the amount of space allocated to
+  an existing field to the amount requested; this is only possible if the
+  field was the last field allocated from the current storage pool and
+  the pool has enough space available. If so, the additional space will be
+  allocated to this field and the field's address will not be changed.
 */
-int __ast_string_field_init(struct ast_string_field_mgr *mgr, size_t size,
-			    ast_string_field *fields, int num_fields);
+int __ast_string_field_ptr_grow(struct ast_string_field_mgr *mgr,
+				struct ast_string_field_pool **pool_head, size_t needed,
+				const ast_string_field *ptr);
 
 /*!
   \internal
@@ -143,45 +176,42 @@ int __ast_string_field_init(struct ast_string_field_mgr *mgr, size_t size,
   \param mgr Pointer to the pool manager structure
   \param needed Amount of space needed for this field
   \param fields Pointer to the first entry of the field array
-  \param num_fields Number of fields in the array
-  \return NULL on failure, an address for the field on success
+  \return NULL on failure, an address for the field on success.
 
   This function will allocate the requested amount of space from
   the field pool. If the requested amount of space is not available,
   an additional pool will be allocated.
 */
-ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr, size_t needed,
-						ast_string_field *fields, int num_fields);
+ast_string_field __ast_string_field_alloc_space(struct ast_string_field_mgr *mgr,
+						struct ast_string_field_pool **pool_head, size_t needed);
 
 /*!
   \internal
   \brief Set a field to a complex (built) value
   \param mgr Pointer to the pool manager structure
-  \param fields Pointer to the first entry of the field array
-  \param num_fields Number of fields in the array
-  \param index Index position of the field within the structure
+  \param pool_head Pointer to the current pool
+  \param ptr Pointer to a field within the structure
   \param format printf-style format string
   \return nothing
 */
-void __ast_string_field_index_build(struct ast_string_field_mgr *mgr,
-				    ast_string_field *fields, int num_fields,
-				    int index, const char *format, ...) __attribute__((format(printf, 5, 6)));
+void __ast_string_field_ptr_build(struct ast_string_field_mgr *mgr,
+				  struct ast_string_field_pool **pool_head,
+				  ast_string_field *ptr, const char *format, ...) __attribute__((format(printf, 4, 5)));
 
 /*!
   \internal
   \brief Set a field to a complex (built) value
   \param mgr Pointer to the pool manager structure
-  \param fields Pointer to the first entry of the field array
-  \param num_fields Number of fields in the array
-  \param index Index position of the field within the structure
+  \param pool_head Pointer to the current pool
+  \param ptr Pointer to a field within the structure
   \param format printf-style format string
   \param args va_list of the args for the format_string
   \param args_again a copy of the first va_list for the sake of bsd not having a copy routine
   \return nothing
 */
-void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
-				       ast_string_field *fields, int num_fields,
-				       int index, const char *format, va_list a1, va_list a2)  __attribute__((format(printf, 5, 0)));
+void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
+				     struct ast_string_field_pool **pool_head,
+				     ast_string_field *ptr, const char *format, va_list a1, va_list a2) __attribute__((format(printf, 4, 0)));
 
 /*!
   \brief Declare a string field
@@ -191,83 +221,116 @@ void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
 
 /*!
   \brief Declare the fields needed in a structure
-  \param field_list The list of fields to declare, using AST_STRING_FIELD() for each one
+  \param field_list The list of fields to declare, using AST_STRING_FIELD() for each one.
+  Internally, string fields are stored as a pointer to the head of the pool,
+  followed by individual string fields, and then a struct ast_string_field_mgr
+  which describes the space allocated.
+  We split the two variables so they can be used as markers around the
+  field_list, and this allows us to determine how many entries are in
+  the field, and play with them.
+  In particular, for writing to the fields, we rely on __field_mgr_pool to be
+  a non-const pointer, so we know it has the same size as ast_string_field,
+  and we can use it to locate the fields.
 */
 #define AST_DECLARE_STRING_FIELDS(field_list) \
-	ast_string_field __begin_field[0]; \
-	field_list \
-	ast_string_field __end_field[0]; \
+	struct ast_string_field_pool *__field_mgr_pool;	\
+	field_list					\
 	struct ast_string_field_mgr __field_mgr
-
-/*!
-  \brief Get the number of string fields in a structure
-  \param x Pointer to a structure containing fields
-  \return the number of fields in the structure's definition
-*/
-#define ast_string_field_count(x) \
-	(offsetof(typeof(*(x)), __end_field) - offsetof(typeof(*(x)), __begin_field)) / sizeof(ast_string_field)
-
-/*!
-  \brief Get the index of a field in a structure
-  \param x Pointer to a structure containing fields
-  \param field Name of the field to locate
-  \return the position (index) of the field within the structure's
-  array of fields
-*/
-#define ast_string_field_index(x, field) \
-	(offsetof(typeof(*x), field) - offsetof(typeof(*x), __begin_field)) / sizeof(ast_string_field)
 
 /*!
   \brief Initialize a field pool and fields
   \param x Pointer to a structure containing fields
-  \param size Amount of storage to allocate
+  \param size Amount of storage to allocate.
+	Use 0 to reset fields to the default value,
+	and release all but the most recent pool.
+	size<0 (used internally) means free all pools.
   \return 0 on success, non-zero on failure
 */
 #define ast_string_field_init(x, size) \
-	__ast_string_field_init(&(x)->__field_mgr, size, &(x)->__begin_field[0], ast_string_field_count(x))
+	__ast_string_field_init(&(x)->__field_mgr, &(x)->__field_mgr_pool, size, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+/*! \brief free all memory - to be called before destroying the object */
+#define ast_string_field_free_memory(x)	\
+	__ast_string_field_init(&(x)->__field_mgr, &(x)->__field_mgr_pool, -1, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+/*!
+ * \internal
+ * \brief internal version of ast_string_field_init
+ */
+int __ast_string_field_init(struct ast_string_field_mgr *mgr, struct ast_string_field_pool **pool_head,
+			    int needed, const char *file, int lineno, const char *func);
+
+/*!
+ * \brief Allocate a structure with embedded stringfields in a single allocation
+ * \param n Number of structures to allocate (see ast_calloc)
+ * \param type The type of structure to allocate
+ * \param size The number of bytes of space (minimum) to allocate for stringfields to use
+ *
+ * This function will allocate memory for one or more structures that use stringfields, and
+ * also allocate space for the stringfields and initialize the stringfield management
+ * structure embedded in the outer structure.
+ *
+ * \since 1.8
+ */
+#define ast_calloc_with_stringfields(n, type, size) \
+	__ast_calloc_with_stringfields(n, sizeof(type), offsetof(type, __field_mgr), offsetof(type, __field_mgr_pool), \
+				       size, __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+/*!
+ * \internal
+ * \brief internal version of ast_calloc_with_stringfields
+ */
+void * attribute_malloc __ast_calloc_with_stringfields(unsigned int num_structs, size_t struct_size, size_t field_mgr_offset,
+						       size_t field_mgr_pool_offset, size_t pool_size, const char *file,
+						       int lineno, const char *func);
+
+/*!
+  \internal
+  \brief Release a field's allocation from a pool
+  \param pool_head Pointer to the current pool
+  \param ptr Field to be released
+  \return nothing
+
+  This function will search the pool list to find the pool that contains
+  the allocation for the specified field, then remove the field's allocation
+  from that pool's 'active' count. If the pool's active count reaches zero,
+  and it is not the current pool, then it will be freed.
+ */
+void __ast_string_field_release_active(struct ast_string_field_pool *pool_head,
+				       const ast_string_field ptr);
+
+/*!
+  \brief Macro to provide access to the allocation field that lives immediately in front of a string field
+  \param x Pointer to the string field
+
+  Note that x must be a pointer to a byte-sized type -- normally (char *) -- or this calculation
+  would break horribly
+*/
+#define AST_STRING_FIELD_ALLOCATION(x) *((ast_string_field_allocation *) (x - __alignof__(ast_string_field_allocation)))
 
 /*!
   \brief Set a field to a simple string value
   \param x Pointer to a structure containing fields
-  \param index Index position of the field within the structure
-  \param data String value to be copied into the field
+  \param ptr Pointer to a field within the structure
+  \param data String value to be copied into the field 
   \return nothing
 */
-#define ast_string_field_index_set(x, index, data) do { \
-    char *__zz__ = (char*) (x)->__begin_field[index]; \
-    char *__data__ = (char*) (data); \
-    size_t __dlen__ = strlen(__data__) + 1; \
-    if ( __dlen__ == 1 ) {\
-      (x)->__begin_field[index] = __ast_string_field_empty; \
-    } else { \
-      if ((__zz__[0] != 0) && (__dlen__ <= (strlen(__zz__) + 1))) { \
-        memcpy(__zz__, __data__, __dlen__); \
-      } else { \
-        if (((x)->__begin_field[index] = __ast_string_field_alloc_space(&(x)->__field_mgr, __dlen__, &(x)->__begin_field[0], ast_string_field_count(x)))) { \
-          char *__yy__ = (char *) (x)->__begin_field[index]; \
-          memcpy(__yy__, __data__, __dlen__); \
-        } \
-      } \
-     } \
-   } while (0)
-
-#define ast_string_field_index_logset(x, index, data, logstr) do { \
-    char *__zz__ = (char*) (x)->__begin_field[index]; \
-    char *__data__ = (char*) (data); \
-    size_t __dlen__ = strlen(__data__) + 1; \
-    if ( __dlen__ == 1 ) {\
-      (x)->__begin_field[index] = __ast_string_field_empty; \
-    } else { \
-      if ((__zz__[0] != 0) && (__dlen__ <= strlen(__zz__) + 1)) { \
-        ast_verbose("%s: ======replacing '%s' with '%s'\n", logstr, __zz__, __data__); \
-        memcpy(__zz__, __data__, __dlen__); \
-      } else { \
-        if (((x)->__begin_field[index] = __ast_string_field_alloc_space(&(x)->__field_mgr, __dlen__, &(x)->__begin_field[0], ast_string_field_count(x)))) \
-          ast_verbose("%s: ++++++allocating room for '%s' to replace '%s'\n", logstr, __data__, __zz__); \
-          memcpy((char*) (x)->__begin_field[index], __data__, __dlen__); \
-      } \
-     } \
-   } while (0)
+#define ast_string_field_ptr_set(x, ptr, data) do {									\
+	const char *__d__ = (data);											\
+	size_t __dlen__ = (__d__) ? strlen(__d__) + 1 : 1;								\
+	ast_string_field *__p__ = (ast_string_field *) (ptr);								\
+	if (__dlen__ == 1) {												\
+		__ast_string_field_release_active((x)->__field_mgr_pool, *__p__);					\
+		*__p__ = __ast_string_field_empty;									\
+	} else if ((__dlen__ <= AST_STRING_FIELD_ALLOCATION(*__p__)) ||							\
+		   (!__ast_string_field_ptr_grow(&(x)->__field_mgr, &(x)->__field_mgr_pool, __dlen__, __p__)) ||	\
+		   (*__p__ = __ast_string_field_alloc_space(&(x)->__field_mgr, &(x)->__field_mgr_pool, __dlen__))) {	\
+		if (*__p__ != (*ptr)) {											\
+			__ast_string_field_release_active((x)->__field_mgr_pool, (*ptr));				\
+		}													\
+		memcpy(* (void **) __p__, __d__, __dlen__);								\
+	}														\
+	} while (0)
 
 /*!
   \brief Set a field to a simple string value
@@ -276,34 +339,20 @@ void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
   \param data String value to be copied into the field
   \return nothing
 */
-#define ast_string_field_set(x, field, data) \
-	ast_string_field_index_set(x, ast_string_field_index(x, field), data)
-
-#define ast_string_field_logset(x, field, data, logstr) \
-	ast_string_field_index_logset(x, ast_string_field_index(x, field), data, logstr)
+#define ast_string_field_set(x, field, data) do {		\
+	ast_string_field_ptr_set(x, &(x)->field, data);		\
+	} while (0)
 
 /*!
   \brief Set a field to a complex (built) value
   \param x Pointer to a structure containing fields
-  \param index Index position of the field within the structure
+  \param ptr Pointer to a field within the structure
   \param fmt printf-style format string
   \param args Arguments for format string
   \return nothing
 */
-#define ast_string_field_index_build(x, index, fmt, args...) \
-	__ast_string_field_index_build(&(x)->__field_mgr, &(x)->__begin_field[0], ast_string_field_count(x), index, fmt, args)
-
-/*!
-  \brief Set a field to a complex (built) value with prebuilt va_lists.
-  \param x Pointer to a structure containing fields
-  \param index Index position of the field within the structure
-  \param fmt printf-style format string
-  \param args1 Arguments for format string in va_list format
-  \param args2 a second copy of the va_list for the sake of bsd, with no va_list copy operation
-  \return nothing
-*/
-#define ast_string_field_index_build_va(x, index, fmt, args1, args2) \
-	__ast_string_field_index_build_va(&(x)->__field_mgr, &(x)->__begin_field[0], ast_string_field_count(x), index, fmt, args1, args2)
+#define ast_string_field_ptr_build(x, ptr, fmt, args...) \
+	__ast_string_field_ptr_build(&(x)->__field_mgr, &(x)->__field_mgr_pool, (ast_string_field *) ptr, fmt, args)
 
 /*!
   \brief Set a field to a complex (built) value
@@ -314,78 +363,30 @@ void __ast_string_field_index_build_va(struct ast_string_field_mgr *mgr,
   \return nothing
 */
 #define ast_string_field_build(x, field, fmt, args...) \
-	ast_string_field_index_build(x, ast_string_field_index(x, field), fmt, args)
+	__ast_string_field_ptr_build(&(x)->__field_mgr, &(x)->__field_mgr_pool, (ast_string_field *) &(x)->field, fmt, args)
+
+/*!
+  \brief Set a field to a complex (built) value with prebuilt va_lists.
+  \param x Pointer to a structure containing fields
+  \param ptr Pointer to a field within the structure
+  \param fmt printf-style format string
+  \param args1 Arguments for format string in va_list format
+  \param args2 a second copy of the va_list for the sake of bsd, with no va_list copy operation
+  \return nothing
+*/
+#define ast_string_field_ptr_build_va(x, ptr, fmt, args1, args2) \
+	__ast_string_field_ptr_build_va(&(x)->__field_mgr, &(x)->__field_mgr_pool, (ast_string_field *) ptr, fmt, args1, args2)
 
 /*!
   \brief Set a field to a complex (built) value
   \param x Pointer to a structure containing fields
   \param field Name of the field to set
   \param fmt printf-style format string
-  \param argslist a va_list of the args
+  \param args1 argument one
+  \param args2 argument two
   \return nothing
 */
 #define ast_string_field_build_va(x, field, fmt, args1, args2) \
-	ast_string_field_index_build_va(x, ast_string_field_index(x, field), fmt, args1, args2)
-
-/*!
-  \brief Free a field's value.
-  \param x Pointer to a structure containing fields
-  \param index Index position of the field within the structure
-  \return nothing
-
-  \note Because of the storage pool used, the memory
-  occupied by the field's value is \b not recovered; the field
-  pointer is just changed to point to an empty string.
-*/
-#define ast_string_field_index_free(x, index) do { \
-	(x)->__begin_field[index] = __ast_string_field_empty; \
-	} while(0)
-
-/*!
-  \brief Free a field's value.
-  \param x Pointer to a structure containing fields
-  \param field Name of the field to free
-  \return nothing
-
-  \note Because of the storage pool used, the memory
-  occupied by the field's value is \b not recovered; the field
-  pointer is just changed to point to an empty string.
-*/
-#define ast_string_field_free(x, field) \
-	ast_string_field_index_free(x, ast_string_field_index(x, field))
-
-/*!
-  \brief Free the stringfield storage pools attached to a structure
-  \param x Pointer to a structure containing fields
-  \return nothing
-
-  After calling this macro, fields can no longer be accessed in
-  structure; it should only be called immediately before freeing
-  the structure itself.
-*/
-#define ast_string_field_free_memory(x) do { \
-	struct ast_string_field_pool *this, *prev; \
-	for (this = (x)->__field_mgr.pool; this; this = prev) { \
-		prev = this->prev; \
-		free(this); \
-	} \
-	} while(0)
-
-/*!
-  \brief Free the stringfields in a structure
-  \param x Pointer to a structure containing fields
-  \return nothing
-
-  After calling this macro, the most recently allocated pool
-  attached to the structure will be available for use by
-  stringfields again.
-*/
-#define ast_string_field_reset_all(x) do { \
-	int index; \
-	for (index = 0; index < ast_string_field_count(x); index++) \
-		ast_string_field_index_free(x, index); \
-	(x)->__field_mgr.used = 0; \
-	(x)->__field_mgr.space = (x)->__field_mgr.size; \
-	} while(0)
+	__ast_string_field_ptr_build_va(&(x)->__field_mgr, &(x)->__field_mgr_pool, (ast_string_field *) &(x)->field, fmt, args1, args2)
 
 #endif /* _ASTERISK_STRINGFIELDS_H */

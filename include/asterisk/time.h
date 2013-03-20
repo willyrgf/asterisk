@@ -23,8 +23,9 @@
 #ifndef _ASTERISK_TIME_H
 #define _ASTERISK_TIME_H
 
+#ifdef HAVE_SYS_TIME_H
 #include <sys/time.h>
-#include <stdlib.h>
+#endif
 
 #include "asterisk/inline_api.h"
 
@@ -36,21 +37,55 @@ typedef typeof(tv.tv_sec) ast_time_t;
 typedef typeof(tv.tv_usec) ast_suseconds_t;
 
 /*!
+ * \brief Computes the difference (in seconds) between two \c struct \c timeval instances.
+ * \param end the end of the time period
+ * \param start the beginning of the time period
+ * \return the difference in seconds
+ */
+AST_INLINE_API(
+int64_t ast_tvdiff_sec(struct timeval end, struct timeval start),
+{
+	int64_t result = end.tv_sec - start.tv_sec;
+	if (result > 0 && end.tv_usec < start.tv_usec)
+		result--;
+	else if (result < 0 && end.tv_usec > start.tv_usec)
+		result++;
+
+	return result;
+}
+)
+
+/*!
+ * \brief Computes the difference (in microseconds) between two \c struct \c timeval instances.
+ * \param end the end of the time period
+ * \param start the beginning of the time period
+ * \return the difference in microseconds
+ */
+AST_INLINE_API(
+int64_t ast_tvdiff_us(struct timeval end, struct timeval start),
+{
+	return (end.tv_sec - start.tv_sec) * (int64_t) 1000000 +
+		end.tv_usec - start.tv_usec;
+}
+)
+
+/*!
  * \brief Computes the difference (in milliseconds) between two \c struct \c timeval instances.
  * \param end end of the time period
  * \param start beginning of the time period
  * \return the difference in milliseconds
  */
 AST_INLINE_API(
-int ast_tvdiff_ms(struct timeval end, struct timeval start),
+int64_t ast_tvdiff_ms(struct timeval end, struct timeval start),
 {
 	/* the offset by 1,000,000 below is intentional...
 	   it avoids differences in the way that division
 	   is handled for positive and negative numbers, by ensuring
 	   that the divisor is always positive
 	*/
-	return  ((end.tv_sec - start.tv_sec) * 1000) +
-		(((1000000 + end.tv_usec - start.tv_usec) / 1000) - 1000);
+	int64_t sec_dif = (int64_t)(end.tv_sec - start.tv_sec) * 1000;
+	int64_t usec_dif = (1000000 + end.tv_usec - start.tv_usec) / 1000 - 1000;
+	return  sec_dif + usec_dif;
 }
 )
 
@@ -115,6 +150,20 @@ struct timeval ast_tvadd(struct timeval a, struct timeval b);
  * \brief Returns the difference of two timevals a - b
  */
 struct timeval ast_tvsub(struct timeval a, struct timeval b);
+
+/*!
+ * \brief Calculate remaining milliseconds given a starting timestamp
+ * and upper bound
+ *
+ * If the upper bound is negative, then this indicates that there is no
+ * upper bound on the amount of time to wait. This will result in a
+ * negative return.
+ *
+ * \param start When timing started being calculated
+ * \param max_ms The maximum number of milliseconds to wait from start. May be negative.
+ * \return The number of milliseconds left to wait for. May be negative.
+ */
+int ast_remaining_ms(struct timeval start, int max_ms);
 
 /*!
  * \brief Returns a timeval from sec, usec

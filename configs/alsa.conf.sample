@@ -37,6 +37,15 @@ extension=s
 ;input_device=hw:0,0
 ;output_device=hw:0,0
 
+;
+; Default mute state (can also be toggled via CLI)
+;mute=true
+
+;
+; If enabled, no audio capture device will be opened.  This is useful on
+; systems where there will be no return audio path, such as overhead pagers.
+;noaudiocapture=true
+
 ;------------------------------ JITTER BUFFER CONFIGURATION --------------------------
 ; jbenable = yes              ; Enables the use of a jitterbuffer on the receiving side of an
                               ; ALSA channel. Defaults to "no". An enabled jitterbuffer will
@@ -56,6 +65,13 @@ extension=s
                               ; channel. Two implementations are currently available - "fixed"
                               ; (with size always equals to jbmax-size) and "adaptive" (with
                               ; variable size, actually the new jb of IAX2). Defaults to fixed.
+
+; jbtargetextra = 40          ; This option only affects the jb when 'jbimpl = adaptive' is set.
+                              ; The option represents the number of milliseconds by which the new
+                              ; jitter buffer will pad its size. the default is 40, so without
+                              ; modification, the new jitter buffer will set its size to the jitter
+                              ; value plus 40 milliseconds. increasing this value may help if your
+                              ; network normally has low jitter, but occasionally has spikes.
 
 ; jblog = no                  ; Enables jitterbuffer frame logging. Defaults to "no".
 ;-----------------------------------------------------------------------------------

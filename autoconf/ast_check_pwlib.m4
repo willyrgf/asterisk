@@ -198,16 +198,16 @@ AC_DEFUN([AST_CHECK_PWLIB_VERSION], [
 	fi
 
 	if test "${HAS_$2:-unset}" != "unset"; then
-		$2_VERSION=`grep "$VNAME" ${$2_INCDIR}/$3 | sed -e 's/[[[:space:]]]\{1,\}/ /g' | cut -f3 -d ' ' | sed -e 's/"//g'`
+		$2_VERSION=`grep "$VNAME \"" ${$2_INCDIR}/$3 | sed -e 's/[[[:space:]]]\{1,\}/ /g' | cut -f3 -d ' ' | sed -e 's/"//g'`
 		$2_MAJOR_VERSION=`echo ${$2_VERSION} | cut -f1 -d.`
 		$2_MINOR_VERSION=`echo ${$2_VERSION} | cut -f2 -d.`
 		$2_BUILD_NUMBER=`echo ${$2_VERSION} | cut -f3 -d.`
-		let $2_VER=${$2_MAJOR_VERSION}*10000+${$2_MINOR_VERSION}*100+${$2_BUILD_NUMBER}
-		let $2_REQ=$4*10000+$5*100+$6
+		$2_VER=$((${$2_MAJOR_VERSION}*10000+${$2_MINOR_VERSION}*100+${$2_BUILD_NUMBER}))
+		$2_REQ=$(($4*10000+$5*100+$6))
 		if test "x$10" = "x"; then
-			let $2_MAX=9999999
+			$2_MAX=9999999
 		else
-			let $2_MAX=$8*10000+$9*100+$10
+			$2_MAX=$(($8*10000+$9*100+$10))
 		fi
 
 		AC_MSG_CHECKING(if $1 version ${$2_VERSION} is compatible with chan_h323)
@@ -224,7 +224,6 @@ AC_DEFUN([AST_CHECK_PWLIB_VERSION], [
 		fi
 	fi
 ])
-
 
 AC_DEFUN([AST_CHECK_PWLIB_BUILD], [
 	if test "${HAS_$2:-unset}" != "unset"; then

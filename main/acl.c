@@ -23,25 +23,15 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/time.h>
-#include <signal.h>
-#include <errno.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <net/if.h>
-#include <netinet/in_systm.h>
-#include <netinet/ip.h>
-#include <sys/ioctl.h>
+#include "asterisk/network.h"
 
 #if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__FreeBSD__) || defined(__Darwin__)
 #include <fcntl.h>
@@ -55,33 +45,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <ifaddrs.h>
 #endif
 
-/* netinet/ip.h may not define the following (See RFCs 791 and 1349) */
-#if !defined(IPTOS_LOWCOST)
-#define       IPTOS_LOWCOST           0x02
-#endif
-
-#if !defined(IPTOS_MINCOST)
-#define       IPTOS_MINCOST           IPTOS_LOWCOST
-#endif
-
 #include "asterisk/acl.h"
-#include "asterisk/logger.h"
 #include "asterisk/channel.h"
-#include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/srv.h"
 
-/* Default IP - if not otherwise set, don't breathe garbage */
-static struct in_addr __ourip = { .s_addr = 0x00000000, };
-
-struct my_ifreq {
-	char ifrn_name[IFNAMSIZ];	/* Interface name, e.g. "eth0", "ppp0", etc.  */
-	struct sockaddr_in ifru_addr;
-};
-
 #if (!defined(SOLARIS) && !defined(HAVE_GETIFADDRS))
-static int get_local_address(struct in_addr *ourip)
+static int get_local_address(struct ast_sockaddr *ourip)
 {
 	return -1;
 }
@@ -94,36 +65,37 @@ static void score_address(const struct sockaddr_in *sin, struct in_addr *best_ad
 	address = ast_inet_ntoa(sin->sin_addr);
 
 	/* RFC 1700 alias for the local network */
-	if (address[0] == '0')
+	if (address[0] == '0') {
 		score = -25;
 	/* RFC 1700 localnet */
-	else if (strncmp(address, "127", 3) == 0)
+	} else if (strncmp(address, "127", 3) == 0) {
 		score = -20;
 	/* RFC 1918 non-public address space */
-	else if (strncmp(address, "10.", 3) == 0)
+	} else if (strncmp(address, "10.", 3) == 0) {
 		score = -5;
 	/* RFC 1918 non-public address space */
-	else if (strncmp(address, "172", 3) == 0) {
+	} else if (strncmp(address, "172", 3) == 0) {
 		/* 172.16.0.0 - 172.19.255.255, but not 172.160.0.0 - 172.169.255.255 */
-		if (address[4] == '1' && address[5] >= '6' && address[6] == '.')
+		if (address[4] == '1' && address[5] >= '6' && address[6] == '.') {
 			score = -5;
 		/* 172.20.0.0 - 172.29.255.255, but not 172.200.0.0 - 172.255.255.255 nor 172.2.0.0 - 172.2.255.255 */
-		else if (address[4] == '2' && address[6] == '.')
+		} else if (address[4] == '2' && address[6] == '.') {
 			score = -5;
 		/* 172.30.0.0 - 172.31.255.255, but not 172.3.0.0 - 172.3.255.255 */
-		else if (address[4] == '3' && (address[5] == '0' || address[5] == '1'))
+		} else if (address[4] == '3' && (address[5] == '0' || address[5] == '1')) {
 			score = -5;
 		/* All other 172 addresses are public */
-		else
+		} else {
 			score = 0;
-	/* RFC 2544 Benchmark test range */
-	} else if (strncmp(address, "198.1", 5) == 0 && address[5] >= '8' && address[6] == '.')
+		}
+	/* RFC 2544 Benchmark test range (198.18.0.0 - 198.19.255.255, but not 198.180.0.0 - 198.199.255.255) */
+	} else if (strncmp(address, "198.1", 5) == 0 && address[5] >= '8' && address[6] == '.') {
 		score = -10;
 	/* RFC 1918 non-public address space */
-	else if (strncmp(address, "192.168", 7) == 0)
+	} else if (strncmp(address, "192.168", 7) == 0) {
 		score = -5;
 	/* RFC 3330 Zeroconf network */
-	else if (strncmp(address, "169.254", 7) == 0)
+	} else if (strncmp(address, "169.254", 7) == 0) {
 		/*!\note Better score than a test network, but not quite as good as RFC 1918
 		 * address space.  The reason is that some Linux distributions automatically
 		 * configure a Zeroconf address before trying DHCP, so we want to prefer a
@@ -131,11 +103,12 @@ static void score_address(const struct sockaddr_in *sin, struct in_addr *best_ad
 		 */
 		score = -10;
 	/* RFC 3330 Test network */
-	else if (strncmp(address, "192.0.2.", 8) == 0)
+	} else if (strncmp(address, "192.0.2.", 8) == 0) {
 		score = -15;
 	/* Every other address should be publically routable */
-	else
+	} else {
 		score = 0;
+	}
 
 	if (score > *best_score) {
 		*best_score = score;
@@ -143,7 +116,7 @@ static void score_address(const struct sockaddr_in *sin, struct in_addr *best_ad
 	}
 }
 
-static int get_local_address(struct in_addr *ourip)
+static int get_local_address(struct ast_sockaddr *ourip)
 {
 	int s, res = -1;
 #ifdef SOLARIS
@@ -182,8 +155,9 @@ static int get_local_address(struct in_addr *ourip)
 				score_address(sin, &best_addr, &best_score);
 				res = 0;
 
-				if (best_score == 0)
+				if (best_score == 0) {
 					break;
+				}
 			}
 		}
 #endif /* BSD_OR_LINUX */
@@ -222,21 +196,25 @@ static int get_local_address(struct in_addr *ourip)
 			score_address(sa, &best_addr, &best_score);
 			res = 0;
 
-			if (best_score == 0)
+			if (best_score == 0) {
 				break;
+			}
 		}
 
 		free(buf);
 #endif /* SOLARIS */
-		
+
 		close(s);
 	}
 #if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__FreeBSD__) || defined(__linux__) || defined(__Darwin__)
 	freeifaddrs(ifaphead);
 #endif /* BSD_OR_LINUX */
 
-	if (res == 0 && ourip)
-		memcpy(ourip, &best_addr, sizeof(*ourip));
+	if (res == 0 && ourip) {
+		ast_sockaddr_setnull(ourip);
+		ourip->ss.ss_family = AF_INET;
+		((struct sockaddr_in *)&ourip->ss)->sin_addr = best_addr;
+	}
 	return res;
 }
 #endif /* HAVE_GETIFADDRS */
@@ -248,15 +226,15 @@ void ast_free_ha(struct ast_ha *ha)
 	while (ha) {
 		hal = ha;
 		ha = ha->next;
-		free(hal);
+		ast_free(hal);
 	}
 }
 
 /* Copy HA structure */
 void ast_copy_ha(const struct ast_ha *from, struct ast_ha *to)
 {
-	memcpy(&to->netaddr, &from->netaddr, sizeof(from->netaddr));
-	memcpy(&to->netmask, &from->netmask, sizeof(from->netmask));
+	ast_sockaddr_copy(&to->addr, &from->addr);
+	ast_sockaddr_copy(&to->netmask, &from->netmask);
 	to->sense = from->sense;
 }
 
@@ -265,7 +243,7 @@ static struct ast_ha *ast_duplicate_ha(struct ast_ha *original)
 {
 	struct ast_ha *new_ha;
 
-	if ((new_ha = ast_malloc(sizeof(*new_ha)))) {
+	if ((new_ha = ast_calloc(1, sizeof(*new_ha)))) {
 		/* Copy from original to new object */
 		ast_copy_ha(original, new_ha);
 	}
@@ -279,128 +257,365 @@ struct ast_ha *ast_duplicate_ha_list(struct ast_ha *original)
 {
 	struct ast_ha *start = original;
 	struct ast_ha *ret = NULL;
-	struct ast_ha *link, *prev = NULL;
+	struct ast_ha *current, *prev = NULL;
 
 	while (start) {
-		link = ast_duplicate_ha(start);  /* Create copy of this object */
-		if (prev)
-			prev->next = link;		/* Link previous to this object */
+		current = ast_duplicate_ha(start);  /* Create copy of this object */
+		if (prev) {
+			prev->next = current;           /* Link previous to this object */
+		}
 
-		if (!ret)
-			ret = link;		/* Save starting point */
+		if (!ret) {
+			ret = current;                  /* Save starting point */
+		}
 
-		start = start->next;		/* Go to next object */
-		prev = link;			/* Save pointer to this object */
+		start = start->next;                /* Go to next object */
+		prev = current;                     /* Save pointer to this object */
 	}
-	return ret;    			/* Return start of list */
+	return ret;                             /* Return start of list */
 }
 
-struct ast_ha *ast_append_ha(char *sense, const char *stuff, struct ast_ha *path)
+/*!
+ * \brief
+ * Isolate a 32-bit section of an IPv6 address
+ *
+ * An IPv6 address can be divided into 4 32-bit chunks. This gives
+ * easy access to one of these chunks.
+ *
+ * \param sin6 A pointer to a struct sockaddr_in6
+ * \param index Which 32-bit chunk to operate on. Must be in the range 0-3.
+ */
+#define V6_WORD(sin6, index) ((uint32_t *)&((sin6)->sin6_addr))[(index)]
+
+/*!
+ * \brief
+ * Apply a netmask to an address and store the result in a separate structure.
+ *
+ * When dealing with IPv6 addresses, one cannot apply a netmask with a simple
+ * logical and operation. Furthermore, the incoming address may be an IPv4 address
+ * and need to be mapped properly before attempting to apply a rule.
+ *
+ * \param addr The IP address to apply the mask to.
+ * \param netmask The netmask configured in the host access rule.
+ * \param result The resultant address after applying the netmask to the given address
+ * \retval 0 Successfully applied netmask
+ * \reval -1 Failed to apply netmask
+ */
+static int apply_netmask(const struct ast_sockaddr *addr, const struct ast_sockaddr *netmask,
+		struct ast_sockaddr *result)
+{
+	int res = 0;
+
+	if (ast_sockaddr_is_ipv4(addr)) {
+		struct sockaddr_in result4 = { 0, };
+		struct sockaddr_in *addr4 = (struct sockaddr_in *) &addr->ss;
+		struct sockaddr_in *mask4 = (struct sockaddr_in *) &netmask->ss;
+		result4.sin_family = AF_INET;
+		result4.sin_addr.s_addr = addr4->sin_addr.s_addr & mask4->sin_addr.s_addr;
+		ast_sockaddr_from_sin(result, &result4);
+	} else if (ast_sockaddr_is_ipv6(addr)) {
+		struct sockaddr_in6 result6 = { 0, };
+		struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *) &addr->ss;
+		struct sockaddr_in6 *mask6 = (struct sockaddr_in6 *) &netmask->ss;
+		int i;
+		result6.sin6_family = AF_INET6;
+		for (i = 0; i < 4; ++i) {
+			V6_WORD(&result6, i) = V6_WORD(addr6, i) & V6_WORD(mask6, i);
+		}
+		memcpy(&result->ss, &result6, sizeof(result6));
+		result->len = sizeof(result6);
+	} else {
+		/* Unsupported address scheme */
+		res = -1;
+	}
+
+	return res;
+}
+
+/*!
+ * \brief
+ * Parse a netmask in CIDR notation
+ *
+ * \details
+ * For a mask of an IPv4 address, this should be a number between 0 and 32. For
+ * a mask of an IPv6 address, this should be a number between 0 and 128. This
+ * function creates an IPv6 ast_sockaddr from the given netmask. For masks of
+ * IPv4 addresses, this is accomplished by adding 96 to the original netmask.
+ *
+ * \param[out] addr The ast_sockaddr produced from the CIDR netmask
+ * \param is_v4 Tells if the address we are masking is IPv4.
+ * \param mask_str The CIDR mask to convert
+ * \retval -1 Failure
+ * \retval 0 Success
+ */
+static int parse_cidr_mask(struct ast_sockaddr *addr, int is_v4, const char *mask_str)
+{
+	int mask;
+
+	if (sscanf(mask_str, "%30d", &mask) != 1) {
+		return -1;
+	}
+
+	if (is_v4) {
+		struct sockaddr_in sin;
+		if (mask < 0 || mask > 32) {
+			return -1;
+		}
+		memset(&sin, 0, sizeof(sin));
+		sin.sin_family = AF_INET;
+		/* If mask is 0, then we already have the
+		 * appropriate all 0s address in sin from
+		 * the above memset.
+		 */
+		if (mask != 0) {
+			sin.sin_addr.s_addr = htonl(0xFFFFFFFF << (32 - mask));
+		}
+		ast_sockaddr_from_sin(addr, &sin);
+	} else {
+		struct sockaddr_in6 sin6;
+		int i;
+		if (mask < 0 || mask > 128) {
+			return -1;
+		}
+		memset(&sin6, 0, sizeof(sin6));
+		sin6.sin6_family = AF_INET6;
+		for (i = 0; i < 4; ++i) {
+			/* Once mask reaches 0, we don't have
+			 * to explicitly set anything anymore
+			 * since sin6 was zeroed out already
+			 */
+			if (mask > 0) {
+				V6_WORD(&sin6, i) = htonl(0xFFFFFFFF << (mask < 32 ? (32 - mask) : 0));
+				mask -= mask < 32 ? mask : 32;
+			}
+		}
+		memcpy(&addr->ss, &sin6, sizeof(sin6));
+		addr->len = sizeof(sin6);
+	}
+
+	return 0;
+}
+
+struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha *path, int *error)
 {
 	struct ast_ha *ha;
-	char *nm = "255.255.255.255";
-	char tmp[256];
 	struct ast_ha *prev = NULL;
 	struct ast_ha *ret;
-	int x, z;
-	unsigned int y;
+	char *tmp = ast_strdupa(stuff);
+	char *address = NULL, *mask = NULL;
+	int addr_is_v4;
 
 	ret = path;
 	while (path) {
 		prev = path;
 		path = path->next;
 	}
-	if ((ha = ast_malloc(sizeof(*ha)))) {
-		ast_copy_string(tmp, stuff, sizeof(tmp));
-		nm = strchr(tmp, '/');
-		if (!nm) {
-			nm = "255.255.255.255";
-		} else {
-			*nm = '\0';
-			nm++;
+
+	if (!(ha = ast_calloc(1, sizeof(*ha)))) {
+		if (error) {
+			*error = 1;
 		}
-		if (!strchr(nm, '.')) {
-			if ((sscanf(nm, "%30d", &x) == 1) && (x >= 0) && (x <= 32)) {
-				y = 0;
-				for (z = 0; z < x; z++) {
-					y >>= 1;
-					y |= 0x80000000;
-				}
-				ha->netmask.s_addr = htonl(y);
-			}
-		} else if (!inet_aton(nm, &ha->netmask)) {
-			ast_log(LOG_WARNING, "%s is not a valid netmask\n", nm);
-			free(ha);
-			return ret;
-		}
-		if (!inet_aton(tmp, &ha->netaddr)) {
-			ast_log(LOG_WARNING, "%s is not a valid IP\n", tmp);
-			free(ha);
-			return ret;
-		}
-		ha->netaddr.s_addr &= ha->netmask.s_addr;
-		if (!strncasecmp(sense, "p", 1)) {
-			ha->sense = AST_SENSE_ALLOW;
-		} else {
-			ha->sense = AST_SENSE_DENY;
-		}
-		ha->next = NULL;
-		if (prev) {
-			prev->next = ha;
-		} else {
-			ret = ha;
-		}
+		return ret;
 	}
-	if (option_debug)
-		ast_log(LOG_DEBUG, "%s/%s appended to acl for peer\n", stuff, nm);
+
+	address = strsep(&tmp, "/");
+	if (!address) {
+		address = tmp;
+	} else {
+		mask = tmp;
+	}
+
+	if (!ast_sockaddr_parse(&ha->addr, address, PARSE_PORT_FORBID)) {
+		ast_log(LOG_WARNING, "Invalid IP address: %s\n", address);
+		ast_free_ha(ha);
+		if (error) {
+			*error = 1;
+		}
+		return ret;
+	}
+
+	/* If someone specifies an IPv4-mapped IPv6 address,
+	 * we just convert this to an IPv4 ACL
+	 */
+	if (ast_sockaddr_ipv4_mapped(&ha->addr, &ha->addr)) {
+		ast_log(LOG_NOTICE, "IPv4-mapped ACL network address specified. "
+				"Converting to an IPv4 ACL network address.\n");
+	}
+
+	addr_is_v4 = ast_sockaddr_is_ipv4(&ha->addr);
+
+	if (!mask) {
+		parse_cidr_mask(&ha->netmask, addr_is_v4, addr_is_v4 ? "32" : "128");
+	} else if (strchr(mask, ':') || strchr(mask, '.')) {
+		int mask_is_v4;
+		/* Mask is of x.x.x.x or x:x:x:x:x:x:x:x variety */
+		if (!ast_sockaddr_parse(&ha->netmask, mask, PARSE_PORT_FORBID)) {
+			ast_log(LOG_WARNING, "Invalid netmask: %s\n", mask);
+			ast_free_ha(ha);
+			if (error) {
+				*error = 1;
+			}
+			return ret;
+		}
+		/* If someone specifies an IPv4-mapped IPv6 netmask,
+		 * we just convert this to an IPv4 ACL
+		 */
+		if (ast_sockaddr_ipv4_mapped(&ha->netmask, &ha->netmask)) {
+			ast_log(LOG_NOTICE, "IPv4-mapped ACL netmask specified. "
+					"Converting to an IPv4 ACL netmask.\n");
+		}
+		mask_is_v4 = ast_sockaddr_is_ipv4(&ha->netmask);
+		if (addr_is_v4 ^ mask_is_v4) {
+			ast_log(LOG_WARNING, "Address and mask are not using same address scheme.\n");
+			ast_free_ha(ha);
+			if (error) {
+				*error = 1;
+			}
+			return ret;
+		}
+	} else if (parse_cidr_mask(&ha->netmask, addr_is_v4, mask)) {
+		ast_log(LOG_WARNING, "Invalid CIDR netmask: %s\n", mask);
+		ast_free_ha(ha);
+		if (error) {
+			*error = 1;
+		}
+		return ret;
+	}
+
+	if (apply_netmask(&ha->addr, &ha->netmask, &ha->addr)) {
+		/* This shouldn't happen because ast_sockaddr_parse would
+		 * have failed much earlier on an unsupported address scheme
+		 */
+		char *failmask = ast_strdupa(ast_sockaddr_stringify(&ha->netmask));
+		char *failaddr = ast_strdupa(ast_sockaddr_stringify(&ha->addr));
+		ast_log(LOG_WARNING, "Unable to apply netmask %s to address %s\n", failmask, failaddr);
+		ast_free_ha(ha);
+		if (error) {
+			*error = 1;
+		}
+		return ret;
+	}
+
+	ha->sense = strncasecmp(sense, "p", 1) ? AST_SENSE_DENY : AST_SENSE_ALLOW;
+
+	ha->next = NULL;
+	if (prev) {
+		prev->next = ha;
+	} else {
+		ret = ha;
+	}
+
+	{
+		const char *addr = ast_strdupa(ast_sockaddr_stringify(&ha->addr));
+		const char *mask = ast_strdupa(ast_sockaddr_stringify(&ha->netmask));
+
+		ast_debug(1, "%s/%s sense %d appended to acl for peer\n", addr, mask, ha->sense);
+	}
+
 	return ret;
 }
 
-int ast_apply_ha(struct ast_ha *ha, struct sockaddr_in *sin)
+int ast_apply_ha(const struct ast_ha *ha, const struct ast_sockaddr *addr)
 {
 	/* Start optimistic */
 	int res = AST_SENSE_ALLOW;
-	while (ha) {
+	const struct ast_ha *current_ha;
+
+	for (current_ha = ha; current_ha; current_ha = current_ha->next) {
+		struct ast_sockaddr result;
+		struct ast_sockaddr mapped_addr;
+		const struct ast_sockaddr *addr_to_use;
+#if 0	/* debugging code */
 		char iabuf[INET_ADDRSTRLEN];
 		char iabuf2[INET_ADDRSTRLEN];
 		/* DEBUG */
 		ast_copy_string(iabuf, ast_inet_ntoa(sin->sin_addr), sizeof(iabuf));
 		ast_copy_string(iabuf2, ast_inet_ntoa(ha->netaddr), sizeof(iabuf2));
-		if (option_debug)
-			ast_log(LOG_DEBUG, "##### Testing %s with %s\n", iabuf, iabuf2);
+		ast_debug(1, "##### Testing %s with %s\n", iabuf, iabuf2);
+#endif
+		if (ast_sockaddr_is_ipv4(&ha->addr)) {
+			if (ast_sockaddr_is_ipv6(addr)) {
+				if (ast_sockaddr_is_ipv4_mapped(addr)) {
+					/* IPv4 ACLs apply to IPv4-mapped addresses */
+					if (!ast_sockaddr_ipv4_mapped(addr, &mapped_addr)) {
+						ast_log(LOG_ERROR, "%s provided to ast_sockaddr_ipv4_mapped could not be converted. That shouldn't be possible.\n",
+							ast_sockaddr_stringify(addr));
+						continue;
+					}
+					addr_to_use = &mapped_addr;
+				} else {
+					/* An IPv4 ACL does not apply to an IPv6 address */
+					continue;
+				}
+			} else {
+				/* Address is IPv4 and ACL is IPv4. No biggie */
+				addr_to_use = addr;
+			}
+		} else {
+			if (ast_sockaddr_is_ipv6(addr) && !ast_sockaddr_is_ipv4_mapped(addr)) {
+				addr_to_use = addr;
+			} else {
+				/* Address is IPv4 or IPv4 mapped but ACL is IPv6. Skip */
+				continue;
+			}
+		}
+
 		/* For each rule, if this address and the netmask = the net address
 		   apply the current rule */
-		if ((sin->sin_addr.s_addr & ha->netmask.s_addr) == ha->netaddr.s_addr)
-			res = ha->sense;
-		ha = ha->next;
+		if (apply_netmask(addr_to_use, &current_ha->netmask, &result)) {
+			/* Unlikely to happen since we know the address to be IPv4 or IPv6 */
+			continue;
+		}
+		if (!ast_sockaddr_cmp_addr(&result, &current_ha->addr)) {
+			res = current_ha->sense;
+		}
 	}
 	return res;
 }
 
-int ast_get_ip_or_srv(struct sockaddr_in *sin, const char *value, const char *service)
+static int resolve_first(struct ast_sockaddr *addr, const char *name, int flag,
+			 int family)
 {
-	struct hostent *hp;
-	struct ast_hostent ahp;
-	char srv[256];
-	char host[256];
-	int tportno = ntohs(sin->sin_port);
-	if (inet_aton(value, &sin->sin_addr))
-		return 0;
-	if (service) {
-		snprintf(srv, sizeof(srv), "%s.%s", service, value);
-		if (ast_get_srv(NULL, host, sizeof(host), &tportno, srv) > 0) {
-			sin->sin_port = htons(tportno);
-			value = host;
+	struct ast_sockaddr *addrs;
+	int addrs_cnt;
+
+	addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
+	if (addrs_cnt > 0) {
+		if (addrs_cnt > 1) {
+			ast_debug(1, "Multiple addresses. Using the first only\n");
 		}
-	}
-	hp = ast_gethostbyname(value, &ahp);
-	if (hp) {
-		sin->sin_family = hp->h_addrtype;
-		memcpy(&sin->sin_addr, hp->h_addr, sizeof(sin->sin_addr));
+		ast_sockaddr_copy(addr, &addrs[0]);
+		ast_free(addrs);
 	} else {
-		ast_log(LOG_WARNING, "Unable to lookup '%s'\n", value);
+		ast_log(LOG_WARNING, "Unable to lookup '%s'\n", name);
 		return -1;
 	}
+
+	return 0;
+}
+
+int ast_get_ip_or_srv(struct ast_sockaddr *addr, const char *hostname, const char *service)
+{
+	char srv[256];
+	char host[256];
+	int srv_ret = 0;
+	int tportno;
+
+	if (service) {
+		snprintf(srv, sizeof(srv), "%s.%s", service, hostname);
+		if ((srv_ret = ast_get_srv(NULL, host, sizeof(host), &tportno, srv)) > 0) {
+			hostname = host;
+		}
+	}
+
+	if (resolve_first(addr, hostname, PARSE_PORT_FORBID, addr->ss.ss_family) != 0) {
+		return -1;
+	}
+
+	if (srv_ret > 0) {
+		ast_sockaddr_set_port(addr, tportno);
+	}
+
 	return 0;
 }
 
@@ -435,6 +650,20 @@ static const struct dscp_codepoint dscp_pool1[] = {
 	{ "EF", 0x2E },
 };
 
+int ast_str2cos(const char *value, unsigned int *cos)
+{
+	int fval;
+
+	if (sscanf(value, "%30d", &fval) == 1) {
+		if (fval < 8) {
+		    *cos = fval;
+		    return 0;
+		}
+	}
+
+	return -1;
+}
+
 int ast_str2tos(const char *value, unsigned int *tos)
 {
 	int fval;
@@ -445,139 +674,105 @@ int ast_str2tos(const char *value, unsigned int *tos)
 		return 0;
 	}
 
-	for (x = 0; x < sizeof(dscp_pool1) / sizeof(dscp_pool1[0]); x++) {
+	for (x = 0; x < ARRAY_LEN(dscp_pool1); x++) {
 		if (!strcasecmp(value, dscp_pool1[x].name)) {
 			*tos = dscp_pool1[x].space << 2;
 			return 0;
 		}
 	}
 
-	if (!strcasecmp(value, "lowdelay"))
-		*tos = IPTOS_LOWDELAY;
-	else if (!strcasecmp(value, "throughput"))
-		*tos = IPTOS_THROUGHPUT;
-	else if (!strcasecmp(value, "reliability"))
-		*tos = IPTOS_RELIABILITY;
-	else if (!strcasecmp(value, "mincost"))
-		*tos = IPTOS_MINCOST;
-	else if (!strcasecmp(value, "none"))
-		*tos = 0;
-	else
-		return -1;
-
-	ast_log(LOG_WARNING, "TOS value %s is deprecated. Please see doc/ip-tos.txt for more information.\n", value);
-
-	return 0;
+	return -1;
 }
 
 const char *ast_tos2str(unsigned int tos)
 {
 	unsigned int x;
 
-	switch (tos) {
-	case 0:
-		return "none";
-	case IPTOS_LOWDELAY:
-		return "lowdelay";
-	case IPTOS_THROUGHPUT:
-		return "throughput";
-	case IPTOS_RELIABILITY:
-		return "reliability";
-	case IPTOS_MINCOST:
-		return "mincost";
-	default:
-		for (x = 0; x < sizeof(dscp_pool1) / sizeof(dscp_pool1[0]); x++) {
-			if (dscp_pool1[x].space == (tos >> 2))
-				return dscp_pool1[x].name;
+	for (x = 0; x < ARRAY_LEN(dscp_pool1); x++) {
+		if (dscp_pool1[x].space == (tos >> 2)) {
+			return dscp_pool1[x].name;
 		}
 	}
 
 	return "unknown";
 }
 
-int ast_get_ip(struct sockaddr_in *sin, const char *value)
+int ast_get_ip(struct ast_sockaddr *addr, const char *hostname)
 {
-	return ast_get_ip_or_srv(sin, value, NULL);
+	return ast_get_ip_or_srv(addr, hostname, NULL);
 }
 
-/* iface is the interface (e.g. eth0); address is the return value */
-int ast_lookup_iface(char *iface, struct in_addr *address)
+int ast_ouraddrfor(const struct ast_sockaddr *them, struct ast_sockaddr *us)
 {
-	int mysock, res = 0;
-	struct my_ifreq ifreq;
-
-	memset(&ifreq, 0, sizeof(ifreq));
-	ast_copy_string(ifreq.ifrn_name, iface, sizeof(ifreq.ifrn_name));
-
-	mysock = socket(PF_INET, SOCK_DGRAM, IPPROTO_IP);
-	res = ioctl(mysock, SIOCGIFADDR, &ifreq);
-
-	close(mysock);
-	if (res < 0) {
-		ast_log(LOG_WARNING, "Unable to get IP of %s: %s\n", iface, strerror(errno));
-		memcpy((char *)address, (char *)&__ourip, sizeof(__ourip));
-		return -1;
-	} else {
-		memcpy((char *)address, (char *)&ifreq.ifru_addr.sin_addr, sizeof(ifreq.ifru_addr.sin_addr));
-		return 0;
-	}
-}
-
-int ast_ouraddrfor(struct in_addr *them, struct in_addr *us)
-{
+	int port;
 	int s;
-	struct sockaddr_in sin;
-	socklen_t slen;
 
-	s = socket(PF_INET, SOCK_DGRAM, 0);
-	if (s < 0) {
-		ast_log(LOG_WARNING, "Cannot create socket\n");
+	port = ast_sockaddr_port(us);
+
+	if ((s = socket(ast_sockaddr_is_ipv6(them) ? AF_INET6 : AF_INET,
+			SOCK_DGRAM, 0)) < 0) {
+		ast_log(LOG_ERROR, "Cannot create socket\n");
 		return -1;
 	}
-	sin.sin_family = AF_INET;
-	sin.sin_port = htons(5060);
-	sin.sin_addr = *them;
-	if (connect(s, (struct sockaddr *)&sin, sizeof(sin))) {
+
+	if (ast_connect(s, them)) {
 		ast_log(LOG_WARNING, "Cannot connect\n");
 		close(s);
 		return -1;
 	}
-	slen = sizeof(sin);
-	if (getsockname(s, (struct sockaddr *)&sin, &slen)) {
+	if (ast_getsockname(s, us)) {
+
 		ast_log(LOG_WARNING, "Cannot get socket name\n");
 		close(s);
 		return -1;
 	}
 	close(s);
-	*us = sin.sin_addr;
+
+	{
+		const char *them_addr = ast_strdupa(ast_sockaddr_stringify_addr(them));
+		const char *us_addr = ast_strdupa(ast_sockaddr_stringify_addr(us));
+
+		ast_debug(3, "For destination '%s', our source address is '%s'.\n",
+				them_addr, us_addr);
+	}
+
+	ast_sockaddr_set_port(us, port);
+
 	return 0;
 }
 
-int ast_find_ourip(struct in_addr *ourip, struct sockaddr_in bindaddr)
+int ast_find_ourip(struct ast_sockaddr *ourip, const struct ast_sockaddr *bindaddr, int family)
 {
 	char ourhost[MAXHOSTNAMELEN] = "";
-	struct ast_hostent ahp;
-	struct hostent *hp;
-	struct in_addr saddr;
+	struct ast_sockaddr root;
+	int res, port = ast_sockaddr_port(ourip);
 
 	/* just use the bind address if it is nonzero */
-	if (ntohl(bindaddr.sin_addr.s_addr)) {
-		memcpy(ourip, &bindaddr.sin_addr, sizeof(*ourip));
+	if (!ast_sockaddr_is_any(bindaddr)) {
+		ast_sockaddr_copy(ourip, bindaddr);
+		ast_debug(3, "Attached to given IP address\n");
 		return 0;
 	}
 	/* try to use our hostname */
 	if (gethostname(ourhost, sizeof(ourhost) - 1)) {
 		ast_log(LOG_WARNING, "Unable to get hostname\n");
 	} else {
-		hp = ast_gethostbyname(ourhost, &ahp);
-		if (hp) {
-			memcpy(ourip, hp->h_addr, sizeof(*ourip));
+		if (resolve_first(ourip, ourhost, PARSE_PORT_FORBID, family) == 0) {
+			/* reset port since resolve_first wipes this out */
+			ast_sockaddr_set_port(ourip, port);
 			return 0;
 		}
 	}
+	ast_debug(3, "Trying to check A.ROOT-SERVERS.NET and get our IP address for that connection\n");
 	/* A.ROOT-SERVERS.NET. */
-	if (inet_aton("198.41.0.4", &saddr) && !ast_ouraddrfor(&saddr, ourip))
+	if (!resolve_first(&root, "A.ROOT-SERVERS.NET", PARSE_PORT_FORBID, 0) &&
+	    !ast_ouraddrfor(&root, ourip)) {
+		/* reset port since resolve_first wipes this out */
+		ast_sockaddr_set_port(ourip, port);
 		return 0;
-	return get_local_address(ourip);
+	}
+	res = get_local_address(ourip);
+	ast_sockaddr_set_port(ourip, port);
+	return res;
 }
 

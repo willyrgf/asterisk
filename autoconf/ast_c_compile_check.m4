@@ -1,4 +1,4 @@
-# AST_C_COMPILE_CHECK can be used for testing for various items in header files
+# Check if a given expression will compile using a certain header.
 
 # AST_C_COMPILE_CHECK([package], [expression], [header file], [version], [description])
 AC_DEFUN([AST_C_COMPILE_CHECK],
@@ -22,7 +22,7 @@ AC_DEFUN([AST_C_COMPILE_CHECK],
 	    [   AC_MSG_RESULT(yes)
 		PBX_$1=1
 		AC_DEFINE([HAVE_$1], 1, [Define if your system has the $1 headers.])
-		AC_DEFINE([HAVE_$1_VERSION], $4, [Define $1 headers version])
+		m4_ifval([$4], [AC_DEFINE([HAVE_$1_VERSION], $4, [Define $1 headers version])])
 	    ],
 	    [       AC_MSG_RESULT(no) ] 
 	)

@@ -20,25 +20,102 @@
  * \brief Conditional logic dialplan functions
  * 
  * \author Anthony Minessale II
+ *
+ * \ingroup functions
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
 #include "asterisk/pbx.h"
-#include "asterisk/logger.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 
-static int isnull(struct ast_channel *chan, char *cmd, char *data,
+/*** DOCUMENTATION
+	<function name="ISNULL" language="en_US">
+		<synopsis>
+			Check if a value is NULL.
+		</synopsis>
+		<syntax>
+			<parameter name="data" required="true" />
+		</syntax>
+		<description>
+			<para>Returns <literal>1</literal> if NULL or <literal>0</literal> otherwise.</para>
+		</description>
+	</function>
+	<function name="SET" language="en_US">
+		<synopsis>
+			SET assigns a value to a channel variable.
+		</synopsis>
+		<syntax argsep="=">
+			<parameter name="varname" required="true" />
+			<parameter name="value" />
+		</syntax>
+		<description>
+		</description>
+	</function>
+	<function name="EXISTS" language="en_US">
+		<synopsis>
+			Test the existence of a value.
+		</synopsis>
+		<syntax>
+			<parameter name="data" required="true" />
+		</syntax>
+		<description>
+			<para>Returns <literal>1</literal> if exists, <literal>0</literal> otherwise.</para>
+		</description>
+	</function>
+	<function name="IF" language="en_US">
+		<synopsis>
+			Check for an expresion.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="expresion" required="true" />
+			<parameter name="retvalue" argsep=":" required="true">
+				<argument name="true" />
+				<argument name="false" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Returns the data following <literal>?</literal> if true, else the data following <literal>:</literal></para>
+		</description>	
+	</function>
+	<function name="IFTIME" language="en_US">
+		<synopsis>
+			Temporal Conditional.
+		</synopsis>
+		<syntax argsep="?">
+			<parameter name="timespec" required="true" />
+			<parameter name="retvalue" required="true" argsep=":">
+				<argument name="true" />
+				<argument name="false" />
+			</parameter>
+		</syntax>
+		<description>
+			<para>Returns the data following <literal>?</literal> if true, else the data following <literal>:</literal></para>
+		</description>
+	</function>
+	<function name="IMPORT" language="en_US">
+		<synopsis>
+			Retrieve the value of a variable from another channel.
+		</synopsis>
+		<syntax>
+			<parameter name="channel" required="true" />
+			<parameter name="variable" required="true" />
+		</syntax>
+		<description>
+		</description>
+	</function>
+ ***/
+
+static int isnull(struct ast_channel *chan, const char *cmd, char *data,
 		  char *buf, size_t len)
 {
 	strcpy(buf, data && *data ? "0" : "1");
@@ -46,7 +123,7 @@ static int isnull(struct ast_channel *chan, char *cmd, char *data,
 	return 0;
 }
 
-static int exists(struct ast_channel *chan, char *cmd, char *data, char *buf,
+static int exists(struct ast_channel *chan, const char *cmd, char *data, char *buf,
 		  size_t len)
 {
 	strcpy(buf, data && *data ? "1" : "0");
@@ -54,7 +131,7 @@ static int exists(struct ast_channel *chan, char *cmd, char *data, char *buf,
 	return 0;
 }
 
-static int iftime(struct ast_channel *chan, char *cmd, char *data, char *buf,
+static int iftime(struct ast_channel *chan, const char *cmd, char *data, char *buf,
 		  size_t len)
 {
 	struct ast_timing timing;
@@ -75,6 +152,7 @@ static int iftime(struct ast_channel *chan, char *cmd, char *data, char *buf,
 
 	if (!ast_build_timing(&timing, expr)) {
 		ast_log(LOG_WARNING, "Invalid Time Spec.\n");
+		ast_destroy_timing(&timing);
 		return -1;
 	}
 
@@ -84,11 +162,12 @@ static int iftime(struct ast_channel *chan, char *cmd, char *data, char *buf,
 		iffalse = ast_strip_quoted(iffalse, "\"", "\"");
 
 	ast_copy_string(buf, ast_check_timing(&timing) ? S_OR(iftrue, "") : S_OR(iffalse, ""), len);
+	ast_destroy_timing(&timing);
 
 	return 0;
 }
 
-static int acf_if(struct ast_channel *chan, char *cmd, char *data, char *buf,
+static int acf_if(struct ast_channel *chan, const char *cmd, char *data, char *buf,
 		  size_t len)
 {
 	AST_DECLARE_APP_ARGS(args1,
@@ -126,7 +205,7 @@ static int acf_if(struct ast_channel *chan, char *cmd, char *data, char *buf,
 	return 0;
 }
 
-static int set(struct ast_channel *chan, char *cmd, char *data, char *buf,
+static int set(struct ast_channel *chan, const char *cmd, char *data, char *buf,
 	       size_t len)
 {
 	char *varname;
@@ -148,41 +227,87 @@ static int set(struct ast_channel *chan, char *cmd, char *data, char *buf,
 	return 0;
 }
 
+static int set2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **str, ssize_t len)
+{
+	if (len > -1) {
+		ast_str_make_space(str, len == 0 ? strlen(data) : len);
+	}
+	return set(chan, cmd, data, ast_str_buffer(*str), ast_str_size(*str));
+}
+
+static int import_helper(struct ast_channel *chan, const char *cmd, char *data, char *buf, struct ast_str **str, ssize_t len)
+{
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(channel);
+		AST_APP_ARG(varname);
+	);
+	AST_STANDARD_APP_ARGS(args, data);
+	if (buf) {
+		*buf = '\0';
+	}
+
+	if (!ast_strlen_zero(args.varname)) {
+		struct ast_channel *chan2;
+
+		if ((chan2 = ast_channel_get_by_name(args.channel))) {
+			char *s = ast_alloca(strlen(args.varname) + 4);
+			sprintf(s, "${%s}", args.varname);
+			ast_channel_lock(chan2);
+			if (buf) {
+				pbx_substitute_variables_helper(chan2, s, buf, len);
+			} else {
+				ast_str_substitute_variables(str, len, chan2, s);
+			}
+			ast_channel_unlock(chan2);
+			chan2 = ast_channel_unref(chan2);
+		}
+	}
+
+	return 0;
+}
+
+static int import_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+{
+	return import_helper(chan, cmd, data, buf, NULL, len);
+}
+
+static int import_read2(struct ast_channel *chan, const char *cmd, char *data, struct ast_str **str, ssize_t len)
+{
+	return import_helper(chan, cmd, data, NULL, str, len);
+}
+
 static struct ast_custom_function isnull_function = {
 	.name = "ISNULL",
-	.synopsis = "NULL Test: Returns 1 if NULL or 0 otherwise",
-	.syntax = "ISNULL(<data>)",
 	.read = isnull,
+	.read_max = 2,
 };
 
 static struct ast_custom_function set_function = {
 	.name = "SET",
-	.synopsis = "SET assigns a value to a channel variable",
-	.syntax = "SET(<varname>=[<value>])",
 	.read = set,
+	.read2 = set2,
 };
 
 static struct ast_custom_function exists_function = {
 	.name = "EXISTS",
-	.synopsis = "Existence Test: Returns 1 if exists, 0 otherwise",
-	.syntax = "EXISTS(<data>)",
 	.read = exists,
+	.read_max = 2,
 };
 
 static struct ast_custom_function if_function = {
 	.name = "IF",
-	.synopsis =
-		"Conditional: Returns the data following '?' if true else the data following ':'",
-	.syntax = "IF(<expr>?[<true>][:<false>])",
 	.read = acf_if,
 };
 
 static struct ast_custom_function if_time_function = {
 	.name = "IFTIME",
-	.synopsis =
-		"Temporal Conditional: Returns the data following '?' if true else the data following ':'",
-	.syntax = "IFTIME(<timespec>?[<true>][:<false>])",
 	.read = iftime,
+};
+
+static struct ast_custom_function import_function = {
+	.name = "IMPORT",
+	.read = import_read,
+	.read2 = import_read2,
 };
 
 static int unload_module(void)
@@ -194,6 +319,7 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&exists_function);
 	res |= ast_custom_function_unregister(&if_function);
 	res |= ast_custom_function_unregister(&if_time_function);
+	res |= ast_custom_function_unregister(&import_function);
 
 	return res;
 }
@@ -207,6 +333,7 @@ static int load_module(void)
 	res |= ast_custom_function_register(&exists_function);
 	res |= ast_custom_function_register(&if_function);
 	res |= ast_custom_function_register(&if_time_function);
+	res |= ast_custom_function_register(&import_function);
 
 	return res;
 }

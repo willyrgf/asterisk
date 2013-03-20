@@ -9,34 +9,26 @@
 # the GNU General Public License
 #
 
--include ../menuselect.makeopts ../menuselect.makedeps
+-include $(ASTTOPDIR)/menuselect.makeopts $(ASTTOPDIR)/menuselect.makedeps
 
+MODULE_PREFIX=app
 MENUSELECT_CATEGORY=APPS
 MENUSELECT_DESCRIPTION=Applications
 
-ALL_C_MODS:=$(patsubst %.c,%,$(wildcard app_*.c))
-ALL_CC_MODS:=$(patsubst %.cc,%,$(wildcard app_*.cc))
-
-C_MODS:=$(filter-out $(MENUSELECT_APPS),$(ALL_C_MODS))
-CC_MODS:=$(filter-out $(MENUSELECT_APPS),$(ALL_CC_MODS))
-
-LOADABLE_MODS:=$(C_MODS) $(CC_MODS)
-
-ifneq ($(findstring apps,$(MENUSELECT_EMBED)),)
-  EMBEDDED_MODS:=$(LOADABLE_MODS)
-  LOADABLE_MODS:=
-endif
-
 MENUSELECT_OPTS_app_directory:=$(MENUSELECT_OPTS_app_voicemail)
 ifneq ($(findstring ODBC_STORAGE,$(MENUSELECT_OPTS_app_voicemail)),)
-MENUSELECT_DEPENDS_app_voicemail+=$(MENUSELECT_DEPENDS_ODBC_STORAGE)
-MENUSELECT_DEPENDS_app_directory+=$(MENUSELECT_DEPENDS_ODBC_STORAGE)
+  MENUSELECT_DEPENDS_app_voicemail+=$(MENUSELECT_DEPENDS_ODBC_STORAGE)
 endif
 ifneq ($(findstring IMAP_STORAGE,$(MENUSELECT_OPTS_app_voicemail)),)
-MENUSELECT_DEPENDS_app_voicemail+=$(MENUSELECT_DEPENDS_IMAP_STORAGE)
-MENUSELECT_DEPENDS_app_directory+=$(MENUSELECT_DEPENDS_IMAP_STORAGE)
+  MENUSELECT_DEPENDS_app_voicemail+=$(MENUSELECT_DEPENDS_IMAP_STORAGE)
 endif
 
 all: _all
 
 include $(ASTTOPDIR)/Makefile.moddir_rules
+
+ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
+  LIBS+= -lres_features.so -lres_ael_share.so -lres_monitor.so -lres_speech.so
+  LIBS+= -lres_smdi.so
+endif
+

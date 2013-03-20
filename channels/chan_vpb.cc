@@ -30,7 +30,8 @@
  */
 
 /*** MODULEINFO
-	<depend>vpbapi</depend>
+	<depend>vpb</depend>
+	<support_level>extended</support_level>
  ***/
 
 #include <vpbapi.h>
@@ -41,17 +42,12 @@ extern "C" {
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <stdio.h>
-#include <string.h>
-
 #include "asterisk/lock.h"
 #include "asterisk/utils.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/logger.h"
 #include "asterisk/module.h"
 #include "asterisk/pbx.h"
-#include "asterisk/options.h"
 #include "asterisk/callerid.h"
 #include "asterisk/dsp.h"
 #include "asterisk/features.h"
@@ -60,9 +56,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <sys/socket.h>
 #include <sys/time.h>
-#include <errno.h>
-#include <unistd.h>
-#include <stdlib.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <sys/ioctl.h>
@@ -100,27 +93,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static const char desc[] = "VoiceTronix V6PCI/V12PCI/V4PCI  API Support";
 static const char tdesc[] = "Standard VoiceTronix API Driver";
 static const char config[] = "vpb.conf";
-
-/* Backwards compatibility from trunk */
-#define ast_verb(level, ...) do { \
-	if (option_verbose >= level) { \
-		if (level >= 4) \
-			ast_verbose(VERBOSE_PREFIX_4 __VA_ARGS__); \
-		else if (level == 3) \
-			ast_verbose(VERBOSE_PREFIX_3 __VA_ARGS__); \
-		else if (level == 2) \
-			ast_verbose(VERBOSE_PREFIX_2 __VA_ARGS__); \
-		else if (level == 1) \
-			ast_verbose(VERBOSE_PREFIX_1 __VA_ARGS__); \
-		else \
-			ast_verbose(__VA_ARGS__); \
-	} \
-} while (0)
-
-#define ast_debug(level, ...) do {       \
-	if (option_debug >= (level)) \
-		ast_log(LOG_DEBUG, __VA_ARGS__); \
-} while (0)
 
 /* Default context for dialtone mode */
 static char context[AST_MAX_EXTENSION] = "default";
@@ -279,88 +251,88 @@ typedef enum {
 
 static struct vpb_pvt {
 
-	ast_mutex_t owner_lock;			/* Protect blocks that expect ownership to remain the same */
-	struct ast_channel *owner;		/* Channel who owns us, possibly NULL */
+	ast_mutex_t owner_lock;           /*!< Protect blocks that expect ownership to remain the same */
+	struct ast_channel *owner;        /*!< Channel who owns us, possibly NULL */
 
-	int golock;				/* Got owner lock ? */
+	int golock;                       /*!< Got owner lock ? */
 
-	int mode;				/* fxo/imediate/dialtone*/
-	int handle;				/* Handle for vpb interface */
+	int mode;                         /*!< fxo/imediate/dialtone */
+	int handle;                       /*!< Handle for vpb interface */
 
-	int state;				/* used to keep port state (internal to driver) */
+	int state;                        /*!< used to keep port state (internal to driver) */
 
-	int group;				/* Which group this port belongs to */
-	ast_group_t callgroup;                  /* Call group */
-	ast_group_t pickupgroup;                /* Pickup group */
+	int group;                        /*!< Which group this port belongs to */
+	ast_group_t callgroup;            /*!< Call group */
+	ast_group_t pickupgroup;          /*!< Pickup group */
 
 
-	char dev[256];				/* Device name, eg vpb/1-1 */
-	vpb_model_t vpb_model;			/* card model */
+	char dev[256];                    /*!< Device name, eg vpb/1-1 */
+	vpb_model_t vpb_model;            /*!< card model */
 
-	struct ast_frame f, fr;			/* Asterisk frame interface */
-	char buf[VPB_MAX_BUF];			/* Static buffer for reading frames */
+	struct ast_frame f, fr;           /*!< Asterisk frame interface */
+	char buf[VPB_MAX_BUF];            /*!< Static buffer for reading frames */
 
-	int dialtone;				/* NOT USED */
-	float txgain, rxgain;			/* Hardware gain control */
-	float txswgain, rxswgain;		/* Software gain control */
+	int dialtone;                     /*!< NOT USED */
+	float txgain, rxgain;             /*!< Hardware gain control */
+	float txswgain, rxswgain;         /*!< Software gain control */
 
-	int wantdtmf;				/* Waiting for DTMF. */
-	char context[AST_MAX_EXTENSION];	/* The context for this channel */
+	int wantdtmf;                     /*!< Waiting for DTMF. */
+	char context[AST_MAX_EXTENSION];  /*!< The context for this channel */
 
-	char ext[AST_MAX_EXTENSION];		/* DTMF buffer for the ext[ens] */
-	char language[MAX_LANGUAGE];		/* language being used */
-	char callerid[AST_MAX_EXTENSION];	/* CallerId used for directly connected phone */
-	int  callerid_type;			/* Caller ID type: 0=>none 1=>vpb 2=>AstV23 3=>AstBell */
+	char ext[AST_MAX_EXTENSION];      /*!< DTMF buffer for the ext[ens] */
+	char language[MAX_LANGUAGE];      /*!< language being used */
+	char callerid[AST_MAX_EXTENSION]; /*!< CallerId used for directly connected phone */
+	int  callerid_type;               /*!< Caller ID type: 0=>none 1=>vpb 2=>AstV23 3=>AstBell */
 	char cid_num[AST_MAX_EXTENSION];
 	char cid_name[AST_MAX_EXTENSION];
 
-	int dtmf_caller_pos;			/* DTMF CallerID detection (Brazil)*/
+	int dtmf_caller_pos;              /*!< DTMF CallerID detection (Brazil)*/
 
-	int lastoutput;				/* Holds the last Audio format output'ed */
-	int lastinput;				/* Holds the last Audio format input'ed */
+	int lastoutput;                   /*!< Holds the last Audio format output'ed */
+	int lastinput;                    /*!< Holds the last Audio format input'ed */
 	int last_ignore_dtmf;
 
-	void *busy_timer;			/* Void pointer for busy vpb_timer */
-	int busy_timer_id;			/* unique timer ID for busy timer */
+	void *busy_timer;                 /*!< Void pointer for busy vpb_timer */
+	int busy_timer_id;                /*!< unique timer ID for busy timer */
 
-	void *ringback_timer; 			/* Void pointer for ringback vpb_timer */
-	int ringback_timer_id;			/* unique timer ID for ringback timer */
+	void *ringback_timer;             /*!< Void pointer for ringback vpb_timer */
+	int ringback_timer_id;            /*!< unique timer ID for ringback timer */
 
-	void *ring_timer;			/* Void pointer for ring vpb_timer */
-	int ring_timer_id;			/* unique timer ID for ring timer */
+	void *ring_timer;                 /*!< Void pointer for ring vpb_timer */
+	int ring_timer_id;                /*!< unique timer ID for ring timer */
 
-	void *dtmfidd_timer;			/* Void pointer for DTMF IDD vpb_timer */
-	int dtmfidd_timer_id;			/* unique timer ID for DTMF IDD timer */
+	void *dtmfidd_timer;              /*!< Void pointer for DTMF IDD vpb_timer */
+	int dtmfidd_timer_id;             /*!< unique timer ID for DTMF IDD timer */
 
-	struct ast_dsp *vad;			/* AST  Voice Activation Detection dsp */
+	struct ast_dsp *vad;              /*!< AST  Voice Activation Detection dsp */
 
-	struct timeval lastgrunt;			/* time stamp of last grunt event */
+	struct timeval lastgrunt;         /*!< time stamp of last grunt event */
 
-	ast_mutex_t lock;			/* This one just protects bridge ptr below */
+	ast_mutex_t lock;                 /*!< This one just protects bridge ptr below */
 	vpb_bridge_t *bridge;
 
-	int stopreads; 				/* Stop reading...*/
-	int read_state;				/* Read state */
-	int chuck_count;			/* a count of packets weve chucked away!*/
-	pthread_t readthread;			/* For monitoring read channel. One per owned channel. */
+	int stopreads;                    /*!< Stop reading...*/
+	int read_state;                   /*!< Read state */
+	int chuck_count;                  /*!< a count of packets weve chucked away!*/
+	pthread_t readthread;             /*!< For monitoring read channel. One per owned channel. */
 
-	ast_mutex_t record_lock;		/* This one prevents reentering a record_buf block */
-	ast_mutex_t play_lock;			/* This one prevents reentering a play_buf block */
-	int  play_buf_time;			/* How long the last play_buf took */
-	struct timeval lastplay;		/* Last play time */
+	ast_mutex_t record_lock;          /*!< This one prevents reentering a record_buf block */
+	ast_mutex_t play_lock;            /*!< This one prevents reentering a play_buf block */
+	int  play_buf_time;               /*!< How long the last play_buf took */
+	struct timeval lastplay;          /*!< Last play time */
 
 	ast_mutex_t play_dtmf_lock;
 	char play_dtmf[16];
 
-	int faxhandled;				/* has a fax tone been handled ? */
+	int faxhandled;                   /*!< has a fax tone been handled ? */
 
-	struct vpb_pvt *next;			/* Next channel in list */
+	struct vpb_pvt *next;             /*!< Next channel in list */
 
 } *iflist = NULL;
 
-static struct ast_channel *vpb_new(struct vpb_pvt *i, enum ast_channel_state state, const char *context);
+static struct ast_channel *vpb_new(struct vpb_pvt *i, enum ast_channel_state state, const char *context, const char *linkedid);
 static void *do_chanreads(void *pvt);
-static struct ast_channel *vpb_request(const char *type, int format, void *data, int *cause);
+static struct ast_channel *vpb_request(const char *type, format_t format, const struct ast_channel *requestor, void *data, int *cause);
 static int vpb_digit_begin(struct ast_channel *ast, char digit);
 static int vpb_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int vpb_call(struct ast_channel *ast, char *dest, int timeout);
@@ -391,13 +363,19 @@ static struct ast_channel_tech vpb_tech = {
 	send_html: NULL,
 	exception: NULL,
 	bridge: ast_vpb_bridge,
+	early_bridge: NULL,
 	indicate: vpb_indicate,
 	fixup: vpb_fixup,
 	setoption: NULL,
 	queryoption: NULL,
 	transfer: NULL,
 	write_video: NULL,
-	bridged_channel: NULL
+	write_text: NULL,
+	bridged_channel: NULL,
+	func_channel_read: NULL,
+	func_channel_write: NULL,
+	get_base_channel: NULL,
+	set_base_channel: NULL
 };
 
 static struct ast_channel_tech vpb_tech_indicate = {
@@ -419,13 +397,19 @@ static struct ast_channel_tech vpb_tech_indicate = {
 	send_html: NULL,
 	exception: NULL,
 	bridge: ast_vpb_bridge,
+	early_bridge: NULL,
 	indicate: NULL,
 	fixup: vpb_fixup,
 	setoption: NULL,
 	queryoption: NULL,
 	transfer: NULL,
 	write_video: NULL,
-	bridged_channel: NULL
+	write_text: NULL,
+	bridged_channel: NULL,
+	func_channel_read: NULL,
+	func_channel_write: NULL,
+	get_base_channel: NULL,
+	set_base_channel: NULL
 };
 
 /* Can't get ast_vpb_bridge() working on v4pci without either a horrible 
@@ -454,10 +438,10 @@ static enum ast_bridge_result ast_vpb_bridge(struct ast_channel *c0, struct ast_
 	cs[1] = c1;
 
 	#ifdef BAD_V4PCI_BRIDGE
-	if (p0->vpb_model==vpb_model_v4pci)
+	if (p0->vpb_model == vpb_model_v4pci)
 		return AST_BRIDGE_FAILED_NOWARN;
 	#endif
-	if ( UseNativeBridge != 1){
+	if (UseNativeBridge != 1) {
 		return AST_BRIDGE_FAILED_NOWARN;
 	}
 
@@ -582,7 +566,7 @@ static enum ast_bridge_result ast_vpb_bridge(struct ast_channel *c0, struct ast_
 				/* Check if we need to break */
 				if (break_for_dtmf) {
 					break;
-				} else if ((f->frametype == AST_FRAME_DTMF) && ((f->subclass == '#') || (f->subclass == '*'))) {
+				} else if ((f->frametype == AST_FRAME_DTMF) && ((f->subclass.integer == '#') || (f->subclass.integer == '*'))) {
 					break;
 				}
 			} else {
@@ -661,8 +645,8 @@ static void get_callerid(struct vpb_pvt *p)
 			vpb_sleep(RING_SKIP);
 		}
 
-		ast_verb(4, "CID record - skipped %dms trailing ring\n",
-				 ast_tvdiff_ms(ast_tvnow(), cid_record_time));
+		ast_verb(4, "CID record - skipped %lldms trailing ring\n",
+				 (long long int) ast_tvdiff_ms(ast_tvnow(), cid_record_time));
 		cid_record_time = ast_tvnow();
 
 		/* Record bit between the rings which contains the callerid */
@@ -675,8 +659,8 @@ static void get_callerid(struct vpb_pvt *p)
 		vpb_wave_close_write(ws);
 #endif
 
-		ast_verb(4, "CID record - recorded %dms between rings\n",
-				 ast_tvdiff_ms(ast_tvnow(), cid_record_time));
+		ast_verb(4, "CID record - recorded %lldms between rings\n",
+				 (long long int) ast_tvdiff_ms(ast_tvnow(), cid_record_time));
 
 		ast_mutex_unlock(&p->record_lock);
 
@@ -710,7 +694,9 @@ static void get_callerid(struct vpb_pvt *p)
 					strcpy(p->cid_num, cli_struct->cldn);
 					strcpy(p->cid_name, cli_struct->cn);
 				}
-				ast_verb(4, "CID record - got [%s] [%s]\n", owner->cid.cid_num, owner->cid.cid_name);
+				ast_verb(4, "CID record - got [%s] [%s]\n",
+					S_COR(owner->caller.id.number.valid, owner->caller.id.number.str, ""),
+					S_COR(owner->caller.id.name.valid, owner->caller.id.name.str, ""));
 				snprintf(p->callerid, sizeof(p->callerid), "%s %s", cli_struct->cldn, cli_struct->cn);
 			} else {
 				ast_log(LOG_ERROR, "CID record - No caller id avalable on %s \n", p->dev);
@@ -795,19 +781,15 @@ static void get_callerid_ast(struct vpb_pvt *p)
 	} else {
 		ast_log(LOG_ERROR, "%s: Failed to create Caller ID struct\n", p->dev);
 	}
-	if (owner->cid.cid_num) {
-		ast_free(owner->cid.cid_num);
-		owner->cid.cid_num = NULL;
-	}
-	if (owner->cid.cid_name) {
-		ast_free(owner->cid.cid_name);
-		owner->cid.cid_name = NULL;
-	}
+	ast_party_number_free(&owner->caller.id.number);
+	ast_party_number_init(&owner->caller.id.number);
+	ast_party_name_free(&owner->caller.id.name);
+	ast_party_name_init(&owner->caller.id.name);
 	if (number)
 		ast_shrink_phone_number(number);
 	ast_set_callerid(owner,
 		number, name,
-		owner->cid.cid_ani ? NULL : number);
+		owner->caller.ani.number.valid ? NULL : number);
 	if (!ast_strlen_zero(name)){
 		snprintf(p->callerid, sizeof(p->callerid), "%s %s", number, name);
 	} else {
@@ -847,7 +829,6 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 {
 	struct ast_frame f = {AST_FRAME_CONTROL}; /* default is control, Clear rest. */
 	int endbridge = 0;
-	int res = 0;
 
 	ast_verb(4, "%s: handle_owned: got event: [%d=>%d]\n", p->dev, e->type, e->data);
 
@@ -855,7 +836,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 	switch (e->type) {
 	case VPB_RING:
 		if (p->mode == MODE_FXO) {
-			f.subclass = AST_CONTROL_RING;
+			f.subclass.integer = AST_CONTROL_RING;
 			vpb_timer_stop(p->ring_timer);
 			vpb_timer_start(p->ring_timer);
 		} else
@@ -883,7 +864,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 			if (p->owner->_state != AST_STATE_UP)  {
 				 /* Assume caller has hung up */
 				vpb_timer_stop(p->ring_timer);
-				f.subclass = AST_CONTROL_HANGUP;
+				f.subclass.integer = AST_CONTROL_HANGUP;
 			} else {
 				vpb_timer_stop(p->ring_timer);
 				f.frametype = AST_FRAME_NULL;
@@ -900,7 +881,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 			f.frametype = AST_FRAME_NULL;
 		} else if (p->owner->_state == AST_STATE_UP) {
 			f.frametype = AST_FRAME_DTMF;
-			f.subclass = e->data;
+			f.subclass.integer = e->data;
 		} else
 			f.frametype = AST_FRAME_NULL;
 		break;
@@ -909,16 +890,17 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 		if (e->data == VPB_BUSY || e->data == VPB_BUSY_308 || e->data == VPB_BUSY_AUST ) {
 			ast_debug(4, "%s: handle_owned: got event: BUSY\n", p->dev);
 			if (p->owner->_state == AST_STATE_UP) {
-				f.subclass = AST_CONTROL_HANGUP;
+				f.subclass.integer = AST_CONTROL_HANGUP;
 			} else {
-				f.subclass = AST_CONTROL_BUSY;
+				f.subclass.integer = AST_CONTROL_BUSY;
 			}
 		} else if (e->data == VPB_FAX) {
 			if (!p->faxhandled) {
 				if (strcmp(p->owner->exten, "fax")) {
 					const char *target_context = S_OR(p->owner->macrocontext, p->owner->context);
 
-					if (ast_exists_extension(p->owner, target_context, "fax", 1, p->owner->cid.cid_num)) {
+					if (ast_exists_extension(p->owner, target_context, "fax", 1,
+						S_COR(p->owner->caller.id.number.valid, p->owner->caller.id.number.str, NULL))) {
 						ast_verb(3, "Redirecting %s to fax extension\n", p->owner->name);
 						/* Save the DID/DNIS when we transfer the fax call to a "fax" extension */
 						pbx_builtin_setvar_helper(p->owner, "FAXEXTEN", p->owner->exten);
@@ -940,7 +922,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 				 * Timeout connection */
 				ast_verb(3, "grunt timeout\n");
 				ast_log(LOG_NOTICE, "%s: Line hangup due of lack of conversation\n", p->dev); 
-				f.subclass = AST_CONTROL_HANGUP;
+				f.subclass.integer = AST_CONTROL_HANGUP;
 			} else {
 				p->lastgrunt = ast_tvnow();
 				f.frametype = AST_FRAME_NULL;
@@ -953,13 +935,13 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 	case VPB_CALLEND:
 		#ifdef DIAL_WITH_CALL_PROGRESS
 		if (e->data == VPB_CALL_CONNECTED) {
-			f.subclass = AST_CONTROL_ANSWER;
+			f.subclass.integer = AST_CONTROL_ANSWER;
 		} else if (e->data == VPB_CALL_NO_DIAL_TONE || e->data == VPB_CALL_NO_RING_BACK) {
-			f.subclass =  AST_CONTROL_CONGESTION;
+			f.subclass.integer =  AST_CONTROL_CONGESTION;
 		} else if (e->data == VPB_CALL_NO_ANSWER || e->data == VPB_CALL_BUSY) {
-			f.subclass = AST_CONTROL_BUSY;
+			f.subclass.integer = AST_CONTROL_BUSY;
 		} else if (e->data  == VPB_CALL_DISCONNECTED) {
-			f.subclass = AST_CONTROL_HANGUP;
+			f.subclass.integer = AST_CONTROL_HANGUP;
 		}
 		#else
 		ast_log(LOG_NOTICE, "%s: Got call progress callback but blind dialing \n", p->dev); 
@@ -968,13 +950,13 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 		break;
 
 	case VPB_STATION_OFFHOOK:
-		f.subclass = AST_CONTROL_ANSWER;
+		f.subclass.integer = AST_CONTROL_ANSWER;
 		break;
 
 	case VPB_DROP:
 		if ((p->mode == MODE_FXO) && (UseLoopDrop)) { /* ignore loop drop on stations */
 			if (p->owner->_state == AST_STATE_UP) {
-				f.subclass = AST_CONTROL_HANGUP;
+				f.subclass.integer = AST_CONTROL_HANGUP;
 			} else {
 				f.frametype = AST_FRAME_NULL;
 			}
@@ -982,17 +964,17 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 		break;
 	case VPB_LOOP_ONHOOK:
 		if (p->owner->_state == AST_STATE_UP) {
-			f.subclass = AST_CONTROL_HANGUP;
+			f.subclass.integer = AST_CONTROL_HANGUP;
 		} else {
 			f.frametype = AST_FRAME_NULL;
 		}
 		break;
 	case VPB_STATION_ONHOOK:
-		f.subclass = AST_CONTROL_HANGUP;
+		f.subclass.integer = AST_CONTROL_HANGUP;
 		break;
 
 	case VPB_STATION_FLASH:
-		f.subclass = AST_CONTROL_FLASH;
+		f.subclass.integer = AST_CONTROL_FLASH;
 		break;
 
 	/* Called when dialing has finished and ringing starts
@@ -1000,7 +982,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 	 */
 	case VPB_DIALEND:
 		if (p->state < 5) {
-			f.subclass = AST_CONTROL_ANSWER;
+			f.subclass.integer = AST_CONTROL_ANSWER;
 			ast_verb(2, "%s: Dialend\n", p->dev);
 		} else {
 			f.frametype = AST_FRAME_NULL;
@@ -1072,7 +1054,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 	}
 
 	if (endbridge) {
-		res = ast_mutex_unlock(&p->lock);
+		ast_mutex_unlock(&p->lock);
 /*
 		ast_verb(4, "%s: unLOCKING in handle_owned [%d]\n", p->dev,res);
 */
@@ -1080,7 +1062,7 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 	}
 
 	ast_verb(4, "%s: handle_owned: Prepared frame type[%d]subclass[%d], bridge=%p owner=[%s]\n",
-			p->dev, f.frametype, f.subclass, (void *)p->bridge, p->owner->name);
+			p->dev, f.frametype, f.subclass.integer, (void *)p->bridge, p->owner->name);
 
 	/* Trylock used here to avoid deadlock that can occur if we
 	 * happen to be in here handling an event when hangup is called
@@ -1093,10 +1075,10 @@ static inline int monitor_handle_owned(struct vpb_pvt *p, VPB_EVENT *e)
 			ast_verb(4, "%s: handled_owned: Queued Frame to [%s]\n", p->dev, p->owner->name);
 		} else {
 			ast_verbose("%s: handled_owned: Missed event %d/%d \n",
-				p->dev, f.frametype, f.subclass);
+				p->dev, f.frametype, f.subclass.integer);
 		}
 	}
-	res = ast_mutex_unlock(&p->lock);
+	ast_mutex_unlock(&p->lock);
 /*
 	ast_verb(4, "%s: unLOCKING in handle_owned [%d]\n", p->dev,res);
 */
@@ -1133,7 +1115,7 @@ static inline int monitor_handle_notowned(struct vpb_pvt *p, VPB_EVENT *e)
 		break;
 	case VPB_RING:
 		if (p->mode == MODE_FXO) /* FXO port ring, start * */ {
-			vpb_new(p, AST_STATE_RING, p->context);
+			vpb_new(p, AST_STATE_RING, p->context, NULL);
 			if (UsePolarityCID != 1) {
 				if (p->callerid_type == 1) {
 					ast_verb(4, "Using VPB Caller ID\n");
@@ -1157,7 +1139,7 @@ static inline int monitor_handle_notowned(struct vpb_pvt *p, VPB_EVENT *e)
 
 	case VPB_STATION_OFFHOOK:
 		if (p->mode == MODE_IMMEDIATE) {
-			vpb_new(p,AST_STATE_RING, p->context);
+			vpb_new(p,AST_STATE_RING, p->context, NULL);
 		} else {
 			ast_verb(4, "%s: handle_notowned: playing dialtone\n", p->dev);
 			playtone(p->handle, &Dialtone);
@@ -1202,7 +1184,7 @@ static inline int monitor_handle_notowned(struct vpb_pvt *p, VPB_EVENT *e)
 			if (ast_exists_extension(NULL, p->context, p->ext, 1, p->callerid)){
 				ast_verb(4, "%s: handle_notowned: DTMF IDD timer out, matching on [%s] in [%s]\n", p->dev, p->ext, p->context);
 
-				vpb_new(p, AST_STATE_RING, p->context);
+				vpb_new(p, AST_STATE_RING, p->context, NULL);
 			}
 		} else if (e->data == p->ring_timer_id) {
 			/* We didnt get another ring in time! */
@@ -1278,11 +1260,11 @@ static inline int monitor_handle_notowned(struct vpb_pvt *p, VPB_EVENT *e)
 				vpb_timer_start(p->dtmfidd_timer);
 			} else {
 				ast_verb(4, "%s: handle_notowned: Matched on [%s] in [%s]\n", p->dev, p->ext , p->context);
-				vpb_new(p, AST_STATE_UP, p->context);
+				vpb_new(p, AST_STATE_UP, p->context, NULL);
 			}
 		} else if (!ast_canmatch_extension(NULL, p->context, p->ext, 1, p->callerid)) {
 			if (ast_exists_extension(NULL, "default", p->ext, 1, p->callerid)) {
-				vpb_new(p, AST_STATE_UP, "default");
+				vpb_new(p, AST_STATE_UP, "default", NULL);
 			} else if (!ast_canmatch_extension(NULL, "default", p->ext, 1, p->callerid)) {
 				ast_verb(4, "%s: handle_notowned: can't match anything in %s or default\n", p->dev, p->context);
 				playtone(p->handle, &Busytone);
@@ -1526,7 +1508,7 @@ static struct vpb_pvt *mkif(int board, int channel, int mode, int gains, float t
 	tmp->callgroup = callgroup;
 	tmp->pickupgroup = pickupgroup;
 
-	/* Initilize dtmf caller ID position variable */
+	/* Initialize dtmf caller ID position variable */
 	tmp->dtmf_caller_pos = 0;
 
 	ast_copy_string(tmp->language, language, sizeof(tmp->language));
@@ -1650,10 +1632,10 @@ static struct vpb_pvt *mkif(int board, int channel, int mode, int gains, float t
 	}
 	if (use_ast_dtmfdet) {
 		tmp->vad = ast_dsp_new();
-		ast_dsp_set_features(tmp->vad, DSP_FEATURE_DTMF_DETECT);
-		ast_dsp_digitmode(tmp->vad, DSP_DIGITMODE_DTMF);
+		ast_dsp_set_features(tmp->vad, DSP_FEATURE_DIGIT_DETECT);
+		ast_dsp_set_digitmode(tmp->vad, DSP_DIGITMODE_DTMF);
 		if (relaxdtmf)
-			ast_dsp_digitmode(tmp->vad, DSP_DIGITMODE_DTMF|DSP_DIGITMODE_RELAXDTMF);
+			ast_dsp_set_digitmode(tmp->vad, DSP_DIGITMODE_DTMF|DSP_DIGITMODE_RELAXDTMF);
 	} else {
 		tmp->vad = NULL;
 	}
@@ -1673,7 +1655,6 @@ static int vpb_indicate(struct ast_channel *ast, int condition, const void *data
 {
 	struct vpb_pvt *p = (struct vpb_pvt *)ast->tech_pvt;
 	int res = 0;
-	int tmp = 0;
 
 	if (use_ast_ind == 1) {
 		ast_verb(4, "%s: vpb_indicate called when using Ast Indications !?!\n", p->dev);
@@ -1737,17 +1718,13 @@ static int vpb_indicate(struct ast_channel *ast, int condition, const void *data
 		res = 0;
 		break;
 	}
-	tmp = ast_mutex_unlock(&p->lock);
-/*
-	ast_verb(4, "%s: unLOCKING in indicate [%d]\n", p->dev,tmp);
-*/
+	ast_mutex_unlock(&p->lock);
 	return res;
 }
 
 static int vpb_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 {
 	struct vpb_pvt *p = (struct vpb_pvt *)newchan->tech_pvt;
-	int res = 0;
 
 /*
 	ast_verb(4, "%s: LOCKING in fixup \n", p->dev);
@@ -1770,10 +1747,7 @@ static int vpb_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 		}
 	}
 
-	res = ast_mutex_unlock(&p->lock);
-/*
-	ast_verb(4, "%s: unLOCKING in fixup [%d]\n", p->dev,res);
-*/
+	ast_mutex_unlock(&p->lock);
 	return 0;
 }
 
@@ -1786,7 +1760,6 @@ static int vpb_digit_end(struct ast_channel *ast, char digit, unsigned int durat
 {
 	struct vpb_pvt *p = (struct vpb_pvt *)ast->tech_pvt;
 	char s[2];
-	int res = 0;
 
 	if (use_ast_dtmf) {
 		ast_verb(4, "%s: vpb_digit: asked to play digit[%c] but we are using asterisk dtmf play back?!\n", p->dev, digit);
@@ -1809,10 +1782,7 @@ static int vpb_digit_end(struct ast_channel *ast, char digit, unsigned int durat
 	strncat(p->play_dtmf, s, sizeof(*p->play_dtmf) - strlen(p->play_dtmf) - 1);
 	ast_mutex_unlock(&p->play_dtmf_lock);
 
-	res = ast_mutex_unlock(&p->lock);
-/*
-	ast_verb(4, "%s: unLOCKING in digit [%d]\n", p->dev,res);
-*/
+	ast_mutex_unlock(&p->lock);
 	return 0;
 }
 
@@ -1823,7 +1793,6 @@ static int vpb_call(struct ast_channel *ast, char *dest, int timeout)
 	int res = 0, i;
 	char *s = strrchr(dest, '/');
 	char dialstring[254] = "";
-	int tmp = 0;
 
 /*
 	ast_verb(4, "%s: LOCKING in call \n", p->dev);
@@ -1846,10 +1815,7 @@ static int vpb_call(struct ast_channel *ast, char *dest, int timeout)
 
 	if (ast->_state != AST_STATE_DOWN && ast->_state != AST_STATE_RESERVED) {
 		ast_log(LOG_WARNING, "vpb_call on %s neither down nor reserved!\n", ast->name);
-		tmp = ast_mutex_unlock(&p->lock);
-/*
-		ast_verb(4, "%s: unLOCKING in call [%d]\n", p->dev,tmp);
-*/
+		ast_mutex_unlock(&p->lock);
 		return -1;
 	}
 	if (p->mode != MODE_FXO)  /* Station port, ring it. */
@@ -1918,10 +1884,7 @@ static int vpb_call(struct ast_channel *ast, char *dest, int timeout)
 		ast_pthread_create(&p->readthread, NULL, do_chanreads, (void *)p);
 	}
 
-	tmp = ast_mutex_unlock(&p->lock);
-/*
-	ast_verb(4, "%s: unLOCKING in call [%d]\n", p->dev,tmp);
-*/
+	ast_mutex_unlock(&p->lock);
 	return res;
 }
 
@@ -1930,7 +1893,6 @@ static int vpb_hangup(struct ast_channel *ast)
 	struct vpb_pvt *p = (struct vpb_pvt *)ast->tech_pvt;
 	VPB_EVENT je;
 	char str[VPB_MAX_STR];
-	int res = 0;
 
 /*
 	ast_verb(4, "%s: LOCKING in hangup \n", p->dev);
@@ -1942,10 +1904,7 @@ static int vpb_hangup(struct ast_channel *ast)
 
 	if (!ast->tech || !ast->tech_pvt) {
 		ast_log(LOG_WARNING, "%s: channel not connected?\n", ast->name);
-		res = ast_mutex_unlock(&p->lock);
-/*
-		ast_verb(4, "%s: unLOCKING in hangup [%d]\n", p->dev,res);
-*/
+		ast_mutex_unlock(&p->lock);
 		/* Free up ast dsp if we have one */
 		if (use_ast_dtmfdet && p->vad) {
 			ast_dsp_free(p->vad);
@@ -2030,21 +1989,13 @@ static int vpb_hangup(struct ast_channel *ast)
 	ast_verb(2, "%s: Hangup complete\n", ast->name);
 
 	restart_monitor();
-/*
-	ast_verb(4, "%s: LOCKING in hangup count[%d] owner[%d] \n", p->dev, p->lock.__m_count,p->lock.__m_owner);
-*/
-	res = ast_mutex_unlock(&p->lock);
-/*
-	ast_verb(4, "%s: unLOCKING in hangup [%d]\n", p->dev,res);
-	ast_verb(4, "%s: LOCKING in hangup count[%d] owner[%d] \n", p->dev, p->lock.__m_count,p->lock.__m_owner);
-*/
+	ast_mutex_unlock(&p->lock);
 	return 0;
 }
 
 static int vpb_answer(struct ast_channel *ast)
 {
 	struct vpb_pvt *p = (struct vpb_pvt *)ast->tech_pvt;
-	int res = 0;
 /*
 	VPB_EVENT je;
 	int ret;
@@ -2095,10 +2046,7 @@ static int vpb_answer(struct ast_channel *ast)
 		ast_verb(4, "%s: Re-enabling Loop Drop detection\n", p->dev);
 		vpb_enable_event(p->handle, VPB_MDROP);
 	}
-	res = ast_mutex_unlock(&p->lock);
-/*
-	ast_verb(4, "%s: unLOCKING in answer [%d]\n", p->dev,res);
-*/
+	ast_mutex_unlock(&p->lock);
 	return 0;
 }
 
@@ -2114,7 +2062,7 @@ static struct ast_frame *vpb_read(struct ast_channel *ast)
 	return &f;
 }
 
-static inline AudioCompress ast2vpbformat(int ast_format)
+static inline AudioCompress ast2vpbformat(format_t ast_format)
 {
 	switch (ast_format) {
 	case AST_FORMAT_ALAW:
@@ -2130,7 +2078,7 @@ static inline AudioCompress ast2vpbformat(int ast_format)
 	}
 }
 
-static inline const char * ast2vpbformatname(int ast_format)
+static inline const char * ast2vpbformatname(format_t ast_format)
 {
 	switch(ast_format) {
 	case AST_FORMAT_ALAW:
@@ -2146,7 +2094,7 @@ static inline const char * ast2vpbformatname(int ast_format)
 	}
 }
 
-static inline int astformatbits(int ast_format)
+static inline int astformatbits(format_t ast_format)
 {
 	switch (ast_format) {
 	case AST_FORMAT_SLINEAR:
@@ -2192,7 +2140,7 @@ static int vpb_write(struct ast_channel *ast, struct ast_frame *frame)
 /*		ast_mutex_unlock(&p->lock); */
 		return 0;
 	} else if (ast->_state != AST_STATE_UP) {
-		ast_verb(4, "%s: vpb_write: Attempt to Write frame type[%d]subclass[%d] on not up chan(state[%d])\n",ast->name, frame->frametype, frame->subclass,ast->_state);
+		ast_verb(4, "%s: vpb_write: Attempt to Write frame type[%d]subclass[%s] on not up chan(state[%d])\n", ast->name, frame->frametype, ast_getformatname(frame->subclass.codec), ast->_state);
 		p->lastoutput = -1;
 /*		ast_mutex_unlock(&p->lock); */
 		return 0;
@@ -2200,9 +2148,9 @@ static int vpb_write(struct ast_channel *ast, struct ast_frame *frame)
 /*	ast_debug(1, "%s: vpb_write: Checked frame type..\n", p->dev); */
 
 
-	fmt = ast2vpbformat(frame->subclass);
+	fmt = ast2vpbformat(frame->subclass.codec);
 	if (fmt < 0) {
-		ast_log(LOG_WARNING, "%s: vpb_write: Cannot handle frames of %d format!\n", ast->name, frame->subclass);
+		ast_log(LOG_WARNING, "%s: vpb_write: Cannot handle frames of %s format!\n", ast->name, ast_getformatname(frame->subclass.codec));
 		return -1;
 	}
 
@@ -2226,7 +2174,7 @@ static int vpb_write(struct ast_channel *ast, struct ast_frame *frame)
 	/* Check if we have set up the play_buf */
 	if (p->lastoutput == -1) {
 		vpb_play_buf_start(p->handle, fmt);
-		ast_verb(2, "%s: vpb_write: Starting play mode (codec=%d)[%s]\n", p->dev, fmt, ast2vpbformatname(frame->subclass));
+		ast_verb(2, "%s: vpb_write: Starting play mode (codec=%d)[%s]\n", p->dev, fmt, ast2vpbformatname(frame->subclass.codec));
 		p->lastoutput = fmt;
 		ast_mutex_unlock(&p->play_lock);
 		return 0;
@@ -2243,7 +2191,7 @@ static int vpb_write(struct ast_channel *ast, struct ast_frame *frame)
 
 	/* Apply extra gain ! */
 	if( p->txswgain > MAX_VPB_GAIN )
-		a_gain_vector(p->txswgain - MAX_VPB_GAIN , (short*)frame->data, frame->datalen / sizeof(short));
+		a_gain_vector(p->txswgain - MAX_VPB_GAIN , (short*)frame->data.ptr, frame->datalen / sizeof(short));
 
 /*	ast_debug(1, "%s: vpb_write: Applied gain..\n", p->dev); */
 /*	ast_debug(1, "%s: vpb_write: play_buf_time %d\n", p->dev, p->play_buf_time); */
@@ -2251,9 +2199,9 @@ static int vpb_write(struct ast_channel *ast, struct ast_frame *frame)
 	if ((p->read_state == 1) && (p->play_buf_time < 5)){
 		play_buf_time_start = ast_tvnow();
 /*		res = vpb_play_buf_sync(p->handle, (char *)frame->data, tdiff * 8 * 2); */
-		res = vpb_play_buf_sync(p->handle, (char *)frame->data, frame->datalen);
+		res = vpb_play_buf_sync(p->handle, (char *)frame->data.ptr, frame->datalen);
 		if(res == VPB_OK) {
-			short * data = (short*)frame->data;
+			short * data = (short*)frame->data.ptr;
 			ast_verb(6, "%s: vpb_write: Wrote chan (codec=%d) %d %d\n", p->dev, fmt, data[0], data[1]);
 		}
 		p->play_buf_time = ast_tvdiff_ms(ast_tvnow(), play_buf_time_start);
@@ -2276,7 +2224,8 @@ static void *do_chanreads(void *pvt)
 	struct ast_frame *fr = &p->fr;
 	char *readbuf = ((char *)p->buf) + AST_FRIENDLY_OFFSET;
 	int bridgerec = 0;
-	int afmt, readlen, res, trycnt=0;
+	format_t afmt;
+	int readlen, res, trycnt=0;
 	AudioCompress fmt;
 	int ignore_dtmf;
 	const char * getdtmf_var = NULL;
@@ -2380,7 +2329,7 @@ static void *do_chanreads(void *pvt)
 		}
 		fmt = ast2vpbformat(afmt);
 		if (fmt < 0) {
-			ast_log(LOG_WARNING, "%s: Record failure (unsupported format %d)\n", p->dev, afmt);
+			ast_log(LOG_WARNING, "%s: Record failure (unsupported format %s)\n", p->dev, ast_getformatname(afmt));
 			return NULL;
 		}
 		readlen = VPB_SAMPLES * astformatbits(afmt) / 8;
@@ -2408,16 +2357,16 @@ static void *do_chanreads(void *pvt)
 				a_gain_vector(p->rxswgain - MAX_VPB_GAIN, (short *)readbuf, readlen / sizeof(short));
 			ast_verb(6, "%s: chanreads: applied gain\n", p->dev);
 
-			fr->subclass = afmt;
-			fr->data = readbuf;
+			fr->subclass.codec = afmt;
+			fr->data.ptr = readbuf;
 			fr->datalen = readlen;
 			fr->frametype = AST_FRAME_VOICE;
 
-			if ((use_ast_dtmfdet)&&(p->vad)) {
-				fr = ast_dsp_process(p->owner,p->vad,fr);
+			if ((use_ast_dtmfdet) && (p->vad)) {
+				fr = ast_dsp_process(p->owner, p->vad, fr);
 				if (fr && (fr->frametype == AST_FRAME_DTMF)) {
-					ast_debug(1, "%s: chanreads: Detected DTMF '%c'\n", p->dev, fr->subclass);
-				} else if (fr->subclass == 'f') {
+					ast_debug(1, "%s: chanreads: Detected DTMF '%c'\n", p->dev, fr->subclass.integer);
+				} else if (fr->subclass.integer == 'f') {
 				}
 			}
 			/* Using trylock here to prevent deadlock when channel is hungup
@@ -2483,7 +2432,7 @@ static void *do_chanreads(void *pvt)
 	return NULL;
 }
 
-static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state state, const char *context)
+static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state state, const char *context, const char *linkedid)
 {
 	struct ast_channel *tmp; 
 	char cid_num[256];
@@ -2495,7 +2444,7 @@ static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state st
 	}
 	ast_verb(4, "%s: New call for context [%s]\n", me->dev, context);
 	    
-	tmp = ast_channel_alloc(1, state, 0, 0, "", me->ext, me->context, 0, "%s", me->dev);
+	tmp = ast_channel_alloc(1, state, 0, 0, "", me->ext, me->context, linkedid, 0, "%s", me->dev);
 	if (tmp) {
 		if (use_ast_ind == 1){
 			tmp->tech = &vpb_tech_indicate;
@@ -2558,9 +2507,9 @@ static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state st
 	return tmp;
 }
 
-static struct ast_channel *vpb_request(const char *type, int format, void *vdata, int *cause) 
+static struct ast_channel *vpb_request(const char *type, format_t format, const struct ast_channel *requestor, void *vdata, int *cause) 
 {
-	int oldformat;
+	format_t oldformat;
 	struct vpb_pvt *p;
 	struct ast_channel *tmp = NULL;
 	char *sepstr, *data = (char *)vdata, *name;
@@ -2570,7 +2519,7 @@ static struct ast_channel *vpb_request(const char *type, int format, void *vdata
 	oldformat = format;
 	format &= prefformat;
 	if (!format) {
-		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%d'\n", oldformat);
+		ast_log(LOG_NOTICE, "Asked to get a channel of unsupported format '%s'\n", ast_getformatname(oldformat));
 		return NULL;
 	}
 
@@ -2590,13 +2539,13 @@ static struct ast_channel *vpb_request(const char *type, int format, void *vdata
 		if (group == -1) {
 			if (strncmp(s, p->dev + 4, sizeof p->dev) == 0) {
 				if (!p->owner) {
-					tmp = vpb_new(p, AST_STATE_DOWN, p->context);
+					tmp = vpb_new(p, AST_STATE_DOWN, p->context, requestor ? requestor->linkedid : NULL);
 					break;
 				}
 			}
 		} else {
 			if ((p->group == group) && (!p->owner)) {
-				tmp = vpb_new(p, AST_STATE_DOWN, p->context);
+				tmp = vpb_new(p, AST_STATE_DOWN, p->context, requestor ? requestor->linkedid : NULL);
 				break;
 			}
 		}
@@ -2699,6 +2648,7 @@ static enum ast_module_load_result load_module()
 {
 	struct ast_config *cfg;
 	struct ast_variable *v;
+	struct ast_flags config_flags = { 0 };
 	struct vpb_pvt *tmp;
 	int board = 0, group = 0;
 	ast_group_t	callgroup = 0;
@@ -2727,10 +2677,10 @@ static enum ast_module_load_result load_module()
 	for (int i = 0; i < num_cards; ++i)
 		ports_per_card[i] = vpb_get_ports_per_card(i);
 
-	cfg = ast_config_load(config);
+	cfg = ast_config_load(config, config_flags);
 
 	/* We *must* have a config file otherwise stop immediately */
-	if (!cfg) {
+	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
 		ast_log(LOG_ERROR, "Unable to load config %s\n", config);
 		return AST_MODULE_LOAD_DECLINE;
 	}  

@@ -8,10 +8,16 @@
 ; of the logging system.
 
 [general]
+;
 ; Customize the display of debug message time stamps
 ; this example is the ISO 8601 date format (yyyy-mm-dd HH:MM:SS)
-; see strftime(3) Linux manual for format specifiers
-;dateformat=%F %T
+;
+; see strftime(3) Linux manual for format specifiers.  Note that there is also
+; a fractional second parameter which may be used in this field.  Use %1q
+; for tenths, %2q for hundredths, etc.
+;
+;dateformat=%F %T       ; ISO 8601 date format
+;dateformat=%F %T.%3q   ; with milliseconds
 ;
 ; This appends the hostname to the name of the log files.
 ;appendhostname = yes
@@ -20,9 +26,35 @@
 ; (defaults to yes).
 ;queue_log = no
 ;
-; This determines whether or not we log generic events to a file
-; (defaults to yes).
-;event_log = no
+; Determines whether the queue_log always goes to a file, even
+; when a realtime backend is present (defaults to no).
+;queue_log_to_file = yes
+;
+; Set the queue_log filename
+; (defaults to queue_log)
+;queue_log_name = queue_log
+;
+; Log rotation strategy:
+; sequential:  Rename archived logs in order, such that the newest
+;              has the highest sequence number [default].  When
+;              exec_after_rotate is set, ${filename} will specify
+;              the new archived logfile.
+; rotate:  Rotate all the old files, such that the oldest has the
+;          highest sequence number [this is the expected behavior
+;          for Unix administrators].  When exec_after_rotate is
+;          set, ${filename} will specify the original root filename.
+; timestamp:  Rename the logfiles using a timestamp instead of a
+;             sequence number when "logger rotate" is executed.
+;             When exec_after_rotate is set, ${filename} will
+;             specify the new archived logfile.
+;rotatestrategy = rotate
+;
+; Run a system command after rotating the files.  This is mainly
+; useful for rotatestrategy=rotate. The example allows the last
+; two archive files to remain uncompressed, but after that point,
+; they are compressed on disk.
+;
+; exec_after_rotate=gzip -9 ${filename}.2
 ;
 ;
 ; For each file, specify what to log.
@@ -43,12 +75,22 @@
 ;    error
 ;    verbose
 ;    dtmf
+;    fax
 ;
 ; Special filename "console" represents the system console
 ;
 ; Filenames can either be relative to the standard Asterisk log directory
 ; (see 'astlogdir' in asterisk.conf), or absolute paths that begin with
 ; '/'.
+;
+; Special level name "*" means all levels, even dynamic levels registered
+; by modules after the logger has been initialized (this means that loading
+; and unloading modules that create/remove dynamic logger levels will result
+; in these levels being included on filenames that have a level name of "*",
+; without any need to perform a 'logger reload' or similar operation). Note
+; that there is no value in specifying both "*" and specific level names for
+; a filename; the "*" level means all levels, and the remaining level names
+; will be ignored.
 ;
 ; We highly recommend that you DO NOT turn on debug mode if you are simply
 ; running a production system.  Debug mode turns on a LOT of extra messages,
@@ -65,9 +107,9 @@
 console => notice,warning,error
 ;console => notice,warning,error,debug
 messages => notice,warning,error
-;full => notice,warning,error,debug,verbose
+;full => notice,warning,error,debug,verbose,dtmf,fax
 
-;syslog keyword : This special keyword logs to syslog facility 
+;syslog keyword : This special keyword logs to syslog facility
 ;
 ;syslog.local0 => notice,warning,error
 ;

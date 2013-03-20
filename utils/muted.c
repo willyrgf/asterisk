@@ -35,6 +35,12 @@
  *
  */
 
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
+#include "asterisk/autoconfig.h"
+
 #ifdef __Darwin__
 #include <CoreAudio/AudioHardware.h> 
 #include <sys/types.h>
@@ -54,8 +60,6 @@
 #include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
-
-#include "asterisk/autoconfig.h"
 
 #define ast_strlen_zero(a)	(!(*(a)))
 
@@ -434,19 +438,19 @@ static float mutevol = 0;
 #endif
 
 #ifndef __Darwin__
-static int mutedlevel(int orig, int mutelevel)
+static int mutedlevel(int orig, int level)
 {
 	int l = orig >> 8;
 	int r = orig & 0xff;
-	l = (float)(mutelevel) * (float)(l) / 100.0;
-	r = (float)(mutelevel) * (float)(r) / 100.0;
+	l = (float)(level) * (float)(l) / 100.0;
+	r = (float)(level) * (float)(r) / 100.0;
 
 	return (l << 8) | r;
 #else
-static float mutedlevel(float orig, float mutelevel)
+static float mutedlevel(float orig, float level)
 {
 	float master = orig;
-	master = mutelevel * master / 100.0;
+	master = level * master / 100.0;
 	return master;
 #endif
 	
@@ -704,7 +708,7 @@ int main(int argc, char *argv[])
 		fclose(astf);
 		exit(1);
 	}
-#if HAVE_WORKING_FORK
+#ifdef HAVE_WORKING_FORK
 	if (needfork) {
 #ifndef HAVE_SBIN_LAUNCHD
 		if (daemon(0,0) < 0) {
@@ -740,7 +744,7 @@ int main(int argc, char *argv[])
 		exit(1);
 #endif /* !defined(HAVE_SBIN_LAUNCHD */
 	}
-#endif /* HAVE_WORKING_FORK */
+#endif
 	for(;;) {
 		if (wait_event()) {
 			fclose(astf);

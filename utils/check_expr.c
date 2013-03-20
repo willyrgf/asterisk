@@ -16,12 +16,101 @@
  * at the top of the source tree.
  */
 
-#include <stdio.h>
-#include <stddef.h>
-#include <stdarg.h>
-#include <string.h>
-#include <stdlib.h>
-#include <../include/asterisk/ast_expr.h>
+/*** MODULEINFO
+	<support_level>extended</support_level>
+ ***/
+
+#include "asterisk.h"
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
+#include "asterisk/ast_expr.h"
+
+#define AST_API_MODULE 1
+#include "asterisk/inline_api.h"
+
+#define AST_API_MODULE 1
+#include "asterisk/lock.h"
+
+#ifndef DEBUG_THREADS
+enum ast_lock_type {
+	        AST_MUTEX,
+	        AST_RDLOCK,
+	        AST_WRLOCK,
+};
+#endif
+#ifdef DEBUG_THREADLOCALS
+#define MALLOC_FAILURE_MSG \
+	ast_log(LOG_ERROR, "Memory Allocation Failure in function %s at line %d of %s\n", func, lineno, file);
+
+void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func);
+
+void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, int lineno, const char *func)
+{
+	void *p;
+
+	if (!(p = calloc(num, len)))
+		MALLOC_FAILURE_MSG;
+
+	return p;
+}
+#endif
+
+#if !defined(LOW_MEMORY)
+#ifdef HAVE_BKTR
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+		        int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt);
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+		        int line_num, const char *func, const char *lock_name, void *lock_addr, struct ast_bt *bt)
+{
+    /* not a lot to do in a standalone w/o threading! */
+}
+
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt);
+void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
+{
+    /* not a lot to do in a standalone w/o threading! */
+}
+
+int ast_bt_get_addresses(struct ast_bt *bt);
+int ast_bt_get_addresses(struct ast_bt *bt)
+{
+	/* Suck it, you stupid utils directory! */
+	return 0;
+}
+char **ast_bt_get_symbols(void **addresses, size_t num_frames);
+char **ast_bt_get_symbols(void **addresses, size_t num_frames)
+{
+	char **foo = calloc(num_frames, sizeof(char *) + 1);
+	if (foo) {
+		int i;
+		for (i = 0; i < num_frames; i++) {
+			foo[i] = (char *) foo + sizeof(char *) * num_frames;
+		}
+	}
+	return foo;
+}
+#else
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+		        int line_num, const char *func, const char *lock_name, void *lock_addr);
+void ast_store_lock_info(enum ast_lock_type type, const char *filename,
+		        int line_num, const char *func, const char *lock_name, void *lock_addr)
+{
+    /* not a lot to do in a standalone w/o threading! */
+}
+
+void ast_remove_lock_info(void *lock_addr);
+void ast_remove_lock_info(void *lock_addr)
+{
+    /* not a lot to do in a standalone w/o threading! */
+}
+#endif /* HAVE_BKTR */
+
+void ast_mark_lock_acquired(void *);
+void ast_mark_lock_acquired(void *foo)
+{
+    /* not a lot to do in a standalone w/o threading! */
+}
+#endif
 
 static int global_lineno = 1;
 static int global_expr_count=0;
@@ -54,8 +143,8 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	fflush(stdout);
 	va_end(vars);
 }
-void ast_register_file_version(const char *file, const char *version);
-void ast_unregister_file_version(const char *file);
+//void ast_register_file_version(const char *file, const char *version);
+//void ast_unregister_file_version(const char *file);
 
 char *find_var(const char *varname);
 void set_var(const char *varname, const char *varval);
@@ -63,10 +152,20 @@ unsigned int check_expr(char* buffer, char* error_report);
 int check_eval(char *buffer, char *error_report);
 void parse_file(const char *fname);
 
-void ast_register_file_version(const char *file, const char *version)
+void ast_register_file_version(const char *file, const char *version);  
+void ast_register_file_version(const char *file, const char *version) { }
+#if !defined(LOW_MEMORY)
+int ast_add_profile(const char *x, uint64_t scale) { return 0;} 
+#endif
+int ast_atomic_fetchadd_int_slow(volatile int *p, int v)
 {
+        int ret;
+        ret = *p;
+        *p += v;
+        return ret;
 }
 
+void ast_unregister_file_version(const char *file);
 void ast_unregister_file_version(const char *file)
 {
 }
@@ -82,9 +181,13 @@ char *find_var(const char *varname) /* the list should be pretty short, if there
 	return 0;
 }
 
+void set_var(const char *varname, const char *varval);
+
 void set_var(const char *varname, const char *varval)
 {
 	struct varz *t = (struct varz*)calloc(1,sizeof(struct varz));
+	if (!t)
+		return;
 	strcpy(t->varname, varname);
 	strcpy(t->varval, varval);
 	t->next = global_varlist;
@@ -159,6 +262,15 @@ unsigned int check_expr(char* buffer, char* error_report)
 	return warn_found;
 }
 
+int check_eval(char *buffer, char *error_report);
+
+struct ast_custom_function *ast_custom_function_find(const char *name);
+
+struct ast_custom_function *ast_custom_function_find(const char *name)
+{
+	return 0;
+}
+
 int check_eval(char *buffer, char *error_report)
 {
 	char *cp, *ep;
@@ -219,7 +331,7 @@ int check_eval(char *buffer, char *error_report)
 	*ep++ = 0;
 
 	/* now, run the test */
-	result = ast_expr(evalbuf, s, sizeof(s));
+	result = ast_expr(evalbuf, s, sizeof(s),NULL);
 	if (result) {
 		sprintf(error_report,"line %d, evaluation of $[ %s ] result: %s\n", global_lineno, evalbuf, s);
 		return 1;
@@ -229,6 +341,8 @@ int check_eval(char *buffer, char *error_report)
 	}
 }
 
+
+void parse_file(const char *fname);
 
 void parse_file(const char *fname)
 {

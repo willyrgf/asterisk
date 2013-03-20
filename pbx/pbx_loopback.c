@@ -22,25 +22,21 @@
  *
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
 
 #include "asterisk/file.h"
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
-#include "asterisk/options.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/frame.h"
-#include "asterisk/file.h"
 #include "asterisk/cli.h"
 #include "asterisk/lock.h"
 #include "asterisk/md5.h"
@@ -49,7 +45,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/sched.h"
 #include "asterisk/io.h"
 #include "asterisk/utils.h"
-#include "asterisk/crypto.h"
 #include "asterisk/astdb.h"
 
 
@@ -95,7 +90,6 @@ static char *loopback_subst(char *buf, int buflen, const char *exten, const char
 	char tmp[80];
 
 	snprintf(tmp, sizeof(tmp), "%d", priority);
-	memset(buf, 0, buflen);
 	AST_LIST_HEAD_INIT_NOLOCK(&headp);
 	newvariable = ast_var_assign("EXTEN", exten);
 	AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
@@ -152,8 +146,9 @@ static int loopback_canmatch(struct ast_channel *chan, const char *context, cons
 
 static int loopback_exec(struct ast_channel *chan, const char *context, const char *exten, int priority, const char *callerid, const char *data)
 {
+	int found;
 	LOOPBACK_COMMON;
-	res = ast_spawn_extension(chan, newcontext, newexten, newpriority, callerid);
+	res = ast_spawn_extension(chan, newcontext, newexten, newpriority, callerid, &found, 0);
 	return res;
 }
 
@@ -168,12 +163,12 @@ static int loopback_matchmore(struct ast_channel *chan, const char *context, con
 
 static struct ast_switch loopback_switch =
 {
-        name:                   "Loopback",
-        description:   		"Loopback Dialplan Switch",
-        exists:                 loopback_exists,
-        canmatch:               loopback_canmatch,
-        exec:                   loopback_exec,
-        matchmore:              loopback_matchmore,
+	.name			= "Loopback",
+	.description		= "Loopback Dialplan Switch",
+	.exists			= loopback_exists,
+	.canmatch		= loopback_canmatch,
+	.exec			= loopback_exec,
+	.matchmore		= loopback_matchmore,
 };
 
 static int unload_module(void)
@@ -184,8 +179,9 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	ast_register_switch(&loopback_switch);
-	return 0;
+	if (ast_register_switch(&loopback_switch))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Loopback Switch");

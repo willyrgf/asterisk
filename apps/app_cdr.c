@@ -17,62 +17,57 @@
  */
 
 /*! \file
- * 
+ *
  * \brief Applications connected with CDR engine
  *
- * Martin Pycko <martinp@digium.com>
+ * \author Martin Pycko <martinp@digium.com>
  *
  * \ingroup applications
  */
+
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
-#include <sys/types.h>
-#include <stdlib.h>
-
 #include "asterisk/channel.h"
 #include "asterisk/module.h"
-#include "asterisk/pbx.h"
 
-static char *nocdr_descrip = 
-"  NoCDR(): This application will tell Asterisk not to maintain a CDR for the\n"
-"current call.\n";
+/*** DOCUMENTATION
+	<application name="NoCDR" language="en_US">
+		<synopsis>
+			Tell Asterisk to not maintain a CDR for the current call
+		</synopsis>
+		<syntax />
+		<description>
+			<para>This application will tell Asterisk not to maintain a CDR for the current call.</para>
+		</description>
+	</application>
+ ***/
 
-static char *nocdr_app = "NoCDR";
-static char *nocdr_synopsis = "Tell Asterisk to not maintain a CDR for the current call";
+static const char nocdr_app[] = "NoCDR";
 
-
-static int nocdr_exec(struct ast_channel *chan, void *data)
+static int nocdr_exec(struct ast_channel *chan, const char *data)
 {
-	struct ast_module_user *u;
-	
-	u = ast_module_user_add(chan);
-
-	if (chan->cdr) {
+	if (chan->cdr)
 		ast_set_flag(chan->cdr, AST_CDR_FLAG_POST_DISABLED);
-	}
-
-	ast_module_user_remove(u);
 
 	return 0;
 }
 
 static int unload_module(void)
 {
-	int res;
-
-	res = ast_unregister_application(nocdr_app);
-
-	ast_module_user_hangup_all();
-
-	return res;
+	return ast_unregister_application(nocdr_app);
 }
 
 static int load_module(void)
 {
-	return ast_register_application(nocdr_app, nocdr_exec, nocdr_synopsis, nocdr_descrip);
+	if (ast_register_application_xml(nocdr_app, nocdr_exec))
+		return AST_MODULE_LOAD_FAILURE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO_STANDARD(ASTERISK_GPL_KEY, "Tell Asterisk to not maintain a CDR for the current call");
