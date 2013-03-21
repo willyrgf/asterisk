@@ -269,16 +269,41 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	/* Get a channel that is the destination we wish to call */
 	peer = dial_transfer(bridge_channel->chan, exten, context);
 	if (!peer) {
+/* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
 		return 0;
 	}
 
-/* BUGBUG we need to wait for Party C (peer) to answer before dumping into the transient B-C bridge. */
+/* BUGBUG bridging API features does not support features.conf featuremap */
+/* BUGBUG bridging API features does not support the features.conf atxfer bounce between C & B channels */
+	/* Setup a DTMF menu to control the transfer. */
+	if (ast_bridge_features_init(&caller_features)
+		|| ast_bridge_hangup_hook(&caller_features,
+			attended_transfer_complete, &transfer_code, NULL)
+		|| ast_bridge_dtmf_hook(&caller_features,
+			attended_transfer && !ast_strlen_zero(attended_transfer->abort)
+				? attended_transfer->abort : "*1",
+			attended_transfer_abort, &transfer_code, NULL)
+		|| ast_bridge_dtmf_hook(&caller_features,
+			attended_transfer && !ast_strlen_zero(attended_transfer->complete)
+				? attended_transfer->complete : "*2",
+			attended_transfer_complete, &transfer_code, NULL)
+		|| ast_bridge_dtmf_hook(&caller_features,
+			attended_transfer && !ast_strlen_zero(attended_transfer->threeway)
+				? attended_transfer->threeway : "*3",
+			attended_transfer_threeway, &transfer_code, NULL)) {
+		ast_bridge_features_cleanup(&caller_features);
+		ast_hangup(peer);
+/* BUGBUG beeperr needs to be configurable from features.conf */
+		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
+		return 0;
+	}
 
 	/* Create a bridge to use to talk to the person we are calling */
 	attended_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX,
 		AST_BRIDGE_FLAG_DISSOLVE_HANGUP, NULL);
 	if (!attended_bridge) {
+		ast_bridge_features_cleanup(&caller_features);
 		ast_hangup(peer);
 /* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
@@ -289,29 +314,12 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 /* BUGBUG we should impart the peer as an independent and move it to the original bridge. */
 	if (ast_bridge_impart(attended_bridge, peer, NULL, NULL, 0)) {
 		ast_bridge_destroy(attended_bridge);
+		ast_bridge_features_cleanup(&caller_features);
 		ast_hangup(peer);
+/* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
 		return 0;
 	}
-
-	/* Setup a DTMF menu to control the transfer. */
-	ast_bridge_features_init(&caller_features);
-/* BUGBUG bridging API features does not support features.conf featuremap */
-/* BUGBUG bridging API features does not support the features.conf atxfer bounce between C & B channels */
-	ast_bridge_hangup_hook(&caller_features,
-		attended_transfer_complete, &transfer_code, NULL);
-	ast_bridge_dtmf_hook(&caller_features,
-		attended_transfer && !ast_strlen_zero(attended_transfer->abort)
-			? attended_transfer->abort : "*1",
-		attended_transfer_abort, &transfer_code, NULL);
-	ast_bridge_dtmf_hook(&caller_features,
-		attended_transfer && !ast_strlen_zero(attended_transfer->complete)
-			? attended_transfer->complete : "*2",
-		attended_transfer_complete, &transfer_code, NULL);
-	ast_bridge_dtmf_hook(&caller_features,
-		attended_transfer && !ast_strlen_zero(attended_transfer->threeway)
-			? attended_transfer->threeway : "*3",
-		attended_transfer_threeway, &transfer_code, NULL);
 
 	/*
 	 * For the caller we want to join the bridge in a blocking
@@ -329,8 +337,8 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	}
 
 	/* Now that all channels are out of it we can destroy the bridge and the feature structures */
-	ast_bridge_features_cleanup(&caller_features);
 	ast_bridge_destroy(attended_bridge);
+	ast_bridge_features_cleanup(&caller_features);
 
 	xfer_failed = -1;
 	switch (transfer_code) {

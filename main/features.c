@@ -4428,6 +4428,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", ast_channel_name(peer));
 	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", ast_channel_name(chan));
 
+/* BUGBUG revisit how BLINDTRANSFER operates with the new bridging model. */
 	/* Clear any BLINDTRANSFER since the transfer has completed. */
 	pbx_builtin_setvar_helper(chan, "BLINDTRANSFER", NULL);
 	pbx_builtin_setvar_helper(peer, "BLINDTRANSFER", NULL);
@@ -4477,9 +4478,9 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	clear_dialed_interfaces(peer);
 
 	/* Setup DTMF features. */
-	ast_bridge_features_init(&chan_features);
+	res = ast_bridge_features_init(&chan_features);
 	peer_features = ast_bridge_features_new();
-	if (!peer_features
+	if (res || !peer_features
 		|| setup_bridge_channel_features(peer_features, &config->features_callee)
 		|| setup_bridge_channel_features(&chan_features, &config->features_caller)) {
 		ast_bridge_features_destroy(peer_features);

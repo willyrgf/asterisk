@@ -200,7 +200,6 @@ static int bridgewait_exec(struct ast_channel *chan, const char *data)
 			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM, NULL);
 	}
 	ast_mutex_unlock(&bridgewait_lock);
-
 	if (!holding_bridge) {
 		ast_log(LOG_ERROR, "Could not create holding bridge for '%s'.\n", ast_channel_name(chan));
 		return -1;
@@ -209,7 +208,10 @@ static int bridgewait_exec(struct ast_channel *chan, const char *data)
 	parse = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	ast_bridge_features_init(&chan_features);
+	if (ast_bridge_features_init(&chan_features)) {
+		ast_bridge_features_cleanup(&chan_features);
+		return -1;
+	}
 
 	if (args.options) {
 		char *opts[OPT_ARG_ARRAY_SIZE] = { NULL, };

@@ -106,6 +106,12 @@ struct ast_bridge_channel;
  * \param bridge_channel Channel executing the feature
  * \param hook_pvt Private data passed in when the hook was created
  *
+ * For interval hooks:
+ * \retval 0 Setup to fire again at the last interval.
+ * \retval positive Setup to fire again at the new interval returned.
+ * \retval -1 Remove the callback hook.
+ *
+ * For other hooks:
  * \retval 0 Keep the callback hook.
  * \retval -1 Remove the callback hook.
  */
@@ -152,7 +158,7 @@ struct ast_bridge_hook_timer {
 	/*! Time at which the hook should actually trip */
 	struct timeval trip_time;
 	/*! Heap index for interval hook */
-	ssize_t __heap_index;
+	ssize_t heap_index;
 	/*! Interval that the hook should execute at in milliseconds */
 	unsigned int interval;
 	/*! Sequence number for the hook to ensure expiration ordering */
@@ -424,28 +430,6 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor);
-
-/*!
- * \brief Update the interval on an interval hook that is currently executing a callback
- *
- * \param bridge_channel The bridge channel that is executing the callback
- * \param interval The new interval value or 0 to remove the interval hook
- *
- * \retval 0 on success
- * \retval 1 on failure
- *
- * Example usage:
- *
- * \code
- * ast_bridge_interval_hook_update(bridge_channel, 10000);
- * \endcode
- *
- * This updates the executing interval hook so that it will be triggered next in 10 seconds.
- *
- * \note This can only be called from the context of the interval hook callback itself. If this
- *       is called outside the callback then behavior is undefined.
- */
-int ast_bridge_interval_hook_update(struct ast_bridge_channel *bridge_channel, unsigned int interval);
 
 /*!
  * \brief Set a callback on the features structure to receive talking notifications on.

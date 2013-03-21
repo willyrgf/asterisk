@@ -125,11 +125,7 @@ static int bridge_features_warning_callback(struct ast_bridge *bridge, struct as
 		limits_interval_playback(bridge, bridge_channel, limits, limits->warning_sound);
 	}
 
-	if (limits->frequency) {
-		ast_bridge_interval_hook_update(bridge_channel, limits->frequency);
-	}
-
-	return !limits->frequency ? -1 : 0;
+	return !limits->frequency ? -1 : limits->frequency;
 }
 
 static void copy_bridge_features_limits(struct ast_bridge_features_limits *dst, struct ast_bridge_features_limits *src)
@@ -169,6 +165,7 @@ static int bridge_builtin_set_limits(struct ast_bridge_features *features, struc
 	copy_bridge_features_limits(feature_limits, limits);
 	features->limits = feature_limits;
 
+/* BUGBUG feature interval hooks need to be reimplemented to be more stand alone. */
 	if (ast_bridge_interval_hook(features, feature_limits->duration,
 		bridge_features_duration_callback, feature_limits, NULL)) {
 		ast_log(LOG_ERROR, "Failed to schedule the duration limiter to the bridge channel.\n");

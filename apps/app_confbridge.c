@@ -1644,10 +1644,14 @@ static int confbridge_exec(struct ast_channel *chan, const char *data)
 		AST_APP_ARG(u_profile_name);
 		AST_APP_ARG(menu_name);
 	);
-	ast_bridge_features_init(&user.features);
 
 	if (ast_channel_state(chan) != AST_STATE_UP) {
 		ast_answer(chan);
+	}
+
+	if (ast_bridge_features_init(&user.features)) {
+		res = -1;
+		goto confbridge_cleanup;
 	}
 
 	if (ast_strlen_zero(data)) {
