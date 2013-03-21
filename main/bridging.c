@@ -523,6 +523,7 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge_channel *bridge_ch
 {
 	struct ast_bridge_features *features;
 	struct ast_bridge_hook *hook;
+	char dtmf[2];
 
 	features = bridge_channel->features;
 	if (!features) {
@@ -531,18 +532,19 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge_channel *bridge_ch
 
 /* BUGBUG the feature hook matching needs to be done here.  Any matching feature hook needs to be queued onto the bridge_channel.  Also the feature hook digit timeout needs to be handled. */
 	/* See if this DTMF matches the beginnings of any feature hooks, if so we switch to the feature state to either execute the feature or collect more DTMF */
-	AST_LIST_TRAVERSE(&features->dtmf_hooks, hook, entry) {
-		if (hook->parms.dtmf.code[0] == frame->subclass.integer) {
-			struct ast_frame action = {
-				.frametype = AST_FRAME_BRIDGE_ACTION,
-				.subclass.integer = AST_BRIDGE_ACTION_FEATURE,
-			};
+	dtmf[0] = frame->subclass.integer;
+	dtmf[1] = '\0';
+	hook = ao2_find(features->dtmf_hooks, dtmf, OBJ_PARTIAL_KEY);
+	if (hook) {
+		struct ast_frame action = {
+			.frametype = AST_FRAME_BRIDGE_ACTION,
+			.subclass.integer = AST_BRIDGE_ACTION_FEATURE,
+		};
 
-			ast_frfree(frame);
-			frame = NULL;
-			ast_bridge_channel_queue_frame(bridge_channel, &action);
-			break;
-		}
+		ast_frfree(frame);
+		frame = NULL;
+		ast_bridge_channel_queue_frame(bridge_channel, &action);
+		ao2_ref(hook, -1);
 	}
 
 	return frame;
@@ -1446,8 +1448,7 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 	struct ast_bridge_features *features = bridge_channel->features;
 	struct ast_bridge_hook *hook = NULL;
 	char dtmf[MAXIMUM_DTMF_FEATURE_STRING] = "";
-	int look_for_dtmf = 1;
-	int dtmf_len = 0;
+	size_t dtmf_len = 0;
 
 	if (!features) {
 		return;
@@ -1457,15 +1458,17 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 	ast_set_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_END_DTMF_ONLY);
 
 	/* Wait for DTMF on the channel and put it into a buffer. If the buffer matches any feature hook execute the hook. */
-	while (look_for_dtmf) {
-		int res = ast_waitfordigit(bridge_channel->chan, 3000);
+	do {
+		int res;
 
 		/* If the above timed out simply exit */
+		res = ast_waitfordigit(bridge_channel->chan, 3000);
 		if (!res) {
 			ast_debug(1, "DTMF feature string collection on bridge channel %p(%s) timed out\n",
 				bridge_channel, ast_channel_name(bridge_channel->chan));
 			break;
-		} else if (res < 0) {
+		}
+		if (res < 0) {
 			ast_debug(1, "DTMF feature string collection failed on bridge channel %p(%s) for some reason\n",
 				bridge_channel, ast_channel_name(bridge_channel->chan));
 			break;
@@ -1474,38 +1477,26 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 /* BUGBUG need to record the duration of DTMF digits so when the string is played back, they are reproduced. */
 		/* Add the above DTMF into the DTMF string so we can do our matching */
 		dtmf[dtmf_len++] = res;
-
 		ast_debug(1, "DTMF feature string on bridge channel %p(%s) is now '%s'\n",
 			bridge_channel, ast_channel_name(bridge_channel->chan), dtmf);
 
-		/* Assume that we do not want to look for DTMF any longer */
-		look_for_dtmf = 0;
-
 		/* See if a DTMF feature hook matches or can match */
-		AST_LIST_TRAVERSE(&features->dtmf_hooks, hook, entry) {
-			/* If this hook matches just break out now */
-			if (!strcmp(hook->parms.dtmf.code, dtmf)) {
-				ast_debug(1, "DTMF feature hook %p matched DTMF string '%s' on bridge channel %p(%s)\n",
-					hook, dtmf, bridge_channel, ast_channel_name(bridge_channel->chan));
-				look_for_dtmf = 0;
-				break;
-			} else if (!strncmp(hook->parms.dtmf.code, dtmf, dtmf_len)) {
-				ast_debug(1, "DTMF feature hook %p can match DTMF string '%s', it wants '%s', on bridge channel %p(%s)\n",
-					hook, dtmf, hook->parms.dtmf.code, bridge_channel,
-					ast_channel_name(bridge_channel->chan));
-				look_for_dtmf = 1;
-			} else {
-				ast_debug(1, "DTMF feature hook %p does not match DTMF string '%s', it wants '%s', on bridge channel %p(%s)\n",
-					hook, dtmf, hook->parms.dtmf.code, bridge_channel,
-					ast_channel_name(bridge_channel->chan));
-			}
-		}
-
-		/* If we have reached the maximum length of a DTMF feature string bail out */
-		if (dtmf_len == MAXIMUM_DTMF_FEATURE_STRING) {
+		hook = ao2_find(features->dtmf_hooks, dtmf, OBJ_PARTIAL_KEY);
+		if (!hook) {
+			ast_debug(1, "No DTMF feature hooks on bridge channel %p(%s) match '%s'\n",
+				bridge_channel, ast_channel_name(bridge_channel->chan), dtmf);
 			break;
 		}
-	}
+		if (strlen(hook->parms.dtmf.code) == dtmf_len) {
+			ast_debug(1, "DTMF feature hook %p matched DTMF string '%s' on bridge channel %p(%s)\n",
+				hook, dtmf, bridge_channel, ast_channel_name(bridge_channel->chan));
+			break;
+		}
+		ao2_ref(hook, -1);
+		hook = NULL;
+
+		/* Stop if we have reached the maximum length of a DTMF feature string. */
+	} while (dtmf_len < ARRAY_LEN(dtmf) - 1);
 
 	/* Since we are done bringing DTMF in return to using both begin and end frames */
 	ast_clear_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_END_DTMF_ONLY);
@@ -1516,19 +1507,11 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 
 		failed = hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
 		if (failed) {
-			struct ast_bridge_hook *cur;
-
-			AST_LIST_TRAVERSE_SAFE_BEGIN(&features->dtmf_hooks, cur, entry) {
-				if (cur == hook) {
-					ast_debug(1, "DTMF hook %p is being removed from bridge channel %p(%s)\n",
-						hook, bridge_channel, ast_channel_name(bridge_channel->chan));
-					AST_LIST_REMOVE_CURRENT(entry);
-					ao2_ref(hook, -1);
-					break;
-				}
-			}
-			AST_LIST_TRAVERSE_SAFE_END;
+			ast_debug(1, "DTMF hook %p is being removed from bridge channel %p(%s)\n",
+				hook, bridge_channel, ast_channel_name(bridge_channel->chan));
+			ao2_unlink(features->dtmf_hooks, hook);
 		}
+		ao2_ref(hook, -1);
 
 		/*
 		 * If we are handing the channel off to an external hook for
@@ -1539,8 +1522,7 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 		if (bridge_channel->chan && ast_check_hangup_locked(bridge_channel->chan)) {
 			bridge_handle_hangup(bridge_channel);
 		}
-	} else {
-/* BUGBUG Check the features.dtmf_passthrough flag just like ast_bridge_handle_trip() before passing on the collected digits. */
+	} else if (features->dtmf_passthrough) {
 		ast_bridge_dtmf_stream(bridge_channel->bridge, dtmf, bridge_channel->chan);
 	}
 }
@@ -2679,6 +2661,7 @@ int ast_bridge_dtmf_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_pvt_destructor destructor)
 {
 	struct ast_bridge_hook *hook;
+	int res;
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor);
@@ -2687,10 +2670,11 @@ int ast_bridge_dtmf_hook(struct ast_bridge_features *features,
 	}
 	ast_copy_string(hook->parms.dtmf.code, dtmf, sizeof(hook->parms.dtmf.code));
 
-	/* Once done we add it onto the list. */
-	AST_LIST_INSERT_TAIL(&features->dtmf_hooks, hook, entry);
+	/* Once done we put it in the container. */
+	res = ao2_link(features->dtmf_hooks, hook) ? 0 : -1;
+	ao2_ref(hook, -1);
 
-	return 0;
+	return res;
 }
 
 int ast_bridge_hangup_hook(struct ast_bridge_features *features,
@@ -2843,23 +2827,65 @@ static int interval_hook_time_cmp(void *a, void *b)
 	return cmp;
 }
 
+/*!
+ * \internal
+ * \brief DTMF hook container sort comparison function.
+ * \since 12.0.0
+ *
+ * \param obj_left pointer to the (user-defined part) of an object.
+ * \param obj_right pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'obj_right', is an object.
+ *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
+ *
+ * \retval <0 if obj_left < obj_right
+ * \retval =0 if obj_left == obj_right
+ * \retval >0 if obj_left > obj_right
+ */
+static int bridge_dtmf_hook_sort(const void *obj_left, const void *obj_right, int flags)
+{
+	const struct ast_bridge_hook *hook_left = obj_left;
+	const struct ast_bridge_hook *hook_right = obj_right;
+	const char *right_key = obj_right;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_key = hook_right->parms.dtmf.code;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcasecmp(hook_left->parms.dtmf.code, right_key);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncasecmp(hook_left->parms.dtmf.code, right_key, strlen(right_key));
+		break;
+	}
+	return cmp;
+}
+
 /* BUGBUG make ast_bridge_features_init() static when make ast_bridge_join() requires features to be allocated. */
 int ast_bridge_features_init(struct ast_bridge_features *features)
 {
 	/* Zero out the structure */
 	memset(features, 0, sizeof(*features));
 
-	/* Initialize the DTMF hooks list, just in case */
-	AST_LIST_HEAD_INIT_NOLOCK(&features->dtmf_hooks);
+	/* Initialize the DTMF hooks container */
+	features->dtmf_hooks = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE, bridge_dtmf_hook_sort, NULL);
+	if (!features->dtmf_hooks) {
+		return -1;
+	}
 
-	/* Initialize the hangup hooks list, just in case */
-	features->hangup_hooks =
-		ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL, NULL);
+	/* Initialize the hangup hooks container */
+	features->hangup_hooks = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL,
+		NULL);
 	if (!features->hangup_hooks) {
 		return -1;
 	}
 
-	/* Initialize the interval hook heap */
+	/* Initialize the interval hooks heap */
 	features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp,
 		offsetof(struct ast_bridge_hook, parms.timer.heap_index));
 	if (!features->interval_hooks) {
@@ -2874,13 +2900,14 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 {
 	struct ast_bridge_hook *hook;
 
-	/* Destroy each interval hook. */
+	/* Destroy the interval hooks heap. */
 	if (features->interval_hooks) {
 		while ((hook = ast_heap_pop(features->interval_hooks))) {
 			ao2_ref(hook, -1);
 		}
 		features->interval_hooks = ast_heap_destroy(features->interval_hooks);
 	}
+
 	if (features->interval_timer) {
 		ast_timer_close(features->interval_timer);
 		features->interval_timer = NULL;
@@ -2898,14 +2925,13 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 		features->talker_pvt_data = NULL;
 	}
 
-	/* Destroy the hangup hook container. */
+	/* Destroy the hangup hooks container. */
 	ao2_cleanup(features->hangup_hooks);
 	features->hangup_hooks = NULL;
 
-	/* Destroy each DTMF feature hook. */
-	while ((hook = AST_LIST_REMOVE_HEAD(&features->dtmf_hooks, entry))) {
-		ao2_ref(hook, -1);
-	}
+	/* Destroy the DTMF hooks container. */
+	ao2_cleanup(features->dtmf_hooks);
+	features->dtmf_hooks = NULL;
 }
 
 void ast_bridge_features_destroy(struct ast_bridge_features *features)

@@ -4250,6 +4250,9 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 	struct ast_call_feature *dtmf;
 	int res = 0;
 
+	/* Always pass through any DTMF digits. */
+	features->dtmf_passthrough = 1;
+
 	if (ast_test_flag(flags, AST_FEATURE_REDIRECT)) {
 		/* Add atxfer and blind transfer. */
 		ast_rwlock_rdlock(&features_lock);

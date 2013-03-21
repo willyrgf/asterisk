@@ -191,9 +191,8 @@ struct ast_bridge_hook {
  * \brief Structure that contains features information
  */
 struct ast_bridge_features {
-/* BUGBUG dtmf_hooks needs to be an ao2_container so it would be possible to iterate without keeping a lock */
 	/*! Attached DTMF feature hooks */
-	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) dtmf_hooks;
+	struct ao2_container *dtmf_hooks;
 	/*! Attached hangup interception hooks container */
 	struct ao2_container *hangup_hooks;
 	/*! Attached interval hooks */
