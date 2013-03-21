@@ -564,20 +564,21 @@ static void bridge_handle_hangup(struct ast_bridge_channel *bridge_channel)
 	features = bridge_channel->features;
 	if (features) {
 		struct ast_bridge_hook *hook;
+		struct ao2_iterator iter;
 
 		/* Run any hangup hooks. */
-		AST_LIST_TRAVERSE_SAFE_BEGIN(&features->hangup_hooks, hook, entry) {
+		iter = ao2_iterator_init(features->hangup_hooks, 0);
+		for (; (hook = ao2_iterator_next(&iter)); ao2_ref(hook, -1)) {
 			int failed;
 
 			failed = hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
 			if (failed) {
 				ast_debug(1, "Hangup hook %p is being removed from bridge channel %p(%s)\n",
 					hook, bridge_channel, ast_channel_name(bridge_channel->chan));
-				AST_LIST_REMOVE_CURRENT(entry);
-				ao2_ref(hook, -1);
+				ao2_unlink(features->hangup_hooks, hook);
 			}
 		}
-		AST_LIST_TRAVERSE_SAFE_END;
+		ao2_iterator_destroy(&iter);
 	}
 
 	/* Default hangup action. */
@@ -2698,6 +2699,7 @@ int ast_bridge_hangup_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_pvt_destructor destructor)
 {
 	struct ast_bridge_hook *hook;
+	int res;
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor);
@@ -2705,10 +2707,11 @@ int ast_bridge_hangup_hook(struct ast_bridge_features *features,
 		return -1;
 	}
 
-	/* Once done we add it onto the list. */
-	AST_LIST_INSERT_TAIL(&features->hangup_hooks, hook, entry);
+	/* Once done we put it in the container. */
+	res = ao2_link(features->hangup_hooks, hook) ? 0 : -1;
+	ao2_ref(hook, -1);
 
-	return 0;
+	return res;
 }
 
 void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
@@ -2728,6 +2731,7 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_pvt_destructor destructor)
 {
 	struct ast_bridge_hook *hook;
+	int res;
 
 	if (!interval || !callback || !features || !features->interval_hooks) {
 		return -1;
@@ -2753,12 +2757,14 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	ast_debug(1, "Putting interval hook %p with interval %u in the heap on features %p\n",
 		hook, hook->parms.timer.interval, features);
 	ast_heap_wrlock(features->interval_hooks);
-	if (ast_heap_push(features->interval_hooks, hook)) {
+	res = ast_heap_push(features->interval_hooks, hook);
+	if (res) {
+		/* Could not push the hook onto the heap. */
 		ao2_ref(hook, -1);
 	}
 	ast_heap_unlock(features->interval_hooks);
 
-	return 0;
+	return res ? -1 : 0;
 }
 
 int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config, ast_bridge_hook_pvt_destructor destructor)
@@ -2847,7 +2853,11 @@ int ast_bridge_features_init(struct ast_bridge_features *features)
 	AST_LIST_HEAD_INIT_NOLOCK(&features->dtmf_hooks);
 
 	/* Initialize the hangup hooks list, just in case */
-	AST_LIST_HEAD_INIT_NOLOCK(&features->hangup_hooks);
+	features->hangup_hooks =
+		ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL, NULL);
+	if (!features->hangup_hooks) {
+		return -1;
+	}
 
 	/* Initialize the interval hook heap */
 	features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp,
@@ -2888,10 +2898,9 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 		features->talker_pvt_data = NULL;
 	}
 
-	/* Destroy each hangup hook. */
-	while ((hook = AST_LIST_REMOVE_HEAD(&features->hangup_hooks, entry))) {
-		ao2_ref(hook, -1);
-	}
+	/* Destroy the hangup hook container. */
+	ao2_cleanup(features->hangup_hooks);
+	features->hangup_hooks = NULL;
 
 	/* Destroy each DTMF feature hook. */
 	while ((hook = AST_LIST_REMOVE_HEAD(&features->dtmf_hooks, entry))) {

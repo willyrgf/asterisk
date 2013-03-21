@@ -194,10 +194,8 @@ struct ast_bridge_features {
 /* BUGBUG dtmf_hooks needs to be an ao2_container so it would be possible to iterate without keeping a lock */
 	/*! Attached DTMF feature hooks */
 	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) dtmf_hooks;
-/* BUGBUG hangup_hooks needs to be an ao2_container so it would be possible to iterate without keeping a lock */
-	/*! Attached hangup interception hooks */
-	AST_LIST_HEAD_NOLOCK(, ast_bridge_hook) hangup_hooks;
-/* BUGBUG use of interval_hooks needs to be made ao2 safe */
+	/*! Attached hangup interception hooks container */
+	struct ao2_container *hangup_hooks;
 	/*! Attached interval hooks */
 	struct ast_heap *interval_hooks;
 	/*! Used to determine when interval based features should be checked */
