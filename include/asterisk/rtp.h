@@ -271,6 +271,8 @@ void ast_rtp_set_rtptimeout(struct ast_rtp *rtp, int timeout);
 void ast_rtp_set_rtpholdtimeout(struct ast_rtp *rtp, int timeout);
 /*! \brief set RTP keepalive interval */
 void ast_rtp_set_rtpkeepalive(struct ast_rtp *rtp, int period);
+/*! \brief Set PLC on or off */
+void ast_rtp_set_plc(struct ast_rtp *rtp, int state);
 /*! \brief Get RTP keepalive interval */
 int ast_rtp_get_rtpkeepalive(struct ast_rtp *rtp);
 /*! \brief Get rtp hold timeout */

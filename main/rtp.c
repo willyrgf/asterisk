@@ -200,6 +200,7 @@ int ast_rtp_senddigit_end_with_duration(struct ast_rtp *rtp, char digit, unsigne
 #define FLAG_CALLBACK_MODE              (1 << 6)
 #define FLAG_DTMF_COMPENSATE            (1 << 7)
 #define FLAG_HAS_STUN                   (1 << 8)
+#define FLAG_POORMANSPLC                (1 << 9)
 
 /*!
  * \brief Structure defining an RTCP session.
@@ -560,6 +561,16 @@ void ast_rtp_set_rtptimeout(struct ast_rtp *rtp, int timeout)
 void ast_rtp_set_rtpholdtimeout(struct ast_rtp *rtp, int timeout)
 {
 	rtp->rtpholdtimeout = timeout;
+}
+
+/*! \brief set RTP PLC status */
+void ast_rtp_set_plc(struct ast_rtp *rtp, int state)
+{
+	if (state) {
+		ast_set_flag(rtp, FLAG_POORMANSPLC);
+	} else {
+		ast_clear_flag(rtp, FLAG_POORMANSPLC);
+	}
 }
 
 /*! \brief set RTP keepalive interval */
@@ -1333,7 +1344,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		rtp->cycles += RTP_SEQ_MOD;
 
 	if (rtp->rxcount > 1) {
-		if (poormansplc && seqno < rtp->lastrxseqno)  {
+		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno)  {
 			/* This is a latecome we've already replaced. A jitter buffer would have handled this
 			   properly, but in many cases we can't afford a jitterbuffer and will have to live
 			   with the face that the poor man's PLC already has replaced this frame and we can't
@@ -1344,10 +1355,10 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		}
 		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
 		/* RTP sequence numbers are consecutive. Have we lost a packet? */
-		if (lostpackets) {
+		if (lostpackets && option_debug > 2) {
 			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
 		}
-		if (poormansplc && rtp->plcbuf != NULL) {
+		if (ast_test_flag(rtp, FLAG_POORMANSPLC)  && rtp->plcbuf != NULL) {
 			int i;
 			for (i = 0; i < lostpackets; i++) {
 				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
@@ -1463,7 +1474,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			rtp->f.subclass |= 0x1;
 	}
 	rtp->f.src = "RTP";
-	if (poormansplc) {
+	if (ast_test_flag(rtp, FLAG_POORMANSPLC)) {
 		/* Copy this frame to buffer */
 		if (rtp->plcbuf) {
 			/* We have something here. Take it away, dear Henry. */
@@ -2038,6 +2049,9 @@ void ast_rtp_new_init(struct ast_rtp *rtp)
 	rtp->seqno = ast_random() & 0xffff;
 	ast_set_flag(rtp, FLAG_HAS_DTMF);
 	rtp->plcbuf = NULL;
+	if (poormansplc) {
+		ast_set_flag(rtp, FLAG_POORMANSPLC);
+	}
 
 	return;
 }
