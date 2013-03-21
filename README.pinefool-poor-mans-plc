@@ -1,0 +1,95 @@
+Edvina AB
+Olle E. Johansson
+
+
+
+
+
+
+
+
+
+
+
+Poor Man's PLC
+==============
+We see a lot of issues in the RTP streams when bridging two sip calls in Asterisk. If there's 
+packet loss coming in, it's the same going out - but in this case the sequence numbers doesn't 
+indicate packet loss. This causes issues with recordings sounding bad and possibly other issues 
+since we have quite long phone calls.
+
+Investigating the PLC in Asterisk, according to Malcolm's wiki article there has to be a core 
+bridge with transcoding and a jitter buffer. That won't work for us.
+
+Looking into the RTP channel, where I've spent some time recently, I notice that we don't bother 
+checking that packets are sequential, so the RTP channel doesn't bother with packet loss much. That needed to change.
+
+I created a very simple PLC in the RTP channel for the incoming stream, following these principles:
+
+- If there is packet loss, resend the previous packet. We discover this at the next packet, so we 
+  introduce two frames at once. In most cases with small packet loss, the receiving end will sort this 
+  out in the jitter buffer. 
+- If there is packet reordering, a jitter causing a packet to arrive too late, we ignore that packet 
+  since we've already replaced it with another one.
+
+Normally PLC would work hand-in-hand with a jitter buffer so we first reorder incoming RTP packets, then add the 
+missing ones. In this case, I can't afford introducing extra delay caused by a jitter buffer, so I needed a poor 
+man's implementation. It will add a bit of CPU, copying frames that wasn't done previously, but it is not a 
+massive amount of operations - unless you have a really poor connection. In that case, audio will be lost 
+anyway and there's nothing much we can do to save the situation.
+
+How does it work?
+================
+- If we receive packets 2,3,5 - we will send 2,3,3,5 into the bridge, making sure that we get no skew.
+- If we receive 2,3,5,4 we will send 2,3,3,5 and throw away #4.
+
+In both cases, the extra "3" will be sent at the same time as the "5" into the bridge.
+
+Looking at wireshark on the other side of the call, the outbound stream now looks better. Of course, 
+there's jitter but no packet loss in the stream, we still have all expected frames - for Alaw 50 RTP 
+frames per second. Without this PLC we could get 45 and the playback of a recording would 
+sound "fast" - Donald Duckish... :-)
+
+It is a small hack compared with other RTP hacks I've worked with recently- the DTMF length, 
+Comfort Noise and others. But it does make the audio better in case of bad incoming streams.
+
+Configuration
+=============
+You can either enable it globally or per device in sip.conf. The SIP channel only
+use this for audio streams.
+
+In RTP.conf you can enable it for the RTP subsystem. This will affect all RTP streams,
+including video and text if you have that. In most cases, it's propably not a good idea
+but for testing.
+
+Downside
+========
+This is a poor man's fix. Codecs that have built-in PLC, like G.729, can propably handle it
+internally better. 
+
+Incoming packets 1,2,4,5 will simply be outbound 1,2,3,4 and we will have a skew - but hide
+the fact that we have packet loss on the inbound stream. In order to handle this, we will need
+to send frames in the media stream that indicate packet loss and make sure codecs understand
+it and that it affects the outbound RTP stream as well.
+
+In my case, we only have G.711a calls, so the Poor Man's Solution works well.
+
+
+From RTP.conf
+=============
+; The RTP channels has an implementation of Packet Loss Concealment
+; that is named "Poor Man's PLC". Normally a PLC happens withing the
+; context of a jitter buffer. This PLC just copies the previous
+; packet into the stream again if a packet (or multiple) is missing.
+; If a packet arrives too late (reordered) it will be ignored.
+; This introduces a bit of jitter since we're sending two
+; packets at the same time. Hopefully the phone or gw at the
+; end of the line will have a jitter buffer and play out the media
+; properly. This PLC will make sure that Asterisk outbound RTP streams has
+; less skew and that recordings will actually have a proper amount of
+; media. Default is turned off.
+; This setting apply to ALL rtp streams in this Asterisk instance.
+; If you have video or text streams, it might not be a good idea.
+;
+; You can turn this on per device or globally in sip.conf too.
+;plc=yes
