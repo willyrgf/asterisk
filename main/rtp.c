@@ -162,6 +162,7 @@ struct ast_rtp {
 	struct ast_smoother *smoother;
 	int *ioid;
 	unsigned short seqno;		/*!< Sequence number, RFC 3550, page 13. */
+	unsigned short prev_frame_seqno;	/*!< Sequence number, RFC 3550, page 13. */
 	unsigned short rxseqno;
 	struct sched_context *sched;
 	struct io_context *io;
@@ -507,6 +508,16 @@ static int stun_handle_packet(int s, struct sockaddr_in *src, unsigned char *dat
 
 /*! \brief List of current sessions */
 static AST_LIST_HEAD_STATIC(protos, ast_rtp_protocol);
+
+static void increment_seqno(struct ast_rtp *rtp, struct ast_frame *f)
+{
+	if (f != NULL) {
+		rtp->prev_frame_seqno = f->seqno;
+	} else {
+		rtp->prev_frame_seqno = 0;	/* Reset if we're sending DTMF or so */
+	}
+	rtp->seqno++;
+}
 
 static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw)
 {
@@ -1360,6 +1371,11 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		}
 		if (ast_test_flag(rtp, FLAG_POORMANSPLC)  && rtp->plcbuf != NULL) {
 			int i;
+			rtp->lastrxseqno++;
+			/* Fix the seqno in the frame */
+			rtp->plcbuf->seqno = rtp->lastrxseqno;
+			/* OEJ:: Fix timestamp */
+			;rtp->lastrxts = timestamp;
 			for (i = 0; i < lostpackets; i++) {
 				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
 				ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
@@ -2431,7 +2447,7 @@ int ast_rtp_senddigit_begin(struct ast_rtp *rtp, char digit)
 				    ast_inet_ntoa(rtp->them.sin_addr),
 				    ntohs(rtp->them.sin_port), payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 		/* Increment sequence number */
-		rtp->seqno++;
+		increment_seqno(rtp, NULL);
 		/* Increment duration */
 		rtp->send_duration += 160;
 		/* Clear marker bit and set seqno */
@@ -2476,7 +2492,7 @@ static int ast_rtp_senddigit_continuation(struct ast_rtp *rtp)
 			    ntohs(rtp->them.sin_port), rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 
 	/* Increment sequence number */
-	rtp->seqno++;
+	increment_seqno(rtp, NULL);
 	/* Increment duration */
 	rtp->send_duration += 160;
 
@@ -2535,7 +2551,7 @@ int ast_rtp_senddigit_end_with_duration(struct ast_rtp *rtp, char digit, unsigne
 	for (i = 0; i < 3; i++) {
 		rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 		res = sendto(rtp->s, (void *) rtpheader, hdrlen + 4, 0, (struct sockaddr *) &rtp->them, sizeof(rtp->them));
-		rtp->seqno++;
+		increment_seqno(rtp, NULL);
 		if (res < 0)
 			ast_log(LOG_ERROR, "RTP Transmission error to %s:%d: %s\n",
 				ast_inet_ntoa(rtp->them.sin_addr),
@@ -2805,7 +2821,7 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level)
 
 	/* Get a pointer to the header */
 	rtpheader = (unsigned int *)data;
-	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (payload << 16) | (rtp->seqno++));
+	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastts);
 	rtpheader[2] = htonl(rtp->ssrc); 
 	data[12] = level;
@@ -2818,6 +2834,7 @@ int ast_rtp_sendcng(struct ast_rtp *rtp, int level)
 					, ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), payload, rtp->seqno, rtp->lastts,res - hdrlen);		   
 		   
 	}
+	increment_seqno(rtp, NULL);
 	return 0;
 }
 
@@ -2838,6 +2855,16 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 
 	if (rtp->sending_digit) {
 		return 0;
+	}
+	
+	if (rtp->prev_frame_seqno > 0 && f->seqno && f->seqno != (rtp->prev_frame_seqno + 1)) {
+		/* We have incoming packet loss and need to signal that outbound. */
+		unsigned int loss = f->seqno - rtp->prev_frame_seqno - 1;
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "**** Incoming packet loss, letting it through: %u packets\n", loss);
+		}
+		/* Jump ahead, let the packet loss go straight through */
+		rtp->seqno += loss;
 	}
 
 	ms = calc_txstamp(rtp, &f->delivery);
@@ -2924,7 +2951,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 					ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), codec, rtp->seqno, rtp->lastts,res - hdrlen);
 	}
 
-	rtp->seqno++;
+	increment_seqno(rtp, f);
 
 	return 0;
 }
