@@ -2852,7 +2852,7 @@ int ast_bridge_features_init(struct ast_bridge_features *features)
 	/* Initialize the interval hook heap */
 	features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp,
 		offsetof(struct ast_bridge_hook, parms.timer.heap_index));
-	if (features->interval_hooks) {
+	if (!features->interval_hooks) {
 		return -1;
 	}
 
