@@ -490,6 +490,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; destinations which do not have a prior
                                 ; account relationship with your server. 
 
+; plc=yes			; Enable Poor Man's Packet Loss Concealment in RTP/Audio channels
+				; Settable in device-level too.
+
 ;------------------------------ JITTER BUFFER CONFIGURATION --------------------------
 ; jbenable = yes              ; Enables the use of a jitterbuffer on the receiving side of a
                               ; SIP channel. Defaults to "no". An enabled jitterbuffer will

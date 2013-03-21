@@ -797,6 +797,7 @@ struct sip_auth {
 #define SIP_PAGE2_RTAUTOCLEAR		(1 << 2)
 #define SIP_PAGE2_RT_FROMCONTACT 	(1 << 4)
 #define SIP_PAGE2_RTSAVE_SYSNAME 	(1 << 5)
+#define SIP_PAGE2_POORMANSPLC		(1 << 6)
 /* Space for addition of other realtime flags in the future */
 #define SIP_PAGE2_STATECHANGEQUEUE	(1 << 9)	/*!< D: Unsent state pending change exists */
 #define SIP_PAGE2_IGNOREREGEXPIRE	(1 << 10)
@@ -829,7 +830,7 @@ struct sip_auth {
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_VIDEOSUPPORT | \
 	SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | SIP_PAGE2_BUGGY_MWI | \
-	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_FORWARD_LOOP_DETECTED)
+	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_FORWARD_LOOP_DETECTED | SIP_PAGE2_POORMANSPLC)
 
 /* SIP packet flags */
 #define SIP_PKT_DEBUG		(1 << 0)	/*!< Debug this packet */
@@ -4900,6 +4901,7 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 			free(p);
 			return NULL;
 		}
+		ast_rtp_set_plc(p->rtp, ast_test_flag(&p->flags[1], SIP_DTMF) == SIP_PAGE2_POORMANSPLC);
 		ast_rtp_setdtmf(p->rtp, ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
 		ast_rtp_setdtmfcompensate(p->rtp, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
 		ast_rtp_settos(p->rtp, global_tos_audio);
@@ -18281,6 +18283,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "forwardloopdetected")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_FORWARD_LOOP_DETECTED);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_FORWARD_LOOP_DETECTED);
+	} else if (!strcasecmp(v->name, "plc")) {
+		ast_set_flag(&mask[1], SIP_PAGE2_POORMANSPLC);
+		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_POORMANSPLC);
 	} else
 		res = 0;
 
