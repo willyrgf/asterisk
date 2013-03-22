@@ -140,7 +140,7 @@ static int apply_option_timeout(struct ast_bridge_features *features, char *dura
 
 	/* Limits struct holds time as milliseconds, so muliply 1000x */
 	hold_limits.duration *= 1000;
-	ast_bridge_features_set_limits(features, &hold_limits);
+	ast_bridge_features_set_limits(features, &hold_limits, 1);
 	ast_bridge_features_limits_destroy(&hold_limits);
 
 	return 0;

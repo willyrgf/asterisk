@@ -2053,7 +2053,8 @@ int conf_set_menu_to_user(const char *menu_name, struct confbridge_user *user)
 		ao2_ref(menu, +1);
 		pvt->menu = menu;
 
-		ast_bridge_dtmf_hook(&user->features, pvt->menu_entry.dtmf, menu_hook_callback, pvt, menu_hook_destroy);
+		ast_bridge_dtmf_hook(&user->features, pvt->menu_entry.dtmf, menu_hook_callback,
+			pvt, menu_hook_destroy, 0);
 	}
 
 	ao2_unlock(menu);

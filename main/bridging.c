@@ -66,6 +66,7 @@ static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
 
 static void cleanup_video_mode(struct ast_bridge *bridge);
 static int bridge_make_compatible(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
+static void bridge_features_remove_on_pull(struct ast_bridge_features *features);
 
 /*! Default DTMF keys for built in features */
 static char builtin_features_dtmf[AST_BRIDGE_BUILTIN_END][MAXIMUM_DTMF_FEATURE_STRING];
@@ -74,7 +75,7 @@ static char builtin_features_dtmf[AST_BRIDGE_BUILTIN_END][MAXIMUM_DTMF_FEATURE_S
 static void *builtin_features_handlers[AST_BRIDGE_BUILTIN_END];
 
 /*! Function handlers for built in interval features */
-static void *builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_END];
+static ast_bridge_builtin_set_limits_fn builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_END];
 
 /*! Bridge manager service request */
 struct bridge_manager_request {
@@ -393,6 +394,7 @@ static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	if (bridge->personality && bridge->personality->pull) {
 		bridge->personality->pull(bridge_channel);
 	}
+	bridge_features_remove_on_pull(bridge_channel->features);
 
 	bridge->reconfigured = 1;
 }
@@ -2583,7 +2585,7 @@ int ast_bridge_features_unregister(enum ast_bridge_builtin_feature feature)
 	return 0;
 }
 
-int ast_bridge_interval_register(enum ast_bridge_builtin_interval interval, void *callback)
+int ast_bridge_interval_register(enum ast_bridge_builtin_interval interval, ast_bridge_builtin_set_limits_fn callback)
 {
 	if (ARRAY_LEN(builtin_interval_handlers) <= interval
 		|| builtin_interval_handlers[interval]) {
@@ -2635,11 +2637,16 @@ static void bridge_hook_destroy(void *vhook)
  * \param callback Function to execute upon activation
  * \param hook_pvt Unique data
  * \param destructor Optional destructor callback for hook_pvt data
+ * \param remove_on_pull TRUE if remove the hook when the channel is pulled from the bridge.
  *
  * \retval hook on success.
  * \retval NULL on error.
  */
-static struct ast_bridge_hook *bridge_hook_generic(size_t size, ast_bridge_hook_callback callback, void *hook_pvt, ast_bridge_hook_pvt_destructor destructor)
+static struct ast_bridge_hook *bridge_hook_generic(size_t size,
+	ast_bridge_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
 {
 	struct ast_bridge_hook *hook;
 
@@ -2649,6 +2656,7 @@ static struct ast_bridge_hook *bridge_hook_generic(size_t size, ast_bridge_hook_
 		hook->callback = callback;
 		hook->destructor = destructor;
 		hook->hook_pvt = hook_pvt;
+		hook->remove_on_pull = remove_on_pull;
 	}
 
 	return hook;
@@ -2658,13 +2666,15 @@ int ast_bridge_dtmf_hook(struct ast_bridge_features *features,
 	const char *dtmf,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
-	ast_bridge_hook_pvt_destructor destructor)
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
 {
 	struct ast_bridge_hook *hook;
 	int res;
 
 	/* Allocate new hook and setup it's various variables */
-	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor);
+	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
+		remove_on_pull);
 	if (!hook) {
 		return -1;
 	}
@@ -2680,13 +2690,15 @@ int ast_bridge_dtmf_hook(struct ast_bridge_features *features,
 int ast_bridge_hangup_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
-	ast_bridge_hook_pvt_destructor destructor)
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
 {
 	struct ast_bridge_hook *hook;
 	int res;
 
 	/* Allocate new hook and setup it's various variables */
-	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor);
+	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
+		remove_on_pull);
 	if (!hook) {
 		return -1;
 	}
@@ -2712,7 +2724,8 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	unsigned int interval,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
-	ast_bridge_hook_pvt_destructor destructor)
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
 {
 	struct ast_bridge_hook *hook;
 	int res;
@@ -2730,7 +2743,8 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	}
 
 	/* Allocate new hook and setup it's various variables */
-	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor);
+	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
+		remove_on_pull);
 	if (!hook) {
 		return -1;
 	}
@@ -2751,7 +2765,12 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	return res ? -1 : 0;
 }
 
-int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_bridge_builtin_feature feature, const char *dtmf, void *config, ast_bridge_hook_pvt_destructor destructor)
+int ast_bridge_features_enable(struct ast_bridge_features *features,
+	enum ast_bridge_builtin_feature feature,
+	const char *dtmf,
+	void *config,
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
 {
 	if (ARRAY_LEN(builtin_features_handlers) <= feature
 		|| !builtin_features_handlers[feature]) {
@@ -2773,7 +2792,8 @@ int ast_bridge_features_enable(struct ast_bridge_features *features, enum ast_br
 	 * The rest is basically pretty easy.  We create another hook
 	 * using the built in feature's DTMF callback.  Easy as pie.
 	 */
-	return ast_bridge_dtmf_hook(features, dtmf, builtin_features_handlers[feature], config, destructor);
+	return ast_bridge_dtmf_hook(features, dtmf, builtin_features_handlers[feature],
+		config, destructor, remove_on_pull);
 }
 
 int ast_bridge_features_limits_construct(struct ast_bridge_features_limits *limits)
@@ -2793,13 +2813,13 @@ void ast_bridge_features_limits_destroy(struct ast_bridge_features_limits *limit
 	ast_string_field_free_memory(limits);
 }
 
-int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits)
+int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits, int remove_on_pull)
 {
 	if (builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_LIMITS]) {
-		int (*bridge_features_set_limits_callback)(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits);
+		ast_bridge_builtin_set_limits_fn bridge_features_set_limits_callback;
 
 		bridge_features_set_limits_callback = builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_LIMITS];
-		return bridge_features_set_limits_callback(features, limits);
+		return bridge_features_set_limits_callback(features, limits, remove_on_pull);
 	}
 
 	ast_log(LOG_ERROR, "Attempted to set limits without an AST_BRIDGE_BUILTIN_INTERVAL_LIMITS callback registered.\n");
@@ -2810,6 +2830,101 @@ void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast
 {
 	ast_set_flag(&features->feature_flags, flag);
 	features->usable = 1;
+}
+
+/*!
+ * \internal
+ * \brief ao2 object match remove_on_pull hooks.
+ * \since 12.0.0
+ *
+ * \param obj Feature hook object.
+ * \param arg Not used
+ * \param flags Not used
+ *
+ * \retval CMP_MATCH if hook has remove_on_pull set.
+ * \retval 0 if not match.
+ */
+static int hook_remove_on_pull_match(void *obj, void *arg, int flags)
+{
+	struct ast_bridge_hook *hook = obj;
+
+	if (hook->remove_on_pull) {
+		return CMP_MATCH;
+	} else {
+		return 0;
+	}
+}
+
+/*!
+ * \internal
+ * \brief Remove all remove_on_pull hooks in the container.
+ * \since 12.0.0
+ *
+ * \param hooks Hooks container to work on.
+ *
+ * \return Nothing
+ */
+static void hooks_remove_on_pull_container(struct ao2_container *hooks)
+{
+	if (hooks) {
+		ao2_callback(hooks, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE,
+			hook_remove_on_pull_match, NULL);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Remove all remove_on_pull hooks in the heap.
+ * \since 12.0.0
+ *
+ * \param hooks Hooks heap to work on.
+ *
+ * \return Nothing
+ */
+static void hooks_remove_on_pull_heap(struct ast_heap *hooks)
+{
+	struct ast_bridge_hook *hook;
+	int changed;
+
+	if (!hooks) {
+		return;
+	}
+
+	ast_heap_wrlock(hooks);
+	do {
+		int idx;
+
+		changed = 0;
+		for (idx = ast_heap_size(hooks); idx; --idx) {
+			hook = ast_heap_peek(hooks, idx);
+			if (hook->remove_on_pull) {
+				ast_heap_remove(hooks, hook);
+				ao2_ref(hook, -1);
+				changed = 1;
+			}
+		}
+	} while (changed);
+	ast_heap_unlock(hooks);
+}
+
+/*!
+ * \internal
+ * \brief Remove marked bridge channel feature hooks.
+ * \since 12.0.0
+ *
+ * \param features Bridge featues structure
+ *
+ * \return Nothing
+ */
+static void bridge_features_remove_on_pull(struct ast_bridge_features *features)
+{
+	if (!features) {
+		return;
+	}
+
+	hooks_remove_on_pull_container(features->dtmf_hooks);
+	hooks_remove_on_pull_container(features->hangup_hooks);
+	hooks_remove_on_pull_heap(features->interval_hooks);
 }
 
 static int interval_hook_time_cmp(void *a, void *b)

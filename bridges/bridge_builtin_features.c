@@ -279,19 +279,19 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	/* Setup a DTMF menu to control the transfer. */
 	if (ast_bridge_features_init(&caller_features)
 		|| ast_bridge_hangup_hook(&caller_features,
-			attended_transfer_complete, &transfer_code, NULL)
+			attended_transfer_complete, &transfer_code, NULL, 0)
 		|| ast_bridge_dtmf_hook(&caller_features,
 			attended_transfer && !ast_strlen_zero(attended_transfer->abort)
 				? attended_transfer->abort : "*1",
-			attended_transfer_abort, &transfer_code, NULL)
+			attended_transfer_abort, &transfer_code, NULL, 0)
 		|| ast_bridge_dtmf_hook(&caller_features,
 			attended_transfer && !ast_strlen_zero(attended_transfer->complete)
 				? attended_transfer->complete : "*2",
-			attended_transfer_complete, &transfer_code, NULL)
+			attended_transfer_complete, &transfer_code, NULL, 0)
 		|| ast_bridge_dtmf_hook(&caller_features,
 			attended_transfer && !ast_strlen_zero(attended_transfer->threeway)
 				? attended_transfer->threeway : "*3",
-			attended_transfer_threeway, &transfer_code, NULL)) {
+			attended_transfer_threeway, &transfer_code, NULL, 0)) {
 		ast_bridge_features_cleanup(&caller_features);
 		ast_hangup(peer);
 /* BUGBUG beeperr needs to be configurable from features.conf */
