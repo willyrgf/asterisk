@@ -1285,8 +1285,9 @@ static struct confbridge_conference *join_conference_bridge(const char *conferen
 		conf_bridge_profile_copy(&conference->b_profile, &user->b_profile);
 
 		/* Create an actual bridge that will do the audio mixing */
-		if (!(conference->bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_MULTIMIX,
-			AST_BRIDGE_FLAG_MASQUERADE_ONLY, NULL))) {
+		conference->bridge = ast_bridge_base_new(AST_BRIDGE_CAPABILITY_MULTIMIX,
+			AST_BRIDGE_FLAG_MASQUERADE_ONLY);
+		if (!conference->bridge) {
 			ao2_ref(conference, -1);
 			conference = NULL;
 			ao2_unlock(conference_bridges);

@@ -114,85 +114,71 @@ struct ast_bridge_tech_optimizations {
 	unsigned int drop_silence:1;
 };
 
+/* BUGBUG move these declarations to before struct ast_bridge declared. --v */
 /*!
- * \brief Create the bridge personality.
+ * \brief Destroy the bridge.
  *
  * \param self Bridge to operate upon.
  *
+ * \return Nothing
+ */
+typedef void (*ast_bridge_destructor_fn)(struct ast_bridge *self);
+
+/*!
+ * \brief Can this channel be pushed into the bridge.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel wanting to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \retval TRUE if can push this channel into the bridge.
+ */
+typedef int (*ast_bridge_can_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
+
+/*!
+ * \brief Push this channel into the bridge.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
  * \details
- * Allocate and setup the self->personality_pvt.
+ * Setup any channel hooks controlled by the bridge.  Allocate
+ * bridge_channel->bridge_pvt and initialize any resources put
+ * in bridge_channel->bridge_pvt if needed.  If there is a swap
+ * channel, use it as a guide to setting up the bridge_channel.
  *
  * \note On entry, self is already locked.
  *
  * \retval 0 on success
  * \retval -1 on failure
  */
-typedef int (*ast_personality_create_fn)(struct ast_bridge *self);
+typedef int (*ast_bridge_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
 
 /*!
- * \brief Destroy the bridge personality.
+ * \brief Pull this channel from the bridge.
  *
  * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to pull.
  *
  * \details
- * Release any resources held by self->personality_pvt and
- * release self->personality_pvt.
+ * Remove any channel hooks controlled by the bridge.  Release
+ * any resources held by bridge_channel->bridge_pvt and release
+ * bridge_channel->bridge_pvt.
+ *
+ * \note On entry, self is already locked.
  *
  * \return Nothing
  */
-typedef void (*ast_personality_destroy_fn)(struct ast_bridge *self);
+typedef void (*ast_bridge_pull_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
 
 /*!
- * \brief Can this channel be pushed into its bridge.
+ * \brief Masquerade push this channel into the bridge.
  *
- * \param self Bridge channel to operate upon.
- * \param swap Bridge channel to swap places with if not NULL.
- *
- * \note On entry, self->bridge is already locked.
- *
- * \retval TRUE if can push this channel into its bridge.
- */
-typedef int (*ast_personality_channel_can_push_fn)(struct ast_bridge_channel *self, struct ast_bridge_channel *swap);
-
-/*!
- * \brief Push this channel into its bridge.
- *
- * \param self Bridge channel to operate upon.
- * \param swap Bridge channel to swap places with if not NULL.
- *
- * \details
- * Setup any channel hooks controlled by the personality,
- * allocate and setup the self->personality_pvt.  If there is a
- * swap channel, use it as a guide to setting up the self
- * channel.
- *
- * \note On entry, self->bridge is already locked.
- *
- * \retval 0 on success
- * \retval -1 on failure
- */
-typedef int (*ast_personality_channel_push_fn)(struct ast_bridge_channel *self, struct ast_bridge_channel *swap);
-
-/*!
- * \brief Pull this channel from its bridge.
- *
- * \param self Bridge channel to operate upon.
- *
- * \details
- * Remove any channel hooks controlled by the personality.
- * Release any resources held by self->personality_pvt and
- * release self->personality_pvt.
- *
- * \note On entry, self->bridge is already locked.
- *
- * \return Nothing
- */
-typedef void (*ast_personality_channel_pull_fn)(struct ast_bridge_channel *self);
-
-/*!
- * \brief Masquerade push this channel into its bridge.
- *
- * \param self Bridge channel to operate upon.
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to virtually push.
  *
  * \note This is a virtual push into the bridge because a
  * masquerade swaps the guts of the channel to give it a new
@@ -201,12 +187,13 @@ typedef void (*ast_personality_channel_pull_fn)(struct ast_bridge_channel *self)
  *
  * \return Nothing
  */
-typedef void (*ast_personality_channel_push_masquerade_fn)(struct ast_bridge_channel *self);
+typedef void (*ast_bridge_push_channel_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
 
 /*!
- * \brief Masquerade pull this channel from its bridge.
+ * \brief Masquerade pull this channel from the bridge.
  *
- * \param self Bridge channel to operate upon.
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to virtually pull.
  *
  * \note This is a virtual pull from the bridge because a
  * masquerade swaps the guts of the channel to give it a new
@@ -215,32 +202,31 @@ typedef void (*ast_personality_channel_push_masquerade_fn)(struct ast_bridge_cha
  *
  * \return Nothing
  */
-typedef void (*ast_personality_channel_pull_masquerade_fn)(struct ast_bridge_channel *self);
+typedef void (*ast_bridge_pull_channel_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
 
-/*! Bridge personality virtual methods table definition. */
-struct ast_personality_methods {
-	/*! Bridge personality name for log messages. */
+/*! Bridge virtual methods table definition. */
+struct ast_bridge_methods {
+	/*! Bridge class name for log messages. */
 	const char *name;
-	/*! Create the bridge personality. */
-	ast_personality_create_fn create;
-	/*! Destroy the bridge personality. */
-	ast_personality_destroy_fn destroy;
-	/*! TRUE if can push the bridge channel into its bridge. */
-	ast_personality_channel_can_push_fn can_push;
-	/*! Push the bridge channel into its bridge. */
-	ast_personality_channel_push_fn push;
-	/*! Pull the bridge channel from its bridge. */
-	ast_personality_channel_pull_fn pull;
+	/*! Destroy the bridge. */
+	ast_bridge_destructor_fn destroy;
+	/*! TRUE if can push the bridge channel into the bridge. */
+	ast_bridge_can_push_channel_fn can_push;
+	/*! Push the bridge channel into the bridge. */
+	ast_bridge_push_channel_fn push;
+	/*! Pull the bridge channel from the bridge. */
+	ast_bridge_pull_channel_fn pull;
 /*
  * BUGBUG push_masquerade may just have to change into masquerade_complete so the bridge will need to check compatibility again.
  * Otherwise, the bridge channel will have to constantly check if the set formats have changed before reading frames.
  * Race conditions may force the bridge channel to constantly check anyway.                                                                                                                            .
  */
-	/*! Virtually push the bridge channel into its bridge. */
-	ast_personality_channel_push_masquerade_fn push_masquerade;
-	/*! Virtually pull the bridge channel from its bridge. */
-	ast_personality_channel_pull_masquerade_fn pull_masquerade;
+	/*! Virtually push the bridge channel into the bridge. */
+	ast_bridge_push_channel_masquerade_fn push_masquerade;
+	/*! Virtually pull the bridge channel from the bridge. */
+	ast_bridge_pull_channel_masquerade_fn pull_masquerade;
 };
+/* BUGBUG move these declarations to before struct ast_bridge declared. --^ */
 
 /*!
  * \brief Structure that contains information regarding a channel in a bridge
@@ -258,13 +244,13 @@ struct ast_bridge_channel {
 	/*! Bridge this channel is participating in */
 	struct ast_bridge *bridge;
 	/*!
-	 * \brief Bridge personality private bridge channel data.
+	 * \brief Bridge class private channel data.
 	 *
 	 * \note This information is added when the channel is pushed
 	 * into the bridge and removed when it is pulled from the
 	 * bridge.
 	 */
-	void *personality_pvt;
+	void *bridge_pvt;
 	/*!
 	 * \brief Private information unique to the bridge technology.
 	 *
@@ -360,14 +346,8 @@ struct ast_bridge_video_mode {
  * \brief Structure that contains information about a bridge
  */
 struct ast_bridge {
-	/*! Bridge personality virtual method table. */
-	const struct ast_personality_methods *personality;
-	/*!
-	 * \brief Bridge personality private bridge data.
-	 *
-	 * \note This information is added when the bridge is created.
-	 */
-	void *personality_pvt;
+	/*! Bridge virtual method table. */
+	const struct ast_bridge_methods *v_table;
 	/*! Bridge technology that is handling the bridge */
 	struct ast_bridge_technology *technology;
 	/*! Private information unique to the bridge technology */
@@ -407,11 +387,49 @@ struct ast_bridge {
 };
 
 /*!
- * \brief Create a new bridge
+ * \internal
+ * \brief Allocate the bridge class object memory.
+ * \since 12.0.0
+ *
+ * \param size Size of the bridge class structure to allocate.
+ * \param v_table Bridge class virtual method table.
+ *
+ * \retval bridge on success.
+ * \retval NULL on error.
+ */
+struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods *v_table);
+
+/*! \brief Bridge base class virtual method table. */
+extern struct ast_bridge_methods ast_bridge_base_v_table;
+
+/*!
+ * \brief Initialize the base class of the bridge.
+ *
+ * \param self Bridge to operate upon. (Tollerates a NULL pointer)
+ * \param capabilities The capabilities that we require to be used on the bridge
+ * \param flags Flags that will alter the behavior of the bridge
+ *
+ * \retval self on success
+ * \retval NULL on failure, self is already destroyed
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge *bridge;
+ * bridge = ast_bridge_alloc(sizeof(*bridge), &ast_bridge_base_v_table);
+ * bridge = ast_bridge_base_init(bridge, AST_BRIDGE_CAPABILITY_1TO1MIX, AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
+ * \endcode
+ *
+ * This creates a no frills two party bridge that will be
+ * destroyed once one of the channels hangs up.
+ */
+struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabilities, int flags);
+
+/*!
+ * \brief Create a new base class bridge
  *
  * \param capabilities The capabilities that we require to be used on the bridge
  * \param flags Flags that will alter the behavior of the bridge
- * \param personality Personality of the new bridge (NULL if none)
  *
  * \retval a pointer to a new bridge on success
  * \retval NULL on failure
@@ -420,13 +438,13 @@ struct ast_bridge {
  *
  * \code
  * struct ast_bridge *bridge;
- * bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_1TO1MIX, AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
+ * bridge = ast_bridge_base_new(AST_BRIDGE_CAPABILITY_1TO1MIX, AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
  * \endcode
  *
- * This creates a simple two party bridge that will be destroyed once one of
- * the channels hangs up.
+ * This creates a no frills two party bridge that will be
+ * destroyed once one of the channels hangs up.
  */
-struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags, const struct ast_personality_methods *personality);
+struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags);
 
 /*!
  * \brief Try locking the bridge.
@@ -501,7 +519,7 @@ int ast_bridge_check(uint32_t capabilities);
  * ast_bridge_destroy(bridge);
  * \endcode
  *
- * This destroys a bridge that was previously created using ast_bridge_new.
+ * This destroys a bridge that was previously created.
  */
 int ast_bridge_destroy(struct ast_bridge *bridge);
 

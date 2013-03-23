@@ -140,7 +140,7 @@ static int apply_option_timeout(struct ast_bridge_features *features, char *dura
 
 	/* Limits struct holds time as milliseconds, so muliply 1000x */
 	hold_limits.duration *= 1000;
-	ast_bridge_features_set_limits(features, &hold_limits, 1);
+	ast_bridge_features_set_limits(features, &hold_limits, 1 /* remove_on_pull */);
 	ast_bridge_features_limits_destroy(&hold_limits);
 
 	return 0;
@@ -195,9 +195,8 @@ static int bridgewait_exec(struct ast_channel *chan, const char *data)
 
 	ast_mutex_lock(&bridgewait_lock);
 	if (!holding_bridge) {
-/* BUGBUG this holding bridge needs a personality to manage the timeout. Otherwise, the timer will move to the next bridge which is likely not desireable. */
-		holding_bridge = ast_bridge_new(AST_BRIDGE_CAPABILITY_HOLDING,
-			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM, NULL);
+		holding_bridge = ast_bridge_base_new(AST_BRIDGE_CAPABILITY_HOLDING,
+			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM);
 	}
 	ast_mutex_unlock(&bridgewait_lock);
 	if (!holding_bridge) {

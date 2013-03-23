@@ -391,10 +391,7 @@ static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	}
 	--bridge->num_channels;
 	AST_LIST_REMOVE(&bridge->channels, bridge_channel, entry);
-	if (bridge->personality && bridge->personality->pull) {
-		bridge->personality->pull(bridge_channel);
-	}
-	bridge_features_remove_on_pull(bridge_channel->features);
+	bridge->v_table->pull(bridge, bridge_channel);
 
 	bridge->reconfigured = 1;
 }
@@ -422,8 +419,8 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	bridge_channel->swap = NULL;
 
 	chan_leaving = bridge->dissolved
-		|| (bridge->personality && bridge->personality->can_push
-			&& !bridge->personality->can_push(bridge_channel, swap));
+		|| (bridge->v_table->can_push
+			&& !bridge->v_table->can_push(bridge, bridge_channel, swap));
 
 	ast_bridge_channel_lock(bridge_channel);
 	if (chan_leaving) {
@@ -450,8 +447,8 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	}
 
 	/* Add channel to the bridge */
-	if (bridge->personality && bridge->personality->push
-		&& bridge->personality->push(bridge_channel, swap)) {
+	if (bridge->v_table->push
+		&& bridge->v_table->push(bridge, bridge_channel, swap)) {
 /* BUGBUG need to use bridge id in the diagnostic message */
 		ast_log(LOG_ERROR, "Pushing channel %s into bridge %p failed\n",
 			ast_channel_name(bridge_channel->chan), bridge);
@@ -824,7 +821,7 @@ static void bridge_tech_deferred_destroy(struct ast_bridge *bridge, struct ast_f
 		.tech_pvt = deferred->tech_pvt,
 		};
 
-	ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy (deferred)\n",
+	ast_debug(1, "Calling bridge technology %s destructor for bridge %p (really %p) (deferred)\n",
 		dummy_bridge.technology->name, &dummy_bridge, bridge);
 	dummy_bridge.technology->destroy(&dummy_bridge);
 	ast_module_unref(dummy_bridge.technology->mod);
@@ -896,7 +893,8 @@ static void destroy_bridge(void *obj)
 {
 	struct ast_bridge *bridge = obj;
 
-	ast_debug(1, "Actually destroying bridge %p, nobody wants it anymore\n", bridge);
+	ast_debug(1, "Actually destroying %s bridge %p, nobody wants it anymore\n",
+		bridge->v_table->name, bridge);
 
 	/* Do any pending actions in the context of destruction. */
 	ast_bridge_lock(bridge);
@@ -906,20 +904,23 @@ static void destroy_bridge(void *obj)
 	/* There should not be any channels left in the bridge. */
 	ast_assert(AST_LIST_EMPTY(&bridge->channels));
 
-	/* Pass off the bridge to the technology to destroy if needed */
-	ast_debug(1, "Giving bridge technology %s the bridge structure %p to destroy\n",
-		bridge->technology->name, bridge);
-	if (bridge->technology->destroy) {
-		bridge->technology->destroy(bridge);
-	}
-	ast_module_unref(bridge->technology->mod);
-
-	if (bridge->personality) {
-		ast_debug(1, "Giving bridge personality %s the bridge structure %p to destroy\n",
-			bridge->personality->name, bridge);
-		if (bridge->personality->destroy) {
-			bridge->personality->destroy(bridge);
+	if (bridge->v_table->destroy) {
+		ast_debug(1, "Calling %s bridge destructor for bridge %p\n",
+			bridge->v_table->name, bridge);
+		if (bridge->v_table->destroy) {
+			bridge->v_table->destroy(bridge);
 		}
+	}
+
+	/* Pass off the bridge to the technology to destroy if needed */
+	if (bridge->technology) {
+		ast_debug(1, "Calling bridge technology %s destructor for bridge %p\n",
+			bridge->technology->name, bridge);
+		if (bridge->technology->destroy) {
+			bridge->technology->destroy(bridge);
+		}
+		ast_module_unref(bridge->technology->mod);
+		bridge->technology = NULL;
 	}
 
 	if (bridge->callid) {
@@ -929,15 +930,36 @@ static void destroy_bridge(void *obj)
 	cleanup_video_mode(bridge);
 }
 
-struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags, const struct ast_personality_methods *personality)
+struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods *v_table)
 {
 	struct ast_bridge *bridge;
-	struct ast_bridge_technology *bridge_technology;
+
+	/* Check v_table for required methods. */
+	if (!v_table || !v_table->name || !v_table->pull) {
+		ast_assert(0);
+		return NULL;
+	}
+
+	bridge = ao2_alloc(size, destroy_bridge);
+	if (bridge) {
+		bridge->v_table = v_table;
+	}
+	return bridge;
+}
+
+struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabilities, int flags)
+{
+	if (!self) {
+		return NULL;
+	}
+
+	ast_set_flag(&self->feature_flags, flags);
 
 	/* If we need to be a smart bridge see if we can move between 1to1 and multimix bridges */
 	if (flags & AST_BRIDGE_FLAG_SMART) {
 		if (!ast_bridge_check((capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX)
 			? AST_BRIDGE_CAPABILITY_MULTIMIX : AST_BRIDGE_CAPABILITY_1TO1MIX)) {
+			ao2_ref(self, -1);
 			return NULL;
 		}
 	}
@@ -947,48 +969,55 @@ struct ast_bridge *ast_bridge_new(uint32_t capabilities, int flags, const struct
 	 * the "best" bridge technology, otherwise we can just look for
 	 * the most basic capability needed, single 1to1 mixing.
 	 */
-	bridge_technology = capabilities
+	self->technology = capabilities
 		? find_best_technology(capabilities)
 		: find_best_technology(AST_BRIDGE_CAPABILITY_1TO1MIX);
-
-	/* If no bridge technology was found we can't possibly do bridging so fail creation of the bridge */
-	if (!bridge_technology) {
+	if (!self->technology) {
+		ao2_ref(self, -1);
 		return NULL;
-	}
-
-	/* We have everything we need to create this bridge... so allocate the memory, link things together, and fire her up! */
-	bridge = ao2_alloc(sizeof(*bridge), destroy_bridge);
-	if (!bridge) {
-		ast_module_unref(bridge_technology->mod);
-		return NULL;
-	}
-
-	bridge->personality = personality;
-	bridge->technology = bridge_technology;
-
-	ast_set_flag(&bridge->feature_flags, flags);
-
-	if (bridge->personality) {
-		ast_debug(1, "Giving bridge personality %s the bridge structure %p to setup\n",
-			bridge->personality->name, bridge);
-		if (bridge->personality->create && bridge->personality->create(bridge)) {
-			ast_debug(1, "Bridge personality %s failed to setup bridge structure %p\n",
-				bridge->personality->name, bridge);
-			ao2_ref(bridge, -1);
-			return NULL;
-		}
 	}
 
 	/* Pass off the bridge to the technology to manipulate if needed */
-	ast_debug(1, "Giving bridge technology %s the bridge structure %p to setup\n",
-		bridge->technology->name, bridge);
-	if (bridge->technology->create && bridge->technology->create(bridge)) {
-		ast_debug(1, "Bridge technology %s failed to setup bridge structure %p\n",
-			bridge->technology->name, bridge);
-		ao2_ref(bridge, -1);
+	ast_debug(1, "Calling bridge technology %s constructor for bridge %p\n",
+		self->technology->name, self);
+	if (self->technology->create && self->technology->create(self)) {
+		ast_debug(1, "Bridge technology %s failed to setup on bridge %p\n",
+			self->technology->name, self);
+		ao2_ref(self, -1);
 		return NULL;
 	}
 
+	return self;
+}
+
+/*!
+ * \internal
+ * \brief ast_bridge base pull method.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to pull.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \return Nothing
+ */
+static void bridge_base_pull(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel)
+{
+	bridge_features_remove_on_pull(bridge_channel->features);
+}
+
+struct ast_bridge_methods ast_bridge_base_v_table = {
+	.name = "base",
+	.pull = bridge_base_pull,
+};
+
+struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags)
+{
+	void *bridge;
+
+	bridge = ast_bridge_alloc(sizeof(struct ast_bridge), &ast_bridge_base_v_table);
+	bridge = ast_bridge_base_init(bridge, capabilities, flags);
 	return bridge;
 }
 
@@ -1193,7 +1222,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	bridge->technology = new_technology;
 
 	/* Setup the new bridge technology. */
-	ast_debug(1, "Giving bridge technology %s the bridge structure %p to setup\n",
+	ast_debug(1, "Calling bridge technology %s constructor for bridge %p\n",
 		new_technology->name, bridge);
 	if (new_technology->create && new_technology->create(bridge)) {
 /* BUGBUG need to output the bridge id for tracking why. */
@@ -1243,11 +1272,11 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	 * around.
 	 */
 	if (old_technology->destroy) {
-		ast_debug(1, "Deferring bridge technology %s bridge structure %p destruction\n",
+		ast_debug(1, "Deferring bridge technology %s destructor for bridge %p\n",
 			old_technology->name, bridge);
 		ast_bridge_queue_action_nodup(bridge, deferred_action);
 	} else {
-		ast_debug(1, "Giving bridge technology %s the bridge structure %p (really %p) to destroy\n",
+		ast_debug(1, "Calling bridge technology %s destructor for bridge %p (really %p)\n",
 			old_technology->name, &dummy_bridge, bridge);
 		ast_module_unref(old_technology->mod);
 	}
