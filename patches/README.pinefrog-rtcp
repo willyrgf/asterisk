@@ -22,17 +22,16 @@ The 1.4 work was sponsored by several companies, including ClearIT AB, Sweden.
 Status of 1.8 port
 ------------------
 2013-03-05	Started
-2013-03-12	Updated README to document current status
 
 Todo for 1.8
 ------------
-Done. - Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
-Done. - Add support of outbound SDES end and goodbye
-Done. - Add manager events at end-of call
-Done. - Add realtime storage of RTCP reports
-Done. - Add time manager events (configured in sip.conf)
-Done. - Add more information to RTCP debug
-Done. - Add more data aggregation to ast_rtcp structure (from svn trunk really)
+- Add support of outbound and inbound SDES. The SDES includes a stream identifier, CNAME. 
+- Add support of outbound SDES end and goodbye
+- Add manager events at end-of call
+- Add realtime storage of RTCP reports
+- Add time manager events (configured in sip.conf)
+- Add more information to RTCP debug
+- Add more data aggregation to ast_rtcp structure (from svn trunk really)
 - Add RTCP for p2p RTP bridges. Needs to be tested and validated.
 
 Background
@@ -73,22 +72,14 @@ The idea is (like RTP)
  - The receiver can then apply symmetric RTCP and start sending to the NAT outside port
    that we're sending from and we'll get their packets.
 
-Logging
--------
-This module logs Call Quality Records either to Realtime databases (see structure
-below) or to a new log channel named CQR. Here's an example log entry, broken
-to multiple lines for clarity:
-
-[Mar 12 14:10:13] CQR[27938] sip/rtcp.c: CQR Channel: SIP/demo2-0000000b Uid example.com-1363086575.11
-     Bch SIP/demo3-0000000a Buid example.com-1363086575.10 Pvt 12474f1963f3312d0cfc930472a164d7@62.80.214.22:5060 
-     Media audio Lssrc 653259305 Rssrc 1997455415 Rip 87.96.134.129 Rtt 0:0:0 Ljitter 0.000000 Rjitter 0.026454 
-     Rtcpstatus Active Dur 6 Pout 169 Plossout 0 Pin 157 Plossin 0
-
 Todo
 ----
 - When CNAME changes, we have a different stream and need to restart the stats.
   Should we add ability to produce multiple RTCP reports for one "call" and aggregate them?
   The different parts might have different properties.
+- Document realtime storage format. Add missing fields.
+- BUG: RTCP is halted during hold. It should not stop.
+- During HOLD, send RTCP SR reports without report block, only the header and no chunks 
 
 Done in 1.4
 -----------
@@ -103,9 +94,7 @@ Done in 1.4
 
 Open Issues
 -----------
-The final manager report lacks (in the case of the second channel) the bridged channel. 
-We could save that data.  This will affect realtime as well, so we need to copy the 
-channel name to a stored variable while it exists.
+The final manager report lacks (in the case of the second channel) the bridged channel. We could save that data.  This will affect realtime as well, so we need to copy the channel name to a stored variable while it exists.
 
 Do we have a counter of consecutive lost packets? How do we measure lost packets on inbound
 stream? Gaps in seq numbers or just the sender reports from the other end compared with received 
@@ -135,9 +124,6 @@ Scenarios to test
 - Nat traversal - Asterisk outside of NAT and inside (as client to external service)
 - Call hold
 - Call with music-on-hold
-- Call transfer
-
-Send feedback from your reports to oej@edvina.net
 
 Database structure
 -------------------
@@ -179,6 +165,4 @@ In extconfig.conf add
 
 rtpcqr => mysql,asterisk,astqos
 
-When you run "sip show settings" you should see this:
-
-  QoS realtime reports:   Enabled
+When you run "sip show settings"
