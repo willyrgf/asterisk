@@ -73,6 +73,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/data.h"
 #include "asterisk/channel_internal.h"
 #include "asterisk/features.h"
+#include "asterisk/bridging.h"
 #include "asterisk/test.h"
 
 /*** DOCUMENTATION
@@ -7286,6 +7287,8 @@ void ast_do_masquerade(struct ast_channel *original)
 	 */
 	ast_channel_unlock(original);
 	ast_channel_unlock(clonechan);
+
+	ast_bridge_notify_masquerade(original);
 
 	if (clone_sending_dtmf_digit) {
 		/*

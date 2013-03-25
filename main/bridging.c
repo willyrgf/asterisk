@@ -338,7 +338,18 @@ void ast_bridge_channel_restore_formats(struct ast_bridge_channel *bridge_channe
 	}
 }
 
-/*! \brief Helper function to find a bridge channel given a channel */
+/*!
+ * \internal
+ * \brief Helper function to find a bridge channel given a channel.
+ *
+ * \param bridge What to search
+ * \param chan What to search for.
+ *
+ * \note On entry, bridge is already locked.
+ *
+ * \retval bridge_channel if channel is in the bridge.
+ * \retval NULL if not in bridge.
+ */
 static struct ast_bridge_channel *find_bridge_channel(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	struct ast_bridge_channel *bridge_channel;
@@ -419,8 +430,7 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	bridge_channel->swap = NULL;
 
 	chan_leaving = bridge->dissolved
-		|| (bridge->v_table->can_push
-			&& !bridge->v_table->can_push(bridge, bridge_channel, swap));
+		|| !bridge->v_table->can_push(bridge, bridge_channel, swap);
 
 	ast_bridge_channel_lock(bridge_channel);
 	if (chan_leaving) {
@@ -447,8 +457,7 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	}
 
 	/* Add channel to the bridge */
-	if (bridge->v_table->push
-		&& bridge->v_table->push(bridge, bridge_channel, swap)) {
+	if (bridge->v_table->push(bridge, bridge_channel, swap)) {
 /* BUGBUG need to use bridge id in the diagnostic message */
 		ast_log(LOG_ERROR, "Pushing channel %s into bridge %p failed\n",
 			ast_channel_name(bridge_channel->chan), bridge);
@@ -904,13 +913,9 @@ static void destroy_bridge(void *obj)
 	/* There should not be any channels left in the bridge. */
 	ast_assert(AST_LIST_EMPTY(&bridge->channels));
 
-	if (bridge->v_table->destroy) {
-		ast_debug(1, "Calling %s bridge destructor for bridge %p\n",
-			bridge->v_table->name, bridge);
-		if (bridge->v_table->destroy) {
-			bridge->v_table->destroy(bridge);
-		}
-	}
+	ast_debug(1, "Calling %s bridge destructor for bridge %p\n",
+		bridge->v_table->name, bridge);
+	bridge->v_table->destroy(bridge);
 
 	/* Pass off the bridge to the technology to destroy if needed */
 	if (bridge->technology) {
@@ -934,8 +939,16 @@ struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods
 {
 	struct ast_bridge *bridge;
 
-	/* Check v_table for required methods. */
-	if (!v_table || !v_table->name || !v_table->pull) {
+	/* Check v_table that all methods are present. */
+	if (!v_table
+		|| !v_table->name
+		|| !v_table->destroy
+		|| !v_table->can_push
+		|| !v_table->push
+		|| !v_table->pull
+		|| !v_table->notify_masquerade) {
+		ast_log(LOG_ERROR, "Virtual method table for bridge class %s not complete.\n",
+			v_table && v_table->name ? v_table->name : "<unknown>");
 		ast_assert(0);
 		return NULL;
 	}
@@ -992,6 +1005,60 @@ struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabi
 
 /*!
  * \internal
+ * \brief ast_bridge base class destructor.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \note Stub because of nothing to do.
+ *
+ * \return Nothing
+ */
+static void bridge_base_destroy(struct ast_bridge *self)
+{
+}
+
+/*!
+ * \internal
+ * \brief ast_bridge base can_push method.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel wanting to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \note On entry, self is already locked.
+ * \note Stub because of nothing to do.
+ *
+ * \retval TRUE if can push this channel into the bridge.
+ */
+static int bridge_base_can_push(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap)
+{
+	return 1;
+}
+
+/*!
+ * \internal
+ * \brief ast_bridge base push method.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \note On entry, self is already locked.
+ * \note Stub because of nothing to do.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+static int bridge_base_push(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap)
+{
+	return 0;
+}
+
+/*!
+ * \internal
  * \brief ast_bridge base pull method.
  * \since 12.0.0
  *
@@ -1007,9 +1074,30 @@ static void bridge_base_pull(struct ast_bridge *self, struct ast_bridge_channel 
 	bridge_features_remove_on_pull(bridge_channel->features);
 }
 
+/*!
+ * \internal
+ * \brief ast_bridge base notify_masquerade method.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel that was masqueraded.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \return Nothing
+ */
+static void bridge_base_notify_masquerade(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel)
+{
+	self->reconfigured = 1;
+}
+
 struct ast_bridge_methods ast_bridge_base_v_table = {
 	.name = "base",
+	.destroy = bridge_base_destroy,
+	.can_push = bridge_base_can_push,
+	.push = bridge_base_push,
 	.pull = bridge_base_pull,
+	.notify_masquerade = bridge_base_notify_masquerade,
 };
 
 struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags)
@@ -2211,6 +2299,34 @@ void ast_after_bridge_set_go_on(struct ast_channel *chan, const char *context, c
 	__after_bridge_set_goto(chan, 0, 0, context, exten, priority, p_goto);
 }
 
+void ast_bridge_notify_masquerade(struct ast_channel *chan)
+{
+	struct ast_bridge_channel *bridge_channel;
+	struct ast_bridge *bridge;
+
+	/* Safely get the bridge_channel pointer for the chan. */
+	ast_channel_lock(chan);
+	bridge_channel = ast_channel_internal_bridge_channel(chan);
+	if (!bridge_channel) {
+		/* Not in a bridge */
+		ast_channel_unlock(chan);
+		return;
+	}
+	ao2_ref(bridge_channel, +1);
+	ast_channel_unlock(chan);
+
+	ast_bridge_channel_lock_bridge(bridge_channel);
+	bridge = bridge_channel->bridge;
+	if (bridge_channel == find_bridge_channel(bridge, chan)) {
+/* BUGBUG this needs more work.  The channels need to be made compatible again if the formats change. The bridge_channel thread needs to monitor for this case. */
+		/* The channel we want to notify is still in a bridge. */
+		bridge->v_table->notify_masquerade(bridge, bridge_channel);
+		ast_bridge_reconfigured(bridge);
+	}
+	ast_bridge_unlock(bridge);
+	ao2_ref(bridge_channel, -1);
+}
+
 /*
  * BUGBUG make ast_bridge_join() require features to be allocated just like ast_bridge_impart() and not expect the struct back.
  *
@@ -2245,7 +2361,9 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	}
 
 	/* Initialize various other elements of the bridge channel structure that we can't do above */
+	ast_channel_lock(chan);
 	ast_channel_internal_bridge_channel_set(chan, bridge_channel);
+	ast_channel_unlock(chan);
 	bridge_channel->thread = pthread_self();
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
@@ -2254,7 +2372,9 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	if (ast_bridge_channel_establish_roles(bridge_channel)) {
 		/* A bridge channel should not be allowed to join if its roles couldn't be copied properly. */
 		state = AST_BRIDGE_CHANNEL_STATE_HANGUP;
+		ast_channel_lock(chan);
 		ast_channel_internal_bridge_channel_set(chan, NULL);
+		ast_channel_unlock(chan);
 		ao2_ref(bridge_channel, -1);
 		goto join_exit;
 	}
@@ -2263,7 +2383,9 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	state = bridge_channel->state;
 
 	/* Cleanup all the data in the bridge channel after it leaves the bridge. */
+	ast_channel_lock(chan);
 	ast_channel_internal_bridge_channel_set(chan, NULL);
+	ast_channel_unlock(chan);
 	bridge_channel->chan = NULL;
 	bridge_channel->swap = NULL;
 	bridge_channel->features = NULL;
@@ -2317,7 +2439,9 @@ static void *bridge_channel_ind_thread(void *data)
 	chan = bridge_channel->chan;
 
 	/* cleanup */
+	ast_channel_lock(chan);
 	ast_channel_internal_bridge_channel_set(chan, NULL);
+	ast_channel_unlock(chan);
 	bridge_channel->chan = NULL;
 	bridge_channel->swap = NULL;
 	ast_bridge_features_destroy(bridge_channel->features);
@@ -2341,7 +2465,9 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	}
 
 	/* Setup various parameters */
+	ast_channel_lock(chan);
 	ast_channel_internal_bridge_channel_set(chan, bridge_channel);
+	ast_channel_unlock(chan);
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
@@ -2371,7 +2497,9 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 bridge_impart_cleanup:
 	if (res) {
 		/* cleanup */
+		ast_channel_lock(chan);
 		ast_channel_internal_bridge_channel_set(chan, NULL);
+		ast_channel_unlock(chan);
 		bridge_channel->chan = NULL;
 		bridge_channel->swap = NULL;
 		ast_bridge_features_destroy(bridge_channel->features);
@@ -2387,9 +2515,13 @@ bridge_impart_cleanup:
 int ast_bridge_depart(struct ast_channel *chan)
 {
 	struct ast_bridge_channel *bridge_channel;
+	int departable;
 
+	ast_channel_lock(chan);
 	bridge_channel = ast_channel_internal_bridge_channel(chan);
-	if (!bridge_channel || !bridge_channel->depart_wait) {
+	departable = bridge_channel && bridge_channel->depart_wait;
+	ast_channel_unlock(chan);
+	if (!departable) {
 		ast_log(LOG_ERROR, "Channel %s cannot be departed.\n",
 			ast_channel_name(chan));
 		/*
@@ -2409,7 +2541,9 @@ int ast_bridge_depart(struct ast_channel *chan)
 	/* Wait for the depart thread to die */
 	pthread_join(bridge_channel->thread, NULL);
 
+	ast_channel_lock(chan);
 	ast_channel_internal_bridge_channel_set(chan, NULL);
+	ast_channel_unlock(chan);
 
 	/* We can get rid of the bridge_channel after the depart thread has died. */
 	ao2_ref(bridge_channel, -1);

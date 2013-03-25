@@ -175,36 +175,27 @@ typedef int (*ast_bridge_push_channel_fn)(struct ast_bridge *self, struct ast_br
 typedef void (*ast_bridge_pull_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
 
 /*!
- * \brief Masquerade push this channel into the bridge.
+ * \brief Notify the bridge that this channel was just masqueraded.
  *
  * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel to virtually push.
+ * \param bridge_channel Bridge channel that was masqueraded.
  *
- * \note This is a virtual push into the bridge because a
- * masquerade swaps the guts of the channel to give it a new
- * identity.  This is mostly for external bridge monitor
- * bookkeeping.
+ * \details
+ * A masquerade just happened to this channel.  The bridge needs
+ * to re-evaluate this a channel in the bridge.
+ *
+ * \note On entry, self is already locked.
  *
  * \return Nothing
  */
-typedef void (*ast_bridge_push_channel_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
+typedef void (*ast_bridge_notify_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
 
 /*!
- * \brief Masquerade pull this channel from the bridge.
+ * \brief Bridge virtual methods table definition.
  *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel to virtually pull.
- *
- * \note This is a virtual pull from the bridge because a
- * masquerade swaps the guts of the channel to give it a new
- * identity.  This is mostly for external bridge monitor
- * bookkeeping.
- *
- * \return Nothing
+ * \note Any changes to this struct must be reflected in
+ * ast_bridge_alloc() validity checking.
  */
-typedef void (*ast_bridge_pull_channel_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
-
-/*! Bridge virtual methods table definition. */
 struct ast_bridge_methods {
 	/*! Bridge class name for log messages. */
 	const char *name;
@@ -216,15 +207,8 @@ struct ast_bridge_methods {
 	ast_bridge_push_channel_fn push;
 	/*! Pull the bridge channel from the bridge. */
 	ast_bridge_pull_channel_fn pull;
-/*
- * BUGBUG push_masquerade may just have to change into masquerade_complete so the bridge will need to check compatibility again.
- * Otherwise, the bridge channel will have to constantly check if the set formats have changed before reading frames.
- * Race conditions may force the bridge channel to constantly check anyway.                                                                                                                            .
- */
-	/*! Virtually push the bridge channel into the bridge. */
-	ast_bridge_push_channel_masquerade_fn push_masquerade;
-	/*! Virtually pull the bridge channel from the bridge. */
-	ast_bridge_pull_channel_masquerade_fn pull_masquerade;
+	/*! Notify the bridge of a masquerade with the channel. */
+	ast_bridge_notify_masquerade_fn notify_masquerade;
 };
 /* BUGBUG move these declarations to before struct ast_bridge declared. --^ */
 
@@ -522,6 +506,16 @@ int ast_bridge_check(uint32_t capabilities);
  * This destroys a bridge that was previously created.
  */
 int ast_bridge_destroy(struct ast_bridge *bridge);
+
+/*!
+ * \brief Notify bridging that this channel was just masqueraded.
+ * \since 12.0.0
+ *
+ * \param chan Channel just involved in a masquerade
+ *
+ * \return Nothing
+ */
+void ast_bridge_notify_masquerade(struct ast_channel *chan);
 
 /*!
  * \brief Join (blocking) a channel to a bridge
