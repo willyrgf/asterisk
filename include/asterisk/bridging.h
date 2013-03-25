@@ -114,104 +114,6 @@ struct ast_bridge_tech_optimizations {
 	unsigned int drop_silence:1;
 };
 
-/* BUGBUG move these declarations to before struct ast_bridge declared. --v */
-/*!
- * \brief Destroy the bridge.
- *
- * \param self Bridge to operate upon.
- *
- * \return Nothing
- */
-typedef void (*ast_bridge_destructor_fn)(struct ast_bridge *self);
-
-/*!
- * \brief Can this channel be pushed into the bridge.
- *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel wanting to push.
- * \param swap Bridge channel to swap places with if not NULL.
- *
- * \note On entry, self is already locked.
- *
- * \retval TRUE if can push this channel into the bridge.
- */
-typedef int (*ast_bridge_can_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
-
-/*!
- * \brief Push this channel into the bridge.
- *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel to push.
- * \param swap Bridge channel to swap places with if not NULL.
- *
- * \details
- * Setup any channel hooks controlled by the bridge.  Allocate
- * bridge_channel->bridge_pvt and initialize any resources put
- * in bridge_channel->bridge_pvt if needed.  If there is a swap
- * channel, use it as a guide to setting up the bridge_channel.
- *
- * \note On entry, self is already locked.
- *
- * \retval 0 on success
- * \retval -1 on failure
- */
-typedef int (*ast_bridge_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
-
-/*!
- * \brief Pull this channel from the bridge.
- *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel to pull.
- *
- * \details
- * Remove any channel hooks controlled by the bridge.  Release
- * any resources held by bridge_channel->bridge_pvt and release
- * bridge_channel->bridge_pvt.
- *
- * \note On entry, self is already locked.
- *
- * \return Nothing
- */
-typedef void (*ast_bridge_pull_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
-
-/*!
- * \brief Notify the bridge that this channel was just masqueraded.
- *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel that was masqueraded.
- *
- * \details
- * A masquerade just happened to this channel.  The bridge needs
- * to re-evaluate this a channel in the bridge.
- *
- * \note On entry, self is already locked.
- *
- * \return Nothing
- */
-typedef void (*ast_bridge_notify_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
-
-/*!
- * \brief Bridge virtual methods table definition.
- *
- * \note Any changes to this struct must be reflected in
- * ast_bridge_alloc() validity checking.
- */
-struct ast_bridge_methods {
-	/*! Bridge class name for log messages. */
-	const char *name;
-	/*! Destroy the bridge. */
-	ast_bridge_destructor_fn destroy;
-	/*! TRUE if can push the bridge channel into the bridge. */
-	ast_bridge_can_push_channel_fn can_push;
-	/*! Push the bridge channel into the bridge. */
-	ast_bridge_push_channel_fn push;
-	/*! Pull the bridge channel from the bridge. */
-	ast_bridge_pull_channel_fn pull;
-	/*! Notify the bridge of a masquerade with the channel. */
-	ast_bridge_notify_masquerade_fn notify_masquerade;
-};
-/* BUGBUG move these declarations to before struct ast_bridge declared. --^ */
-
 /*!
  * \brief Structure that contains information regarding a channel in a bridge
  */
@@ -324,6 +226,102 @@ struct ast_bridge_video_mode {
 		struct ast_bridge_video_single_src_data single_src_data;
 		struct ast_bridge_video_talker_src_data talker_src_data;
 	} mode_data;
+};
+
+/*!
+ * \brief Destroy the bridge.
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_bridge_destructor_fn)(struct ast_bridge *self);
+
+/*!
+ * \brief Can this channel be pushed into the bridge.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel wanting to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \retval TRUE if can push this channel into the bridge.
+ */
+typedef int (*ast_bridge_can_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
+
+/*!
+ * \brief Push this channel into the bridge.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \details
+ * Setup any channel hooks controlled by the bridge.  Allocate
+ * bridge_channel->bridge_pvt and initialize any resources put
+ * in bridge_channel->bridge_pvt if needed.  If there is a swap
+ * channel, use it as a guide to setting up the bridge_channel.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+typedef int (*ast_bridge_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
+
+/*!
+ * \brief Pull this channel from the bridge.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to pull.
+ *
+ * \details
+ * Remove any channel hooks controlled by the bridge.  Release
+ * any resources held by bridge_channel->bridge_pvt and release
+ * bridge_channel->bridge_pvt.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_bridge_pull_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
+
+/*!
+ * \brief Notify the bridge that this channel was just masqueraded.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel that was masqueraded.
+ *
+ * \details
+ * A masquerade just happened to this channel.  The bridge needs
+ * to re-evaluate this a channel in the bridge.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_bridge_notify_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
+
+/*!
+ * \brief Bridge virtual methods table definition.
+ *
+ * \note Any changes to this struct must be reflected in
+ * ast_bridge_alloc() validity checking.
+ */
+struct ast_bridge_methods {
+	/*! Bridge class name for log messages. */
+	const char *name;
+	/*! Destroy the bridge. */
+	ast_bridge_destructor_fn destroy;
+	/*! TRUE if can push the bridge channel into the bridge. */
+	ast_bridge_can_push_channel_fn can_push;
+	/*! Push the bridge channel into the bridge. */
+	ast_bridge_push_channel_fn push;
+	/*! Pull the bridge channel from the bridge. */
+	ast_bridge_pull_channel_fn pull;
+	/*! Notify the bridge of a masquerade with the channel. */
+	ast_bridge_notify_masquerade_fn notify_masquerade;
 };
 
 /*!
