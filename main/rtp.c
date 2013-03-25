@@ -78,6 +78,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
 static int poormansplc;			/*!< Are we using poor man's packet loss concealment? */
+static int donthidepacketloss;		/*!< Do not hide packet loss on outbound RTP - default off */
 static int rtpstart;			/*!< First port for RTP sessions (set in rtp.conf) */
 static int rtpend;			/*!< Last port for RTP sessions (set in rtp.conf) */
 static int rtpdebug;			/*!< Are we debugging? */
@@ -2857,7 +2858,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 		return 0;
 	}
 	
-	if (rtp->prev_frame_seqno > 0 && f->seqno && f->seqno != (rtp->prev_frame_seqno + 1)) {
+	if (donthidepacketloss && rtp->prev_frame_seqno > 0 && f->seqno && f->seqno != (rtp->prev_frame_seqno + 1)) {
 		/* We have incoming packet loss and need to signal that outbound. */
 		unsigned int loss = f->seqno - rtp->prev_frame_seqno - 1;
 		if (option_debug > 2) {
@@ -4035,6 +4036,7 @@ int ast_rtp_reload(void)
 	const char *s;
 
 	poormansplc = 0;
+	donthidepacketloss = 0;
 	rtpstart = 5000;
 	rtpend = 31000;
 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
@@ -4074,10 +4076,10 @@ int ast_rtp_reload(void)
 				ast_log(LOG_WARNING, "Disabling RTP checksums is not supported on this operating system!\n");
 #endif
 		}
-		if ((s = ast_variable_retrieve(cfg, "general", "plc"))) {
-			poormansplc = ast_true(s);
+		if ((s = ast_variable_retrieve(cfg, "general", "donthidepacketloss"))) {
+			donthidepacketloss = ast_true(s);
 			if (option_debug > 1) {
-				ast_log(LOG_DEBUG, "*** Poor man's PLC is turned %s\n", poormansplc ? "on" : "off" );
+				ast_log(LOG_DEBUG, "*** Hiding packet loss on outbound RTP stream?  %s\n", donthidepacketloss ? "on" : "off" );
 			}
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {

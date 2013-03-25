@@ -11794,6 +11794,7 @@ static int _sip_show_peer(int type, int fd, struct mansession *s, const struct m
 		ast_cli(fd, "  T38 pt RTP   : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_RTP)?"Yes":"No");
 		ast_cli(fd, "  T38 pt TCP   : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT_TCP)?"Yes":"No");
 #endif
+		ast_cli(fd, "  RTP PLC      : %s\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_POORMANSPLC) ? "Yes" : "No");
 		ast_cli(fd, "  CanReinvite  : %s\n", ast_test_flag(&peer->flags[0], SIP_CAN_REINVITE)?"Yes":"No");
 		ast_cli(fd, "  PromiscRedir : %s\n", ast_test_flag(&peer->flags[0], SIP_PROMISCREDIR)?"Yes":"No");
 		ast_cli(fd, "  User=Phone   : %s\n", ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)?"Yes":"No");
@@ -12055,6 +12056,7 @@ static int sip_show_settings(int fd, int argc, char *argv[])
 	ast_cli(fd, "  IP ToS SIP:             %s\n", ast_tos2str(global_tos_sip));
 	ast_cli(fd, "  IP ToS RTP audio:       %s\n", ast_tos2str(global_tos_audio));
 	ast_cli(fd, "  IP ToS RTP video:       %s\n", ast_tos2str(global_tos_video));
+	ast_cli(fd, "  RTP PLC:                %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_POORMANSPLC) ? "Yes" : "No");
 	ast_cli(fd, "  T38 fax pt UDPTL:       %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_UDPTL) ? "Yes" : "No");
 #ifdef WHEN_WE_HAVE_T38_FOR_OTHER_TRANSPORTS
 	ast_cli(fd, "  T38 fax pt RTP:         %s\n", ast_test_flag(&global_flags[1], SIP_PAGE2_T38SUPPORT_RTP) ? "Yes" : "No");
@@ -12405,6 +12407,7 @@ static int sip_show_channel(int fd, int argc, char *argv[])
 			ast_cli(fd, "  Promiscuous Redir:      %s\n", ast_test_flag(&cur->flags[0], SIP_PROMISCREDIR) ? "Yes" : "No");
 			ast_cli(fd, "  Route:                  %s\n", cur->route ? cur->route->hop : "N/A");
 			ast_cli(fd, "  DTMF Mode:              %s\n", dtmfmode2str(ast_test_flag(&cur->flags[0], SIP_DTMF)));
+			ast_cli(fd, "  RTP PLC:                %s\n", ast_test_flag(&cur->flags[1], SIP_PAGE2_POORMANSPLC) ? "Yes" : "No");
 			ast_cli(fd, "  SIP Options:            ");
 			if (cur->sipoptions) {
 				int x;
