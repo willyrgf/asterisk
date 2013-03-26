@@ -7737,13 +7737,36 @@ static void build_contact(struct sip_pvt *p)
 	char tmp[SIPBUFSIZE];
 	char *user;
 
-	user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 1);
+	user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 0);
 
 	/* Construct Contact: header */
 	if (ourport != STANDARD_SIP_PORT)
 		ast_string_field_build(p, our_contact, "<sip:%s%s%s:%d>", user, ast_strlen_zero(user) ? "" : "@", ast_inet_ntoa(p->ourip), ourport);
 	else
 		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", user, ast_strlen_zero(user) ? "" : "@", ast_inet_ntoa(p->ourip));
+}
+
+static int valid_for_usreqphone(const char *username)
+{
+
+	/* Test username against allowed characters in AST_DIGIT_ANY
+	If it matches the allowed characters list, then sipuser = ";user=phone"
+	If not, then sipuser = ""
+	*/
+	/* + is allowed in first position in a tel: uri */
+	if (*username == '+') {
+			username++;
+	}
+	for (; *username; username++) {
+		if (!strchr(AST_DIGIT_ANYNUM, *username) ) {
+			break;
+		}
+	}
+	/* If we have only digits, add ;user=phone to the uri */
+	if (!*username) {
+		return TRUE;
+	}
+	return FALSE;
 }
 
 /*! \brief Build the Remote Party-ID & From using callingpres options */
@@ -7756,6 +7779,7 @@ static void build_rpid(struct sip_pvt *p)
 	const char *clid = default_callerid;
 	const char *clin = NULL;
 	const char *fromdomain;
+	const char *urioptions = "";
 
 	if (!ast_strlen_zero(p->rpid) || !ast_strlen_zero(p->rpid_from))  
 		return;
@@ -7814,16 +7838,21 @@ static void build_rpid(struct sip_pvt *p)
 	}
 	
 	fromdomain = S_OR(p->fromdomain, ast_inet_ntoa(p->ourip));
+	if (ast_test_flag(&p->flags[0], SIP_USEREQPHONE) && valid_for_usreqphone(clid)) { 
+		urioptions = ";user=phone";
+	}
 
-	snprintf(buf, sizeof(buf), "\"%s\" <sip:%s@%s>", clin, clid, fromdomain);
+	snprintf(buf, sizeof(buf), "\"%s\" <sip:%s@%s%s>", clin, clid, fromdomain, urioptions);
 	if (send_pres_tags)
 		snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf), ";privacy=%s;screen=%s", privacy, screen);
 	ast_string_field_set(p, rpid, buf);
 
-	ast_string_field_build(p, rpid_from, "\"%s\" <sip:%s@%s>;tag=%s", clin,
+	ast_string_field_build(p, rpid_from, "\"%s\" <sip:%s@%s%s>;tag=%s", clin,
 			       S_OR(p->fromuser, clid),
-			       fromdomain, p->tag);
+			       fromdomain, urioptions, p->tag);
 }
+
+
 
 /*! \brief Initiate new SIP request to peer/user */
 static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmethod)
@@ -7836,27 +7865,12 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	char tmp[SIPBUFSIZE/2];
 	char tmp2[SIPBUFSIZE/2];
 	const char *l = NULL, *n = NULL, *d = NULL;
-	const char *urioptions = "";
+	const char *rurioptions = "";
+	const char *furioptions = "";
 
-	if (ast_test_flag(&p->flags[0], SIP_USEREQPHONE)) {
-	 	const char *s = p->username;	/* being a string field, cannot be NULL */
-
-		/* Test p->username against allowed characters in AST_DIGIT_ANY
-			If it matches the allowed characters list, then sipuser = ";user=phone"
-			If not, then sipuser = ""
-		*/
-		/* + is allowed in first position in a tel: uri */
-		if (*s == '+')
-			s++;
-		for (; *s; s++) {
-			if (!strchr(AST_DIGIT_ANYNUM, *s) )
-				break;
-		}
-		/* If we have only digits, add ;user=phone to the uri */
-		if (!*s)
-			urioptions = ";user=phone";
+	if (ast_test_flag(&p->flags[0], SIP_USEREQPHONE) && valid_for_usreqphone(p->username)) { 
+		rurioptions = ";user=phone";
 	}
-
 
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Init: %s", sip_methods[sipmethod].text);
 
@@ -7894,11 +7908,15 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		ast_uri_encode(l, tmp2, sizeof(tmp2), 0);
 		l = tmp2;
 	}
+	if (ast_test_flag(&p->flags[0], SIP_USEREQPHONE) && valid_for_usreqphone(l)) { 
+		furioptions = ";user=phone";
+	}
 
-	if (ourport != STANDARD_SIP_PORT && ast_strlen_zero(p->fromdomain))
-		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d>;tag=%s", n, l, d, ourport, p->tag);
-	else
-		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s>;tag=%s", n, l, d, p->tag);
+	if (ourport != STANDARD_SIP_PORT && ast_strlen_zero(p->fromdomain)) {
+		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s:%d%s>;tag=%s", n, l, d, ourport, furioptions, p->tag);
+	} else {
+		snprintf(from, sizeof(from), "\"%s\" <sip:%s@%s%s>;tag=%s", n, l, d, furioptions, p->tag);
+	}
 
 	/* If we're calling a registered SIP peer, use the fullcontact to dial to the peer */
 	if (!ast_strlen_zero(p->fullcontact)) {
@@ -7918,7 +7936,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		ast_build_string(&invite, &invite_max, "%s", p->tohost);
 		if (p->portinuri)
 			ast_build_string(&invite, &invite_max, ":%d", ntohs(p->sa.sin_port));
-		ast_build_string(&invite, &invite_max, "%s", urioptions);
+		ast_build_string(&invite, &invite_max, "%s", rurioptions);
 	}
 
 	/* If custom URI options have been provided, append them */
