@@ -4901,7 +4901,9 @@ static struct sip_pvt *sip_alloc(ast_string_field callid, struct sockaddr_in *si
 			free(p);
 			return NULL;
 		}
-		ast_rtp_set_plc(p->rtp, ast_test_flag(&p->flags[1], SIP_DTMF) == SIP_PAGE2_POORMANSPLC);
+		if (ast_test_flag(&p->flags[1], SIP_PAGE2_POORMANSPLC)) {
+			ast_rtp_set_plc(p->rtp, TRUE);
+		}
 		ast_rtp_setdtmf(p->rtp, ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
 		ast_rtp_setdtmfcompensate(p->rtp, ast_test_flag(&p->flags[1], SIP_PAGE2_RFC2833_COMPENSATE));
 		ast_rtp_settos(p->rtp, global_tos_audio);
@@ -10767,6 +10769,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 		if (p->rtp) {
 			ast_rtp_codec_setpref(p->rtp, &p->prefs);
 			p->autoframing = user->autoframing;
+			if (ast_test_flag(&p->flags[1], SIP_PAGE2_POORMANSPLC)) {
+				ast_rtp_set_plc(p->rtp, TRUE);
+			}
 		}
 		/* replace callerid if rpid found, and not restricted */
 		if (!ast_strlen_zero(rpid_num) && ast_test_flag(&p->flags[0], SIP_TRUSTRPID)) {
@@ -10786,6 +10791,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
 			ast_copy_flags(&p->flags[0], &user->flags[0], SIP_FLAGS_TO_COPY);
 			ast_copy_flags(&p->flags[1], &user->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
+			if (ast_test_flag(&p->flags[1], SIP_PAGE2_POORMANSPLC)) {
+				ast_rtp_set_plc(p->rtp, TRUE);
+			}
 			/* Copy SIP extensions profile from INVITE */
 			if (p->sipoptions)
 				user->sipoptions = p->sipoptions;
@@ -10867,6 +10875,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			if (p->rtp) {
 				ast_rtp_codec_setpref(p->rtp, &peer->prefs);
 				p->autoframing = peer->autoframing;
+				if (ast_test_flag(&p->flags[1], SIP_PAGE2_POORMANSPLC)) {
+					ast_rtp_set_plc(p->rtp, TRUE);
+				}
 			}
 			if (debug)
 				ast_verbose("Found peer '%s'\n", peer->name);
@@ -10912,6 +10923,10 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					ast_set_flag(&p->flags[0], SIP_CALL_LIMIT);
 				ast_string_field_set(p, peername, peer->name);
 				ast_string_field_set(p, authname, peer->name);
+
+				if (p->rtp && ast_test_flag(&p->flags[1], SIP_PAGE2_POORMANSPLC)) {
+					ast_rtp_set_plc(p->rtp, TRUE);
+				}
 
 				if (sipmethod == SIP_INVITE) {
 					/* destroy old channel vars and copy new channel vars */

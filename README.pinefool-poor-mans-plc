@@ -83,6 +83,7 @@ solve these issues!
 - http://en.wikipedia.org/wiki/Packet_loss_concealment
 - http://research.microsoft.com/pubs/73282/network-survey-1998.pdf
 - http://ivms.stanford.edu/~liang/research/sigproc2/
+- http://www.ietf.org/rfc/rfc3550.txt - The RTP RFC
 
 And finally a description of the current PLC in Asterisk
 - https://wiki.asterisk.org/wiki/display/AST/Packet+Loss+Concealment+%28PLC%29

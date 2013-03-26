@@ -27,3 +27,12 @@ rtpend=20000
 ; be a gap in the outbound sequence numbers as well, which in most cases will help
 ; both codecs and jitter buffers/PLC functions in the receiving end - a phone or a gateway.
 donthidepacketloss = no
+
+; If a channel driver turns on Poor Man's PLC the RTP channel will replace lost packets
+; with a copy of a previous packet. The "plcmax" setting defines the maximum number of
+; packets inserted in one operation. If the seqno indicates 200 lost packets, it doesn't
+; make much sense to inject all of them. (default 10)
+; For many codecs, the size of the packet is 20 ms (see packetization settings)
+; so 10 packets is 0.2 secs of noise. 50 packets is a second and will sound really bad.
+;plcmax = 42
+

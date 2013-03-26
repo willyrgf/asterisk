@@ -77,8 +77,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
-static int poormansplc;			/*!< Are we using poor man's packet loss concealment? */
+
 static int donthidepacketloss;		/*!< Do not hide packet loss on outbound RTP - default off */
+static int plcmax;			/*!< Maximum number of PLC injections in the stream in one operation */
+#define DEFAULT_PLCMAX	10
+
 static int rtpstart;			/*!< First port for RTP sessions (set in rtp.conf) */
 static int rtpend;			/*!< Last port for RTP sessions (set in rtp.conf) */
 static int rtpdebug;			/*!< Are we debugging? */
@@ -580,6 +583,9 @@ void ast_rtp_set_plc(struct ast_rtp *rtp, int state)
 {
 	if (state) {
 		ast_set_flag(rtp, FLAG_POORMANSPLC);
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "*** Enabling PLC for this call\n");
+		}
 	} else {
 		ast_clear_flag(rtp, FLAG_POORMANSPLC);
 	}
@@ -1356,30 +1362,64 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		rtp->cycles += RTP_SEQ_MOD;
 
 	if (rtp->rxcount > 1) {
-		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno)  {
-			/* This is a latecome we've already replaced. A jitter buffer would have handled this
-			   properly, but in many cases we can't afford a jitterbuffer and will have to live
-			   with the face that the poor man's PLC already has replaced this frame and we can't
-			   insert it AGAIN, because that would cause negative skew.
-			   Henry, just ignore this late visitor. Thank you.
-			*/
-			return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
-		}
-		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
+		int MAX_MISORDER = 100;
+		int not_jitter = 0;
+
 		/* RTP sequence numbers are consecutive. Have we lost a packet? */
-		if (lostpackets && option_debug > 2) {
-			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
+		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
+		if (lostpackets > MAX_MISORDER) {
+			/* We have a new seqno sequence and will just have to live with it */
+			lostpackets = 0;
 		}
-		if (ast_test_flag(rtp, FLAG_POORMANSPLC)  && rtp->plcbuf != NULL) {
-			int i;
-			rtp->lastrxseqno++;
-			/* Fix the seqno in the frame */
-			rtp->plcbuf->seqno = rtp->lastrxseqno;
-			/* OEJ:: Fix timestamp */
-			;rtp->lastrxts = timestamp;
-			for (i = 0; i < lostpackets; i++) {
-				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
-				ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
+		if (seqno < rtp->lastrxseqno && (rtp->lastrxseqno - seqno) > MAX_MISORDER) {
+			/* We have a new seqno that is much lower than the previous one. */
+			/* The difference is bigger than normal jitter, so assume a new 
+			   seqno series */
+			lostpackets = 0;
+			not_jitter = 1;
+		}
+
+		if (!mark) {
+			/* If we have a marker bit set, the SSRC and the SEQNO have changed and
+			   we can't compare with the previous one. Just go ahead and wait for
+			   the next packet 
+			 */
+			if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno && not_jitter == 0)  {
+				/* This is a latecomer that we've already replaced. A jitter buffer would have handled this
+			   	properly, but in many cases we can't afford a jitterbuffer and will have to live
+			   	with the face that the poor man's PLC already has replaced this frame and we can't
+			   	insert it AGAIN, because that would cause negative skew.
+			   	Henry, just ignore this late visitor. Thank you.
+				*/
+				if (rtp_debug_test_addr(&sin)) {
+					ast_verbose("Ignoring RTP from       %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u) - jitter?\n",
+						ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp,res - hdrlen);
+				}
+				return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
+			}
+		} 
+
+		if (lostpackets) {
+			if(option_debug > 2) {
+				ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
+			}
+			if (ast_test_flag(rtp, FLAG_POORMANSPLC)  && rtp->plcbuf != NULL) {
+				int i;
+				for (i = 0; i < lostpackets && i < plcmax; i++) {
+					rtp->lastrxseqno++;
+					/* Fix the seqno in the frame */
+					rtp->plcbuf->seqno = rtp->lastrxseqno;
+					rtp->plcbuf->ts += rtp->plcbuf->len;
+
+					AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
+					if (option_debug > 2) {
+						ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
+					}
+				}
+			} else {
+				if (ast_test_flag(rtp, FLAG_POORMANSPLC)  &&  option_debug > 2 && rtp->plcbuf == NULL) {
+					ast_log(LOG_DEBUG, " *** Not copying frame from PLCbuf, since it's empty \n");
+				}
 			}
 		}
 	}
@@ -1498,6 +1538,10 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			ast_frame_free(rtp->plcbuf, 0);
 		}
 		rtp->plcbuf = ast_frdup(&rtp->f);
+	} else {
+		if (option_debug > 1 && lostpackets) {
+			ast_log(LOG_DEBUG, " *** Not copying frame into plcbuf PLC=%s\n", ast_test_flag(rtp, FLAG_POORMANSPLC) ? "On" : "Off");
+		}
 	}
 
 	AST_LIST_INSERT_TAIL(&frames, &rtp->f, frame_list);
@@ -2064,11 +2108,9 @@ void ast_rtp_new_init(struct ast_rtp *rtp)
 	rtp->us.sin_family = AF_INET;
 	rtp->ssrc = ast_random();
 	rtp->seqno = ast_random() & 0xffff;
+	rtp->lastrxseqno = 0;
 	ast_set_flag(rtp, FLAG_HAS_DTMF);
 	rtp->plcbuf = NULL;
-	if (poormansplc) {
-		ast_set_flag(rtp, FLAG_POORMANSPLC);
-	}
 
 	return;
 }
@@ -2861,11 +2903,13 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	if (donthidepacketloss && rtp->prev_frame_seqno > 0 && f->seqno && f->seqno != (rtp->prev_frame_seqno + 1)) {
 		/* We have incoming packet loss and need to signal that outbound. */
 		unsigned int loss = f->seqno - rtp->prev_frame_seqno - 1;
-		if (option_debug > 2) {
-			ast_log(LOG_DEBUG, "**** Incoming packet loss, letting it through: %u packets\n", loss);
+		if (f->seqno > rtp->prev_frame_seqno) {
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "**** Incoming packet loss, letting it through: %u packets\n", loss);
+			}
+			/* Jump ahead, let the packet loss go straight through */
+			rtp->seqno += loss;
 		}
-		/* Jump ahead, let the packet loss go straight through */
-		rtp->seqno += loss;
 	}
 
 	ms = calc_txstamp(rtp, &f->delivery);
@@ -4035,8 +4079,8 @@ int ast_rtp_reload(void)
 	struct ast_config *cfg;
 	const char *s;
 
-	poormansplc = 0;
 	donthidepacketloss = 0;
+	plcmax = DEFAULT_PLCMAX;
 	rtpstart = 5000;
 	rtpend = 31000;
 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
@@ -4076,10 +4120,16 @@ int ast_rtp_reload(void)
 				ast_log(LOG_WARNING, "Disabling RTP checksums is not supported on this operating system!\n");
 #endif
 		}
+		if ((s = ast_variable_retrieve(cfg, "general", "plcmax"))) {
+			plcmax = atoi(s);
+			if (option_debug > 1) {
+				ast_log(LOG_DEBUG, "PLCmax: Maximum number of injected RTP packets in one operation  %d\n", plcmax);
+			}
+		}
 		if ((s = ast_variable_retrieve(cfg, "general", "donthidepacketloss"))) {
 			donthidepacketloss = ast_true(s);
 			if (option_debug > 1) {
-				ast_log(LOG_DEBUG, "*** Hiding packet loss on outbound RTP stream?  %s\n", donthidepacketloss ? "on" : "off" );
+				ast_log(LOG_DEBUG, "Hiding packet loss on outbound RTP stream?  %s\n", donthidepacketloss ? "on" : "off" );
 			}
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {
