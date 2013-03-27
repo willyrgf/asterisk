@@ -1758,7 +1758,6 @@ static void bridge_channel_handle_control(struct ast_bridge_channel *bridge_chan
 		ast_indicate_data(chan, fr->subclass.integer, fr->data.ptr, fr->datalen);
 		break;
 	}
-	/*! \todo BUGBUG bridge_channel_handle_control() not written */
 }
 
 /*!
