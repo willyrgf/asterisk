@@ -296,7 +296,11 @@ int ast_bridge_channel_queue_frame(struct ast_bridge_channel *bridge_channel, st
 	struct ast_frame *dup;
 	char nudge = 0;
 
-	if (bridge_channel->suspended && !ast_is_deferrable_frame(fr)) {
+	if (bridge_channel->suspended
+		/* Also defer DTMF frames. */
+		&& fr->frametype != AST_FRAME_DTMF_BEGIN
+		&& fr->frametype != AST_FRAME_DTMF_END
+		&& !ast_is_deferrable_frame(fr)) {
 		/* Drop non-deferable frames when suspended. */
 		return 0;
 	}
@@ -389,6 +393,8 @@ static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	ast_debug(1, "Pulling bridge channel %p(%s) from bridge %p\n",
 		bridge_channel, ast_channel_name(bridge_channel->chan), bridge);
 
+/* BUGBUG This is where incoming HOLD/UNHOLD memory should write UNHOLD into bridge. (if not local optimizing) */
+/* BUGBUG This is where incoming DTMF begin/end memory should write DTMF end into bridge. (if not local optimizing) */
 	if (!bridge_channel->just_joined) {
 		/* Tell the bridge technology we are leaving so they tear us down */
 		ast_debug(1, "Giving bridge technology %s notification that %p(%s) is leaving bridge %p\n",
@@ -654,10 +660,14 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 		ast_frfree(frame);
 		return;
 	case AST_FRAME_CONTROL:
-		if (frame->subclass.integer == AST_CONTROL_HANGUP) {
+		switch (frame->subclass.integer) {
+		case AST_CONTROL_HANGUP:
 			bridge_handle_hangup(bridge_channel);
 			ast_frfree(frame);
 			return;
+/* BUGBUG This is where incoming HOLD/UNHOLD memory should register.  Write UNHOLD into bridge when this channel is pulled. */
+		default:
+			break;
 		}
 		break;
 	case AST_FRAME_DTMF_BEGIN:
@@ -671,6 +681,7 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 			ast_frfree(frame);
 			return;
 		}
+/* BUGBUG This is where incoming DTMF begin/end memory should register.  Write DTMF end into bridge when this channel is pulled. */
 		break;
 	default:
 		break;
@@ -680,6 +691,8 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 
 	/* Simply write the frame out to the bridge technology. */
 	ast_bridge_channel_lock_bridge(bridge_channel);
+/* BUGBUG The tech is where AST_CONTROL_ANSWER hook should go. (early bridge) */
+/* BUGBUG The tech is where incoming BUSY/CONGESTION hangup should happen? (early bridge) */
 	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
 	ast_bridge_unlock(bridge_channel->bridge);
 	ast_frfree(frame);
@@ -1930,15 +1943,15 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 	ast_bridge_unlock(bridge_channel->bridge);
 
-	/* Flush any unhandled frames. */
+	/* Flush any unhandled wr_queue frames. */
 	ast_bridge_channel_lock(bridge_channel);
-/* BUGBUG need to destroy unused bridge action frames specially since they can have referenced pointers. */
 	while ((fr = AST_LIST_REMOVE_HEAD(&bridge_channel->wr_queue, frame_list))) {
 		ast_frfree(fr);
 	}
 	ast_bridge_channel_unlock(bridge_channel);
 
 /* BUGBUG Revisit in regards to moving channels between bridges and local channel optimization. */
+/* BUGBUG This is where outgoing HOLD/UNHOLD memory should write UNHOLD to channel. */
 	/* Complete any partial DTMF digit before exiting the bridge. */
 	if (ast_channel_sending_dtmf_digit(bridge_channel->chan)) {
 		ast_bridge_end_dtmf(bridge_channel->chan,

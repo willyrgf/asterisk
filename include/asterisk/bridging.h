@@ -187,8 +187,15 @@ enum ast_bridge_action_type {
 	AST_BRIDGE_ACTION_TALKING_START,
 	/*! Bridged channel is to indicate talking stop */
 	AST_BRIDGE_ACTION_TALKING_STOP,
+
+	/*
+	 * Bridge actions put after this comment must never be put onto
+	 * the bridge_channel wr_queue because they have other resources
+	 * that must be freed.
+	 */
+
 	/*! Bridge reconfiguration deferred technology destruction. */
-	AST_BRIDGE_ACTION_DEFERRED_TECH_DESTROY,
+	AST_BRIDGE_ACTION_DEFERRED_TECH_DESTROY = 1000,
 };
 
 enum ast_bridge_video_mode_type {
