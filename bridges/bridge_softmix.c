@@ -468,8 +468,64 @@ static void softmix_pass_video_all(struct ast_bridge *bridge, struct ast_bridge_
 	}
 }
 
-/*! \brief Function called when a channel writes a frame into the bridge */
-static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+/*!
+ * \internal
+ * \brief Determine what to do with a video frame.
+ * \since 12.0.0
+ *
+ * \param bridge Which bridge is getting the frame
+ * \param bridge_channel Which channel is writing the frame.
+ * \param frame What is being written.
+ *
+ * \return Nothing
+ */
+static void softmix_bridge_write_video(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+{
+	struct softmix_channel *sc = bridge_channel->tech_pvt;
+	int num_src;
+	int video_src_priority;
+
+	num_src = ast_bridge_number_video_src(bridge);
+	video_src_priority = ast_bridge_is_video_src(bridge, bridge_channel->chan);
+
+	/* Determine if the video frame should be distributed or not */
+	switch (bridge->video_mode.mode) {
+	case AST_BRIDGE_VIDEO_MODE_NONE:
+		break;
+	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
+		if (video_src_priority == 1) {
+			softmix_pass_video_all(bridge, bridge_channel, frame, 1);
+		}
+		break;
+	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
+		ast_mutex_lock(&sc->lock);
+		ast_bridge_update_talker_src_video_mode(bridge, bridge_channel->chan,
+			sc->video_talker.energy_average,
+			ast_format_get_video_mark(&frame->subclass.format));
+		ast_mutex_unlock(&sc->lock);
+		if (video_src_priority == 1) {
+			int echo = num_src > 1 ? 0 : 1;
+
+			softmix_pass_video_all(bridge, bridge_channel, frame, echo);
+		} else if (video_src_priority == 2) {
+			softmix_pass_video_top_priority(bridge, frame);
+		}
+		break;
+	}
+}
+
+/*!
+ * \internal
+ * \brief Determine what to do with a voice frame.
+ * \since 12.0.0
+ *
+ * \param bridge Which bridge is getting the frame
+ * \param bridge_channel Which channel is writing the frame.
+ * \param frame What is being written.
+ *
+ * \return Nothing
+ */
+static void softmix_bridge_write_voice(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	struct softmix_channel *sc = bridge_channel->tech_pvt;
 	struct softmix_bridge_data *softmix_data = bridge->tech_pvt;
@@ -479,49 +535,8 @@ static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 		bridge_channel->tech_args.silence_threshold :
 		DEFAULT_SOFTMIX_SILENCE_THRESHOLD;
 	char update_talking = -1;  /* if this is set to 0 or 1, tell the bridge that the channel has started or stopped talking. */
-	int res = 0;
 
-	/* Only accept audio frames, all others are unsupported */
-	if (frame->frametype == AST_FRAME_DTMF_END || frame->frametype == AST_FRAME_DTMF_BEGIN) {
-		softmix_pass_dtmf(bridge, bridge_channel, frame);
-		return res;
-	} else if (frame->frametype != AST_FRAME_VOICE && frame->frametype != AST_FRAME_VIDEO) {
-		/* Frame type unsupported. */
-		res = -1;
-		return res;
-	} else if (frame->datalen == 0) {
-		return res;
-	}
-
-	/* Determine if this video frame should be distributed or not */
-	if (frame->frametype == AST_FRAME_VIDEO) {
-		int num_src = ast_bridge_number_video_src(bridge);
-		int video_src_priority = ast_bridge_is_video_src(bridge, bridge_channel->chan);
-
-		switch (bridge->video_mode.mode) {
-		case AST_BRIDGE_VIDEO_MODE_NONE:
-			break;
-		case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
-			if (video_src_priority == 1) {
-				softmix_pass_video_all(bridge, bridge_channel, frame, 1);
-			}
-			break;
-		case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
-			ast_mutex_lock(&sc->lock);
-			ast_bridge_update_talker_src_video_mode(bridge, bridge_channel->chan, sc->video_talker.energy_average, ast_format_get_video_mark(&frame->subclass.format));
-			ast_mutex_unlock(&sc->lock);
-			if (video_src_priority == 1) {
-				int echo = num_src > 1 ? 0 : 1;
-				softmix_pass_video_all(bridge, bridge_channel, frame, echo);
-			} else if (video_src_priority == 2) {
-				softmix_pass_video_top_priority(bridge, frame);
-			}
-			break;
-		}
-		return res;
-	}
-
-	/* If we made it here, we are going to write the frame into the conference */
+	/* Write the frame into the conference */
 	ast_mutex_lock(&sc->lock);
 	ast_dsp_silence_with_energy(sc->dsp, frame, &totalsilence, &cur_energy);
 
@@ -569,6 +584,62 @@ static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 
 	if (update_talking != -1) {
 		ast_bridge_notify_talking(bridge_channel, update_talking);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Determine what to do with a control frame.
+ * \since 12.0.0
+ *
+ * \param bridge Which bridge is getting the frame
+ * \param bridge_channel Which channel is writing the frame.
+ * \param frame What is being written.
+ *
+ * \return Nothing
+ */
+static void softmix_bridge_write_control(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+{
+/* BUGBUG need to look at channel roles to determine what to do with control frame. */
+	/*! \todo BUGBUG softmix_bridge_write_control() not written */
+}
+
+/*!
+ * \internal
+ * \brief Determine what to do with a frame written into the bridge.
+ * \since 12.0.0
+ *
+ * \param bridge Which bridge is getting the frame
+ * \param bridge_channel Which channel is writing the frame.
+ * \param frame What is being written.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * \note On entry, bridge is already locked.
+ */
+static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+{
+	int res = 0;
+
+	switch (frame->frametype) {
+	case AST_FRAME_DTMF_BEGIN:
+	case AST_FRAME_DTMF_END:
+		softmix_pass_dtmf(bridge, bridge_channel, frame);
+		break;
+	case AST_FRAME_VOICE:
+		softmix_bridge_write_voice(bridge, bridge_channel, frame);
+		break;
+	case AST_FRAME_VIDEO:
+		softmix_bridge_write_video(bridge, bridge_channel, frame);
+		break;
+	case AST_FRAME_CONTROL:
+		softmix_bridge_write_control(bridge, bridge_channel, frame);
+		break;
+	default:
+		ast_debug(3, "Frame type %d unsupported\n", frame->frametype);
+		res = -1;
+		break;
 	}
 
 	return res;

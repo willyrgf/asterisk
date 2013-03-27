@@ -278,11 +278,7 @@ static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 		}
 
 		if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-/* BUGBUG need to handle control frames in a bridge tech specific way here.  Mostly just queue action to bridge channel. */
-			if (!other->suspended
-				|| ast_is_deferrable_frame(frame)) {
-				ast_bridge_channel_queue_frame(other, frame);
-			}
+			ast_bridge_channel_queue_frame(other, frame);
 		}
 	}
 

@@ -570,6 +570,7 @@ int ast_jb_read_conf(struct ast_jb_conf *conf, const char *varname, const char *
 
 void ast_jb_configure(struct ast_channel *chan, const struct ast_jb_conf *conf)
 {
+/* BUGBUG convert this to use func_jitterbuffer then the channel jitterbuffer may be able to go away. */
 	memcpy(&ast_channel_jb(chan)->conf, conf, sizeof(*conf));
 }
 

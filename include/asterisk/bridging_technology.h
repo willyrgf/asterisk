@@ -83,6 +83,8 @@ struct ast_bridge_technology {
 	 *
 	 * \retval 0 on success
 	 * \retval -1 on failure
+	 *
+	 * \note On entry, bridge is already locked.
 	 */
 	int (*write)(struct ast_bridge *bridge, struct ast_bridge_channel *bridged_channel, struct ast_frame *frame);
 	/*! Formats that the bridge technology supports */

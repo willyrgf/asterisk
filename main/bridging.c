@@ -296,7 +296,10 @@ int ast_bridge_channel_queue_frame(struct ast_bridge_channel *bridge_channel, st
 	struct ast_frame *dup;
 	char nudge = 0;
 
-/* BUGBUG need to do something with media frames when channel is suspended. Likely just drop non-deferable frames. */
+	if (bridge_channel->suspended && !ast_is_deferrable_frame(fr)) {
+		/* Drop non-deferable frames when suspended. */
+		return 0;
+	}
 
 	dup = ast_frdup(fr);
 	if (!dup) {
@@ -614,32 +617,6 @@ static int bridge_channel_interval_ready(struct ast_bridge_channel *bridge_chann
 	return ready;
 }
 
-/*! \brief Internal function used to determine whether a control frame should be dropped or not */
-static int bridge_drop_control_frame(int subclass)
-{
-/* BUGBUG I think this code should be removed. Let the bridging tech determine what to do with control frames. */
-#if 1
-	/* Block all control frames. */
-	return 1;
-#else
-	switch (subclass) {
-	case AST_CONTROL_READ_ACTION:
-	case AST_CONTROL_CC:
-	case AST_CONTROL_MCID:
-	case AST_CONTROL_AOC:
-	case AST_CONTROL_CONNECTED_LINE:
-	case AST_CONTROL_REDIRECTING:
-		return 1;
-
-	case AST_CONTROL_ANSWER:
-	case -1:
-		return 1;
-	default:
-		return 0;
-	}
-#endif
-}
-
 void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int started_talking)
 {
 	struct ast_frame action = {
@@ -682,13 +659,6 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 			ast_frfree(frame);
 			return;
 		}
-		if (bridge_drop_control_frame(frame->subclass.integer)) {
-			ast_debug(1, "Dropping control frame %d from bridge channel %p(%s)\n",
-				frame->subclass.integer, bridge_channel,
-				ast_channel_name(bridge_channel->chan));
-			ast_frfree(frame);
-			return;
-		}
 		break;
 	case AST_FRAME_DTMF_BEGIN:
 		frame = bridge_handle_dtmf(bridge_channel, frame);
@@ -706,10 +676,6 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 		break;
 	}
 
-/* BUGBUG looks like the place to handle the control frame exchange between 1-1 bridge participants is the bridge tech write callback. */
-/* BUGBUG make a 1-1 bridge write handler for control frames. */
-/* BUGBUG make bridge_channel thread run the CONNECTED_LINE and REDIRECTING interception macros. */
-/* BUGBUG should make AST_CONTROL_ANSWER do an ast_indicate(-1) to the bridge peer if it is not UP as well as a connected line update. */
 /* BUGBUG bridge join or impart needs to do CONNECTED_LINE updates if the channels are being swapped and it is a 1-1 bridge. */
 
 	/* Simply write the frame out to the bridge technology. */
@@ -1714,10 +1680,82 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
  */
 static void bridge_channel_handle_control(struct ast_bridge_channel *bridge_channel, struct ast_frame *fr)
 {
+	struct ast_channel *chan;
+	struct ast_option_header *aoh;
+	int is_caller;
+	int intercept_failed;
+
+	chan = bridge_channel->chan;
 	switch (fr->subclass.integer) {
+	case AST_CONTROL_REDIRECTING:
+		is_caller = !ast_test_flag(ast_channel_flags(chan), AST_FLAG_OUTGOING);
+		bridge_channel_suspend(bridge_channel);
+		intercept_failed = ast_channel_redirecting_sub(NULL, chan, fr, 1)
+			&& ast_channel_redirecting_macro(NULL, chan, fr, is_caller, 1);
+		bridge_channel_unsuspend(bridge_channel);
+		if (intercept_failed) {
+			ast_indicate_data(chan, fr->subclass.integer, fr->data.ptr, fr->datalen);
+		}
+		break;
 	case AST_CONTROL_CONNECTED_LINE:
+		is_caller = !ast_test_flag(ast_channel_flags(chan), AST_FLAG_OUTGOING);
+		bridge_channel_suspend(bridge_channel);
+		intercept_failed = ast_channel_connected_line_sub(NULL, chan, fr, 1)
+			&& ast_channel_connected_line_macro(NULL, chan, fr, is_caller, 1);
+		bridge_channel_unsuspend(bridge_channel);
+		if (intercept_failed) {
+			ast_indicate_data(chan, fr->subclass.integer, fr->data.ptr, fr->datalen);
+		}
+		break;
+	case AST_CONTROL_HOLD:
+	case AST_CONTROL_UNHOLD:
+/*
+ * BUGBUG bridge_channels should remember sending/receiving an outstanding HOLD to/from the bridge
+ *
+ * When the sending channel is pulled from the bridge it needs to write into the bridge an UNHOLD before being pulled.
+ * When the receiving channel is pulled from the bridge it needs to generate its own UNHOLD.
+ * Something similar needs to be done for DTMF begin/end.
+ */
+	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_SRCUPDATE:
+	case AST_CONTROL_SRCCHANGE:
+	case AST_CONTROL_T38_PARAMETERS:
+/* BUGBUG may have to do something with a jitter buffer for these. */
+		ast_indicate_data(chan, fr->subclass.integer, fr->data.ptr, fr->datalen);
+		break;
+	case AST_CONTROL_OPTION:
+		/*
+		 * Forward option Requests, but only ones we know are safe These
+		 * are ONLY sent by chan_iax2 and I'm not convinced that they
+		 * are useful. I haven't deleted them entirely because I just am
+		 * not sure of the ramifications of removing them.
+		 */
+		aoh = fr->data.ptr;
+		if (aoh && aoh->flag == AST_OPTION_FLAG_REQUEST) {
+			switch (ntohs(aoh->option)) {
+			case AST_OPTION_TONE_VERIFY:
+			case AST_OPTION_TDD:
+			case AST_OPTION_RELAXDTMF:
+			case AST_OPTION_AUDIO_MODE:
+			case AST_OPTION_DIGIT_DETECT:
+			case AST_OPTION_FAX_DETECT:
+				ast_channel_setoption(chan, ntohs(aoh->option), aoh->data,
+					fr->datalen - sizeof(*aoh), 0);
+				break;
+			default:
+				break;
+			}
+		}
+		break;
+	case AST_CONTROL_ANSWER:
+		if (ast_channel_state(chan) != AST_STATE_UP) {
+			ast_answer(chan);
+		} else {
+			ast_indicate(chan, -1);
+		}
 		break;
 	default:
+		ast_indicate_data(chan, fr->subclass.integer, fr->data.ptr, fr->datalen);
 		break;
 	}
 	/*! \todo BUGBUG bridge_channel_handle_control() not written */
