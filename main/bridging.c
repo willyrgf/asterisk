@@ -1658,17 +1658,23 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 	switch (action->subclass.integer) {
 	case AST_BRIDGE_ACTION_INTERVAL:
 		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_interval(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
 		break;
 	case AST_BRIDGE_ACTION_FEATURE:
 		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_feature(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
 		break;
 	case AST_BRIDGE_ACTION_DTMF_STREAM:
 		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_dtmf_stream(bridge_channel, action->data.ptr);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
 		break;
 	case AST_BRIDGE_ACTION_TALKING_START:
@@ -1919,6 +1925,16 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	ast_bridge_channel_push(bridge_channel);
 	ast_bridge_reconfigured(bridge_channel->bridge);
 
+	/*
+	 * Indicate a source change since this channel is entering the
+	 * bridge system only if the bridge technology is not MULTIMIX
+	 * capable.  The MULTIMIX technology has already done it.
+	 */
+	if (!(bridge_channel->bridge->technology->capabilities
+		& AST_BRIDGE_CAPABILITY_MULTIMIX)) {
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCCHANGE);
+	}
+
 	/* Wait for something to do. */
 	ast_bridge_unlock(bridge_channel->bridge);
 	while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
@@ -1949,6 +1965,9 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		ast_frfree(fr);
 	}
 	ast_bridge_channel_unlock(bridge_channel);
+
+	/* Indicate a source change since this channel is leaving the bridge system. */
+	ast_indicate(bridge_channel->chan, AST_CONTROL_SRCCHANGE);
 
 /* BUGBUG Revisit in regards to moving channels between bridges and local channel optimization. */
 /* BUGBUG This is where outgoing HOLD/UNHOLD memory should write UNHOLD to channel. */

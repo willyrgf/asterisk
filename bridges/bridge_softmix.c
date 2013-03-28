@@ -366,19 +366,47 @@ static void softmix_poke_thread(struct softmix_bridge_data *softmix_data)
 /*! \brief Function called when a channel is unsuspended from the bridge */
 static void softmix_bridge_unsuspend(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
-	softmix_poke_thread(bridge->tech_pvt);
+	if (bridge->tech_pvt) {
+		softmix_poke_thread(bridge->tech_pvt);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Indicate a source change to the channel.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel source is changing.
+ *
+ * \return Nothing
+ */
+static void softmix_src_change(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_frame frame = {
+		.frametype = AST_FRAME_CONTROL,
+		.subclass.integer = AST_CONTROL_SRCCHANGE
+	};
+
+	ast_bridge_channel_queue_frame(bridge_channel, &frame);
 }
 
 /*! \brief Function called when a channel is joined into the bridge */
 static int softmix_bridge_join(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
 	struct softmix_channel *sc;
-	struct softmix_bridge_data *softmix_data = bridge->tech_pvt;
+	struct softmix_bridge_data *softmix_data;
+
+	softmix_data = bridge->tech_pvt;
+	if (!softmix_data) {
+		return -1;
+	}
 
 	/* Create a new softmix_channel structure and allocate various things on it */
 	if (!(sc = ast_calloc(1, sizeof(*sc)))) {
 		return -1;
 	}
+
+	softmix_src_change(bridge_channel);
 
 	/* Can't forget the lock */
 	ast_mutex_init(&sc->lock);
@@ -405,6 +433,8 @@ static void softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_ch
 		return;
 	}
 	bridge_channel->tech_pvt = NULL;
+
+	softmix_src_change(bridge_channel);
 
 	/* Drop mutex lock */
 	ast_mutex_destroy(&sc->lock);
@@ -621,6 +651,10 @@ static void softmix_bridge_write_control(struct ast_bridge *bridge, struct ast_b
 static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	int res = 0;
+
+	if (!bridge->tech_pvt || !bridge_channel->tech_pvt) {
+		return -1;
+	}
 
 	switch (frame->frametype) {
 	case AST_FRAME_DTMF_BEGIN:
