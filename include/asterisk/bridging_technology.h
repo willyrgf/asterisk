@@ -54,22 +54,43 @@ struct ast_bridge_technology {
 	 *
 	 * \retval 0 on success
 	 * \retval -1 on failure
+	 *
+	 * \note On entry, bridge may or may not already be locked.
+	 * However, it can be accessed as if it were locked.
 	 */
 	int (*create)(struct ast_bridge *bridge);
-	/*! Callback for when a bridge is being destroyed */
+	/*!
+	 * \brief Callback for when a bridge is being destroyed
+	 *
+	 * \note On entry, bridge must NOT be locked.
+	 */
 	void (*destroy)(struct ast_bridge *bridge);
 	/*!
 	 * \brief Callback for when a channel is being added to a bridge.
 	 *
 	 * \retval 0 on success
 	 * \retval -1 on failure
+	 *
+	 * \note On entry, bridge is already locked.
 	 */
 	int (*join)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
-	/*! Callback for when a channel is leaving a bridge */
+	/*!
+	 * \brief Callback for when a channel is leaving a bridge
+	 *
+	 * \note On entry, bridge is already locked.
+	 */
 	void (*leave)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
-	/*! Callback for when a channel is suspended from the bridge */
+	/*!
+	 * \brief Callback for when a channel is suspended from the bridge
+	 *
+	 * \note On entry, bridge is already locked.
+	 */
 	void (*suspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
-	/*! Callback for when a channel is unsuspended from the bridge */
+	/*!
+	 * \brief Callback for when a channel is unsuspended from the bridge
+	 *
+	 * \note On entry, bridge is already locked.
+	 */
 	void (*unsuspend)(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel);
 	/*!
 	 * \brief Callback to see if the bridge is compatible with the bridging technology.
