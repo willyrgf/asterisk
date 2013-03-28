@@ -4184,7 +4184,7 @@ struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *cha
  *
  * \retval Message type for \ref ast_channel_snapshot.
  */
-struct stasis_message_type *ast_channel_snapshot(void);
+struct stasis_message_type *ast_channel_snapshot_type(void);
 
 /*!
  * \since 12
@@ -4235,7 +4235,7 @@ struct ast_channel_blob {
  *
  * \retval Message type for \ref ast_channel_blob messages.
  */
-struct stasis_message_type *ast_channel_blob(void);
+struct stasis_message_type *ast_channel_blob_type(void);
 
 /*!
  * \since 12
@@ -4245,7 +4245,7 @@ struct stasis_message_type *ast_channel_blob(void);
  * \return Type field value from the blob.
  * \return \c NULL on error.
  */
-const char *ast_channel_blob_type(struct ast_channel_blob *obj);
+const char *ast_channel_blob_json_type(struct ast_channel_blob *obj);
 
 /*!
  * \since 12
