@@ -72,6 +72,7 @@ extern "C" {
 #include "asterisk/bridging_features.h"
 #include "asterisk/bridging_roles.h"
 #include "asterisk/dsp.h"
+#include "asterisk/uuid.h"
 
 /*! \brief Capabilities for a bridge technology */
 enum ast_bridge_capability {
@@ -337,6 +338,8 @@ struct ast_bridge_methods {
 struct ast_bridge {
 	/*! Bridge virtual method table. */
 	const struct ast_bridge_methods *v_table;
+	/*! Immutable bridge UUID. */
+	char uniqueid[AST_UUID_STR_LEN];
 	/*! Bridge technology that is handling the bridge */
 	struct ast_bridge_technology *technology;
 	/*! Private information unique to the bridge technology */

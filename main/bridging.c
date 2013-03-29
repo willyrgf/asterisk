@@ -474,9 +474,8 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 
 	/* Add channel to the bridge */
 	if (bridge->v_table->push(bridge, bridge_channel, swap)) {
-/* BUGBUG need to use bridge id in the diagnostic message */
-		ast_log(LOG_ERROR, "Pushing channel %s into bridge %p failed\n",
-			ast_channel_name(bridge_channel->chan), bridge);
+		ast_log(LOG_ERROR, "Failed to push channel %s into bridge %s\n",
+			ast_channel_name(bridge_channel->chan), bridge->uniqueid);
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 		return;
 	}
@@ -952,6 +951,7 @@ struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabi
 		return NULL;
 	}
 
+	ast_uuid_generate_str(self->uniqueid, sizeof(self->uniqueid));
 	ast_set_flag(&self->feature_flags, flags);
 
 	/* If we need to be a smart bridge see if we can move between 1to1 and multimix bridges */
@@ -1247,9 +1247,8 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 				bridge);
 			return 0;
 		}
-/* BUGBUG need to output the bridge id for tracking why. */
-		ast_log(LOG_WARNING, "No bridge technology available to support bridge %p\n",
-			bridge);
+		ast_log(LOG_WARNING, "No bridge technology available to support bridge %s\n",
+			bridge->uniqueid);
 		return -1;
 	}
 
@@ -1299,9 +1298,8 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	ast_debug(1, "Calling bridge technology %s constructor for bridge %p\n",
 		new_technology->name, bridge);
 	if (new_technology->create && new_technology->create(bridge)) {
-/* BUGBUG need to output the bridge id for tracking why. */
-		ast_log(LOG_WARNING, "Bridge technology %s for bridge %p failed to get setup\n",
-			new_technology->name, bridge);
+		ast_log(LOG_WARNING, "Failed to setup bridge technology %s for bridge %s\n",
+			new_technology->name, bridge->uniqueid);
 		bridge->tech_pvt = dummy_bridge.tech_pvt;
 		bridge->technology = dummy_bridge.technology;
 		ast_module_unref(new_technology->mod);
