@@ -451,16 +451,20 @@ static void softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_ch
 
 /*!
  * \internal
- * \brief If the bridging core passes DTMF to us, then they want it to be distributed out to all memebers. Do that here.
+ * \brief Pass the given frame to everyone else.
+ * \since 12.0.0
+ *
+ * \param bridge What bridge to distribute frame.
+ * \param bridge_channel Channel to optionally not pass frame to. (NULL to pass to everyone)
+ * \param frame Frame to pass.
+ *
+ * \return Nothing
  */
-static void softmix_pass_dtmf(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+static void softmix_pass_everyone_else(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	struct ast_bridge_channel *cur;
 
 	AST_LIST_TRAVERSE(&bridge->channels, cur, entry) {
-		if (cur->suspended) {
-			continue;
-		}
 		if (cur == bridge_channel) {
 			continue;
 		}
@@ -483,21 +487,6 @@ static void softmix_pass_video_top_priority(struct ast_bridge *bridge, struct as
 	}
 }
 
-static void softmix_pass_video_all(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame, int echo)
-{
-	struct ast_bridge_channel *cur;
-
-	AST_LIST_TRAVERSE(&bridge->channels, cur, entry) {
-		if (cur->suspended) {
-			continue;
-		}
-		if (cur == bridge_channel && !echo) {
-			continue;
-		}
-		ast_bridge_channel_queue_frame(cur, frame);
-	}
-}
-
 /*!
  * \internal
  * \brief Determine what to do with a video frame.
@@ -511,32 +500,33 @@ static void softmix_pass_video_all(struct ast_bridge *bridge, struct ast_bridge_
  */
 static void softmix_bridge_write_video(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-	struct softmix_channel *sc = bridge_channel->tech_pvt;
-	int num_src;
+	struct softmix_channel *sc;
 	int video_src_priority;
-
-	num_src = ast_bridge_number_video_src(bridge);
-	video_src_priority = ast_bridge_is_video_src(bridge, bridge_channel->chan);
 
 	/* Determine if the video frame should be distributed or not */
 	switch (bridge->video_mode.mode) {
 	case AST_BRIDGE_VIDEO_MODE_NONE:
 		break;
 	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
+		video_src_priority = ast_bridge_is_video_src(bridge, bridge_channel->chan);
 		if (video_src_priority == 1) {
-			softmix_pass_video_all(bridge, bridge_channel, frame, 1);
+			/* Pass to me and everyone else. */
+			softmix_pass_everyone_else(bridge, NULL, frame);
 		}
 		break;
 	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
+		sc = bridge_channel->tech_pvt;
 		ast_mutex_lock(&sc->lock);
 		ast_bridge_update_talker_src_video_mode(bridge, bridge_channel->chan,
 			sc->video_talker.energy_average,
 			ast_format_get_video_mark(&frame->subclass.format));
 		ast_mutex_unlock(&sc->lock);
+		video_src_priority = ast_bridge_is_video_src(bridge, bridge_channel->chan);
 		if (video_src_priority == 1) {
+			int num_src = ast_bridge_number_video_src(bridge);
 			int echo = num_src > 1 ? 0 : 1;
 
-			softmix_pass_video_all(bridge, bridge_channel, frame, echo);
+			softmix_pass_everyone_else(bridge, echo ? NULL : bridge_channel, frame);
 		} else if (video_src_priority == 2) {
 			softmix_pass_video_top_priority(bridge, frame);
 		}
@@ -659,7 +649,7 @@ static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 	switch (frame->frametype) {
 	case AST_FRAME_DTMF_BEGIN:
 	case AST_FRAME_DTMF_END:
-		softmix_pass_dtmf(bridge, bridge_channel, frame);
+		softmix_pass_everyone_else(bridge, bridge_channel, frame);
 		break;
 	case AST_FRAME_VOICE:
 		softmix_bridge_write_voice(bridge, bridge_channel, frame);
@@ -669,6 +659,9 @@ static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 		break;
 	case AST_FRAME_CONTROL:
 		softmix_bridge_write_control(bridge, bridge_channel, frame);
+		break;
+	case AST_FRAME_BRIDGE_ACTION:
+		softmix_pass_everyone_else(bridge, bridge_channel, frame);
 		break;
 	default:
 		ast_debug(3, "Frame type %d unsupported\n", frame->frametype);

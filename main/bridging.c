@@ -211,7 +211,7 @@ int ast_bridge_technology_unregister(struct ast_bridge_technology *technology)
  *
  * \return Nothing
  */
-static void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
+static void bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_bridge *bridge;
 
@@ -311,6 +311,13 @@ int ast_bridge_channel_queue_frame(struct ast_bridge_channel *bridge_channel, st
 	}
 
 	ast_bridge_channel_lock(bridge_channel);
+	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+		/* Drop frames on channels leaving the bridge. */
+		ast_bridge_channel_unlock(bridge_channel);
+		ast_frfree(dup);
+		return 0;
+	}
+
 	AST_LIST_INSERT_TAIL(&bridge_channel->wr_queue, dup, frame_list);
 	if (write(bridge_channel->alert_pipe[1], &nudge, sizeof(nudge)) != sizeof(nudge)) {
 		ast_log(LOG_ERROR, "We couldn't write alert pipe for %p(%s)... something is VERY wrong\n",
@@ -690,7 +697,7 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 /* BUGBUG bridge join or impart needs to do CONNECTED_LINE updates if the channels are being swapped and it is a 1-1 bridge. */
 
 	/* Simply write the frame out to the bridge technology. */
-	ast_bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel_lock_bridge(bridge_channel);
 /* BUGBUG The tech is where AST_CONTROL_ANSWER hook should go. (early bridge) */
 /* BUGBUG The tech is where incoming BUSY/CONGESTION hangup should happen? (early bridge) */
 	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
@@ -1416,7 +1423,7 @@ static void bridge_channel_suspend_nolock(struct ast_bridge_channel *bridge_chan
  */
 static void bridge_channel_suspend(struct ast_bridge_channel *bridge_channel)
 {
-	ast_bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel_suspend_nolock(bridge_channel);
 	ast_bridge_unlock(bridge_channel->bridge);
 }
@@ -1459,7 +1466,7 @@ static void bridge_channel_unsuspend_nolock(struct ast_bridge_channel *bridge_ch
  */
 static void bridge_channel_unsuspend(struct ast_bridge_channel *bridge_channel)
 {
-	ast_bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel_unsuspend_nolock(bridge_channel);
 	ast_bridge_unlock(bridge_channel->bridge);
 }
@@ -1534,6 +1541,20 @@ static void bridge_channel_interval(struct ast_bridge_channel *bridge_channel)
 		}
 	}
 	ast_heap_unlock(bridge_channel->features->interval_hooks);
+}
+
+static void bridge_channel_write_dtmf_stream(struct ast_bridge_channel *bridge_channel, const char *dtmf)
+{
+	struct ast_frame action = {
+		.frametype = AST_FRAME_BRIDGE_ACTION,
+		.subclass.integer = AST_BRIDGE_ACTION_DTMF_STREAM,
+		.datalen = strlen(dtmf) + 1,
+		.data.ptr = (char *) dtmf,
+	};
+
+	bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, &action);
+	ast_bridge_unlock(bridge_channel->bridge);
 }
 
 /*!
@@ -1621,7 +1642,7 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 			bridge_handle_hangup(bridge_channel);
 		}
 	} else if (features->dtmf_passthrough) {
-		ast_bridge_dtmf_stream(bridge_channel->bridge, dtmf, bridge_channel->chan);
+		bridge_channel_write_dtmf_stream(bridge_channel, dtmf);
 	}
 }
 
@@ -1943,7 +1964,7 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 		bridge_channel_wait(bridge_channel);
 	}
-	ast_bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel_lock_bridge(bridge_channel);
 
 	ast_bridge_channel_pull(bridge_channel);
 	ast_bridge_reconfigured(bridge_channel->bridge);
@@ -2384,7 +2405,7 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan)
 	ao2_ref(bridge_channel, +1);
 	ast_channel_unlock(chan);
 
-	ast_bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel_lock_bridge(bridge_channel);
 	bridge = bridge_channel->bridge;
 	if (bridge_channel == find_bridge_channel(bridge, chan)) {
 /* BUGBUG this needs more work.  The channels need to be made compatible again if the formats change. The bridge_channel thread needs to monitor for this case. */
@@ -3303,30 +3324,6 @@ struct ast_bridge_features *ast_bridge_features_new(void)
 	}
 
 	return features;
-}
-
-int ast_bridge_dtmf_stream(struct ast_bridge *bridge, const char *dtmf, struct ast_channel *chan)
-{
-	struct ast_bridge_channel *bridge_channel;
-	struct ast_frame action = {
-		.frametype = AST_FRAME_BRIDGE_ACTION,
-		.subclass.integer = AST_BRIDGE_ACTION_DTMF_STREAM,
-		.datalen = strlen(dtmf) + 1,
-		.data.ptr = (char *) dtmf,
-	};
-
-	ast_bridge_lock(bridge);
-
-	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
-		if (bridge_channel->chan == chan) {
-			continue;
-		}
-		ast_bridge_channel_queue_frame(bridge_channel, &action);
-	}
-
-	ast_bridge_unlock(bridge);
-
-	return 0;
 }
 
 void ast_bridge_set_mixing_interval(struct ast_bridge *bridge, unsigned int mixing_interval)

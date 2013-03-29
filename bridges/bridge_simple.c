@@ -82,9 +82,7 @@ static int simple_bridge_write(struct ast_bridge *bridge, struct ast_bridge_chan
 	}
 
 	/* The bridging core takes care of freeing the passed in frame. */
-	if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		ast_bridge_channel_queue_frame(other, frame);
-	}
+	ast_bridge_channel_queue_frame(other, frame);
 
 	return 0;
 }

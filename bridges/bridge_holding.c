@@ -255,7 +255,7 @@ static void holding_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_ch
 
 static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-	struct ast_bridge_channel *other;
+	struct ast_bridge_channel *cur;
 	struct holding_channel *hc = bridge_channel->tech_pvt;
 
 	/* If there is no tech_pvt, then the channel failed to allocate one when it joined and is borked. Don't listen to him. */
@@ -269,17 +269,12 @@ static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 	}
 
 	/* Ok, so we are the announcer and there are one or more people available to receive our writes. Let's do it. */
-	AST_LIST_TRAVERSE(&bridge->channels, other, entry) {
-		if (!other->tech_pvt) {
-			continue;
-		}
-		if (bridge_channel == other) {
+	AST_LIST_TRAVERSE(&bridge->channels, cur, entry) {
+		if (bridge_channel == cur || !cur->tech_pvt) {
 			continue;
 		}
 
-		if (other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-			ast_bridge_channel_queue_frame(other, frame);
-		}
+		ast_bridge_channel_queue_frame(cur, frame);
 	}
 
 	return 0;

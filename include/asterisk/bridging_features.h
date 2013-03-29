@@ -643,28 +643,6 @@ struct ast_bridge_features *ast_bridge_features_new(void);
  */
 void ast_bridge_features_destroy(struct ast_bridge_features *features);
 
-/*!
- * \brief Play a DTMF stream into a bridge, optionally not to a given channel
- *
- * \param bridge Bridge to play stream into
- * \param dtmf DTMF to play
- * \param chan Channel to optionally not play to
- *
- * \retval 0 on success
- * \retval -1 on failure
- *
- * Example usage:
- *
- * \code
- * ast_bridge_dtmf_stream(bridge, "0123456789", NULL);
- * \endcode
- *
- * This sends the DTMF digits '0123456789' to all channels in the bridge pointed to
- * by the bridge pointer. Optionally a channel may be excluded by passing it's channel pointer
- * using the chan parameter.
- */
-int ast_bridge_dtmf_stream(struct ast_bridge *bridge, const char *dtmf, struct ast_channel *chan);
-
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
