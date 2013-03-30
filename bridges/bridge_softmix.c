@@ -990,7 +990,7 @@ static void *softmix_mixing_thread(void *data)
 		ast_callid_threadassoc_add(bridge->callid);
 	}
 
-	ast_debug(1, "Starting mixing thread for bridge %p\n", bridge);
+	ast_debug(1, "Bridge %s: starting mixing thread\n", bridge->uniqueid);
 
 	softmix_data = bridge->tech_pvt;
 	while (!softmix_data->stop) {
@@ -1019,7 +1019,7 @@ static void *softmix_mixing_thread(void *data)
 
 	ast_bridge_unlock(bridge);
 
-	ast_debug(1, "Stopping mixing thread for bridge %p\n", bridge);
+	ast_debug(1, "Bridge %s: stopping mixing thread\n", bridge->uniqueid);
 
 	return NULL;
 }
