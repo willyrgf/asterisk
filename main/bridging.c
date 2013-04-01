@@ -379,6 +379,82 @@ static struct ast_bridge_channel *find_bridge_channel(struct ast_bridge *bridge,
 
 /*!
  * \internal
+ * \brief Dissolve the bridge.
+ * \since 12.0.0
+ *
+ * \param bridge Bridge to eject all channels
+ *
+ * \details
+ * Force out all channels that are not already going out of the
+ * bridge.  Any new channels joining will leave immediately.
+ *
+ * \note On entry, bridge is already locked.
+ *
+ * \return Nothing
+ */
+static void bridge_dissolve(struct ast_bridge *bridge)
+{
+	struct ast_bridge_channel *bridge_channel;
+
+	if (bridge->dissolved) {
+		return;
+	}
+	bridge->dissolved = 1;
+
+	ast_debug(1, "Bridge %s: dissolving bridge\n", bridge->uniqueid);
+
+/* BUGBUG need a cause code on the bridge for the later ejected channels. */
+	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+	}
+	bridge->v_table->dissolving(bridge);
+}
+
+/*!
+ * \internal
+ * \brief Check if a bridge should dissolve and do it.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Channel causing the check.
+ *
+ * \note On entry, bridge_channel->bridge is already locked.
+ *
+ * \return Nothing
+ */
+static void bridge_dissolve_check(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_bridge *bridge = bridge_channel->bridge;
+
+	if (bridge->dissolved) {
+		return;
+	}
+
+	if (!bridge->num_channels
+		&& ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_EMPTY)) {
+		/* Last channel leaving the bridge turns off the lights. */
+		bridge_dissolve(bridge);
+		return;
+	}
+
+	switch (bridge_channel->state) {
+	case AST_BRIDGE_CHANNEL_STATE_END:
+		/* Do we need to dissolve the bridge because this channel hung up? */
+		if (ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_HANGUP)
+			|| (bridge_channel->features
+				&& bridge_channel->features->usable
+				&& ast_test_flag(&bridge_channel->features->feature_flags,
+					AST_BRIDGE_FLAG_DISSOLVE_HANGUP))) {
+			bridge_dissolve(bridge);
+			return;
+		}
+		break;
+	default:
+		break;
+	}
+}
+
+/*!
+ * \internal
  * \brief Pull the bridge channel out of its current bridge.
  * \since 12.0.0
  *
@@ -419,6 +495,8 @@ static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	--bridge->num_channels;
 	AST_LIST_REMOVE(&bridge->channels, bridge_channel, entry);
 	bridge->v_table->pull(bridge, bridge_channel);
+
+	bridge_dissolve_check(bridge_channel);
 
 	bridge->reconfigured = 1;
 }
@@ -492,53 +570,6 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	}
 
 	bridge->reconfigured = 1;
-}
-
-/*!
- * \internal
- * \brief Force out all channels that are not already going out of the bridge.
- * \since 12.0.0
- *
- * \param bridge Bridge to eject all channels
- *
- * \note On entry, bridge is already locked.
- *
- * \return Nothing
- */
-static void bridge_force_out_all(struct ast_bridge *bridge)
-{
-	struct ast_bridge_channel *bridge_channel;
-
-	bridge->dissolved = 1;
-
-/* BUGBUG need a cause code on the bridge for the later ejected channels. */
-	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
-	}
-}
-
-/*!
- * \internal
- * \brief Check if a bridge should dissolve and then do it.
- * \since 12.0.0
- *
- * \param bridge_channel Channel causing the check.
- *
- * \note On entry, bridge_channel->bridge is already locked.
- *
- * \return Nothing
- */
-static void bridge_check_dissolve(struct ast_bridge_channel *bridge_channel)
-{
-	if (!ast_test_flag(&bridge_channel->bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_HANGUP)
-		&& (!bridge_channel->features
-			|| !bridge_channel->features->usable
-			|| !ast_test_flag(&bridge_channel->features->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_HANGUP))) {
-		return;
-	}
-
-	ast_debug(1, "Bridge %s: dissolving bridge\n", bridge_channel->bridge->uniqueid);
-	bridge_force_out_all(bridge_channel->bridge);
 }
 
 /*! \brief Internal function to handle DTMF from a channel */
@@ -929,6 +960,7 @@ struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods
 	if (!v_table
 		|| !v_table->name
 		|| !v_table->destroy
+		|| !v_table->dissolving
 		|| !v_table->can_push
 		|| !v_table->push
 		|| !v_table->pull
@@ -1007,6 +1039,21 @@ static void bridge_base_destroy(struct ast_bridge *self)
 
 /*!
  * \internal
+ * \brief The bridge is being dissolved.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \return Nothing
+ */
+static void bridge_base_dissolving(struct ast_bridge *self)
+{
+/* BUGBUG unlink from the global bridges container. */
+	/*! \todo BUGBUG bridge_base_dissolving() not written */
+}
+
+/*!
+ * \internal
  * \brief ast_bridge base can_push method.
  * \since 12.0.0
  *
@@ -1081,6 +1128,7 @@ static void bridge_base_notify_masquerade(struct ast_bridge *self, struct ast_br
 struct ast_bridge_methods ast_bridge_base_v_table = {
 	.name = "base",
 	.destroy = bridge_base_destroy,
+	.dissolving = bridge_base_dissolving,
 	.can_push = bridge_base_can_push,
 	.push = bridge_base_push,
 	.pull = bridge_base_pull,
@@ -1113,7 +1161,7 @@ int ast_bridge_destroy(struct ast_bridge *bridge)
 {
 	ast_debug(1, "Bridge %s: telling all channels to leave the party\n", bridge->uniqueid);
 	ast_bridge_lock(bridge);
-	bridge_force_out_all(bridge);
+	bridge_dissolve(bridge);
 	ast_bridge_unlock(bridge);
 
 	ao2_ref(bridge, -1);
@@ -1388,8 +1436,8 @@ static void ast_bridge_reconfigured(struct ast_bridge *bridge)
 	bridge->reconfigured = 0;
 	if (ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_SMART)
 		&& smart_bridge_operation(bridge)) {
-		/* Smart bridge failed.  Dissolve the bridge. */
-		bridge_force_out_all(bridge);
+		/* Smart bridge failed. */
+		bridge_dissolve(bridge);
 		return;
 	}
 	bridge_complete_join(bridge);
@@ -1974,15 +2022,6 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 
 	ast_bridge_channel_pull(bridge_channel);
 	ast_bridge_reconfigured(bridge_channel->bridge);
-
-	/* See if we need to dissolve the bridge itself if they hung up */
-	switch (bridge_channel->state) {
-	case AST_BRIDGE_CHANNEL_STATE_END:
-		bridge_check_dissolve(bridge_channel);
-		break;
-	default:
-		break;
-	}
 
 	ast_bridge_unlock(bridge_channel->bridge);
 

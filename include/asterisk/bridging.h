@@ -246,6 +246,19 @@ struct ast_bridge_video_mode {
 typedef void (*ast_bridge_destructor_fn)(struct ast_bridge *self);
 
 /*!
+ * \brief The bridge is being dissolved.
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \details
+ * The bridge is being dissolved.  Remove any external
+ * references to the bridge so it can be destroyed.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_bridge_dissolving_fn)(struct ast_bridge *self);
+
+/*!
  * \brief Can this channel be pushed into the bridge.
  *
  * \param self Bridge to operate upon.
@@ -322,6 +335,8 @@ struct ast_bridge_methods {
 	const char *name;
 	/*! Destroy the bridge. */
 	ast_bridge_destructor_fn destroy;
+	/*! The bridge is being dissolved.  Remove any references to the bridge. */
+	ast_bridge_dissolving_fn dissolving;
 	/*! TRUE if can push the bridge channel into the bridge. */
 	ast_bridge_can_push_channel_fn can_push;
 	/*! Push the bridge channel into the bridge. */

@@ -329,6 +329,18 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	 */
 	ast_bridge_join(attended_bridge, bridge_channel->chan, NULL, &caller_features, NULL, 0);
 
+/*
+ * BUGBUG there is a small window where the channel does not point to the bridge_channel.
+ *
+ * This window is expected to go away when atxfer is redesigned
+ * to fully support existing functionality.  There will be one
+ * and only one ast_bridge_channel structure per channel.
+ */
+	/* Point the channel back to the original bridge_channel. */
+	ast_channel_lock(bridge_channel->chan);
+	ast_channel_internal_bridge_channel_set(bridge_channel->chan, bridge_channel);
+	ast_channel_unlock(bridge_channel->chan);
+
 	/* Wait for peer thread to exit bridge and die. */
 	if (!ast_autoservice_start(bridge_channel->chan)) {
 		ast_bridge_depart(peer);

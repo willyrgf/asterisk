@@ -4542,7 +4542,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 /* BUGBUG need to create the basic bridge class that will manage the DTMF feature hooks. */
 	bridge = ast_bridge_base_new(
 		AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_MULTIMIX,
-		AST_BRIDGE_FLAG_DISSOLVE_HANGUP | AST_BRIDGE_FLAG_SMART);
+		AST_BRIDGE_FLAG_DISSOLVE_HANGUP | AST_BRIDGE_FLAG_DISSOLVE_EMPTY | AST_BRIDGE_FLAG_SMART);
 	if (!bridge) {
 		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);
