@@ -78,12 +78,14 @@ extern "C" {
 enum ast_bridge_capability {
 	/*! Bridge technology can service calls on hold */
 	AST_BRIDGE_CAPABILITY_HOLDING = (1 << 0),
+	/*! Bridge waits for channel to answer.  Passes early media. */
+	AST_BRIDGE_CAPABILITY_EARLY = (1 << 1),
 	/*! Bridge should natively bridge two channels if possible */
-	AST_BRIDGE_CAPABILITY_NATIVE = (1 << 1),
+	AST_BRIDGE_CAPABILITY_NATIVE = (1 << 2),
 	/*! Bridge is only capable of mixing 2 channels */
-	AST_BRIDGE_CAPABILITY_1TO1MIX = (1 << 2),
+	AST_BRIDGE_CAPABILITY_1TO1MIX = (1 << 3),
 	/*! Bridge is capable of mixing 2 or more channels */
-	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 3),
+	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 4),
 };
 
 /*! \brief State information about a bridged channel */
@@ -392,6 +394,37 @@ struct ast_bridge {
 	/*! TRUE if the bridge has been dissolved.  Any channel that now tries to join is immediately ejected. */
 	unsigned int dissolved:1;
 };
+
+/*!
+ * \brief Register the new bridge with the system.
+ * \since 12.0.0
+ *
+ * \param bridge What to register. (Tollerates a NULL pointer)
+ *
+ * \code
+ * struct ast_bridge *ast_bridge_basic_new(uint32_t capabilities, int flags)
+ * {
+ *     void *bridge;
+ *
+ *     bridge = ast_bridge_alloc(sizeof(struct ast_bridge_basic), &ast_bridge_basic_v_table);
+ *     bridge = ast_bridge_base_init(bridge, capabilities, flags);
+ *     bridge = ast_bridge_basic_init(bridge, dtmf_features);
+ *     bridge = ast_bridge_register(bridge);
+ *     return bridge;
+ * }
+ * \endcode
+ *
+ * \note This must be done after a bridge constructor has
+ * completed setting up the new bridge but before it returns.
+ *
+ * \note After a bridge is registered, the bridge must be
+ * explicitly destroyed by ast_bridge_destroy() to get rid of
+ * the bridge.
+ *
+ * \retval bridge on success.
+ * \retval NULL on error.
+ */
+struct ast_bridge *ast_bridge_register(struct ast_bridge *bridge);
 
 /*!
  * \internal

@@ -55,6 +55,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/musiconhold.h"
 #include "asterisk/features.h"
+#include "asterisk/cli.h"
+
+/*! All bridges container. */
+static struct ao2_container *bridges;
 
 static AST_RWLIST_HEAD_STATIC(bridge_technologies, ast_bridge_technology);
 
@@ -952,6 +956,15 @@ static void destroy_bridge(void *obj)
 	cleanup_video_mode(bridge);
 }
 
+struct ast_bridge *ast_bridge_register(struct ast_bridge *bridge)
+{
+	if (bridge && !ao2_link(bridges, bridge)) {
+		ast_bridge_destroy(bridge);
+		bridge = NULL;
+	}
+	return bridge;
+}
+
 struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods *v_table)
 {
 	struct ast_bridge *bridge;
@@ -1048,8 +1061,7 @@ static void bridge_base_destroy(struct ast_bridge *self)
  */
 static void bridge_base_dissolving(struct ast_bridge *self)
 {
-/* BUGBUG unlink from the global bridges container. */
-	/*! \todo BUGBUG bridge_base_dissolving() not written */
+	ao2_unlink(bridges, self);
 }
 
 /*!
@@ -1141,6 +1153,7 @@ struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags)
 
 	bridge = ast_bridge_alloc(sizeof(struct ast_bridge), &ast_bridge_base_v_table);
 	bridge = ast_bridge_base_init(bridge, capabilities, flags);
+	bridge = ast_bridge_register(bridge);
 	return bridge;
 }
 
@@ -3668,6 +3681,410 @@ static struct bridge_manager_controller *bridge_manager_create(void)
 
 /*!
  * \internal
+ * \brief Bridge ao2 container sort function.
+ * \since 12.0.0
+ *
+ * \param obj_left pointer to the (user-defined part) of an object.
+ * \param obj_right pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'obj_right', is an object.
+ *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
+ *
+ * \retval <0 if obj_left < obj_right
+ * \retval =0 if obj_left == obj_right
+ * \retval >0 if obj_left > obj_right
+ */
+static int bridge_sort_cmp(const void *obj_left, const void *obj_right, int flags)
+{
+	const struct ast_bridge *bridge_left = obj_left;
+	const struct ast_bridge *bridge_right = obj_right;
+	const char *right_key = obj_right;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_key = bridge_right->uniqueid;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcmp(bridge_left->uniqueid, right_key);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncmp(bridge_left->uniqueid, right_key, strlen(right_key));
+		break;
+	}
+	return cmp;
+}
+
+struct bridge_complete {
+	/*! Nth match to return. */
+	int state;
+	/*! Which match currently on. */
+	int which;
+};
+
+static int complete_bridge_search(void *obj, void *arg, void *data, int flags)
+{
+	struct bridge_complete *search = data;
+
+	if (++search->which > search->state) {
+		return CMP_MATCH;
+	}
+	return 0;
+}
+
+static char *complete_bridge(const char *word, int state)
+{
+	char *ret;
+	struct ast_bridge *bridge;
+	struct bridge_complete search = {
+		.state = state,
+		};
+
+	bridge = ao2_callback_data(bridges, ast_strlen_zero(word) ? 0 : OBJ_PARTIAL_KEY,
+		complete_bridge_search, (char *) word, &search);
+	if (!bridge) {
+		return NULL;
+	}
+	ret = ast_strdup(bridge->uniqueid);
+	ao2_ref(bridge, -1);
+	return ret;
+}
+
+static char *handle_bridge_show_all(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+#define FORMAT_HDR "%-36s %5s %-15s %s\n"
+#define FORMAT_ROW "%-36s %5u %-15s %s\n"
+
+	struct ao2_iterator iter;
+	struct ast_bridge *bridge;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "bridge show all";
+		e->usage =
+			"Usage: bridge show all\n"
+			"       Lists active bridges\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, FORMAT_HDR, "Bridge ID", "Chans", "Type", "Technology");
+	iter = ao2_iterator_init(bridges, 0);
+	for (; (bridge = ao2_iterator_next(&iter)); ao2_ref(bridge, -1)) {
+		ast_bridge_lock(bridge);
+		ast_cli(a->fd, FORMAT_ROW,
+			bridge->uniqueid,
+			bridge->num_channels,
+			bridge->v_table ? bridge->v_table->name : "<unknown>",
+			bridge->technology ? bridge->technology->name : "<unknown>");
+		ast_bridge_unlock(bridge);
+	}
+	ao2_iterator_destroy(&iter);
+	return CLI_SUCCESS;
+
+#undef FORMAT_HDR
+#undef FORMAT_ROW
+}
+
+static char *handle_bridge_show_specific(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct ast_bridge *bridge;
+	struct ast_bridge_channel *bridge_channel;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "bridge show";
+		e->usage =
+			"Usage: bridge show <bridge-id>\n"
+			"       Show a specific bridge\n";
+		return NULL;
+	case CLI_GENERATE:
+		if (a->pos == 2) {
+			return complete_bridge(a->word, a->n);
+		}
+		return NULL;
+	}
+
+	if (a->argc != 3) {
+		return CLI_SHOWUSAGE;
+	}
+
+	bridge = ao2_find(bridges, a->argv[2], OBJ_KEY);
+	if (!bridge) {
+		ast_cli(a->fd, "Bridge '%s' not found\n", a->argv[2]);
+		return CLI_SUCCESS;
+	}
+
+	ast_bridge_lock(bridge);
+	ast_cli(a->fd, "Id: %s\n", bridge->uniqueid);
+	ast_cli(a->fd, "Type: %s\n", bridge->v_table ? bridge->v_table->name : "<unknown>");
+	ast_cli(a->fd, "Technology: %s\n",
+		bridge->technology ? bridge->technology->name : "<unknown>");
+	ast_cli(a->fd, "Num-Channels: %u\n", bridge->num_channels);
+	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		ast_cli(a->fd, "Channel: %s\n", ast_channel_name(bridge_channel->chan));
+	}
+	ast_bridge_unlock(bridge);
+	ao2_ref(bridge, -1);
+
+	return CLI_SUCCESS;
+}
+
+static char *handle_bridge_destroy_specific(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct ast_bridge *bridge;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "bridge destroy";
+		e->usage =
+			"Usage: bridge destroy <bridge-id>\n"
+			"       Destroy a specific bridge\n";
+		return NULL;
+	case CLI_GENERATE:
+		if (a->pos == 2) {
+			return complete_bridge(a->word, a->n);
+		}
+		return NULL;
+	}
+
+	if (a->argc != 3) {
+		return CLI_SHOWUSAGE;
+	}
+
+	bridge = ao2_find(bridges, a->argv[2], OBJ_KEY);
+	if (!bridge) {
+		ast_cli(a->fd, "Bridge '%s' not found\n", a->argv[2]);
+		return CLI_SUCCESS;
+	}
+
+	ast_cli(a->fd, "Destroying bridge '%s'\n", a->argv[2]);
+	ast_bridge_destroy(bridge);
+
+	return CLI_SUCCESS;
+}
+
+static char *complete_bridge_participant(const char *bridge_name, const char *line, const char *word, int pos, int state)
+{
+	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	struct ast_bridge_channel *bridge_channel;
+	int which;
+	int wordlen;
+
+	bridge = ao2_find(bridges, bridge_name, OBJ_KEY);
+	if (!bridge) {
+		return NULL;
+	}
+
+	{
+		SCOPED_LOCK(bridge_lock, bridge, ast_bridge_lock, ast_bridge_unlock);
+
+		which = 0;
+		wordlen = strlen(word);
+		AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+			if (!strncasecmp(ast_channel_name(bridge_channel->chan), word, wordlen)
+				&& ++which > state) {
+				return ast_strdup(ast_channel_name(bridge_channel->chan));
+			}
+		}
+	}
+
+	return NULL;
+}
+
+static char *handle_bridge_kick_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_channel *, chan, NULL, ao2_cleanup);
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "bridge kick";
+		e->usage =
+			"Usage: bridge kick <bridge-id> <channel>\n"
+			"       Kick a channel out of a bridge\n";
+		return NULL;
+	case CLI_GENERATE:
+		if (a->pos == 2) {
+			return complete_bridge(a->word, a->n);
+		}
+		if (a->pos == 3) {
+			return complete_bridge_participant(a->argv[2], a->line, a->word, a->pos, a->n);
+		}
+		return NULL;
+	}
+
+	if (a->argc != 4) {
+		return CLI_SHOWUSAGE;
+	}
+
+	bridge = ao2_find(bridges, a->argv[2], OBJ_KEY);
+	if (!bridge) {
+		ast_cli(a->fd, "Bridge '%s' not found\n", a->argv[2]);
+		return CLI_SUCCESS;
+	}
+
+	chan = ast_channel_get_by_name_prefix(a->argv[3], strlen(a->argv[3]));
+	if (!chan) {
+		ast_cli(a->fd, "Channel '%s' not found\n", a->argv[3]);
+		return CLI_SUCCESS;
+	}
+
+	ast_cli(a->fd, "Kicking channel '%s' from bridge '%s'\n",
+		ast_channel_name(chan), a->argv[2]);
+	ast_bridge_remove(bridge, chan);
+
+	return CLI_SUCCESS;
+}
+
+static char *handle_bridge_technology_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+#define FORMAT "%-20s %-20s %-10s %s\n"
+
+	struct ast_bridge_technology *cur;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "bridge technology show";
+		e->usage =
+			"Usage: bridge technology show\n"
+			"       Lists registered bridge technologies\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	ast_cli(a->fd, FORMAT, "Name", "Type", "Priority", "Suspended");
+	AST_RWLIST_RDLOCK(&bridge_technologies);
+	AST_RWLIST_TRAVERSE(&bridge_technologies, cur, entry) {
+		const char *type;
+		const char *priority;
+
+		/* Decode type for display */
+		if (cur->capabilities & AST_BRIDGE_CAPABILITY_HOLDING) {
+			type = "Holding";
+		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_EARLY) {
+			type = "Early";
+		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_NATIVE) {
+			type = "Native";
+		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX) {
+			type = "1to1Mix";
+		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
+			type = "MultiMix";
+		} else {
+			type = "<Unknown>";
+		}
+
+		/* Decode priority for display */
+		priority = "<Unknown>";
+		switch (cur->preference) {
+		case AST_BRIDGE_PREFERENCE_HIGH:
+			priority = "High";
+			break;
+		case AST_BRIDGE_PREFERENCE_MEDIUM:
+			priority = "Medium";
+			break;
+		case AST_BRIDGE_PREFERENCE_LOW:
+			priority = "Low";
+			break;
+		}
+
+		ast_cli(a->fd, FORMAT, cur->name, type, priority, AST_CLI_YESNO(cur->suspended));
+	}
+	AST_RWLIST_UNLOCK(&bridge_technologies);
+	return CLI_SUCCESS;
+
+#undef FORMAT
+}
+
+static char *complete_bridge_technology(const char *word, int state)
+{
+	struct ast_bridge_technology *cur;
+	char *res;
+	int which;
+	int wordlen;
+
+	which = 0;
+	wordlen = strlen(word);
+	AST_RWLIST_RDLOCK(&bridge_technologies);
+	AST_RWLIST_TRAVERSE(&bridge_technologies, cur, entry) {
+		if (!strncasecmp(cur->name, word, wordlen) && ++which > state) {
+			res = ast_strdup(cur->name);
+			AST_RWLIST_UNLOCK(&bridge_technologies);
+			return res;
+		}
+	}
+	AST_RWLIST_UNLOCK(&bridge_technologies);
+	return NULL;
+}
+
+static char *handle_bridge_technology_suspend(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	struct ast_bridge_technology *cur;
+	int suspend;
+	int successful;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "bridge technology {suspend|unsuspend}";
+		e->usage =
+			"Usage: bridge technology {suspend|unsuspend} <technology>\n"
+			"       Suspend or unsuspend the specified bridge technology.\n";
+		return NULL;
+	case CLI_GENERATE:
+		if (a->pos == 3) {
+			return complete_bridge_technology(a->word, a->n);
+		}
+		return NULL;
+	}
+
+	if (a->argc != 4) {
+		return CLI_SHOWUSAGE;
+	}
+
+	suspend = !strcasecmp(a->argv[2], "suspend");
+	successful = 0;
+	AST_RWLIST_WRLOCK(&bridge_technologies);
+	AST_RWLIST_TRAVERSE(&bridge_technologies, cur, entry) {
+		if (!strcasecmp(cur->name, a->argv[3])) {
+			successful = 1;
+			if (suspend) {
+				ast_bridge_technology_suspend(cur);
+			} else {
+				ast_bridge_technology_unsuspend(cur);
+			}
+			break;
+		}
+	}
+	AST_RWLIST_UNLOCK(&bridge_technologies);
+
+	if (successful) {
+		if (suspend) {
+			ast_cli(a->fd, "Suspended bridge technology '%s'\n", a->argv[3]);
+		} else {
+			ast_cli(a->fd, "Unsuspended bridge technology '%s'\n", a->argv[3]);
+		}
+	} else {
+		ast_cli(a->fd, "Bridge technology '%s' not found\n", a->argv[3]);
+	}
+
+	return CLI_SUCCESS;
+}
+
+static struct ast_cli_entry bridge_cli[] = {
+	AST_CLI_DEFINE(handle_bridge_show_all, "List bridges"),
+	AST_CLI_DEFINE(handle_bridge_show_specific, "Show a specific bridge"),
+	AST_CLI_DEFINE(handle_bridge_destroy_specific, "Destroy specific bridge"),
+	AST_CLI_DEFINE(handle_bridge_kick_channel, "Kick a channel from a bridge"),
+	AST_CLI_DEFINE(handle_bridge_technology_show, "List bridge technologies"),
+	AST_CLI_DEFINE(handle_bridge_technology_suspend, "Suspend/unsuspend bridge technology"),
+};
+
+/*!
+ * \internal
  * \brief Shutdown the bridging system.
  * \since 12.0.0
  *
@@ -3675,6 +4092,9 @@ static struct bridge_manager_controller *bridge_manager_create(void)
  */
 static void bridge_shutdown(void)
 {
+	ast_cli_unregister_multiple(bridge_cli, ARRAY_LEN(bridge_cli));
+	ao2_cleanup(bridges);
+	bridges = NULL;
 	ao2_cleanup(bridge_manager);
 	bridge_manager = NULL;
 }
@@ -3683,8 +4103,19 @@ int ast_bridging_init(void)
 {
 	bridge_manager = bridge_manager_create();
 	if (!bridge_manager) {
+		bridge_shutdown();
 		return -1;
 	}
+
+	bridges = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_MUTEX,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE, bridge_sort_cmp, NULL);
+	if (!bridges) {
+		bridge_shutdown();
+		return -1;
+	}
+
+/* BUGBUG need AMI action equivalents to the CLI commands. */
+	ast_cli_register_multiple(bridge_cli, ARRAY_LEN(bridge_cli));
 
 	ast_register_atexit(bridge_shutdown);
 	return 0;
