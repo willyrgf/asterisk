@@ -12951,6 +12951,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 							pris[span].pri.layer1_ignored = 0;
 						}
 						pris[span].pri.append_msn_to_user_tag = conf->pri.pri.append_msn_to_user_tag;
+						pris[span].pri.inband_on_proceeding = conf->pri.pri.inband_on_proceeding;
 						ast_copy_string(pris[span].pri.initial_user_tag, conf->chan.cid_tag, sizeof(pris[span].pri.initial_user_tag));
 						ast_copy_string(pris[span].pri.msn_list, conf->pri.pri.msn_list, sizeof(pris[span].pri.msn_list));
 #if defined(HAVE_PRI_MWI)
@@ -18218,6 +18219,8 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 #endif	/* defined(HAVE_PRI_MWI) */
 			} else if (!strcasecmp(v->name, "append_msn_to_cid_tag")) {
 				confp->pri.pri.append_msn_to_user_tag = ast_true(v->value);
+			} else if (!strcasecmp(v->name, "inband_on_proceeding")) {
+				confp->pri.pri.inband_on_proceeding = ast_true(v->value);
 #if defined(HAVE_PRI_DISPLAY_TEXT)
 			} else if (!strcasecmp(v->name, "display_send")) {
 				confp->pri.pri.display_flags_send = dahdi_display_text_option(v->value);
