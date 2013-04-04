@@ -190,6 +190,8 @@ enum ast_bridge_action_type {
 	AST_BRIDGE_ACTION_TALKING_START,
 	/*! Bridged channel is to indicate talking stop */
 	AST_BRIDGE_ACTION_TALKING_STOP,
+	/*! Bridge channel is to run the indicated application. */
+	AST_BRIDGE_ACTION_RUN_APP,
 
 	/*
 	 * Bridge actions put after this comment must never be put onto
@@ -896,6 +898,66 @@ int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
  * \note BUGBUG This may get moved.
  */
 int ast_bridge_channel_queue_frame(struct ast_bridge_channel *bridge_channel, struct ast_frame *fr);
+
+/*!
+ * \brief Write an action frame into the bridge with data.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel is putting the frame into the bridge.
+ * \param action Type of bridge action frame.
+ * \param data Frame payload data to pass.
+ * \param datalen Frame payload data length to pass.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_write_action_data(struct ast_bridge_channel *bridge_channel, enum ast_bridge_action_type action, const void *data, size_t datalen);
+
+/*!
+ * \brief Write a control frame into the bridge with data.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel is putting the frame into the bridge.
+ * \param control Type of control frame.
+ * \param data Frame payload data to pass.
+ * \param datalen Frame payload data length to pass.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_write_control_data(struct ast_bridge_channel *bridge_channel, enum ast_control_frame_type control, const void *data, size_t datalen);
+
+/*!
+ * \brief Run an application on the bridge channel.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel to run the application on.
+ * \param app_name Dialplan application name.
+ * \param app_args Arguments for the application. (NULL tolerant)
+ * \param moh_class MOH class to request bridge peers to hear while application is running.
+ *     NULL if no MOH.
+ *     Empty if default MOH class.
+ *
+ * \note This is intended to be called by bridge hooks.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class);
+
+/*!
+ * \brief Write a bridge action run application frame into the bridge.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel is putting the frame into the bridge
+ * \param app_name Dialplan application name.
+ * \param app_args Arguments for the application. (NULL or empty for no arguments)
+ * \param moh_class MOH class to request bridge peers to hear while application is running.
+ *     NULL if no MOH.
+ *     Empty if default MOH class.
+ *
+ * \note This is intended to be called by bridge hooks.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class);
 
 /*!
  * \brief Restore the formats of a bridge channel's channel to how they were before bridge_channel_join

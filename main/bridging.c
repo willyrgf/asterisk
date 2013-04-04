@@ -675,6 +675,123 @@ void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int st
 	ast_bridge_channel_queue_frame(bridge_channel, &action);
 }
 
+static void bridge_channel_write_frame(struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+{
+	bridge_channel_lock_bridge(bridge_channel);
+	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
+	ast_bridge_unlock(bridge_channel->bridge);
+}
+
+void ast_bridge_channel_write_action_data(struct ast_bridge_channel *bridge_channel, enum ast_bridge_action_type action, const void *data, size_t datalen)
+{
+	struct ast_frame frame = {
+		.frametype = AST_FRAME_BRIDGE_ACTION,
+		.subclass.integer = action,
+		.datalen = datalen,
+		.data.ptr = (void *) data,
+	};
+
+	bridge_channel_write_frame(bridge_channel, &frame);
+}
+
+void ast_bridge_channel_write_control_data(struct ast_bridge_channel *bridge_channel, enum ast_control_frame_type control, const void *data, size_t datalen)
+{
+	struct ast_frame frame = {
+		.frametype = AST_FRAME_CONTROL,
+		.subclass.integer = control,
+		.datalen = datalen,
+		.data.ptr = (void *) data,
+	};
+
+	bridge_channel_write_frame(bridge_channel, &frame);
+}
+
+static void run_app_helper(struct ast_channel *chan, const char *app_name, const char *app_args)
+{
+	if (!strcasecmp("Gosub", app_name)) {
+		ast_app_exec_sub(NULL, chan, app_args, 0);
+	} else if (!strcasecmp("Macro", app_name)) {
+		ast_app_exec_macro(NULL, chan, app_args);
+	} else {
+		struct ast_app *app;
+
+		app = pbx_findapp(app_name);
+		if (!app) {
+			ast_log(LOG_WARNING, "Could not find application (%s)\n", app_name);
+		} else {
+			pbx_exec(chan, app, app_args);
+		}
+	}
+}
+
+void ast_bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
+{
+	if (moh_class) {
+		if (ast_strlen_zero(moh_class)) {
+			ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD,
+				NULL, 0);
+		} else {
+			ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD,
+				moh_class, strlen(moh_class) + 1);
+		}
+	}
+	run_app_helper(bridge_channel->chan, app_name, S_OR(app_args, ""));
+	if (moh_class) {
+		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD,
+			NULL, 0);
+	}
+}
+
+struct bridge_run_app {
+	/*! Offset into app_name[] where the MOH class name starts.  (zero if no MOH)*/
+	int moh_offset;
+	/*! Offset into app_name[] where the application argument string starts. (zero if no arguments) */
+	int app_args_offset;
+	/*! Application name to run. */
+	char app_name[0];
+};
+
+/*!
+ * \internal
+ * \brief Handle the run application bridge action.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel to run the application on.
+ * \param data Action frame data to run the application.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, struct bridge_run_app *data)
+{
+	ast_bridge_channel_run_app(bridge_channel, data->app_name,
+		data->app_args_offset ? &data->app_name[data->app_args_offset] : NULL,
+		data->moh_offset ? &data->app_name[data->moh_offset] : NULL);
+}
+
+void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
+{
+	struct bridge_run_app *app_data;
+	size_t len_name = strlen(app_name) + 1;
+	size_t len_args = ast_strlen_zero(app_args) ? 0 : strlen(app_args) + 1;
+	size_t len_moh = !moh_class ? 0 : strlen(moh_class) + 1;
+	size_t len_data = sizeof(*app_data) + len_name + len_args + len_moh;
+
+	/* Fill in application run frame data. */
+	app_data = alloca(len_data);
+	app_data->app_args_offset = len_args ? len_name : 0;
+	app_data->moh_offset = len_moh ? len_name + len_args : 0;
+	strcpy(app_data->app_name, app_name);/* Safe */
+	if (len_args) {
+		strcpy(&app_data->app_name[app_data->app_args_offset], app_args);/* Safe */
+	}
+	if (moh_class) {
+		strcpy(&app_data->app_name[app_data->moh_offset], moh_class);/* Safe */
+	}
+
+	ast_bridge_channel_write_action_data(bridge_channel,
+		AST_BRIDGE_ACTION_RUN_APP, app_data, len_data);
+}
+
 /*!
  * \internal
  * \brief Feed notification that a frame is waiting on a channel into the bridging core
@@ -731,11 +848,9 @@ static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 /* BUGBUG bridge join or impart needs to do CONNECTED_LINE updates if the channels are being swapped and it is a 1-1 bridge. */
 
 	/* Simply write the frame out to the bridge technology. */
-	bridge_channel_lock_bridge(bridge_channel);
 /* BUGBUG The tech is where AST_CONTROL_ANSWER hook should go. (early bridge) */
 /* BUGBUG The tech is where incoming BUSY/CONGESTION hangup should happen? (early bridge) */
-	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
-	ast_bridge_unlock(bridge_channel->bridge);
+	bridge_channel_write_frame(bridge_channel, frame);
 	ast_frfree(frame);
 }
 
@@ -1611,16 +1726,8 @@ static void bridge_channel_interval(struct ast_bridge_channel *bridge_channel)
 
 static void bridge_channel_write_dtmf_stream(struct ast_bridge_channel *bridge_channel, const char *dtmf)
 {
-	struct ast_frame action = {
-		.frametype = AST_FRAME_BRIDGE_ACTION,
-		.subclass.integer = AST_BRIDGE_ACTION_DTMF_STREAM,
-		.datalen = strlen(dtmf) + 1,
-		.data.ptr = (char *) dtmf,
-	};
-
-	bridge_channel_lock_bridge(bridge_channel);
-	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, &action);
-	ast_bridge_unlock(bridge_channel->bridge);
+	ast_bridge_channel_write_action_data(bridge_channel,
+		AST_BRIDGE_ACTION_DTMF_STREAM, dtmf, strlen(dtmf) + 1);
 }
 
 /*!
@@ -1768,6 +1875,13 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 	case AST_BRIDGE_ACTION_TALKING_STOP:
 		bridge_channel_talking(bridge_channel,
 			action->subclass.integer == AST_BRIDGE_ACTION_TALKING_START);
+		break;
+	case AST_BRIDGE_ACTION_RUN_APP:
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_run_app(bridge_channel, action->data.ptr);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
 		break;
 	default:
 		break;
