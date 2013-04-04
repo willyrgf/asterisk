@@ -112,7 +112,7 @@ static struct bridge_manager_controller *bridge_manager;
  *
  * \return Nothing
  */
-static void ast_bridge_manager_service_req(struct ast_bridge *bridge)
+static void bridge_manager_service_req(struct ast_bridge *bridge)
 {
 	struct bridge_manager_request *request;
 
@@ -272,7 +272,7 @@ void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast
  *
  * \return Nothing
  */
-static void ast_bridge_queue_action_nodup(struct ast_bridge *bridge, struct ast_frame *action)
+static void bridge_queue_action_nodup(struct ast_bridge *bridge, struct ast_frame *action)
 {
 	ast_debug(1, "Bridge %s: queueing action type:%d sub:%d\n",
 		bridge->uniqueid, action->frametype, action->subclass.integer);
@@ -280,7 +280,7 @@ static void ast_bridge_queue_action_nodup(struct ast_bridge *bridge, struct ast_
 	ast_bridge_lock(bridge);
 	AST_LIST_INSERT_TAIL(&bridge->action_queue, action, frame_list);
 	ast_bridge_unlock(bridge);
-	ast_bridge_manager_service_req(bridge);
+	bridge_manager_service_req(bridge);
 }
 
 int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
@@ -291,7 +291,7 @@ int ast_bridge_queue_action(struct ast_bridge *bridge, struct ast_frame *action)
 	if (!dup) {
 		return -1;
 	}
-	ast_bridge_queue_action_nodup(bridge, dup);
+	bridge_queue_action_nodup(bridge, dup);
 	return 0;
 }
 
@@ -468,7 +468,7 @@ static void bridge_dissolve_check(struct ast_bridge_channel *bridge_channel)
  *
  * \return Nothing
  */
-static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
+static void bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_bridge *bridge = bridge_channel->bridge;
 
@@ -516,7 +516,7 @@ static void ast_bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
  *
  * \return Nothing
  */
-static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
+static void bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_bridge *bridge = bridge_channel->bridge;
 	struct ast_bridge_channel *swap;
@@ -570,7 +570,7 @@ static void ast_bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	}
 	if (swap) {
 		ast_bridge_change_state(swap, AST_BRIDGE_CHANNEL_STATE_HANGUP);
-		ast_bridge_channel_pull(swap);
+		bridge_channel_pull(swap);
 	}
 
 	bridge->reconfigured = 1;
@@ -798,7 +798,7 @@ void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, con
  *
  * \param bridge_channel Bridge channel the notification was received on
  */
-static void ast_bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
+static void bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_frame *frame;
 
@@ -1529,7 +1529,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 	if (old_technology->destroy) {
 		ast_debug(1, "Bridge %s: deferring %s technology destructor\n",
 			bridge->uniqueid, old_technology->name);
-		ast_bridge_queue_action_nodup(bridge, deferred_action);
+		bridge_queue_action_nodup(bridge, deferred_action);
 	} else {
 		ast_debug(1, "Bridge %s: calling %s technology destructor\n",
 			bridge->uniqueid, old_technology->name);
@@ -1547,8 +1547,8 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
  * \param bridge Reconfigured bridge.
  *
  * \details
- * After a series of ast_bridge_channel_push and
- * ast_bridge_channel_pull calls, you need to call this function
+ * After a series of bridge_channel_push and
+ * bridge_channel_pull calls, you need to call this function
  * to cause the bridge to complete restruturing for the change
  * in the channel makeup of the bridge.
  *
@@ -1556,7 +1556,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
  *
  * \return Nothing
  */
-static void ast_bridge_reconfigured(struct ast_bridge *bridge)
+static void bridge_reconfigured(struct ast_bridge *bridge)
 {
 	if (!bridge->reconfigured) {
 		return;
@@ -2092,7 +2092,7 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 			&& bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 			if (chan) {
 				bridge_channel_handle_interval(bridge_channel);
-				ast_bridge_handle_trip(bridge_channel);
+				bridge_handle_trip(bridge_channel);
 			} else if (-1 < outfd) {
 				bridge_channel_handle_write(bridge_channel);
 			}
@@ -2124,8 +2124,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		bridge_channel->bridge->callid = ast_read_threadstorage_callid();
 	}
 
-	ast_bridge_channel_push(bridge_channel);
-	ast_bridge_reconfigured(bridge_channel->bridge);
+	bridge_channel_push(bridge_channel);
+	bridge_reconfigured(bridge_channel->bridge);
 
 	/*
 	 * Indicate a source change since this channel is entering the
@@ -2147,8 +2147,8 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	}
 	bridge_channel_lock_bridge(bridge_channel);
 
-	ast_bridge_channel_pull(bridge_channel);
-	ast_bridge_reconfigured(bridge_channel->bridge);
+	bridge_channel_pull(bridge_channel);
+	bridge_reconfigured(bridge_channel->bridge);
 
 	ast_bridge_unlock(bridge_channel->bridge);
 
@@ -2583,7 +2583,7 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan)
 /* BUGBUG this needs more work.  The channels need to be made compatible again if the formats change. The bridge_channel thread needs to monitor for this case. */
 		/* The channel we want to notify is still in a bridge. */
 		bridge->v_table->notify_masquerade(bridge, bridge_channel);
-		ast_bridge_reconfigured(bridge);
+		bridge_reconfigured(bridge);
 	}
 	ast_bridge_unlock(bridge);
 	ao2_ref(bridge_channel, -1);
@@ -2851,7 +2851,7 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan)
  * this operation is completed.  The caller must explicitly call
  * ast_bridge_destroy().
  */
-static void ast_bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
+static void bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
 {
 	struct ast_bridge_channel *bridge_channel;
 
@@ -2860,7 +2860,7 @@ static void ast_bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *b
 
 	/* Move channels from bridge2 over to bridge1 */
 	while ((bridge_channel = AST_LIST_FIRST(&bridge2->channels))) {
-		ast_bridge_channel_pull(bridge_channel);
+		bridge_channel_pull(bridge_channel);
 
 		/* Point to new bridge.*/
 		ao2_ref(bridge1, +1);
@@ -2869,10 +2869,10 @@ static void ast_bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *b
 		ast_bridge_channel_unlock(bridge_channel);
 		ao2_ref(bridge2, -1);
 
-		ast_bridge_channel_push(bridge_channel);
+		bridge_channel_push(bridge_channel);
 	}
-	ast_bridge_reconfigured(bridge1);
-	ast_bridge_reconfigured(bridge2);
+	bridge_reconfigured(bridge1);
+	bridge_reconfigured(bridge2);
 
 	ast_debug(1, "Merged bridge %s into bridge %s\n",
 		bridge2->uniqueid, bridge1->uniqueid);
@@ -2909,7 +2909,7 @@ int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
 	} else {
 		++bridge1->inhibit_merge;
 		++bridge2->inhibit_merge;
-		ast_bridge_merge_do(bridge1, bridge2);
+		bridge_merge_do(bridge1, bridge2);
 		--bridge2->inhibit_merge;
 		--bridge1->inhibit_merge;
 		res = 0;
