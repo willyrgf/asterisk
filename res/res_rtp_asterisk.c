@@ -113,6 +113,7 @@ enum strict_rtp_state {
 #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
 #define FLAG_NEED_MARKER_BIT            (1 << 3)
 #define FLAG_DTMF_COMPENSATE            (1 << 4)
+#define FLAG_CN_ACTIVE			(1 << 5)
 
 /*! \brief RTP session description */
 struct ast_rtp {
@@ -1738,17 +1739,8 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 	/* Convert comfort noise into audio with various codecs.  Unfortunately this doesn't
 	   totally help us out becuase we don't have an engine to keep it going and we are not
 	   guaranteed to have it every 20ms or anything */
-	if (rtpdebug)
+	if (rtpdebug) {
 		ast_debug(0, "- RTP 3389 Comfort noise event: Level %" PRId64 " (len = %d)\n", rtp->lastrxformat, len);
-
-	if (ast_test_flag(rtp, FLAG_3389_WARNING)) {
-		struct ast_sockaddr remote_address = { {0,} };
-
-		ast_rtp_instance_get_remote_address(instance, &remote_address);
-
-		ast_log(LOG_NOTICE, "Comfort noise support incomplete in Asterisk (RFC 3389). Please turn off on client if possible. Client address: %s\n",
-			ast_sockaddr_stringify(&remote_address));
-		ast_set_flag(rtp, FLAG_3389_WARNING);
 	}
 
 	/* Must have at least one byte */
@@ -1765,9 +1757,21 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 		rtp->f.datalen = 0;
 	}
 	rtp->f.frametype = AST_FRAME_CNG;
+		/* The noise level is expressed in -dBov with values 0 to 127, representing 0 to -127 dBov
+		   It's in bits 1-7 in the payload. Bit 0 is always 0.
+		*/
 	rtp->f.subclass.integer = data[0] & 0x7f;
 	rtp->f.samples = 0;
 	rtp->f.delivery.tv_usec = rtp->f.delivery.tv_sec = 0;
+
+	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		ast_set_flag(rtp, FLAG_CN_ACTIVE);
+		ast_debug(0, "###### ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
+		/* Start the generator on the other end. */
+	
+	} else {
+		/* Check if the level is the same. If not, reactivate. */
+	}
 
 	return &rtp->f;
 }
@@ -2345,6 +2349,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	/* If the payload is not actually an Asterisk one but a special one pass it off to the respective handler */
 	if (!payload.asterisk_format) {
 		struct ast_frame *f = NULL;
+		if (payload.code != AST_RTP_CN && ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+			/* Insert a control frame to indicate that we need to shut down Comfort Noise generators, if active */
+			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+			ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+			f = ast_frdup(&cngoff);
+			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+			f = NULL;
+		}
 		if (payload.code == AST_RTP_DTMF) {
 			/* process_dtmf_rfc2833 may need to return multiple frames. We do this
 			 * by passing the pointer to the frame list to it so that the method
@@ -2371,6 +2384,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			return AST_LIST_FIRST(&frames);
 		}
 		return &ast_null_frame;
+	}
+	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		struct ast_frame *f = NULL;
+		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+		ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+		f = ast_frdup(&cngoff);
+		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+		f = NULL;
 	}
 
 	rtp->lastrxformat = rtp->f.subclass.codec = payload.code;

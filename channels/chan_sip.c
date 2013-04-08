@@ -4762,6 +4762,10 @@ static int sip_queryoption(struct ast_channel *chan, int option, void *data, int
 		 * implied else case here
 		 */
 		break;
+	case AST_OPTION_CNG_SUPPORT:
+		/* Check if the current dialog has agreed on Comfort Noise support */
+		res = (p->noncodeccapability & AST_RTP_CN);
+		break;
 	default:
 		break;
 	}
@@ -5756,6 +5760,10 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 		dialog->noncodeccapability |= AST_RTP_DTMF;
 	else
 		dialog->noncodeccapability &= ~AST_RTP_DTMF;
+
+	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_ALLOW_CN)) {
+		dialog->noncodeccapability |= AST_RTP_CN;
+	}
 	dialog->directmediaha = ast_duplicate_ha_list(peer->directmediaha);
 	if (peer->call_limit)
 		ast_set_flag(&dialog->flags[0], SIP_CALL_LIMIT);
@@ -9679,7 +9687,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		   they are acceptable */
 		p->jointcapability = newjointcapability;                /* Our joint codec profile for this call */
 		p->peercapability = newpeercapability;                  /* The other side's capability in latest offer */
-		p->jointnoncodeccapability = newnoncodeccapability;     /* DTMF capabilities */
+		p->jointnoncodeccapability = newnoncodeccapability;     /* CN and DTMF capabilities */
 
 		/* respond with single most preferred joint codec, limiting the other side's choice */
 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_PREFERRED_CODEC)) {
@@ -11466,6 +11474,7 @@ static void add_codec_to_sdp(const struct sip_pvt *p, format_t codec,
 		fmt = ast_codec_pref_getsize(pref, codec);
 	} else /* I don't see how you couldn't have p->rtp, but good to check for and error out if not there like earlier code */
 		return;
+
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
 		       ast_rtp_lookup_mime_subtype2(1, codec,
@@ -11585,7 +11594,7 @@ static unsigned int t38_get_rate(enum ast_control_t38_rate rate)
 	}
 }
 
-/*! \brief Add RFC 2833 DTMF offer to SDP */
+/*! \brief Add CN and RFC 2833 DTMF offer to SDP */
 static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
 				struct ast_str **m_buf, struct ast_str **a_buf,
 				int debug)
@@ -11951,10 +11960,12 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 				add_tcodec_to_sdp(p, x, &m_text, &a_text, debug, &min_text_packet_size);
 		}
 
-		/* Now add DTMF RFC2833 telephony-event as a codec */
+		/* Now add Comfort Noise and DTMF RFC2833 telephony-event as a codec */
 		for (x = 1LL; x <= AST_RTP_MAX; x <<= 1) {
-			if (!(p->jointnoncodeccapability & x))
+			if (!(p->jointnoncodeccapability & x)) {
+				ast_debug(1, "NOT Adding non-codec 0x%lx (%s) to SDP\n", (int64_t)x, ast_rtp_lookup_mime_subtype2(0, x, 0));
 				continue;
+			}
 
 			add_noncodec_to_sdp(p, x, &m_audio, &a_audio, debug);
 		}
@@ -16695,6 +16706,9 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 			p->noncodeccapability |= AST_RTP_DTMF;
 		else
 			p->noncodeccapability &= ~AST_RTP_DTMF;
+		if (ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOW_CN)) {
+			p->noncodeccapability |= AST_RTP_CN;
+		}
 		p->jointnoncodeccapability = p->noncodeccapability;
 		p->rtptimeout = peer->rtptimeout;
 		p->rtpholdtimeout = peer->rtpholdtimeout;
@@ -18141,6 +18155,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
 		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
 		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
+		ast_cli(fd, "  Comfort Noise: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)));
 		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 		ast_cli(fd, "  Trust RPID   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_TRUSTRPID)));
 		ast_cli(fd, "  Send RPID    : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_SENDRPID)));
@@ -18253,6 +18268,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "SIP-T.38Support: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT)?"Y":"N"));
 		astman_append(s, "SIP-T.38EC: %s\r\n", faxec2str(ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT)));
 		astman_append(s, "SIP-T.38MaxDtgrm: %d\r\n", peer->t38_maxdatagram);
+		astman_append(s, "SIP-ComfortNoise: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)?"Y":"N"));
 		astman_append(s, "SIP-Sess-Timers: %s\r\n", stmode2str(peer->stimer.st_mode_oper));
 		astman_append(s, "SIP-Sess-Refresh: %s\r\n", strefresherparam2str(peer->stimer.st_ref));
 		astman_append(s, "SIP-Sess-Expires: %d\r\n", peer->stimer.st_max_se);
@@ -18706,6 +18722,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 				"Disabled");
 	ast_cli(a->fd, "  Videosupport:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
 	ast_cli(a->fd, "  Textsupport:            %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
+	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
 	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 	ast_cli(a->fd, "  AutoCreate Peer:        %s\n", AST_CLI_YESNO(sip_cfg.autocreatepeer));
 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
@@ -19228,6 +19245,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
+			ast_cli(a->fd, "  Comfort Noise support   %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[1],SIP_PAGE2_ALLOW_CN)));
 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
@@ -27603,6 +27621,8 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "buggymwi")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
+	} else if (!strcasecmp(v->name, "comfort-noise")) {
+		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOW_CN);
 	} else
 		res = 0;
 
