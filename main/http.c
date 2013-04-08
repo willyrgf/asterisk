@@ -230,7 +230,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 		goto out403;
 	}
 
-	/* Disallow any funny filenames at all */
+	/* Disallow any funny filenames at all (checking first character only??) */
 	if ((uri[0] < 33) || strchr("./|~@#$%^&*() \t", uri[0])) {
 		goto out403;
 	}
@@ -245,6 +245,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 
 	if (!(mtype = ast_http_ftype2mtype(ftype))) {
 		snprintf(wkspace, sizeof(wkspace), "text/%s", S_OR(ftype, "plain"));
+		mtype = wkspace;
 	}
 
 	/* Cap maximum length */
@@ -262,12 +263,12 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 		goto out404;
 	}
 
-	fd = open(path, O_RDONLY);
-	if (fd < 0) {
+	if (strstr(path, "/private/") && !astman_is_authed(ast_http_manid_from_vars(headers))) {
 		goto out403;
 	}
 
-	if (strstr(path, "/private/") && !astman_is_authed(ast_http_manid_from_vars(headers))) {
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
 		goto out403;
 	}
 
@@ -290,6 +291,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 	}
 
 	if ( (http_header = ast_str_create(255)) == NULL) {
+		close(fd);
 		return -1;
 	}
 
@@ -612,6 +614,8 @@ static void http_decode(char *s)
 	ast_uri_decode(s);
 }
 
+#define MAX_POST_CONTENT 1025
+
 /*
  * get post variables from client Request Entity-Body, if content type is
  * application/x-www-form-urlencoded
@@ -641,6 +645,13 @@ struct ast_variable *ast_http_get_post_vars(
 	}
 
 	if (content_length <= 0) {
+		return NULL;
+	}
+
+	if (content_length > MAX_POST_CONTENT - 1) {
+		ast_log(LOG_WARNING, "Excessively long HTTP content. %d is greater than our max of %d\n",
+				content_length, MAX_POST_CONTENT);
+		ast_http_send(ser, AST_HTTP_POST, 413, "Request Entity Too Large", NULL, NULL, 0, 0);
 		return NULL;
 	}
 

@@ -87,7 +87,7 @@ static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 
 static int rtpstart = DEFAULT_RTP_START;			/*!< First port for RTP sessions (set in rtp.conf) */
 static int rtpend = DEFAULT_RTP_END;			/*!< Last port for RTP sessions (set in rtp.conf) */
-static int poormansplc;                 /*!< Are we using poor man's packet loss concealment? */
+static int bridgepacketloss;		/*!< Expose packet loss when sending RTP */
 static int rtpdebug;			/*!< Are we debugging? */
 static int rtcpdebug;			/*!< Are we debugging RTCP? */
 static int rtcpstats;			/*!< Are we debugging RTCP? */
@@ -371,7 +371,7 @@ static int __rtp_recvfrom(struct ast_rtp_instance *instance, void *buf, size_t s
 	   return len;
 	}
 
-	if ((*in > 1) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
+	if ((*in & 0xC0) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
 	   return -1;
 	}
 
@@ -536,9 +536,6 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 	/* Set default parameters on the newly created RTP structure */
 	rtp->plcbuf = NULL;
 
-	if (poormansplc) {
-		ast_set_flag(rtp, FLAG_POORMANSPLC);	/* If PLC is globally set, turn it on */
-	}
 	rtp->ssrc = ast_random();
 	rtp->seqno = ast_random() & 0xffff;
 	rtp->strict_rtp_state = (strictrtp ? STRICT_RTP_LEARN : STRICT_RTP_OPEN);
@@ -3031,11 +3028,11 @@ static int rtp_reload(int reload)
 		return 0;
 	}
 
+	bridgepacketloss = 0;	/* Off by default */
 	rtpstart = DEFAULT_RTP_START;
 	rtpend = DEFAULT_RTP_END;
 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 	strictrtp = STRICT_RTP_OPEN;
-	poormansplc = 0;
 	learning_min_sequential = DEFAULT_LEARNING_MIN_SEQUENTIAL;
 	if (cfg) {
 		if ((s = ast_variable_retrieve(cfg, "general", "rtpstart"))) {
@@ -3069,11 +3066,8 @@ static int rtp_reload(int reload)
 				ast_log(LOG_WARNING, "Disabling RTP checksums is not supported on this operating system!\n");
 #endif
 		}
-		if ((s = ast_variable_retrieve(cfg, "general", "plc"))) {
-			poormansplc = ast_true(s);
-			if (option_debug > 1) {
-				ast_log(LOG_DEBUG, "*** Poor man's PLC is turned %s\n", poormansplc ? "on" : "off" );
-			}
+		if ((s = ast_variable_retrieve(cfg, "general", "bridgepacketloss"))) {
+			bridgepacketloss = ast_true(s);
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "dtmftimeout"))) {
 			dtmftimeout = atoi(s);
