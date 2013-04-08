@@ -197,6 +197,10 @@ struct ast_bridge_features {
 	struct ao2_container *dtmf_hooks;
 	/*! Attached hangup interception hooks container */
 	struct ao2_container *hangup_hooks;
+	/*! Attached bridge channel join interception hooks container */
+	struct ao2_container *join_hooks;
+	/*! Attached bridge channel leave interception hooks container */
+	struct ao2_container *leave_hooks;
 	/*! Attached interval hooks */
 	struct ast_heap *interval_hooks;
 	/*! Used to determine when interval based features should be checked */
@@ -356,6 +360,66 @@ int ast_bridge_interval_register(enum ast_bridge_builtin_interval interval, ast_
  * This unregisters the function that is handling the built in duration limit feature.
  */
 int ast_bridge_interval_unregister(enum ast_bridge_builtin_interval interval);
+
+/*!
+ * \brief Attach a bridge channel join hook to a bridge features structure
+ *
+ * \param features Bridge features structure
+ * \param callback Function to execute upon activation
+ * \param hook_pvt Unique data
+ * \param destructor Optional destructor callback for hook_pvt data
+ * \param remove_on_pull TRUE if remove the hook when the channel is pulled from the bridge.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge_features features;
+ * ast_bridge_features_init(&features);
+ * ast_bridge_join_hook(&features, join_callback, NULL, NULL, 0);
+ * \endcode
+ *
+ * This makes the bridging core call join_callback when a
+ * channel successfully joins the bridging system.  A pointer to
+ * useful data may be provided to the hook_pvt parameter.
+ */
+int ast_bridge_join_hook(struct ast_bridge_features *features,
+	ast_bridge_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull);
+
+/*!
+ * \brief Attach a bridge channel leave hook to a bridge features structure
+ *
+ * \param features Bridge features structure
+ * \param callback Function to execute upon activation
+ * \param hook_pvt Unique data
+ * \param destructor Optional destructor callback for hook_pvt data
+ * \param remove_on_pull TRUE if remove the hook when the channel is pulled from the bridge.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * struct ast_bridge_features features;
+ * ast_bridge_features_init(&features);
+ * ast_bridge_leave_hook(&features, leave_callback, NULL, NULL, 0);
+ * \endcode
+ *
+ * This makes the bridging core call leave_callback when a
+ * channel successfully leaves the bridging system.  A pointer
+ * to useful data may be provided to the hook_pvt parameter.
+ */
+int ast_bridge_leave_hook(struct ast_bridge_features *features,
+	ast_bridge_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull);
 
 /*!
  * \brief Attach a hangup hook to a bridge features structure

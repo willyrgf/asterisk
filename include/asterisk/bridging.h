@@ -836,6 +836,25 @@ static inline void _ast_bridge_channel_unlock(struct ast_bridge_channel *bridge_
 }
 
 /*!
+ * \brief Lock the bridge associated with the bridge channel.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Channel that wants to lock the bridge.
+ *
+ * \details
+ * This is an upstream lock operation.  The defined locking
+ * order is bridge then bridge_channel.
+ *
+ * \note On entry, neither the bridge nor bridge_channel is locked.
+ *
+ * \note The bridge_channel->bridge pointer changes because of a
+ * bridge-merge/channel-move operation between bridges.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel);
+
+/*!
  * \brief Set bridge channel state to leave bridge (if not leaving already) with no lock.
  *
  * \param bridge_channel Channel to change the state on

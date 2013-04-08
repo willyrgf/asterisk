@@ -197,25 +197,7 @@ int ast_bridge_technology_unregister(struct ast_bridge_technology *technology)
 	return current ? 0 : -1;
 }
 
-/*!
- * \internal
- * \brief Lock the bridge associated with the bridge channel.
- * \since 12.0.0
- *
- * \param bridge_channel Channel that wants to lock the bridge.
- *
- * \details
- * This is an upstream lock operation.  The defined locking
- * order is bridge then bridge_channel.
- *
- * \note On entry, neither the bridge nor bridge_channel is locked.
- *
- * \note The bridge_channel->bridge pointer changes because of a
- * bridge-merge/channel-move operation between bridges.
- *
- * \return Nothing
- */
-static void bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
+void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_bridge *bridge;
 
@@ -701,7 +683,7 @@ void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int st
 
 static void bridge_channel_write_frame(struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-	bridge_channel_lock_bridge(bridge_channel);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
 	ast_bridge_unlock(bridge_channel->bridge);
 }
@@ -1730,7 +1712,7 @@ static void bridge_channel_suspend_nolock(struct ast_bridge_channel *bridge_chan
  */
 static void bridge_channel_suspend(struct ast_bridge_channel *bridge_channel)
 {
-	bridge_channel_lock_bridge(bridge_channel);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel_suspend_nolock(bridge_channel);
 	ast_bridge_unlock(bridge_channel->bridge);
 }
@@ -1773,7 +1755,7 @@ static void bridge_channel_unsuspend_nolock(struct ast_bridge_channel *bridge_ch
  */
 static void bridge_channel_unsuspend(struct ast_bridge_channel *bridge_channel)
 {
-	bridge_channel_lock_bridge(bridge_channel);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge_channel_unsuspend_nolock(bridge_channel);
 	ast_bridge_unlock(bridge_channel->bridge);
 }
@@ -2235,11 +2217,79 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 	ast_bridge_channel_unlock(bridge_channel);
 }
 
+/*!
+ * \internal
+ * \brief Handle bridge channel join event.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel is joining.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_handle_join(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_bridge_features *features;
+
+	features = bridge_channel->features;
+	if (features) {
+		struct ast_bridge_hook *hook;
+		struct ao2_iterator iter;
+
+		/* Run any join hooks. */
+		iter = ao2_iterator_init(features->join_hooks, AO2_ITERATOR_UNLINK);
+		hook = ao2_iterator_next(&iter);
+		if (hook) {
+			bridge_channel_suspend(bridge_channel);
+			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+			do {
+				hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
+				ao2_ref(hook, -1);
+			} while ((hook = ao2_iterator_next(&iter)));
+			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+			bridge_channel_unsuspend(bridge_channel);
+		}
+		ao2_iterator_destroy(&iter);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Handle bridge channel leave event.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel is leaving.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_handle_leave(struct ast_bridge_channel *bridge_channel)
+{
+	struct ast_bridge_features *features;
+
+	features = bridge_channel->features;
+	if (features) {
+		struct ast_bridge_hook *hook;
+		struct ao2_iterator iter;
+
+		/* Run any leave hooks. */
+		iter = ao2_iterator_init(features->leave_hooks, AO2_ITERATOR_UNLINK);
+		hook = ao2_iterator_next(&iter);
+		if (hook) {
+			bridge_channel_suspend(bridge_channel);
+			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+			do {
+				hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
+				ao2_ref(hook, -1);
+			} while ((hook = ao2_iterator_next(&iter)));
+			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+			bridge_channel_unsuspend(bridge_channel);
+		}
+		ao2_iterator_destroy(&iter);
+	}
+}
+
 /*! \brief Join a channel to a bridge and handle anything the bridge may want us to do */
 static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 {
-	struct ast_frame *fr;
-
 	ast_format_copy(&bridge_channel->read_format, ast_channel_readformat(bridge_channel->chan));
 	ast_format_copy(&bridge_channel->write_format, ast_channel_writeformat(bridge_channel->chan));
 
@@ -2260,37 +2310,34 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	bridge_channel_push(bridge_channel);
 	bridge_reconfigured(bridge_channel->bridge);
 
-	/*
-	 * Indicate a source change since this channel is entering the
-	 * bridge system only if the bridge technology is not MULTIMIX
-	 * capable.  The MULTIMIX technology has already done it.
-	 */
-	if (!(bridge_channel->bridge->technology->capabilities
-		& AST_BRIDGE_CAPABILITY_MULTIMIX)) {
-		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCCHANGE);
-	}
+	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+		/*
+		 * Indicate a source change since this channel is entering the
+		 * bridge system only if the bridge technology is not MULTIMIX
+		 * capable.  The MULTIMIX technology has already done it.
+		 */
+		if (!(bridge_channel->bridge->technology->capabilities
+			& AST_BRIDGE_CAPABILITY_MULTIMIX)) {
+			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCCHANGE);
+		}
 
-	/* Wait for something to do. */
-	ast_bridge_unlock(bridge_channel->bridge);
-	while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-		/* Update bridge pointer on channel */
-		ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
+		ast_bridge_unlock(bridge_channel->bridge);
+		bridge_channel_handle_join(bridge_channel);
+		while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			/* Update bridge pointer on channel */
+			ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
 
-		bridge_channel_wait(bridge_channel);
+			/* Wait for something to do. */
+			bridge_channel_wait(bridge_channel);
+		}
+		bridge_channel_handle_leave(bridge_channel);
+		ast_bridge_channel_lock_bridge(bridge_channel);
 	}
-	bridge_channel_lock_bridge(bridge_channel);
 
 	bridge_channel_pull(bridge_channel);
 	bridge_reconfigured(bridge_channel->bridge);
 
 	ast_bridge_unlock(bridge_channel->bridge);
-
-	/* Flush any unhandled wr_queue frames. */
-	ast_bridge_channel_lock(bridge_channel);
-	while ((fr = AST_LIST_REMOVE_HEAD(&bridge_channel->wr_queue, frame_list))) {
-		ast_frfree(fr);
-	}
-	ast_bridge_channel_unlock(bridge_channel);
 
 	/* Indicate a source change since this channel is leaving the bridge system. */
 	ast_indicate(bridge_channel->chan, AST_CONTROL_SRCCHANGE);
@@ -2378,6 +2425,7 @@ static int pipe_init_nonblock(int *my_pipe)
 static void bridge_channel_destroy(void *obj)
 {
 	struct ast_bridge_channel *bridge_channel = obj;
+	struct ast_frame *fr;
 
 	ast_bridge_channel_clear_roles(bridge_channel);
 
@@ -2389,7 +2437,13 @@ static void bridge_channel_destroy(void *obj)
 		ao2_ref(bridge_channel->bridge, -1);
 		bridge_channel->bridge = NULL;
 	}
+
+	/* Flush any unhandled wr_queue frames. */
+	while ((fr = AST_LIST_REMOVE_HEAD(&bridge_channel->wr_queue, frame_list))) {
+		ast_frfree(fr);
+	}
 	pipe_close(bridge_channel->alert_pipe);
+
 	ast_cond_destroy(&bridge_channel->cond);
 }
 
@@ -2710,7 +2764,7 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan)
 	ao2_ref(bridge_channel, +1);
 	ast_channel_unlock(chan);
 
-	bridge_channel_lock_bridge(bridge_channel);
+	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge = bridge_channel->bridge;
 	if (bridge_channel == find_bridge_channel(bridge, chan)) {
 /* BUGBUG this needs more work.  The channels need to be made compatible again if the formats change. The bridge_channel thread needs to monitor for this case. */
@@ -3270,6 +3324,52 @@ int ast_bridge_hangup_hook(struct ast_bridge_features *features,
 	return res;
 }
 
+int ast_bridge_join_hook(struct ast_bridge_features *features,
+	ast_bridge_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
+{
+	struct ast_bridge_hook *hook;
+	int res;
+
+	/* Allocate new hook and setup it's various variables */
+	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
+		remove_on_pull);
+	if (!hook) {
+		return -1;
+	}
+
+	/* Once done we put it in the container. */
+	res = ao2_link(features->join_hooks, hook) ? 0 : -1;
+	ao2_ref(hook, -1);
+
+	return res;
+}
+
+int ast_bridge_leave_hook(struct ast_bridge_features *features,
+	ast_bridge_hook_callback callback,
+	void *hook_pvt,
+	ast_bridge_hook_pvt_destructor destructor,
+	int remove_on_pull)
+{
+	struct ast_bridge_hook *hook;
+	int res;
+
+	/* Allocate new hook and setup it's various variables */
+	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
+		remove_on_pull);
+	if (!hook) {
+		return -1;
+	}
+
+	/* Once done we put it in the container. */
+	res = ao2_link(features->leave_hooks, hook) ? 0 : -1;
+	ao2_ref(hook, -1);
+
+	return res;
+}
+
 void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
 	ast_bridge_talking_indicate_callback talker_cb,
 	ast_bridge_talking_indicate_destructor talker_destructor,
@@ -3484,6 +3584,8 @@ static void bridge_features_remove_on_pull(struct ast_bridge_features *features)
 
 	hooks_remove_on_pull_container(features->dtmf_hooks);
 	hooks_remove_on_pull_container(features->hangup_hooks);
+	hooks_remove_on_pull_container(features->join_hooks);
+	hooks_remove_on_pull_container(features->leave_hooks);
 	hooks_remove_on_pull_heap(features->interval_hooks);
 }
 
@@ -3560,6 +3662,20 @@ int ast_bridge_features_init(struct ast_bridge_features *features)
 		return -1;
 	}
 
+	/* Initialize the join hooks container */
+	features->join_hooks = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL,
+		NULL);
+	if (!features->join_hooks) {
+		return -1;
+	}
+
+	/* Initialize the leave hooks container */
+	features->leave_hooks = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL,
+		NULL);
+	if (!features->leave_hooks) {
+		return -1;
+	}
+
 	/* Initialize the interval hooks heap */
 	features->interval_hooks = ast_heap_create(8, interval_hook_time_cmp,
 		offsetof(struct ast_bridge_hook, parms.timer.heap_index));
@@ -3599,6 +3715,14 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 		features->talker_destructor_cb(features->talker_pvt_data);
 		features->talker_pvt_data = NULL;
 	}
+
+	/* Destroy the leave hooks container. */
+	ao2_cleanup(features->leave_hooks);
+	features->leave_hooks = NULL;
+
+	/* Destroy the join hooks container. */
+	ao2_cleanup(features->join_hooks);
+	features->join_hooks = NULL;
 
 	/* Destroy the hangup hooks container. */
 	ao2_cleanup(features->hangup_hooks);
