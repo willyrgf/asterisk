@@ -98,7 +98,13 @@ static void limits_interval_playback(struct ast_bridge *bridge, struct ast_bridg
 		ast_stream_and_wait(bridge_channel->chan, file, AST_DIGIT_NONE);
 	}
 
-	/* It may be necessary to resume music on hold after we finish playing the announcment. */
+	/*
+	 * It may be necessary to resume music on hold after we finish
+	 * playing the announcment.
+	 *
+	 * XXX We have no idea what MOH class was in use before playing
+	 * the file.
+	 */
 	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
 		ast_moh_start(bridge_channel->chan, NULL, NULL);
 	}

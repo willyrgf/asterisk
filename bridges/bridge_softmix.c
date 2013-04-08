@@ -382,12 +382,7 @@ static void softmix_bridge_unsuspend(struct ast_bridge *bridge, struct ast_bridg
  */
 static void softmix_src_change(struct ast_bridge_channel *bridge_channel)
 {
-	struct ast_frame frame = {
-		.frametype = AST_FRAME_CONTROL,
-		.subclass.integer = AST_CONTROL_SRCCHANGE
-	};
-
-	ast_bridge_channel_queue_frame(bridge_channel, &frame);
+	ast_bridge_channel_queue_control_data(bridge_channel, AST_CONTROL_SRCCHANGE, NULL, 0);
 }
 
 /*! \brief Function called when a channel is joined into the bridge */

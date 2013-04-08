@@ -331,6 +331,30 @@ int ast_bridge_channel_queue_frame(struct ast_bridge_channel *bridge_channel, st
 	return 0;
 }
 
+void ast_bridge_channel_queue_action_data(struct ast_bridge_channel *bridge_channel, enum ast_bridge_action_type action, const void *data, size_t datalen)
+{
+	struct ast_frame frame = {
+		.frametype = AST_FRAME_BRIDGE_ACTION,
+		.subclass.integer = action,
+		.datalen = datalen,
+		.data.ptr = (void *) data,
+	};
+
+	ast_bridge_channel_queue_frame(bridge_channel, &frame);
+}
+
+void ast_bridge_channel_queue_control_data(struct ast_bridge_channel *bridge_channel, enum ast_control_frame_type control, const void *data, size_t datalen)
+{
+	struct ast_frame frame = {
+		.frametype = AST_FRAME_CONTROL,
+		.subclass.integer = control,
+		.datalen = datalen,
+		.data.ptr = (void *) data,
+	};
+
+	ast_bridge_channel_queue_frame(bridge_channel, &frame);
+}
+
 void ast_bridge_channel_restore_formats(struct ast_bridge_channel *bridge_channel)
 {
 	/* Restore original formats of the channel as they came in */
@@ -768,7 +792,8 @@ static void bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, st
 		data->moh_offset ? &data->app_name[data->moh_offset] : NULL);
 }
 
-void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
+static void payload_helper_app(ast_bridge_channel_post_action_data post_it,
+	struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
 {
 	struct bridge_run_app *app_data;
 	size_t len_name = strlen(app_name) + 1;
@@ -788,8 +813,109 @@ void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, con
 		strcpy(&app_data->app_name[app_data->moh_offset], moh_class);/* Safe */
 	}
 
-	ast_bridge_channel_write_action_data(bridge_channel,
-		AST_BRIDGE_ACTION_RUN_APP, app_data, len_data);
+	post_it(bridge_channel, AST_BRIDGE_ACTION_RUN_APP, app_data, len_data);
+}
+
+void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
+{
+	payload_helper_app(ast_bridge_channel_write_action_data,
+		bridge_channel, app_name, app_args, moh_class);
+}
+
+void ast_bridge_channel_queue_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
+{
+	payload_helper_app(ast_bridge_channel_queue_action_data,
+		bridge_channel, app_name, app_args, moh_class);
+}
+
+void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+{
+	if (moh_class) {
+		if (ast_strlen_zero(moh_class)) {
+			ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD,
+				NULL, 0);
+		} else {
+			ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD,
+				moh_class, strlen(moh_class) + 1);
+		}
+	}
+	if (custom_play) {
+		custom_play(playfile);
+	} else {
+		ast_stream_and_wait(bridge_channel->chan, playfile, AST_DIGIT_NONE);
+	}
+	if (moh_class) {
+		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD,
+			NULL, 0);
+	}
+
+	/*
+	 * It may be necessary to resume music on hold after we finish
+	 * playing the announcment.
+	 *
+	 * XXX We have no idea what MOH class was in use before playing
+	 * the file.
+	 */
+	if (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_MOH)) {
+		ast_moh_start(bridge_channel->chan, NULL, NULL);
+	}
+}
+
+struct bridge_playfile {
+	/*! Call this function to play the playfile. (NULL if normal sound file to play) */
+	void (*custom_play)(const char *playfile);
+	/*! Offset into playfile[] where the MOH class name starts.  (zero if no MOH)*/
+	int moh_offset;
+	/*! Filename to play. */
+	char playfile[0];
+};
+
+/*!
+ * \internal
+ * \brief Handle the playfile bridge action.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel to play a file on.
+ * \param payload Action frame payload to play a file.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, struct bridge_playfile *payload)
+{
+	ast_bridge_channel_playfile(bridge_channel, payload->custom_play, payload->playfile,
+		payload->moh_offset ? &payload->playfile[payload->moh_offset] : NULL);
+}
+
+static void payload_helper_playfile(ast_bridge_channel_post_action_data post_it,
+	struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+{
+	struct bridge_playfile *payload;
+	size_t len_name = strlen(playfile) + 1;
+	size_t len_moh = !moh_class ? 0 : strlen(moh_class) + 1;
+	size_t len_payload = sizeof(*payload) + len_name + len_moh;
+
+	/* Fill in play file frame data. */
+	payload = alloca(len_payload);
+	payload->custom_play = custom_play;
+	payload->moh_offset = len_moh ? len_name : 0;
+	strcpy(payload->playfile, playfile);/* Safe */
+	if (moh_class) {
+		strcpy(&payload->playfile[payload->moh_offset], moh_class);/* Safe */
+	}
+
+	post_it(bridge_channel, AST_BRIDGE_ACTION_PLAY_FILE, payload, len_payload);
+}
+
+void ast_bridge_channel_write_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+{
+	payload_helper_playfile(ast_bridge_channel_write_action_data,
+		bridge_channel, custom_play, playfile, moh_class);
+}
+
+void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+{
+	payload_helper_playfile(ast_bridge_channel_queue_action_data,
+		bridge_channel, custom_play, playfile, moh_class);
 }
 
 /*!
@@ -1875,6 +2001,13 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 	case AST_BRIDGE_ACTION_TALKING_STOP:
 		bridge_channel_talking(bridge_channel,
 			action->subclass.integer == AST_BRIDGE_ACTION_TALKING_START);
+		break;
+	case AST_BRIDGE_ACTION_PLAY_FILE:
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_playfile(bridge_channel, action->data.ptr);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
 		break;
 	case AST_BRIDGE_ACTION_RUN_APP:
 		bridge_channel_suspend(bridge_channel);
