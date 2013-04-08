@@ -1304,6 +1304,7 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 	seqno &= 0xffff;
 	timestamp = ntohl(rtpheader[1]);
 	ssrc = ntohl(rtpheader[2]);
+	int not_jitter = 0;
 
  	AST_LIST_HEAD_INIT_NOLOCK(&frames);
  	/* Force a marker bit and change SSRC if the SSRC changes */
@@ -1363,7 +1364,6 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 
 	if (rtp->rxcount > 1) {
 		int MAX_MISORDER = 100;
-		int not_jitter = 0;
 
 		/* RTP sequence numbers are consecutive. Have we lost a packet? */
 		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
@@ -1384,36 +1384,47 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			   we can't compare with the previous one. Just go ahead and wait for
 			   the next packet 
 			 */
-			if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno && not_jitter == 0)  {
-				/* This is a latecomer that we've already replaced. A jitter buffer would have handled this
-			   	properly, but in many cases we can't afford a jitterbuffer and will have to live
-			   	with the face that the poor man's PLC already has replaced this frame and we can't
-			   	insert it AGAIN, because that would cause negative skew.
-			   	Henry, just ignore this late visitor. Thank you.
-				*/
-				if (rtp_debug_test_addr(&sin)) {
-					ast_verbose("Ignoring RTP from       %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u) - jitter?\n",
-						ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp,res - hdrlen);
+			if (seqno < rtp->lastrxseqno && not_jitter == 0)  {
+				if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno && not_jitter == 0)  {
+					/* This is a latecomer that we've already replaced. A jitter buffer would have handled this
+			   		properly, but in many cases we can't afford a jitterbuffer and will have to live
+			   		with the face that the poor man's PLC already has replaced this frame and we can't
+			   		insert it AGAIN, because that would cause negative skew.
+			   		Henry, just ignore this late visitor. Thank you.
+					*/
+					if (rtp_debug_test_addr(&sin)) {
+						ast_verbose("Ignoring RTP from       %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u) - jitter?\n",
+							ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp,res - hdrlen);
+					}
+					return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
+				} else {
+					/* No poor mans PLC. Do we care about forwarding this? */
+					if (rtp_debug_test_addr(&sin)) {
+						ast_verbose("Got late RTP from       %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u) - jitter?\n",
+							ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port), payloadtype, seqno, timestamp,res - hdrlen);
+					}
 				}
-				return AST_LIST_FIRST(&frames) ? AST_LIST_FIRST(&frames) : &ast_null_frame;
+			
 			}
 		} 
 
-		if (lostpackets) {
+		if (lostpackets > 0) {
 			if(option_debug > 2) {
 				ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
 			}
 			if (ast_test_flag(rtp, FLAG_POORMANSPLC)  && rtp->plcbuf != NULL) {
 				int i;
 				for (i = 0; i < lostpackets && i < plcmax; i++) {
+					struct ast_frame *new;
 					rtp->lastrxseqno++;
 					/* Fix the seqno in the frame */
 					rtp->plcbuf->seqno = rtp->lastrxseqno;
 					rtp->plcbuf->ts += rtp->plcbuf->len;
+					new = ast_frdup(rtp->plcbuf);
 
-					AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
+					AST_LIST_INSERT_TAIL(&frames, new, frame_list);
 					if (option_debug > 2) {
-						ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
+						ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. Seqno %d\n", i + 1, rtp->plcbuf->seqno);
 					}
 				}
 			} else {
@@ -1424,8 +1435,11 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 		}
 	}
 
-	rtp->lastrxseqno = seqno;
-	
+	/* Only change lastrxseqno if it's bigger or if we have a large gap or marker bit */
+	if (mark || not_jitter || (rtp->lastrxseqno < seqno )) {
+		rtp->lastrxseqno = seqno;
+	}
+
 	if (rtp->themssrc==0)
 		rtp->themssrc = ntohl(rtpheader[2]); /* Record their SSRC to put in future RR */
 	
@@ -1543,7 +1557,6 @@ struct ast_frame *ast_rtp_read(struct ast_rtp *rtp)
 			ast_log(LOG_DEBUG, " *** Not copying frame into plcbuf PLC=%s\n", ast_test_flag(rtp, FLAG_POORMANSPLC) ? "On" : "Off");
 		}
 	}
-
 	AST_LIST_INSERT_TAIL(&frames, &rtp->f, frame_list);
 	return AST_LIST_FIRST(&frames);
 }
@@ -2890,6 +2903,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	int pred;
 	int mark = 0;
 	int rate = rtp_get_rate(f->subclass) / 1000;
+	int send_seqno = rtp->seqno;
 
 	if (f->subclass == AST_FORMAT_G722) {
 		/* G722 is silllllllllllllllllly */
@@ -2903,12 +2917,23 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	if (donthidepacketloss && rtp->prev_frame_seqno > 0 && f->seqno && f->seqno != (rtp->prev_frame_seqno + 1)) {
 		/* We have incoming packet loss and need to signal that outbound. */
 		unsigned int loss = f->seqno - rtp->prev_frame_seqno - 1;
+	
 		if (f->seqno > rtp->prev_frame_seqno) {
-			if (option_debug > 2) {
-				ast_log(LOG_DEBUG, "**** Incoming packet loss, letting it through: %u packets\n", loss);
-			}
 			/* Jump ahead, let the packet loss go straight through */
 			rtp->seqno += loss;
+			send_seqno += loss;
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "**** Incoming packet loss, letting it through: %d packets (Seqno %d Prev seqno %d)\n", loss, f->seqno, rtp->prev_frame_seqno);
+			}
+		}
+		if (f->seqno && f->seqno < rtp->prev_frame_seqno) {
+			/* We have a latecomer. Forward it as is but keep the seqno */
+			int diff = rtp->prev_frame_seqno - f->seqno;
+			send_seqno = rtp->seqno - diff - 1;
+			/* Keep RTP-seqno */
+			if (option_debug > 2) {
+				ast_log(LOG_DEBUG, "**** Incoming reordering, letting it through: %d packets (Seqno %d Prev seqno %d)\n", loss, f->seqno, rtp->prev_frame_seqno);
+			}
 		}
 	}
 
@@ -2966,7 +2991,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 	/* Get a pointer to the header */
 	rtpheader = (unsigned char *)(f->data - hdrlen);
 
-	put_unaligned_uint32(rtpheader, htonl((2 << 30) | (codec << 16) | (rtp->seqno) | (mark << 23)));
+	put_unaligned_uint32(rtpheader, htonl((2 << 30) | (codec << 16) | (send_seqno) | (mark << 23)));
 	put_unaligned_uint32(rtpheader + 4, htonl(rtp->lastts));
 	put_unaligned_uint32(rtpheader + 8, htonl(rtp->ssrc)); 
 
@@ -2974,7 +2999,7 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 		res = sendto(rtp->s, (void *)rtpheader, f->datalen + hdrlen, 0, (struct sockaddr *)&rtp->them, sizeof(rtp->them));
 		if (res <0) {
 			if (!rtp->nat || (rtp->nat && (ast_test_flag(rtp, FLAG_NAT_ACTIVE) == FLAG_NAT_ACTIVE))) {
-				ast_log(LOG_DEBUG, "RTP Transmission error of packet %d to %s:%d: %s\n", rtp->seqno, ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), strerror(errno));
+				ast_log(LOG_DEBUG, "RTP Transmission error of packet %d to %s:%d: %s\n", send_seqno, ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), strerror(errno));
 			} else if (((ast_test_flag(rtp, FLAG_NAT_ACTIVE) == FLAG_NAT_INACTIVE) || rtpdebug) && !ast_test_flag(rtp, FLAG_NAT_INACTIVE_NOWARN)) {
 				/* Only give this error message once if we are not RTP debugging */
 				if (option_debug || rtpdebug)
@@ -2992,11 +3017,19 @@ static int ast_rtp_raw_write(struct ast_rtp *rtp, struct ast_frame *f, int codec
 		}
 				
 		if (rtp_debug_test_addr(&rtp->them))
-			ast_verbose("Sent RTP packet to      %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
-					ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), codec, rtp->seqno, rtp->lastts,res - hdrlen);
+			ast_verbose("Sent RTP packet to      %s:%u (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u) Seq-in %-6.6u\n",
+					ast_inet_ntoa(rtp->them.sin_addr), ntohs(rtp->them.sin_port), codec, send_seqno, rtp->lastts,res - hdrlen, f->seqno);
 	}
 
-	increment_seqno(rtp, f);
+	if (send_seqno == rtp->seqno) {
+		/* Do not update if we are sending a late packet (not current seqno) to preserve jitter reordering across
+		   the bridge  */
+		increment_seqno(rtp, f);
+	} else {
+		if (option_debug > 2) {
+			ast_log(LOG_DEBUG, "**** Not updating seqno -sending late frame. Send_seqno %d RTP seqno %d \n", send_seqno, rtp->seqno);
+		}
+	}
 
 	return 0;
 }
@@ -3139,8 +3172,10 @@ int ast_rtp_write(struct ast_rtp *rtp, struct ast_frame *_f)
 		if (f->data) {
 			ast_rtp_raw_write(rtp, f, codec);
 		}
-		if (f != _f)
+		if (f != _f) {
 			ast_frfree(f);
+		}
+
 	}
 		
 	return 0;

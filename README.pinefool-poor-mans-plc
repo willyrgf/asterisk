@@ -16,21 +16,33 @@ Poor Man's PLC
 We see a lot of issues in the RTP streams when bridging two sip calls in Asterisk. If there's 
 packet loss coming in, it's the same going out - but in this case the sequence numbers doesn't 
 indicate packet loss. This causes issues with recordings sounding bad and possibly other issues 
-since we have quite long phone calls.
+since we have quite long phone calls. If the packets coming in are reordered, they go out
+the same - but this time resequenced to hide the reordering. This can be very bad for some 
+codecs
 
 Investigating the PLC in Asterisk, according to Malcolm's wiki article there has to be a core 
 bridge with transcoding and a jitter buffer. That won't work for us.
 
-Looking into the RTP channel, where I've spent some time recently, I notice that we don't bother 
-checking that packets are sequential, so the RTP channel doesn't bother with packet loss much. That needed to change.
+Looking into the RTP channel, where I've spent some time recently, I notice that Asterisk does not bother 
+checking that packets are sequential, so the RTP channel ignores both packet loss and reordering.
+That needed to change.
 
 I created a very simple PLC in the RTP channel for the incoming stream, following these principles:
 
+PLC mode (configured in sip.conf)
+==================================
 - If there is packet loss, resend the previous packet. We discover this at the next packet, so we 
   introduce two frames at once. In most cases with small packet loss, the receiving end will sort this 
   out in the jitter buffer. 
 - If there is packet reordering, a jitter causing a packet to arrive too late, we ignore that packet 
   since we've already replaced it with another one.
+
+Shit-in-shit-out mode (configured in rtp.conf)
+==============================================
+- If there is packet loss, transmit RTP with gaps in sequence numbers to indicate reordering
+- If packets are reordered, transmit reordered
+
+(turn this on with donthidepacketloss=yes in rtp.conf)
 
 Normally PLC would work hand-in-hand with a jitter buffer so we first reorder incoming RTP packets, then add the 
 missing ones. In this case, I can't afford introducing extra delay caused by a jitter buffer, so I needed a poor 
@@ -40,10 +52,18 @@ anyway and there's nothing much we can do to save the situation.
 
 How does it work?
 ================
+PLC mode:
 - If we receive packets 2,3,5 - we will send 2,3,3,5 into the bridge, making sure that we get no skew.
 - If we receive 2,3,5,4 we will send 2,3,3,5 and throw away #4.
 
-In both cases, the extra "3" will be sent at the same time as the "5" into the bridge.
+SISO mode:
+- If we receive packets 2,3,5 we will send 2,3,5
+- If we receive packets 1,3,2,4,5 we will send them as 1,3,2,4,5
+
+Before this patch:
+- If we receive packets 1,2,3,5 we will send them as 1,2,3,4
+- If we receive packets 1,3,2,4,5 we will send them as 1,2,3,4,5 - just new numbers,
+  the media is still not in order.
 
 Looking at wireshark on the other side of the call, the outbound stream now looks better. Of course, 
 there's jitter but no packet loss in the stream, we still have all expected frames - for Alaw 50 RTP 
@@ -55,24 +75,24 @@ Comfort Noise and others. But it does make the audio better in case of bad incom
 
 Configuration
 =============
-You can either enable it globally or per device in sip.conf. The SIP channel only
+PLC: You can either enable it globally or per device in sip.conf. The SIP channel only
 use this for audio streams.
 
-In RTP.conf you can enable it for the RTP subsystem. This will affect all RTP streams,
-including video and text if you have that. In most cases, it's propably not a good idea
-but for testing.
+SISO: Enable "donthidepacketloss" in rtp.conf.
 
 Downside
 ========
 This is a poor man's fix. Codecs that have built-in PLC, like G.729, can propably handle it
-internally better. 
+internally better. In that case the "donthidepacketloss" patch works better.
 
-Incoming packets 1,2,4,5 will simply be outbound 1,2,3,4 and we will have a skew - but hide
-the fact that we have packet loss on the inbound stream. In order to handle this, we will need
-to send frames in the media stream that indicate packet loss and make sure codecs understand
-it and that it affects the outbound RTP stream as well.
+At some point the PLC should automatically be disabled for a set of codecs. If you want
+to fund that work, contact me directly.
 
-In my case, we only have G.711a calls, so the Poor Man's Solution works well.
+Credits
+=======
+A bit thank you to Martin Festr Vit (voipmonitor.org) who has spent a lot of time
+chatting with me about possible solutions - the donthidepacketloss mode is based
+on his ideas mostly.
 
 Reading suggestion (with audio)
 ===============================
@@ -88,22 +108,3 @@ solve these issues!
 And finally a description of the current PLC in Asterisk
 - https://wiki.asterisk.org/wiki/display/AST/Packet+Loss+Concealment+%28PLC%29
 
-
-From RTP.conf
-=============
-; The RTP channels has an implementation of Packet Loss Concealment
-; that is named "Poor Man's PLC". Normally a PLC happens withing the
-; context of a jitter buffer. This PLC just copies the previous
-; packet into the stream again if a packet (or multiple) is missing.
-; If a packet arrives too late (reordered) it will be ignored.
-; This introduces a bit of jitter since we're sending two
-; packets at the same time. Hopefully the phone or gw at the
-; end of the line will have a jitter buffer and play out the media
-; properly. This PLC will make sure that Asterisk outbound RTP streams has
-; less skew and that recordings will actually have a proper amount of
-; media. Default is turned off.
-; This setting apply to ALL rtp streams in this Asterisk instance.
-; If you have video or text streams, it might not be a good idea.
-;
-; You can turn this on per device or globally in sip.conf too.
-;plc=yes
