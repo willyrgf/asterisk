@@ -177,6 +177,8 @@ struct ast_bridge_channel {
 	AST_LIST_HEAD_NOLOCK(, ast_frame) wr_queue;
 	/*! Pipe to alert thread when frames are put into the wr_queue. */
 	int alert_pipe[2];
+	/*! TRUE if the bridge channel thread is waiting on channels (needs to be atomically settable) */
+	int waiting;
 };
 
 enum ast_bridge_action_type {

@@ -225,8 +225,10 @@ void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
 static void bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
 {
 	if (!pthread_equal(pthread_self(), bridge_channel->thread)) {
-		pthread_kill(bridge_channel->thread, SIGURG);
-		ast_cond_signal(&bridge_channel->cond);
+		while (bridge_channel->waiting) {
+			pthread_kill(bridge_channel->thread, SIGURG);
+			sched_yield();
+		}
 	}
 }
 
@@ -243,6 +245,8 @@ void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, e
 
 	/* Change the state on the bridge channel */
 	bridge_channel->state = new_state;
+
+	bridge_channel_poke(bridge_channel);
 }
 
 void ast_bridge_change_state(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
@@ -2206,11 +2210,13 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 		ast_debug(10, "Bridge %s: %p(%s) is going into a waitfor\n",
 			bridge_channel->bridge->uniqueid, bridge_channel,
 			ast_channel_name(bridge_channel->chan));
+		bridge_channel->waiting = 1;
 		ast_bridge_channel_unlock(bridge_channel);
 		outfd = -1;
 /* BUGBUG need to make the next expiring active interval setup ms timeout rather than holding up the chan reads. */
 		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1,
 			&bridge_channel->alert_pipe[0], 1, NULL, &outfd, &ms);
+		bridge_channel->waiting = 0;
 		if (!bridge_channel->suspended
 			&& bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 			if (chan) {
@@ -2993,17 +2999,7 @@ int ast_bridge_depart(struct ast_channel *chan)
 
 	/* We are claiming the reference held by the depart thread. */
 
-	ast_bridge_channel_lock(bridge_channel);
-	ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
-
-/* BUGBUG hack alert ast_bridge_depart() may fail to return because of a race condition. */
-	/*
-	 * XXX The poke is a bit of a hack since there is a race
-	 * condition in bridge_channel_wait() when it is just about to
-	 * enter ast_waitfor_nandfds() and we poke the thread.
-	 */
-	bridge_channel_poke(bridge_channel);
-	ast_bridge_channel_unlock(bridge_channel);
+	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 
 	/* Wait for the depart thread to die */
 	ast_debug(1, "Waiting for %p(%s) bridge thread to die.\n",
