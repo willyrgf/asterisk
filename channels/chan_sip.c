@@ -7290,6 +7290,11 @@ static int sip_answer(struct ast_channel *ast)
 	int res = 0;
 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
 
+	if (!p) {
+		ast_debug(1, "Asked to answer channel %s without tech pvt; ignoring\n",
+				ast_channel_name(ast));
+		return res;
+	}
 	sip_pvt_lock(p);
 	if ((ast_channel_state(ast) != AST_STATE_UP) && ast_test_flag(&p->flags[2], SIP_PAGE3_INVITE_WAIT_FOR_PRACK)) {
  		ast_set_flag(&p->flags[2], SIP_PAGE3_ANSWER_WAIT_FOR_PRACK);
@@ -7464,6 +7469,12 @@ static int sip_senddigit_begin(struct ast_channel *ast, char digit)
 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
 	int res = 0;
 
+	if (!p) {
+		ast_debug(1, "Asked to begin DTMF digit on channel %s with no pvt; ignoring\n",
+				ast_channel_name(ast));
+		return res;
+	}
+
 	sip_pvt_lock(p);
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {
 	case SIP_DTMF_INBAND:
@@ -7487,6 +7498,12 @@ static int sip_senddigit_end(struct ast_channel *ast, char digit, unsigned int d
 {
 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
 	int res = 0;
+
+	if (!p) {
+		ast_debug(1, "Asked to end DTMF digit on channel %s with no pvt; ignoring\n",
+				ast_channel_name(ast));
+		return res;
+	}
 
 	sip_pvt_lock(p);
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {
@@ -7512,6 +7529,12 @@ static int sip_transfer(struct ast_channel *ast, const char *dest)
 {
 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
 	int res;
+
+	if (!p) {
+		ast_debug(1, "Asked to transfer channel %s with no pvt; ignoring\n",
+				ast_channel_name(ast));
+		return -1;
+	}
 
 	if (dest == NULL)	/* functions below do not take a NULL */
 		dest = "";
@@ -7707,6 +7730,12 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 {
 	struct sip_pvt *p = ast_channel_tech_pvt(ast);
 	int res = 0;
+
+	if (!p) {
+		ast_debug(1, "Asked to indicate condition on channel %s with no pvt; ignoring\n",
+				ast_channel_name(ast));
+		return res;
+	}
 
 	sip_pvt_lock(p);
 	switch(condition) {
