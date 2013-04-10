@@ -222,6 +222,14 @@ void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
 	}
 }
 
+static void bridge_channel_poke(struct ast_bridge_channel *bridge_channel)
+{
+	if (!pthread_equal(pthread_self(), bridge_channel->thread)) {
+		pthread_kill(bridge_channel->thread, SIGURG);
+		ast_cond_signal(&bridge_channel->cond);
+	}
+}
+
 void ast_bridge_change_state_nolock(struct ast_bridge_channel *bridge_channel, enum ast_bridge_channel_state new_state)
 {
 /* BUGBUG need cause code for the bridge_channel leaving the bridge. */
@@ -2985,9 +2993,21 @@ int ast_bridge_depart(struct ast_channel *chan)
 
 	/* We are claiming the reference held by the depart thread. */
 
-	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+	ast_bridge_channel_lock(bridge_channel);
+	ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+
+/* BUGBUG hack alert ast_bridge_depart() may fail to return because of a race condition. */
+	/*
+	 * XXX The poke is a bit of a hack since there is a race
+	 * condition in bridge_channel_wait() when it is just about to
+	 * enter ast_waitfor_nandfds() and we poke the thread.
+	 */
+	bridge_channel_poke(bridge_channel);
+	ast_bridge_channel_unlock(bridge_channel);
 
 	/* Wait for the depart thread to die */
+	ast_debug(1, "Waiting for %p(%s) bridge thread to die.\n",
+		bridge_channel, ast_channel_name(bridge_channel->chan));
 	pthread_join(bridge_channel->thread, NULL);
 
 	ast_channel_lock(chan);
@@ -4007,6 +4027,7 @@ static void bridge_manager_destroy(void *obj)
 		manager->stop = 1;
 		ast_cond_signal(&manager->cond);
 		ao2_unlock(manager);
+		ast_debug(1, "Waiting for bridge manager thread to die.\n");
 		pthread_join(manager->thread, NULL);
 	}
 

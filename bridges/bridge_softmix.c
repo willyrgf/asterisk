@@ -1080,6 +1080,7 @@ static void softmix_bridge_destroy(struct ast_bridge *bridge)
 	softmix_data->thread = AST_PTHREADT_NULL;
 	ast_mutex_unlock(&softmix_data->lock);
 	if (thread != AST_PTHREADT_NULL) {
+		ast_debug(1, "Waiting for mixing thread to die.\n");
 		pthread_join(thread, NULL);
 	}
 
