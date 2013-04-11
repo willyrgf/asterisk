@@ -4176,13 +4176,13 @@ static char *handle_bridge_show_all(struct ast_cli_entry *e, int cmd, struct ast
 		e->command = "bridge show all";
 		e->usage =
 			"Usage: bridge show all\n"
-			"       Lists active bridges\n";
+			"       List all bridges\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
 	}
 
-	ast_cli(a->fd, FORMAT_HDR, "Bridge ID", "Chans", "Type", "Technology");
+	ast_cli(a->fd, FORMAT_HDR, "Bridge-ID", "Chans", "Type", "Technology");
 	iter = ao2_iterator_init(bridges, 0);
 	for (; (bridge = ao2_iterator_next(&iter)); ao2_ref(bridge, -1)) {
 		ast_bridge_lock(bridge);
@@ -4210,7 +4210,7 @@ static char *handle_bridge_show_specific(struct ast_cli_entry *e, int cmd, struc
 		e->command = "bridge show";
 		e->usage =
 			"Usage: bridge show <bridge-id>\n"
-			"       Show a specific bridge\n";
+			"       Show information about the <bridge-id> bridge\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
@@ -4253,7 +4253,7 @@ static char *handle_bridge_destroy_specific(struct ast_cli_entry *e, int cmd, st
 		e->command = "bridge destroy";
 		e->usage =
 			"Usage: bridge destroy <bridge-id>\n"
-			"       Destroy a specific bridge\n";
+			"       Destroy the <bridge-id> bridge\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
@@ -4315,8 +4315,8 @@ static char *handle_bridge_kick_channel(struct ast_cli_entry *e, int cmd, struct
 	case CLI_INIT:
 		e->command = "bridge kick";
 		e->usage =
-			"Usage: bridge kick <bridge-id> <channel>\n"
-			"       Kick a channel out of a bridge\n";
+			"Usage: bridge kick <bridge-id> <channel-name>\n"
+			"       Kick the <channel-name> channel out of the <bridge-id> bridge\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
@@ -4362,7 +4362,7 @@ static char *handle_bridge_technology_show(struct ast_cli_entry *e, int cmd, str
 		e->command = "bridge technology show";
 		e->usage =
 			"Usage: bridge technology show\n"
-			"       Lists registered bridge technologies\n";
+			"       List registered bridge technologies\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -4442,8 +4442,8 @@ static char *handle_bridge_technology_suspend(struct ast_cli_entry *e, int cmd, 
 	case CLI_INIT:
 		e->command = "bridge technology {suspend|unsuspend}";
 		e->usage =
-			"Usage: bridge technology {suspend|unsuspend} <technology>\n"
-			"       Suspend or unsuspend the specified bridge technology.\n";
+			"Usage: bridge technology {suspend|unsuspend} <technology-name>\n"
+			"       Suspend or unsuspend a bridge technology.\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 3) {
@@ -4486,12 +4486,12 @@ static char *handle_bridge_technology_suspend(struct ast_cli_entry *e, int cmd, 
 }
 
 static struct ast_cli_entry bridge_cli[] = {
-	AST_CLI_DEFINE(handle_bridge_show_all, "List bridges"),
-	AST_CLI_DEFINE(handle_bridge_show_specific, "Show a specific bridge"),
-	AST_CLI_DEFINE(handle_bridge_destroy_specific, "Destroy specific bridge"),
+	AST_CLI_DEFINE(handle_bridge_show_all, "List all bridges"),
+	AST_CLI_DEFINE(handle_bridge_show_specific, "Show information about a bridge"),
+	AST_CLI_DEFINE(handle_bridge_destroy_specific, "Destroy a bridge"),
 	AST_CLI_DEFINE(handle_bridge_kick_channel, "Kick a channel from a bridge"),
-	AST_CLI_DEFINE(handle_bridge_technology_show, "List bridge technologies"),
-	AST_CLI_DEFINE(handle_bridge_technology_suspend, "Suspend/unsuspend bridge technology"),
+	AST_CLI_DEFINE(handle_bridge_technology_show, "List registered bridge technologies"),
+	AST_CLI_DEFINE(handle_bridge_technology_suspend, "Suspend/unsuspend a bridge technology"),
 };
 
 /*!

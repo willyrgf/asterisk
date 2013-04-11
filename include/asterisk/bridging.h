@@ -405,7 +405,7 @@ struct ast_bridge {
  * \brief Register the new bridge with the system.
  * \since 12.0.0
  *
- * \param bridge What to register. (Tollerates a NULL pointer)
+ * \param bridge What to register. (Tolerates a NULL pointer)
  *
  * \code
  * struct ast_bridge *ast_bridge_basic_new(uint32_t capabilities, int flags)
@@ -451,7 +451,7 @@ extern struct ast_bridge_methods ast_bridge_base_v_table;
 /*!
  * \brief Initialize the base class of the bridge.
  *
- * \param self Bridge to operate upon. (Tollerates a NULL pointer)
+ * \param self Bridge to operate upon. (Tolerates a NULL pointer)
  * \param capabilities The capabilities that we require to be used on the bridge
  * \param flags Flags that will alter the behavior of the bridge
  *
