@@ -316,6 +316,38 @@ int astman_datastore_remove(struct mansession *s, struct ast_datastore *datastor
  */
 struct ast_datastore *astman_datastore_find(struct mansession *s, const struct ast_datastore_info *info, const char *uid);
 
+/*! \brief Struct containing info for an AMI event to send out. */
+struct ast_manager_event_blob {
+	int event_flags;		/*!< Flags the event should be raised with. */
+	const char *manager_event;	/*!< The event to be raised, should be a string literal. */
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(extra_fields);	/*!< Extra fields to include in the event. */
+	);
+};
+
+/*!
+ * \since 12
+ * \brief Construct a \ref snapshot_manager_event.
+ *
+ * \param event_flags Flags the event should be raised with.
+ * \param manager_event The event to be raised, should be a string literal.
+ * \param extra_fields_fmt Format string for extra fields to include.
+ *                         Or NO_EXTRA_FIELDS for no extra fields.
+ *
+ * \return New \ref ast_manager_snapshot_event object.
+ * \return \c NULL on error.
+ */
+struct ast_manager_event_blob *
+__attribute__((format(printf, 3, 4)))
+ast_manager_event_blob_create(
+	int event_flags,
+	const char *manager_event,
+	const char *extra_fields_fmt,
+	...);
+
+/*! GCC warns about blank or NULL format strings. So, shenanigans! */
+#define NO_EXTRA_FIELDS "%s", ""
+
 /*!
  * \brief Initialize support for AMI channel events.
  * \return 0 on success.
@@ -323,5 +355,13 @@ struct ast_datastore *astman_datastore_find(struct mansession *s, const struct a
  * \since 12
  */
 int manager_channels_init(void);
+
+/*!
+ * \brief Initialize support for AMI channel events.
+ * \return 0 on success.
+ * \return non-zero on error.
+ * \since 12
+ */
+int manager_bridging_init(void);
 
 #endif /* _ASTERISK_MANAGER_H */

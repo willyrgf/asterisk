@@ -40,6 +40,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/bridging.h"
+#include "asterisk/stasis_bridging.h"
 #include "asterisk/bridging_technology.h"
 #include "asterisk/app.h"
 #include "asterisk/file.h"
@@ -521,6 +522,7 @@ static void bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	bridge_dissolve_check(bridge_channel);
 
 	bridge->reconfigured = 1;
+	ast_bridge_publish_leave(bridge, bridge_channel->chan);
 }
 
 /*!
@@ -592,6 +594,7 @@ static void bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	}
 
 	bridge->reconfigured = 1;
+	ast_bridge_publish_enter(bridge, bridge_channel->chan);
 }
 
 /*! \brief Internal function to handle DTMF from a channel */
@@ -1164,9 +1167,15 @@ static void bridge_handle_actions(struct ast_bridge *bridge)
 static void destroy_bridge(void *obj)
 {
 	struct ast_bridge *bridge = obj;
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 
 	ast_debug(1, "Bridge %s: actually destroying %s bridge, nobody wants it anymore\n",
 		bridge->uniqueid, bridge->v_table->name);
+
+	msg = stasis_cache_clear_create(ast_bridge_snapshot_type(), bridge->uniqueid);
+	if (msg) {
+		stasis_publish(ast_bridge_topic(bridge), msg);
+	}
 
 	/* Do any pending actions in the context of destruction. */
 	ast_bridge_lock(bridge);
@@ -1270,6 +1279,11 @@ struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabi
 	if (self->technology->create && self->technology->create(self)) {
 		ast_debug(1, "Bridge %s: failed to setup %s technology\n",
 			self->uniqueid, self->technology->name);
+		ao2_ref(self, -1);
+		return NULL;
+	}
+
+	if (!ast_bridge_topic(self)) {
 		ao2_ref(self, -1);
 		return NULL;
 	}
@@ -1396,6 +1410,9 @@ struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags)
 	bridge = ast_bridge_alloc(sizeof(struct ast_bridge), &ast_bridge_base_v_table);
 	bridge = ast_bridge_base_init(bridge, capabilities, flags);
 	bridge = ast_bridge_register(bridge);
+	if (bridge) {
+		ast_bridge_publish_state(bridge);
+	}
 	return bridge;
 }
 
@@ -3084,6 +3101,8 @@ static void bridge_merge_do(struct ast_bridge *bridge1, struct ast_bridge *bridg
 	ast_debug(1, "Merging bridge %s into bridge %s\n",
 		bridge2->uniqueid, bridge1->uniqueid);
 
+	ast_bridge_publish_merge(bridge1, bridge2);
+
 	/* Move channels from bridge2 over to bridge1 */
 	while ((bridge_channel = AST_LIST_FIRST(&bridge2->channels))) {
 		bridge_channel_pull(bridge_channel);
@@ -4351,6 +4370,47 @@ static char *handle_bridge_kick_channel(struct ast_cli_entry *e, int cmd, struct
 	return CLI_SUCCESS;
 }
 
+/*! Bridge technology capabilities to string. */
+static const char *tech_capability2str(uint32_t capabilities)
+{
+	const char *type;
+
+	if (capabilities & AST_BRIDGE_CAPABILITY_HOLDING) {
+		type = "Holding";
+	} else if (capabilities & AST_BRIDGE_CAPABILITY_EARLY) {
+		type = "Early";
+	} else if (capabilities & AST_BRIDGE_CAPABILITY_NATIVE) {
+		type = "Native";
+	} else if (capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX) {
+		type = "1to1Mix";
+	} else if (capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
+		type = "MultiMix";
+	} else {
+		type = "<Unknown>";
+	}
+	return type;
+}
+
+/*! Bridge technology priority preference to string. */
+static const char *tech_preference2str(enum ast_bridge_preference preference)
+{
+	const char *priority;
+
+	priority = "<Unknown>";
+	switch (preference) {
+	case AST_BRIDGE_PREFERENCE_HIGH:
+		priority = "High";
+		break;
+	case AST_BRIDGE_PREFERENCE_MEDIUM:
+		priority = "Medium";
+		break;
+	case AST_BRIDGE_PREFERENCE_LOW:
+		priority = "Low";
+		break;
+	}
+	return priority;
+}
+
 static char *handle_bridge_technology_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 #define FORMAT "%-20s %-20s %-10s %s\n"
@@ -4375,33 +4435,10 @@ static char *handle_bridge_technology_show(struct ast_cli_entry *e, int cmd, str
 		const char *priority;
 
 		/* Decode type for display */
-		if (cur->capabilities & AST_BRIDGE_CAPABILITY_HOLDING) {
-			type = "Holding";
-		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_EARLY) {
-			type = "Early";
-		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_NATIVE) {
-			type = "Native";
-		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX) {
-			type = "1to1Mix";
-		} else if (cur->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
-			type = "MultiMix";
-		} else {
-			type = "<Unknown>";
-		}
+		type = tech_capability2str(cur->capabilities);
 
-		/* Decode priority for display */
-		priority = "<Unknown>";
-		switch (cur->preference) {
-		case AST_BRIDGE_PREFERENCE_HIGH:
-			priority = "High";
-			break;
-		case AST_BRIDGE_PREFERENCE_MEDIUM:
-			priority = "Medium";
-			break;
-		case AST_BRIDGE_PREFERENCE_LOW:
-			priority = "Low";
-			break;
-		}
+		/* Decode priority preference for display */
+		priority = tech_preference2str(cur->preference);
 
 		ast_cli(a->fd, FORMAT, cur->name, type, priority, AST_CLI_YESNO(cur->suspended));
 	}
@@ -4508,10 +4545,16 @@ static void bridge_shutdown(void)
 	bridges = NULL;
 	ao2_cleanup(bridge_manager);
 	bridge_manager = NULL;
+	ast_stasis_bridging_shutdown();
 }
 
 int ast_bridging_init(void)
 {
+	if (ast_stasis_bridging_init()) {
+		bridge_shutdown();
+		return -1;
+	}
+
 	bridge_manager = bridge_manager_create();
 	if (!bridge_manager) {
 		bridge_shutdown();

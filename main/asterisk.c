@@ -4220,11 +4220,6 @@ int main(int argc, char *argv[])
 
 	ast_http_init();		/* Start the HTTP server, if needed */
 
-	if (init_manager()) {
-		printf("%s", term_quit());
-		exit(1);
-	}
-
 	if (ast_cdr_engine_init()) {
 		printf("%s", term_quit());
 		exit(1);
@@ -4274,6 +4269,11 @@ int main(int argc, char *argv[])
 	}
 
 	if (ast_bridging_init()) {
+		printf("%s", term_quit());
+		exit(1);
+	}
+
+	if (init_manager()) {
 		printf("%s", term_quit());
 		exit(1);
 	}

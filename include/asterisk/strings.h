@@ -29,6 +29,7 @@
 
 #include "asterisk/utils.h"
 #include "asterisk/threadstorage.h"
+#include "asterisk/astobj2.h"
 
 #if defined(DEBUG_OPAQUE)
 #define __AST_STR_USED used2
@@ -1013,4 +1014,26 @@ static force_inline int attribute_pure ast_str_case_hash(const char *str)
 	return abs(hash);
 }
 
+/*!
+ * \since 12
+ * \brief Allocates a hash container for bare strings
+ *
+ * \param buckets The number of buckets to use for the hash container
+ *
+ * \retval AO2 container for strings
+ * \retval NULL if allocation failed
+ */
+struct ao2_container *ast_str_container_alloc(int buckets);
+
+/*!
+ * \since 12
+ * \brief Adds a string to a string container allocated by ast_str_container_alloc
+ *
+ * \param str_container The container to which to add a string
+ * \param add The string to add to the container
+ *
+ * \retval zero on success
+ * \retval non-zero if the operation failed
+ */
+int ast_str_container_add(struct ao2_container *str_container, const char *add);
 #endif /* _ASTERISK_STRINGS_H */

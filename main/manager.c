@@ -7500,6 +7500,10 @@ static int __init_manager(int reload, int by_external_config)
 		return -1;
 	}
 
+	if (manager_bridging_init()) {
+		return -1;
+	}
+
 	if (!registered) {
 		/* Register default actions */
 		ast_manager_register_xml_core("Ping", 0, action_ping);
@@ -8010,3 +8014,45 @@ struct ast_datastore *astman_datastore_find(struct mansession *s, const struct a
 
 	return datastore;
 }
+
+static void manager_event_blob_dtor(void *obj)
+{
+	struct ast_manager_event_blob *ev = obj;
+	ast_string_field_free_memory(ev);
+}
+
+struct ast_manager_event_blob *
+__attribute__((format(printf, 3, 4)))
+ast_manager_event_blob_create(
+	int event_flags,
+	const char *manager_event,
+	const char *extra_fields_fmt,
+	...)
+{
+	RAII_VAR(struct ast_manager_event_blob *, ev, NULL, ao2_cleanup);
+	va_list argp;
+
+	ast_assert(extra_fields_fmt != NULL);
+	ast_assert(manager_event != NULL);
+
+	ev = ao2_alloc(sizeof(*ev), manager_event_blob_dtor);
+	if (!ev) {
+		return NULL;
+	}
+
+	if (ast_string_field_init(ev, 20)) {
+		return NULL;
+	}
+
+	ev->manager_event = manager_event;
+	ev->event_flags = event_flags;
+
+	va_start(argp, extra_fields_fmt);
+	ast_string_field_ptr_build_va(ev, &ev->extra_fields, extra_fields_fmt,
+				      argp);
+	va_end(argp);
+
+	ao2_ref(ev, +1);
+	return ev;
+}
+
