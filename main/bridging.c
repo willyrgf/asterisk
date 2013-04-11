@@ -607,6 +607,7 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge_channel *bridge_ch
 	}
 
 /* BUGBUG the feature hook matching needs to be done here.  Any matching feature hook needs to be queued onto the bridge_channel.  Also the feature hook digit timeout needs to be handled. */
+/* BUGBUG the AMI atxfer action just sends DTMF end events to initiate DTMF atxfer and dial the extension.  Another reason the DTMF hook matching needs rework. */
 	/* See if this DTMF matches the beginnings of any feature hooks, if so we switch to the feature state to either execute the feature or collect more DTMF */
 	dtmf[0] = frame->subclass.integer;
 	dtmf[1] = '\0';
@@ -724,8 +725,10 @@ void ast_bridge_channel_write_control_data(struct ast_bridge_channel *bridge_cha
 	bridge_channel_write_frame(bridge_channel, &frame);
 }
 
-static void run_app_helper(struct ast_channel *chan, const char *app_name, const char *app_args)
+static int run_app_helper(struct ast_channel *chan, const char *app_name, const char *app_args)
 {
+	int res = 0;
+
 	if (!strcasecmp("Gosub", app_name)) {
 		ast_app_exec_sub(NULL, chan, app_args, 0);
 	} else if (!strcasecmp("Macro", app_name)) {
@@ -737,9 +740,10 @@ static void run_app_helper(struct ast_channel *chan, const char *app_name, const
 		if (!app) {
 			ast_log(LOG_WARNING, "Could not find application (%s)\n", app_name);
 		} else {
-			pbx_exec(chan, app, app_args);
+			res = pbx_exec(chan, app, app_args);
 		}
 	}
+	return res;
 }
 
 void ast_bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class)
@@ -753,7 +757,10 @@ void ast_bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, const
 				moh_class, strlen(moh_class) + 1);
 		}
 	}
-	run_app_helper(bridge_channel->chan, app_name, S_OR(app_args, ""));
+	if (run_app_helper(bridge_channel->chan, app_name, S_OR(app_args, ""))) {
+		/* Break the bridge if the app returns non-zero. */
+		bridge_handle_hangup(bridge_channel);
+	}
 	if (moh_class) {
 		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD,
 			NULL, 0);
@@ -761,7 +768,7 @@ void ast_bridge_channel_run_app(struct ast_bridge_channel *bridge_channel, const
 }
 
 struct bridge_run_app {
-	/*! Offset into app_name[] where the MOH class name starts.  (zero if no MOH)*/
+	/*! Offset into app_name[] where the MOH class name starts.  (zero if no MOH) */
 	int moh_offset;
 	/*! Offset into app_name[] where the application argument string starts. (zero if no arguments) */
 	int app_args_offset;
@@ -2819,6 +2826,13 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 		state = AST_BRIDGE_CHANNEL_STATE_HANGUP;
 		goto join_exit;
 	}
+/* BUGBUG features cannot be NULL when passed in. When it is changed to allocated we can do like ast_bridge_impart() and allocate one. */
+	ast_assert(features != NULL);
+	if (!features) {
+		ao2_ref(bridge_channel, -1);
+		state = AST_BRIDGE_CHANNEL_STATE_HANGUP;
+		goto join_exit;
+	}
 	if (tech_args) {
 		bridge_channel->tech_args = *tech_args;
 	}
@@ -2921,9 +2935,18 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	int res;
 	struct ast_bridge_channel *bridge_channel;
 
+	/* Supply an empty features structure if the caller did not. */
+	if (!features) {
+		features = ast_bridge_features_new();
+		if (!features) {
+			return -1;
+		}
+	}
+
 	/* Try to allocate a structure for the bridge channel */
 	bridge_channel = bridge_channel_alloc(bridge);
 	if (!bridge_channel) {
+		ast_bridge_features_destroy(features);
 		return -1;
 	}
 

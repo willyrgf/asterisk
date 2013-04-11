@@ -649,6 +649,7 @@ static void *record_thread(void *obj)
 	struct ast_channel *chan;
 	struct ast_str *filename = ast_str_alloca(PATH_MAX);
 	struct ast_str *orig_rec_file = NULL;
+	struct ast_bridge_features features;
 
 	ast_mutex_lock(&conference->record_lock);
 	if (!mixmonapp) {
@@ -658,20 +659,27 @@ static void *record_thread(void *obj)
 		ao2_ref(conference, -1);
 		return NULL;
 	}
+	if (ast_bridge_features_init(&features)) {
+		conference->record_thread = AST_PTHREADT_NULL;
+		ast_mutex_unlock(&conference->record_lock);
+		ao2_ref(conference, -1);
+		return NULL;
+	}
 
 	/* XXX If we get an EXIT right here, START will essentially be a no-op */
 	while (conference->record_state != CONF_RECORD_EXIT) {
 		set_rec_filename(conference, &filename,
-				 is_new_rec_file(conference->b_profile.rec_file, &orig_rec_file));
+			is_new_rec_file(conference->b_profile.rec_file, &orig_rec_file));
 		chan = ast_channel_ref(conference->record_chan);
 		ast_answer(chan);
 		pbx_exec(chan, mixmonapp, ast_str_buffer(filename));
-		ast_bridge_join(conference->bridge, chan, NULL, NULL, NULL, 0);
+		ast_bridge_join(conference->bridge, chan, NULL, &features, NULL, 0);
 
 		ast_hangup(chan); /* This will eat this thread's reference to the channel as well */
 		/* STOP has been called. Wait for either a START or an EXIT */
 		ast_cond_wait(&conference->record_cond, &conference->record_lock);
 	}
+	ast_bridge_features_cleanup(&features);
 	ast_free(orig_rec_file);
 	ast_mutex_unlock(&conference->record_lock);
 	ao2_ref(conference, -1);

@@ -4341,7 +4341,6 @@ static int setup_bridge_channel_features(struct ast_bridge_features *features, s
 #else
 	return 0;
 #endif
-/* BUGBUG dynamic features not handled yet.  App run returns non-zero breaks bridge and ast_bridge_call returns 0.  App returns zero continues bridge. */
 }
 
 static void bridge_config_set_limits_warning_values(struct ast_bridge_config *config, struct ast_bridge_features_limits *limits)
