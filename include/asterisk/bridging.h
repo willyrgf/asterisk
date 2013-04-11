@@ -408,7 +408,7 @@ struct ast_bridge {
  * \param bridge What to register. (Tolerates a NULL pointer)
  *
  * \code
- * struct ast_bridge *ast_bridge_basic_new(uint32_t capabilities, int flags)
+ * struct ast_bridge *ast_bridge_basic_new(uint32_t capabilities, int flags, uint32 dtmf_features)
  * {
  *     void *bridge;
  *

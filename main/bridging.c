@@ -1209,9 +1209,12 @@ static void destroy_bridge(void *obj)
 
 struct ast_bridge *ast_bridge_register(struct ast_bridge *bridge)
 {
-	if (bridge && !ao2_link(bridges, bridge)) {
-		ast_bridge_destroy(bridge);
-		bridge = NULL;
+	if (bridge) {
+		ast_bridge_publish_state(bridge);
+		if (!ao2_link(bridges, bridge)) {
+			ast_bridge_destroy(bridge);
+			bridge = NULL;
+		}
 	}
 	return bridge;
 }
@@ -1410,9 +1413,6 @@ struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags)
 	bridge = ast_bridge_alloc(sizeof(struct ast_bridge), &ast_bridge_base_v_table);
 	bridge = ast_bridge_base_init(bridge, capabilities, flags);
 	bridge = ast_bridge_register(bridge);
-	if (bridge) {
-		ast_bridge_publish_state(bridge);
-	}
 	return bridge;
 }
 
