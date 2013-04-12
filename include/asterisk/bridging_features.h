@@ -145,7 +145,7 @@ typedef void (*ast_bridge_talking_indicate_destructor)(void *pvt_data);
 /*!
  * \brief Maximum length of a DTMF feature string
  */
-#define MAXIMUM_DTMF_FEATURE_STRING 8
+#define MAXIMUM_DTMF_FEATURE_STRING (11 + 1)
 
 /*! Extra parameters for a DTMF feature hook. */
 struct ast_bridge_hook_dtmf {

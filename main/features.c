@@ -73,6 +73,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cel.h"
 #include "asterisk/test.h"
 #include "asterisk/bridging.h"
+#include "asterisk/bridging_basic.h"
 
 /*
  * Party A - transferee
@@ -3759,6 +3760,9 @@ static void set_config_flags(struct ast_channel *chan, struct ast_bridge_config 
 {
 	int x;
 
+/* BUGBUG there is code that checks AST_BRIDGE_IGNORE_SIGS but no code to set it. */
+/* BUGBUG there is code that checks AST_BRIDGE_REC_CHANNEL_0 but no code to set it. */
+/* BUGBUG there is code that checks AST_BRIDGE_REC_CHANNEL_1 but no code to set it. */
 	ast_clear_flag(config, AST_FLAGS_ALL);
 
 	ast_rdlock_call_features();
@@ -4271,76 +4275,226 @@ void ast_bridge_end_dtmf(struct ast_channel *chan, char digit, struct timeval st
 
 /*!
  * \internal
- * \brief Setup bridge channel features.
+ * \brief Setup bridge builtin features.
  * \since 12.0.0
  *
  * \param features Bridge features to setup.
- * \param flags DTMF features to enable.
+ * \param chan Get features from this channel.
  *
  * \retval 0 on success.
- * \retval -1 on failure.
+ * \retval -1 on error.
  */
-static int setup_bridge_channel_features(struct ast_bridge_features *features, struct ast_flags *flags)
+static int setup_bridge_features_builtin(struct ast_bridge_features *features, struct ast_channel *chan)
 {
-	struct ast_call_feature *dtmf;
-	int res = 0;
+	struct ast_flags *flags;
+	char dtmf[FEATURE_MAX_LEN];
+	int res;
 
-	/* Always pass through any DTMF digits. */
-	features->dtmf_passthrough = 1;
+	ast_channel_lock(chan);
+	flags = ast_bridge_features_ds_get(chan);
+	ast_channel_unlock(chan);
+	if (!flags) {
+		return 0;
+	}
 
+	res = 0;
+	ast_rdlock_call_features();
 	if (ast_test_flag(flags, AST_FEATURE_REDIRECT)) {
 		/* Add atxfer and blind transfer. */
-		ast_rwlock_rdlock(&features_lock);
-		dtmf = ast_find_call_feature("blindxfer");
-		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+		builtin_feature_get_exten(chan, "blindxfer", dtmf, sizeof(dtmf));
+		if (!ast_strlen_zero(dtmf)) {
 /* BUGBUG need to supply a blind transfer structure and destructor to use other than defaults */
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_BLINDTRANSFER, dtmf->exten, NULL, NULL, 0);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_BLINDTRANSFER, dtmf, NULL, NULL, 1);
 		}
-		dtmf = ast_find_call_feature("atxfer");
-		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
+		builtin_feature_get_exten(chan, "atxfer", dtmf, sizeof(dtmf));
+		if (!ast_strlen_zero(dtmf)) {
 /* BUGBUG need to supply an attended transfer structure and destructor to use other than defaults */
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, dtmf->exten, NULL, NULL, 0);
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_ATTENDEDTRANSFER, dtmf, NULL, NULL, 1);
 		}
-		ast_rwlock_unlock(&features_lock);
 	}
 	if (ast_test_flag(flags, AST_FEATURE_DISCONNECT)) {
-		ast_rwlock_rdlock(&features_lock);
-		dtmf = ast_find_call_feature("disconnect");
-		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_HANGUP, dtmf->exten, NULL, NULL, 0);
+		builtin_feature_get_exten(chan, "disconnect", dtmf, sizeof(dtmf));
+		if (ast_strlen_zero(dtmf)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_HANGUP, dtmf, NULL, NULL, 1);
 		}
-		ast_rwlock_unlock(&features_lock);
 	}
 	if (ast_test_flag(flags, AST_FEATURE_PARKCALL)) {
-		ast_rwlock_rdlock(&features_lock);
-		dtmf = ast_find_call_feature("parkcall");
-		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_PARKCALL, dtmf->exten, NULL, NULL, 0);
+		builtin_feature_get_exten(chan, "parkcall", dtmf, sizeof(dtmf));
+		if (!ast_strlen_zero(dtmf)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_PARKCALL, dtmf, NULL, NULL, 1);
 		}
-		ast_rwlock_unlock(&features_lock);
 	}
 	if (ast_test_flag(flags, AST_FEATURE_AUTOMON)) {
-		ast_rwlock_rdlock(&features_lock);
-		dtmf = ast_find_call_feature("automon");
-		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMON, dtmf->exten, NULL, NULL, 0);
+		builtin_feature_get_exten(chan, "automon", dtmf, sizeof(dtmf));
+		if (!ast_strlen_zero(dtmf)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMON, dtmf, NULL, NULL, 1);
 		}
-		ast_rwlock_unlock(&features_lock);
 	}
 	if (ast_test_flag(flags, AST_FEATURE_AUTOMIXMON)) {
-		ast_rwlock_rdlock(&features_lock);
-		dtmf = ast_find_call_feature("automixmon");
-		if (dtmf && !ast_strlen_zero(dtmf->exten)) {
-			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMIXMON, dtmf->exten, NULL, NULL, 0);
+		builtin_feature_get_exten(chan, "automixmon", dtmf, sizeof(dtmf));
+		if (!ast_strlen_zero(dtmf)) {
+			res |= ast_bridge_features_enable(features, AST_BRIDGE_BUILTIN_AUTOMIXMON, dtmf, NULL, NULL, 1);
 		}
-		ast_rwlock_unlock(&features_lock);
 	}
+	ast_unlock_call_features();
 
 #if 0	/* BUGBUG don't report errors untill all of the builtin features are supported. */
 	return res ? -1 : 0;
 #else
 	return 0;
 #endif
+}
+
+struct dtmf_hook_run_app {
+	/*! Which side of bridge to run app (AST_FEATURE_FLAG_ONSELF/AST_FEATURE_FLAG_ONPEER) */
+	unsigned int flags;
+	/*! Offset into app_name[] where the MOH class name starts.  (zero if no MOH) */
+	int moh_offset;
+	/*! Offset into app_name[] where the application argument string starts. (zero if no arguments) */
+	int app_args_offset;
+	/*! Application name to run. */
+	char app_name[0];
+};
+
+/*!
+ * \internal
+ * \brief Setup bridge dynamic features.
+ * \since 12.0.0
+ *
+ * \param bridge The bridge that the channel is part of
+ * \param bridge_channel Channel executing the feature
+ * \param hook_pvt Private data passed in when the hook was created
+ *
+ * \retval 0 Keep the callback hook.
+ * \retval -1 Remove the callback hook.
+ */
+static int app_dtmf_feature_hook(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	struct dtmf_hook_run_app *pvt = hook_pvt;
+	void (*run_it)(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class);
+
+	if (ast_test_flag(pvt, AST_FEATURE_FLAG_ONPEER)) {
+		run_it = ast_bridge_channel_write_app;
+	} else {
+		run_it = ast_bridge_channel_run_app;
+	}
+
+	run_it(bridge_channel, pvt->app_name,
+		pvt->app_args_offset ? &pvt->app_name[pvt->app_args_offset] : NULL,
+		pvt->moh_offset ? &pvt->app_name[pvt->moh_offset] : NULL);
+	return 0;
+}
+
+/*!
+ * \internal
+ * \brief Add a dynamic DTMF feature hook to the bridge features.
+ * \since 12.0.0
+ *
+ * \param features Bridge features to setup.
+ * \param flags Which side of bridge to run app (AST_FEATURE_FLAG_ONSELF/AST_FEATURE_FLAG_ONPEER).
+ * \param dtmf DTMF trigger sequence.
+ * \param app_name Dialplan application name to run.
+ * \param app_args Dialplan application arguments. (Empty or NULL if no arguments)
+ * \param moh_class MOH class to play to peer. (Empty or NULL if no MOH played)
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int add_dynamic_dtmf_hook(struct ast_bridge_features *features, unsigned int flags, const char *dtmf, const char *app_name, const char *app_args, const char *moh_class)
+{
+	struct dtmf_hook_run_app *app_data;
+	size_t len_name = strlen(app_name) + 1;
+	size_t len_args = ast_strlen_zero(app_args) ? 0 : strlen(app_args) + 1;
+	size_t len_moh = ast_strlen_zero(moh_class) ? 0 : strlen(moh_class) + 1;
+	size_t len_data = sizeof(*app_data) + len_name + len_args + len_moh;
+
+	/* Fill in application run hook data. */
+	app_data = ast_malloc(len_data);
+	if (!app_data) {
+		return -1;
+	}
+	app_data->flags = flags;
+	app_data->app_args_offset = len_args ? len_name : 0;
+	app_data->moh_offset = len_moh ? len_name + len_args : 0;
+	strcpy(app_data->app_name, app_name);/* Safe */
+	if (len_args) {
+		strcpy(&app_data->app_name[app_data->app_args_offset], app_args);/* Safe */
+	}
+	if (len_moh) {
+		strcpy(&app_data->app_name[app_data->moh_offset], moh_class);/* Safe */
+	}
+
+	return ast_bridge_dtmf_hook(features, dtmf, app_dtmf_feature_hook,
+		app_data, ast_free_ptr, 1);
+}
+
+/*!
+ * \internal
+ * \brief Setup bridge dynamic features.
+ * \since 12.0.0
+ *
+ * \param features Bridge features to setup.
+ * \param chan Get features from this channel.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int setup_bridge_features_dynamic(struct ast_bridge_features *features, struct ast_channel *chan)
+{
+	const char *feat;
+	char *dynamic_features = NULL;
+	char *tok;
+	int res;
+
+	ast_channel_lock(chan);
+	feat = pbx_builtin_getvar_helper(chan, "DYNAMIC_FEATURES");
+	if (!ast_strlen_zero(feat)) {
+		dynamic_features = ast_strdupa(feat);
+	}
+	ast_channel_unlock(chan);
+	if (!dynamic_features) {
+		return 0;
+	}
+
+	res = 0;
+	while ((tok = strsep(&dynamic_features, "#"))) {
+		struct feature_group *fg;
+		struct ast_call_feature *feature;
+
+		AST_RWLIST_RDLOCK(&feature_groups);
+		fg = find_group(tok);
+		if (fg) {
+			struct feature_group_exten *fge;
+
+			AST_LIST_TRAVERSE(&fg->features, fge, entry) {
+				res |= add_dynamic_dtmf_hook(features, fge->feature->flags, fge->exten,
+					fge->feature->app, fge->feature->app_args, fge->feature->moh_class);
+			}
+		}
+		AST_RWLIST_UNLOCK(&feature_groups);
+
+		ast_rdlock_call_features();
+		feature = find_dynamic_feature(tok);
+		if (feature) {
+			res |= add_dynamic_dtmf_hook(features, feature->flags, feature->exten,
+				feature->app, feature->app_args, feature->moh_class);
+		}
+		ast_unlock_call_features();
+	}
+	return res;
+}
+
+int ast_bridge_channel_setup_features(struct ast_bridge_channel *bridge_channel)
+{
+	int res = 0;
+
+	/* Always pass through any DTMF digits. */
+	bridge_channel->features->dtmf_passthrough = 1;
+
+	res |= setup_bridge_features_builtin(bridge_channel->features, bridge_channel->chan);
+	res |= setup_bridge_features_dynamic(bridge_channel->features, bridge_channel->chan);
+
+	return res;
 }
 
 static void bridge_config_set_limits_warning_values(struct ast_bridge_config *config, struct ast_bridge_features_limits *limits)
@@ -4514,12 +4668,22 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	clear_dialed_interfaces(chan);
 	clear_dialed_interfaces(peer);
 
-	/* Setup DTMF features. */
+	res = 0;
+	ast_channel_lock(chan);
+	res |= ast_bridge_features_ds_set(chan, &config->features_caller);
+	ast_channel_unlock(chan);
+	ast_channel_lock(peer);
+	res |= ast_bridge_features_ds_set(peer, &config->features_callee);
+	ast_channel_unlock(peer);
+	if (res) {
+		bridge_failed_peer_goto(chan, peer);
+		return -1;
+	}
+
+	/* Setup features. */
 	res = ast_bridge_features_init(&chan_features);
 	peer_features = ast_bridge_features_new();
-	if (res || !peer_features
-		|| setup_bridge_channel_features(peer_features, &config->features_callee)
-		|| setup_bridge_channel_features(&chan_features, &config->features_caller)) {
+	if (res || !peer_features) {
 		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);
 		bridge_failed_peer_goto(chan, peer);
@@ -4573,10 +4737,7 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	}
 
 	/* Create bridge */
-/* BUGBUG need to create the basic bridge class that will manage the DTMF feature hooks. */
-	bridge = ast_bridge_base_new(
-		AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_MULTIMIX,
-		AST_BRIDGE_FLAG_DISSOLVE_HANGUP | AST_BRIDGE_FLAG_DISSOLVE_EMPTY | AST_BRIDGE_FLAG_SMART);
+	bridge = ast_bridge_basic_new();
 	if (!bridge) {
 		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);

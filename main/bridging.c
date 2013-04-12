@@ -40,8 +40,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/bridging.h"
-#include "asterisk/stasis_bridging.h"
+#include "asterisk/bridging_basic.h"
 #include "asterisk/bridging_technology.h"
+#include "asterisk/stasis_bridging.h"
 #include "asterisk/app.h"
 #include "asterisk/file.h"
 #include "asterisk/module.h"
@@ -4567,6 +4568,8 @@ int ast_bridging_init(void)
 		bridge_shutdown();
 		return -1;
 	}
+
+	ast_bridging_init_basic();
 
 /* BUGBUG need AMI action equivalents to the CLI commands. */
 	ast_cli_register_multiple(bridge_cli, ARRAY_LEN(bridge_cli));

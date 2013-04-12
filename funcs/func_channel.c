@@ -346,6 +346,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*
  * BUGBUG add CHANNEL(after_bridge_goto)=<parseable-goto> Sets an after bridge goto datastore property on the channel.
  * CHANNEL(after_bridge_goto)=<empty> Deletes any after bridge goto datastore property on the channel.
+ *
+ * BUGBUG add CHANNEL(dtmf_features)=tkhwx sets channel dtmf features to specified. (transfer, park, hangup, monitor, mixmonitor)
  */
 
 #define locked_copy_string(chan, dest, source, len) \

@@ -180,6 +180,9 @@ context => parkedcalls          ; Which context parked calls are in (default par
 ;                   values are "caller", "callee", and "both". "both" is the default.
 ;                   The "caller" is the channel that executed the Dial application, while
 ;                   the "callee" is the channel called by the Dial application.
+;BUGBUG ActivatedBy is no longer going to be honored.
+; It will only apply to the channel DYNAMIC_FEATURES is on.
+; Use predial to set different values of DYNAMIC_FEATURES on the channels.
 ;  Application   -> This is the application to execute.
 ;  AppArguments  -> These are the arguments to be passed into the application.  If you need
 ;                   commas in your arguments, you should use either the second or third
