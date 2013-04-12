@@ -160,30 +160,4 @@ char *__ast_str_helper2(struct ast_str **buf, ssize_t maxlen, const char *src, s
 	return (*buf)->__AST_STR_STR;
 }
 
-static int str_hash(const void *obj, const int flags)
-{
-	return ast_str_hash(obj);
-}
 
-static int str_cmp(void *lhs, void *rhs, int flags)
-{
-	return strcmp(lhs, rhs) ? 0 : CMP_MATCH;
-}
-
-struct ao2_container *ast_str_container_alloc(int buckets)
-{
-	return ao2_container_alloc(buckets, str_hash, str_cmp);
-}
-
-int ast_str_container_add(struct ao2_container *str_container, const char *add)
-{
-	RAII_VAR(char *, ao2_add, ao2_alloc(strlen(add) + 1, NULL), ao2_cleanup);
-
-	if (!ao2_add) {
-		return -1;
-	}
-
-	/* safe strcpy */
-	strcpy(ao2_add, add);
-	return ao2_link(str_container, ao2_add);
-}
