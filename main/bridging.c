@@ -4202,6 +4202,7 @@ static char *handle_bridge_show_all(struct ast_cli_entry *e, int cmd, struct ast
 		return NULL;
 	}
 
+/* BUGBUG this command may need to be changed to look at the stasis cache. */
 	ast_cli(a->fd, FORMAT_HDR, "Bridge-ID", "Chans", "Type", "Technology");
 	iter = ao2_iterator_init(bridges, 0);
 	for (; (bridge = ao2_iterator_next(&iter)); ao2_ref(bridge, -1)) {
@@ -4239,6 +4240,7 @@ static char *handle_bridge_show_specific(struct ast_cli_entry *e, int cmd, struc
 		return NULL;
 	}
 
+/* BUGBUG this command may need to be changed to look at the stasis cache. */
 	if (a->argc != 3) {
 		return CLI_SHOWUSAGE;
 	}
@@ -4364,6 +4366,22 @@ static char *handle_bridge_kick_channel(struct ast_cli_entry *e, int cmd, struct
 		return CLI_SUCCESS;
 	}
 
+/*
+ * BUGBUG the CLI kick needs to get the bridge to decide if it should dissolve.
+ *
+ * Likely the best way to do this is to add a kick method.  The
+ * basic bridge class can then decide to dissolve the bridge if
+ * one of two channels is kicked.
+ *
+ * SIP/foo -- Local;1==Local;2 -- .... -- Local;1==Local;2 -- SIP/bar
+ * Kick a ;1 channel and the chain toward SIP/foo goes away.
+ * Kick a ;2 channel and the chain toward SIP/bar goes away.
+ *
+ * This can leave a local channel chain between the kicked ;1
+ * and ;2 channels that are orphaned until you manually request
+ * one of those channels to hangup or request the bridge to
+ * dissolve.
+ */
 	ast_cli(a->fd, "Kicking channel '%s' from bridge '%s'\n",
 		ast_channel_name(chan), a->argv[2]);
 	ast_bridge_remove(bridge, chan);
