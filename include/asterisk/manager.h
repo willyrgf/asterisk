@@ -347,6 +347,23 @@ struct ast_str *ast_manager_build_channel_state_string_suffix(
 struct ast_str *ast_manager_build_channel_state_string(
 		const struct ast_channel_snapshot *snapshot);
 
+/*! \brief Struct representing a snapshot of bridge state */
+struct ast_bridge_snapshot;
+
+/*!
+ * \brief Generate the AMI message body from a bridge snapshot
+ * \since 12
+ *
+ * \param snapshot the bridge snapshot for which to generate an AMI message
+ *                 body
+ *
+ * \retval NULL on error
+ * \retval ast_str* on success (must be ast_freed by caller)
+ */
+struct ast_str *ast_manager_build_bridge_state_string(
+	const struct ast_bridge_snapshot *snapshot,
+	const char *suffix);
+
 /*! \brief Struct containing info for an AMI event to send out. */
 struct ast_manager_event_blob {
 	int event_flags;		/*!< Flags the event should be raised with. */

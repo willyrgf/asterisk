@@ -108,17 +108,7 @@ static struct stasis_message_router *bridge_state_router;
 	</manager>
  ***/
 
-/*!
- * \brief Generate the AMI message body from a bridge snapshot
- * \internal
- *
- * \param snapshot the bridge snapshot for which to generate an AMI message
- *                 body
- *
- * \retval NULL on error
- * \retval ast_str* on success (must be ast_freed by caller)
- */
-static struct ast_str *manager_build_bridge_state_string(
+struct ast_str *ast_manager_build_bridge_state_string(
 	const struct ast_bridge_snapshot *snapshot,
 	const char *suffix)
 {
@@ -207,7 +197,7 @@ static void bridge_snapshot_update(void *data, struct stasis_subscription *sub,
 		/* If we haven't already, build the channel event string */
 		if (!bridge_event_string) {
 			bridge_event_string =
-				manager_build_bridge_state_string(
+				ast_manager_build_bridge_state_string(
 					new_snapshot ? new_snapshot : old_snapshot, "");
 			if (!bridge_event_string) {
 				return;
@@ -231,8 +221,8 @@ static void bridge_merge_cb(void *data, struct stasis_subscription *sub,
 	ast_assert(merge_msg->to != NULL);
 	ast_assert(merge_msg->from != NULL);
 
-	to_text = manager_build_bridge_state_string(merge_msg->to, "");
-	from_text = manager_build_bridge_state_string(merge_msg->from, "From");
+	to_text = ast_manager_build_bridge_state_string(merge_msg->to, "");
+	from_text = ast_manager_build_bridge_state_string(merge_msg->from, "From");
 
 	/*** DOCUMENTATION
 		<managerEventInstance>
@@ -262,6 +252,7 @@ static void bridge_blob_cb(void *data, struct stasis_subscription *sub,
 	struct ast_bridge_blob *blob = stasis_message_data(message);
 	const char *type = ast_bridge_blob_json_type(blob);
 	RAII_VAR(struct ast_str *, bridge_text, NULL, ast_free);
+	RAII_VAR(struct ast_str *, channel_text, NULL, ast_free);
 	char *event;
 
 	if (!strcmp("leave", type)) {
@@ -272,13 +263,14 @@ static void bridge_blob_cb(void *data, struct stasis_subscription *sub,
 		return;
 	}
 
-	bridge_text = manager_build_bridge_state_string(blob->bridge, "");
+	bridge_text = ast_manager_build_bridge_state_string(blob->bridge, "");
+	channel_text = ast_manager_build_channel_state_string(blob->channel);
 
 	manager_event(EVENT_FLAG_CALL, event,
 		"%s"
-		"Uniqueid: %s\r\n",
+		"%s",
 		ast_str_buffer(bridge_text),
-		blob->channel->uniqueid);
+		ast_str_buffer(channel_text));
 }
 
 static int filter_bridge_type_cb(void *obj, void *arg, int flags)
@@ -294,7 +286,7 @@ static int send_bridge_list_item_cb(void *obj, void *arg, void *data, int flags)
 	struct ast_bridge_snapshot *snapshot = stasis_message_data(obj);
 	struct mansession *s = arg;
 	char *id_text = data;
-	RAII_VAR(struct ast_str *, bridge_info, manager_build_bridge_state_string(snapshot, ""), ast_free);
+	RAII_VAR(struct ast_str *, bridge_info, ast_manager_build_bridge_state_string(snapshot, ""), ast_free);
 
 	astman_append(s,
 		"Event: BridgeListItem\r\n"
@@ -390,7 +382,7 @@ static int manager_bridge_info(struct mansession *s, const struct message *m)
 	}
 
 	snapshot = stasis_message_data(msg);
-	bridge_info = manager_build_bridge_state_string(snapshot, "");
+	bridge_info = ast_manager_build_bridge_state_string(snapshot, "");
 
 	ao2_callback_data(snapshot->channels, OBJ_NODATA, send_bridge_info_item_cb, s, ast_str_buffer(id_text));
 
