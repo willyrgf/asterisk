@@ -9515,6 +9515,9 @@ static void defer_full_frame(struct iax2_thread *from_here, struct iax2_thread *
 	if (!cur_pkt_buf)
 		AST_LIST_INSERT_TAIL(&to_here->full_frames, pkt_buf, entry);
 
+	to_here->iostate = IAX_IOSTATE_READY;
+	ast_cond_signal(&to_here->cond);
+
 	ast_mutex_unlock(&to_here->lock);
 }
 
@@ -12232,16 +12235,26 @@ static int start_network_thread(void)
 			ast_cond_init(&thread->cond, NULL);
 			ast_mutex_init(&thread->init_lock);
 			ast_cond_init(&thread->init_cond, NULL);
+
+			ast_mutex_lock(&thread->init_lock);
+
 			if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
 				ast_log(LOG_WARNING, "Failed to create new thread!\n");
 				ast_mutex_destroy(&thread->lock);
 				ast_cond_destroy(&thread->cond);
+				ast_mutex_unlock(&thread->init_lock);
 				ast_mutex_destroy(&thread->init_lock);
 				ast_cond_destroy(&thread->init_cond);
 				ast_free(thread);
 				thread = NULL;
 				continue;
 			}
+			/* Wait for the thread to be ready */
+			ast_cond_wait(&thread->init_cond, &thread->init_lock);
+
+			/* Done with init_lock */
+			ast_mutex_unlock(&thread->init_lock);
+
 			AST_LIST_LOCK(&idle_list);
 			AST_LIST_INSERT_TAIL(&idle_list, thread, list);
 			AST_LIST_UNLOCK(&idle_list);
