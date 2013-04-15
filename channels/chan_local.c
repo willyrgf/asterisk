@@ -108,7 +108,6 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 static int local_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen);
 static int local_sendtext(struct ast_channel *ast, const char *text);
 static int local_devicestate(const char *data);
-static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge);
 static int local_queryoption(struct ast_channel *ast, int option, void *data, int *datalen);
 static int local_setoption(struct ast_channel *chan, int option, void *data, int datalen);
 
@@ -131,7 +130,6 @@ static struct ast_channel_tech local_tech = {
 	.send_html = local_sendhtml,
 	.send_text = local_sendtext,
 	.devicestate = local_devicestate,
-	.bridged_channel = local_bridgedchannel,
 	.queryoption = local_queryoption,
 	.setoption = local_setoption,
 };
@@ -156,8 +154,7 @@ struct local_pvt {
 #define LOCAL_ALREADY_MASQED  (1 << 0) /*!< Already masqueraded */
 #define LOCAL_LAUNCHED_PBX    (1 << 1) /*!< PBX was launched */
 #define LOCAL_NO_OPTIMIZATION (1 << 2) /*!< Do not optimize using masquerading */
-#define LOCAL_BRIDGE          (1 << 3) /*!< Report back the "true" channel as being bridged to */
-#define LOCAL_MOH_PASSTHRU    (1 << 4) /*!< Pass through music on hold start/stop frames */
+#define LOCAL_MOH_PASSTHRU    (1 << 3) /*!< Pass through music on hold start/stop frames */
 
 /*!
  * \brief Send a pvt in with no locks held and get all locks
@@ -327,37 +324,6 @@ static int local_devicestate(const char *data)
 	ao2_iterator_destroy(&it);
 
 	return res;
-}
-
-/*! \brief Return the bridged channel of a Local channel */
-static struct ast_channel *local_bridgedchannel(struct ast_channel *chan, struct ast_channel *bridge)
-{
-	struct local_pvt *p = ast_channel_tech_pvt(bridge);
-	struct ast_channel *bridged = bridge;
-
-	if (!p) {
-		ast_debug(1, "Asked for bridged channel on '%s'/'%s', returning <none>\n",
-			ast_channel_name(chan), ast_channel_name(bridge));
-		return NULL;
-	}
-
-	ao2_lock(p);
-
-	if (ast_test_flag(p, LOCAL_BRIDGE)) {
-		/* Find the opposite channel */
-		bridged = (bridge == p->owner ? p->chan : p->owner);
-
-		/* Now see if the opposite channel is bridged to anything */
-		if (!bridged) {
-			bridged = bridge;
-		} else if (ast_channel_internal_bridged_channel(bridged)) {
-			bridged = ast_channel_internal_bridged_channel(bridged);
-		}
-	}
-
-	ao2_unlock(p);
-
-	return bridged;
 }
 
 /* Called with ast locked */
@@ -1191,9 +1157,6 @@ static struct local_pvt *local_alloc(const char *data, struct ast_format_cap *ca
 				ast_log(LOG_ERROR, "You must use the 'n' option for chan_local "
 					"to use the 'j' option to enable the jitterbuffer\n");
 			}
-		}
-		if (strchr(opts, 'b')) {
-			ast_set_flag(tmp, LOCAL_BRIDGE);
 		}
 		if (strchr(opts, 'm')) {
 			ast_set_flag(tmp, LOCAL_MOH_PASSTHRU);

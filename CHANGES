@@ -62,6 +62,10 @@ AMI (Asterisk Manager Interface)
 Channel Drivers
 ------------------
 
+chan_local
+------------------
+ * The /b option is removed.
+
 chan_mobile
 ------------------
  * Added general support for busy detection.
