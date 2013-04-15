@@ -464,8 +464,7 @@ static void bridge_dissolve_check(struct ast_bridge_channel *bridge_channel)
 	case AST_BRIDGE_CHANNEL_STATE_END:
 		/* Do we need to dissolve the bridge because this channel hung up? */
 		if (ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_HANGUP)
-			|| (bridge_channel->features
-				&& bridge_channel->features->usable
+			|| (bridge_channel->features->usable
 				&& ast_test_flag(&bridge_channel->features->feature_flags,
 					AST_BRIDGE_FLAG_DISSOLVE_HANGUP))) {
 			bridge_dissolve(bridge);
@@ -601,14 +600,9 @@ static void bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 /*! \brief Internal function to handle DTMF from a channel */
 static struct ast_frame *bridge_handle_dtmf(struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-	struct ast_bridge_features *features;
+	struct ast_bridge_features *features = bridge_channel->features;
 	struct ast_bridge_hook *hook;
 	char dtmf[2];
-
-	features = bridge_channel->features;
-	if (!features) {
-		return frame;
-	}
 
 /* BUGBUG the feature hook matching needs to be done here.  Any matching feature hook needs to be queued onto the bridge_channel.  Also the feature hook digit timeout needs to be handled. */
 /* BUGBUG the AMI atxfer action just sends DTMF end events to initiate DTMF atxfer and dial the extension.  Another reason the DTMF hook matching needs rework. */
@@ -642,27 +636,23 @@ static struct ast_frame *bridge_handle_dtmf(struct ast_bridge_channel *bridge_ch
  */
 static void bridge_handle_hangup(struct ast_bridge_channel *bridge_channel)
 {
-	struct ast_bridge_features *features;
+	struct ast_bridge_features *features = bridge_channel->features;
+	struct ast_bridge_hook *hook;
+	struct ao2_iterator iter;
 
-	features = bridge_channel->features;
-	if (features) {
-		struct ast_bridge_hook *hook;
-		struct ao2_iterator iter;
+	/* Run any hangup hooks. */
+	iter = ao2_iterator_init(features->hangup_hooks, 0);
+	for (; (hook = ao2_iterator_next(&iter)); ao2_ref(hook, -1)) {
+		int failed;
 
-		/* Run any hangup hooks. */
-		iter = ao2_iterator_init(features->hangup_hooks, 0);
-		for (; (hook = ao2_iterator_next(&iter)); ao2_ref(hook, -1)) {
-			int failed;
-
-			failed = hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
-			if (failed) {
-				ast_debug(1, "Hangup hook %p is being removed from %p(%s)\n",
-					hook, bridge_channel, ast_channel_name(bridge_channel->chan));
-				ao2_unlink(features->hangup_hooks, hook);
-			}
+		failed = hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
+		if (failed) {
+			ast_debug(1, "Hangup hook %p is being removed from %p(%s)\n",
+				hook, bridge_channel, ast_channel_name(bridge_channel->chan));
+			ao2_unlink(features->hangup_hooks, hook);
 		}
-		ao2_iterator_destroy(&iter);
 	}
+	ao2_iterator_destroy(&iter);
 
 	/* Default hangup action. */
 	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
@@ -670,14 +660,9 @@ static void bridge_handle_hangup(struct ast_bridge_channel *bridge_channel)
 
 static int bridge_channel_interval_ready(struct ast_bridge_channel *bridge_channel)
 {
-	struct ast_bridge_features *features;
+	struct ast_bridge_features *features = bridge_channel->features;
 	struct ast_bridge_hook *hook;
 	int ready;
-
-	features = bridge_channel->features;
-	if (!features || !features->interval_hooks) {
-		return 0;
-	}
 
 	ast_heap_wrlock(features->interval_hooks);
 	hook = ast_heap_peek(features->interval_hooks, 1);
@@ -933,7 +918,7 @@ static void bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_frame *frame;
 
-	if (bridge_channel->features && bridge_channel->features->mute) {
+	if (bridge_channel->features->mute) {
 		frame = ast_read_noaudio(bridge_channel->chan);
 	} else {
 		frame = ast_read(bridge_channel->chan);
@@ -966,7 +951,7 @@ static void bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 		}
 		/* Fall through */
 	case AST_FRAME_DTMF_END:
-		if (bridge_channel->features && !bridge_channel->features->dtmf_passthrough) {
+		if (!bridge_channel->features->dtmf_passthrough) {
 			ast_frfree(frame);
 			return;
 		}
@@ -1887,10 +1872,6 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 	char dtmf[MAXIMUM_DTMF_FEATURE_STRING] = "";
 	size_t dtmf_len = 0;
 
-	if (!features) {
-		return;
-	}
-
 	/* The channel is now under our control and we don't really want any begin frames to do our DTMF matching so disable 'em at the core level */
 	ast_set_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_END_DTMF_ONLY);
 
@@ -1966,10 +1947,9 @@ static void bridge_channel_feature(struct ast_bridge_channel *bridge_channel)
 
 static void bridge_channel_talking(struct ast_bridge_channel *bridge_channel, int talking)
 {
-	struct ast_bridge_features *features;
+	struct ast_bridge_features *features = bridge_channel->features;
 
-	features = bridge_channel->features;
-	if (features && features->talker_cb) {
+	if (features->talker_cb) {
 		features->talker_cb(bridge_channel, features->talker_pvt_data, talking);
 	}
 }
@@ -2188,8 +2168,8 @@ static void bridge_channel_handle_interval(struct ast_bridge_channel *bridge_cha
 {
 	struct ast_timer *interval_timer;
 
-	if (bridge_channel->features
-		&& (interval_timer = bridge_channel->features->interval_timer)) {
+	interval_timer = bridge_channel->features->interval_timer;
+	if (interval_timer) {
 		if (ast_wait_for_input(ast_timer_fd(interval_timer), 0) == 1) {
 			ast_timer_ack(interval_timer, 1);
 			if (bridge_channel_interval_ready(bridge_channel)) {
@@ -2267,28 +2247,24 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
  */
 static void bridge_channel_handle_join(struct ast_bridge_channel *bridge_channel)
 {
-	struct ast_bridge_features *features;
+	struct ast_bridge_features *features = bridge_channel->features;
+	struct ast_bridge_hook *hook;
+	struct ao2_iterator iter;
 
-	features = bridge_channel->features;
-	if (features) {
-		struct ast_bridge_hook *hook;
-		struct ao2_iterator iter;
-
-		/* Run any join hooks. */
-		iter = ao2_iterator_init(features->join_hooks, AO2_ITERATOR_UNLINK);
-		hook = ao2_iterator_next(&iter);
-		if (hook) {
-			bridge_channel_suspend(bridge_channel);
-			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
-			do {
-				hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
-				ao2_ref(hook, -1);
-			} while ((hook = ao2_iterator_next(&iter)));
-			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
-			bridge_channel_unsuspend(bridge_channel);
-		}
-		ao2_iterator_destroy(&iter);
+	/* Run any join hooks. */
+	iter = ao2_iterator_init(features->join_hooks, AO2_ITERATOR_UNLINK);
+	hook = ao2_iterator_next(&iter);
+	if (hook) {
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		do {
+			hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
+			ao2_ref(hook, -1);
+		} while ((hook = ao2_iterator_next(&iter)));
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
 	}
+	ao2_iterator_destroy(&iter);
 }
 
 /*!
@@ -2302,28 +2278,24 @@ static void bridge_channel_handle_join(struct ast_bridge_channel *bridge_channel
  */
 static void bridge_channel_handle_leave(struct ast_bridge_channel *bridge_channel)
 {
-	struct ast_bridge_features *features;
+	struct ast_bridge_features *features = bridge_channel->features;
+	struct ast_bridge_hook *hook;
+	struct ao2_iterator iter;
 
-	features = bridge_channel->features;
-	if (features) {
-		struct ast_bridge_hook *hook;
-		struct ao2_iterator iter;
-
-		/* Run any leave hooks. */
-		iter = ao2_iterator_init(features->leave_hooks, AO2_ITERATOR_UNLINK);
-		hook = ao2_iterator_next(&iter);
-		if (hook) {
-			bridge_channel_suspend(bridge_channel);
-			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
-			do {
-				hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
-				ao2_ref(hook, -1);
-			} while ((hook = ao2_iterator_next(&iter)));
-			ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
-			bridge_channel_unsuspend(bridge_channel);
-		}
-		ao2_iterator_destroy(&iter);
+	/* Run any leave hooks. */
+	iter = ao2_iterator_init(features->leave_hooks, AO2_ITERATOR_UNLINK);
+	hook = ao2_iterator_next(&iter);
+	if (hook) {
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		do {
+			hook->callback(bridge_channel->bridge, bridge_channel, hook->hook_pvt);
+			ao2_ref(hook, -1);
+		} while ((hook = ao2_iterator_next(&iter)));
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
 	}
+	ao2_iterator_destroy(&iter);
 }
 
 /*! \brief Join a channel to a bridge and handle anything the bridge may want us to do */
@@ -3449,7 +3421,7 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	struct ast_bridge_hook *hook;
 	int res;
 
-	if (!interval || !callback || !features || !features->interval_hooks) {
+	if (!features ||!interval || !callback) {
 		return -1;
 	}
 
@@ -3585,10 +3557,8 @@ static int hook_remove_on_pull_match(void *obj, void *arg, int flags)
  */
 static void hooks_remove_on_pull_container(struct ao2_container *hooks)
 {
-	if (hooks) {
-		ao2_callback(hooks, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE,
-			hook_remove_on_pull_match, NULL);
-	}
+	ao2_callback(hooks, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE,
+		hook_remove_on_pull_match, NULL);
 }
 
 /*!
@@ -3604,10 +3574,6 @@ static void hooks_remove_on_pull_heap(struct ast_heap *hooks)
 {
 	struct ast_bridge_hook *hook;
 	int changed;
-
-	if (!hooks) {
-		return;
-	}
 
 	ast_heap_wrlock(hooks);
 	do {
@@ -3637,10 +3603,6 @@ static void hooks_remove_on_pull_heap(struct ast_heap *hooks)
  */
 static void bridge_features_remove_on_pull(struct ast_bridge_features *features)
 {
-	if (!features) {
-		return;
-	}
-
 	hooks_remove_on_pull_container(features->dtmf_hooks);
 	hooks_remove_on_pull_container(features->hangup_hooks);
 	hooks_remove_on_pull_container(features->join_hooks);
