@@ -40,6 +40,9 @@
 		rewrite of SIP transfers
 
 
+Nordicom Norge AS, Kristiansand, Norway, for funding work with RTCP support
+and Call Quality Records.
+
 === WISHLIST CONTRIBUTERS ===
 
  We'd like to thank the following for contributing to our wishlist
@@ -153,6 +156,7 @@
 		transfer support, SIP presence support, SIP call state updates
 		(dialog-info), QUEUE_EXISTS function, device state provider
 		architecture, multiparking (together with mvanbaak), meetme and
+		RTCP improvements, Call Quality Records,
 		parking device states, MiniVM - the small voicemail system,
 		many documentation updates/corrections, and many bug fixes.
 		oej(AT)edvina.net, http://edvina.net
@@ -265,8 +269,8 @@
 		implementation Developers: Marc Blanchet, Simon Perreault and 
 		Jean-Philippe Dionne
 
-	* ClearIT AB, Sweden - res_mutestream, queue_exists and various other
-		patches (developed by oej)
+	* ClearIT AB, Sweden - res_mutestream, queue_exists, RTCP improvements
+		and various other patches (developed by oej)
 
 	* Despegar.com, Argentina - AstData API implementation, also sponsored
 		by Google as part of the gsoc/2009 program (developed by Eliel)
