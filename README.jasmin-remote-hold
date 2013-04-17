@@ -1,0 +1,25 @@
+Edvina AB
+Olle E. Johansson
+2013-04-17
+
+
+
+
+
+
+
+
+
+
+
+Remote hold support for Asterisk
+================================
+
+Asterisk currently supports playing music on hold when the incoming call on a bridge
+puts the call leg on hold. With the code in this branch, Asterisk will be able to
+put the device on hold using SIP offer/answer. 
+
+The configuration is available in the [general] section of sip.conf as well as
+per device.
+
+This work is funded by Inteno AB, Sweden.

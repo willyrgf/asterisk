@@ -1304,7 +1304,7 @@ static void try_suggested_sip_codec(struct sip_pvt *p);
 static const char *get_sdp_iterate(int* start, struct sip_request *req, const char *name);
 static char get_sdp_line(int *start, int stop, struct sip_request *req, const char **value);
 static int find_sdp(struct sip_request *req);
-static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action);
+static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action, int oastate);
 static int process_sdp_o(const char *o, struct sip_pvt *p);
 static int process_sdp_c(const char *c, struct ast_sockaddr *addr);
 static int process_sdp_a_sendonly(const char *a, int *sendonly);
@@ -9289,8 +9289,9 @@ static int sockaddr_is_null_or_any(const struct ast_sockaddr *addr)
 	If offer is rejected, we will not change any properties of the call
  	Return 0 on success, a negative value on errors.
 	Must be called after find_sdp().
+	OAstate is 1 for new offer from remote, 0 for answer
 */
-static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action)
+static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action, int oastate)
 {
 	/* Iterators for SDP parsing */
 	int start = req->sdp_start;
@@ -9958,6 +9959,11 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		ast_set_write_format(p->owner, p->owner->writeformat);
 	}
 
+	if (oastate != TRUE) {
+		/* If this is an SDP answer, don't bother with hold states */
+		/* This might be wrong though. */
+		return 0;
+	}
 	if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) && (!ast_sockaddr_isnull(sa) || !ast_sockaddr_isnull(vsa) || !ast_sockaddr_isnull(tsa) || !ast_sockaddr_isnull(isa)) && (!sendonly || sendonly == -1)) {
 		/* If we have been on hold and is now put off hold, make sure the other side understand it */
 		ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
@@ -20877,7 +20883,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		if (find_sdp(req)) {
 			if (p->invitestate != INV_CANCELLED)
 				p->invitestate = INV_EARLY_MEDIA;
-			res = process_sdp(p, req, SDP_T38_NONE);
+			res = process_sdp(p, req, SDP_T38_NONE, FALSE);
 			if (!req->ignore && p->owner) {
 				/* Queue a progress frame only if we have SDP in 180 or 182 */
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
@@ -20949,7 +20955,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		if (find_sdp(req)) {
 			if (p->invitestate != INV_CANCELLED)
 				p->invitestate = INV_EARLY_MEDIA;
-			res = process_sdp(p, req, SDP_T38_NONE);
+			res = process_sdp(p, req, SDP_T38_NONE, FALSE);
 			if (!req->ignore && p->owner) {
 				/* Queue a progress frame */
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
@@ -20972,7 +20978,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
 		p->authtries = 0;
 		if (find_sdp(req)) {
-			if ((res = process_sdp(p, req, SDP_T38_ACCEPT)) && !req->ignore)
+			if ((res = process_sdp(p, req, SDP_T38_ACCEPT, FALSE)) && !req->ignore)
 				if (!reinvite) {
 					/* This 200 OK's SDP is not acceptable, so we need to ack, then hangup */
 					/* For re-invites, we try to recover */
@@ -22106,7 +22112,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 					if (!req->ignore && sip_cancel_destroy(p))
 						ast_log(LOG_WARNING, "Unable to cancel SIP destruction.  Expect bad things.\n");
 					if (find_sdp(req))
-						process_sdp(p, req, SDP_T38_NONE);
+						process_sdp(p, req, SDP_T38_NONE, FALSE);
 					if (p->owner) {
 						/* Queue a progress frame */
 						ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
@@ -23362,7 +23368,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			}
 			/* Handle SDP here if we already have an owner */
 			if (find_sdp(req)) {
-				if (process_sdp(p, req, SDP_T38_INITIATE)) {
+				if (process_sdp(p, req, SDP_T38_INITIATE, TRUE)) {
 					if (!ast_strlen_zero(get_header(req, "Content-Encoding"))) {
 						/* Asterisk does not yet support any Content-Encoding methods.  Always
 						 * attempt to process the sdp, but return a 415 if a Content-Encoding header
@@ -23428,7 +23434,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 		/* We have a successful authentication, process the SDP portion if there is one */
 		if (find_sdp(req)) {
-			if (process_sdp(p, req, SDP_T38_INITIATE)) {
+			if (process_sdp(p, req, SDP_T38_INITIATE, TRUE)) {
 				/* Asterisk does not yet support any Content-Encoding methods.  Always
 				 * attempt to process the sdp, but return a 415 if a Content-Encoding header
 				 * was present after processing fails. */
@@ -26080,7 +26086,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 			p->pendinginvite = 0;
 			acked = __sip_ack(p, seqno, 1 /* response */, 0);
 			if (find_sdp(req)) {
-				if (process_sdp(p, req, SDP_T38_NONE)) {
+				if (process_sdp(p, req, SDP_T38_NONE, FALSE)) {
 					return -1;
 				}
 				if (ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
