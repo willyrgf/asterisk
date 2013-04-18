@@ -54,6 +54,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/devicestate.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/bridging.h"
 
 /*** DOCUMENTATION
 	<manager name="LocalOptimizeAway" language="en_US">
@@ -151,7 +152,6 @@ struct local_pvt {
 	struct ast_channel *chan;       /*!< Outbound channel - PBX is run here */
 };
 
-#define LOCAL_ALREADY_MASQED  (1 << 0) /*!< Already masqueraded */
 #define LOCAL_LAUNCHED_PBX    (1 << 1) /*!< PBX was launched */
 #define LOCAL_NO_OPTIMIZATION (1 << 2) /*!< Do not optimize using masquerading */
 #define LOCAL_MOH_PASSTHRU    (1 << 3) /*!< Pass through music on hold start/stop frames */
@@ -449,146 +449,32 @@ static int local_answer(struct ast_channel *ast)
 
 /*!
  * \internal
- * \note This function assumes that we're only called from the "outbound" local channel side
+ * \brief Check and optimize out the local channels between bridges.
+ * \since 12.0.0
  *
- * \note it is assummed p is locked and reffed before entering this function
+ * \param ast Channel writing a frame into the local channels.
+ * \param p Local channel private.
+ *
+ * \note It is assumed that ast is locked.
+ * \note It is assumed that p is locked.
+ *
+ * \retval 0 if local channels were not optimized out.
+ * \retval non-zero if local channels were optimized out.
  */
-static void check_bridge(struct ast_channel *ast, struct local_pvt *p)
+static int optimized_out(struct ast_channel *ast, struct local_pvt *p)
 {
-	struct ast_channel *owner;
-	struct ast_channel *chan;
-	struct ast_channel *bridged_chan;
-	struct ast_frame *f;
-
 	/* Do a few conditional checks early on just to see if this optimization is possible */
-	if (ast_test_flag(p, LOCAL_NO_OPTIMIZATION | LOCAL_ALREADY_MASQED)
-		|| !p->chan || !p->owner) {
-		return;
+	if (ast_test_flag(p, LOCAL_NO_OPTIMIZATION) || !p->chan || !p->owner) {
+		return 0;
 	}
-
-	/* Safely get the channel bridged to p->chan */
-	chan = ast_channel_ref(p->chan);
-
-	ao2_unlock(p); /* don't call bridged channel with the pvt locked */
-	bridged_chan = ast_bridged_channel(chan);
-	ao2_lock(p);
-
-	chan = ast_channel_unref(chan);
-
-	/* since we had to unlock p to get the bridged chan, validate our
-	 * data once again and verify the bridged channel is what we expect
-	 * it to be in order to perform this optimization */
-	if (ast_test_flag(p, LOCAL_NO_OPTIMIZATION | LOCAL_ALREADY_MASQED)
-		|| !p->chan || !p->owner
-		|| (ast_channel_internal_bridged_channel(p->chan) != bridged_chan)) {
-		return;
+	if (ast == p->owner) {
+		return ast_bridge_local_optimized_out(p->owner, p->chan);
 	}
-
-	/* only do the masquerade if we are being called on the outbound channel,
-	   if it has been bridged to another channel and if there are no pending
-	   frames on the owner channel (because they would be transferred to the
-	   outbound channel during the masquerade)
-	*/
-	if (!ast_channel_internal_bridged_channel(p->chan) /* Not ast_bridged_channel!  Only go one step! */
-		|| !AST_LIST_EMPTY(ast_channel_readq(p->owner))
-		|| ast != p->chan /* Sanity check (should always be false) */) {
-		return;
+	if (ast == p->chan) {
+		return ast_bridge_local_optimized_out(p->chan, p->owner);
 	}
-
-	/* Masquerade bridged channel into owner */
-	/* Lock everything we need, one by one, and give up if
-	   we can't get everything.  Remember, we'll get another
-	   chance in just a little bit */
-	if (ast_channel_trylock(ast_channel_internal_bridged_channel(p->chan))) {
-		return;
-	}
-	if (ast_check_hangup(ast_channel_internal_bridged_channel(p->chan))
-		|| ast_channel_trylock(p->owner)) {
-		ast_channel_unlock(ast_channel_internal_bridged_channel(p->chan));
-		return;
-	}
-
-	/*
-	 * At this point we have 4 locks:
-	 * p, p->chan (same as ast), p->chan->_bridge, p->owner
-	 *
-	 * Flush a voice or video frame on the outbound channel to make
-	 * the queue empty faster so we can get optimized out.
-	 */
-	f = AST_LIST_FIRST(ast_channel_readq(p->chan));
-	if (f && (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO)) {
-		AST_LIST_REMOVE_HEAD(ast_channel_readq(p->chan), frame_list);
-		ast_frfree(f);
-		f = AST_LIST_FIRST(ast_channel_readq(p->chan));
-	}
-
-	if (f
-		|| ast_check_hangup(p->owner)
-		|| ast_channel_masquerade(p->owner, ast_channel_internal_bridged_channel(p->chan))) {
-		ast_channel_unlock(p->owner);
-		ast_channel_unlock(ast_channel_internal_bridged_channel(p->chan));
-		return;
-	}
-
-	/* Masquerade got setup. */
-	ast_debug(4, "Masquerading %s <- %s\n",
-		ast_channel_name(p->owner),
-		ast_channel_name(ast_channel_internal_bridged_channel(p->chan)));
-	if (ast_channel_monitor(p->owner)
-		&& !ast_channel_monitor(ast_channel_internal_bridged_channel(p->chan))) {
-		struct ast_channel_monitor *tmp;
-
-		/* If a local channel is being monitored, we don't want a masquerade
-		 * to cause the monitor to go away. Since the masquerade swaps the monitors,
-		 * pre-swapping the monitors before the masquerade will ensure that the monitor
-		 * ends up where it is expected.
-		 */
-		tmp = ast_channel_monitor(p->owner);
-		ast_channel_monitor_set(p->owner, ast_channel_monitor(ast_channel_internal_bridged_channel(p->chan)));
-		ast_channel_monitor_set(ast_channel_internal_bridged_channel(p->chan), tmp);
-	}
-	if (ast_channel_audiohooks(p->chan)) {
-		struct ast_audiohook_list *audiohooks_swapper;
-
-		audiohooks_swapper = ast_channel_audiohooks(p->chan);
-		ast_channel_audiohooks_set(p->chan, ast_channel_audiohooks(p->owner));
-		ast_channel_audiohooks_set(p->owner, audiohooks_swapper);
-	}
-
-	/* If any Caller ID was set, preserve it after masquerade like above. We must check
-	 * to see if Caller ID was set because otherwise we'll mistakingly copy info not
-	 * set from the dialplan and will overwrite the real channel Caller ID. The reason
-	 * for this whole preswapping action is because the Caller ID is set on the channel
-	 * thread (which is the to be masqueraded away local channel) before both local
-	 * channels are optimized away.
-	 */
-	if (ast_channel_caller(p->owner)->id.name.valid || ast_channel_caller(p->owner)->id.number.valid
-		|| ast_channel_caller(p->owner)->id.subaddress.valid || ast_channel_caller(p->owner)->ani.name.valid
-		|| ast_channel_caller(p->owner)->ani.number.valid || ast_channel_caller(p->owner)->ani.subaddress.valid) {
-		SWAP(*ast_channel_caller(p->owner), *ast_channel_caller(ast_channel_internal_bridged_channel(p->chan)));
-	}
-	if (ast_channel_redirecting(p->owner)->from.name.valid || ast_channel_redirecting(p->owner)->from.number.valid
-		|| ast_channel_redirecting(p->owner)->from.subaddress.valid || ast_channel_redirecting(p->owner)->to.name.valid
-		|| ast_channel_redirecting(p->owner)->to.number.valid || ast_channel_redirecting(p->owner)->to.subaddress.valid) {
-		SWAP(*ast_channel_redirecting(p->owner), *ast_channel_redirecting(ast_channel_internal_bridged_channel(p->chan)));
-	}
-	if (ast_channel_dialed(p->owner)->number.str || ast_channel_dialed(p->owner)->subaddress.valid) {
-		SWAP(*ast_channel_dialed(p->owner), *ast_channel_dialed(ast_channel_internal_bridged_channel(p->chan)));
-	}
-	ast_app_group_update(p->chan, p->owner);
-	ast_set_flag(p, LOCAL_ALREADY_MASQED);
-
-	ast_channel_unlock(p->owner);
-	ast_channel_unlock(ast_channel_internal_bridged_channel(p->chan));
-
-	/* Do the masquerade now. */
-	owner = ast_channel_ref(p->owner);
-	ao2_unlock(p);
-	ast_channel_unlock(ast);
-	ast_do_masquerade(owner);
-	ast_channel_unref(owner);
-	ast_channel_lock(ast);
-	ao2_lock(p);
+	/* What is ast? */
+	return 0;
 }
 
 static struct ast_frame  *local_read(struct ast_channel *ast)
@@ -607,21 +493,19 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 	}
 
 	/* Just queue for delivery to the other side */
-	ao2_ref(p, 1); /* ref for local_queue_frame */
+	ao2_ref(p, 1);
 	ao2_lock(p);
-	isoutbound = IS_OUTBOUND(ast, p);
-
-	if (isoutbound
-		&& (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO)) {
-		check_bridge(ast, p);
-	}
-
-	if (!ast_test_flag(p, LOCAL_ALREADY_MASQED)) {
+	switch (f->frametype) {
+	case AST_FRAME_VOICE:
+	case AST_FRAME_VIDEO:
+		if (optimized_out(ast, p)) {
+			break;
+		}
+		/* fall through */
+	default:
+		isoutbound = IS_OUTBOUND(ast, p);
 		res = local_queue_frame(p, isoutbound, f, ast, 1);
-	} else {
-		ast_debug(1, "Not posting to '%s' queue since already masqueraded out\n",
-			ast_channel_name(ast));
-		res = 0;
+		break;
 	}
 	ao2_unlock(p);
 	ao2_ref(p, -1);

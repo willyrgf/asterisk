@@ -98,6 +98,15 @@ enum ast_bridge_channel_state {
 	AST_BRIDGE_CHANNEL_STATE_HANGUP,
 };
 
+enum ast_bridge_channel_thread_state {
+	/*! Bridge channel thread is idle/waiting. */
+	AST_BRIDGE_CHANNEL_THREAD_IDLE,
+	/*! Bridge channel thread is writing a normal/simple frame. */
+	AST_BRIDGE_CHANNEL_THREAD_SIMPLE,
+	/*! Bridge channel thread is processing a frame. */
+	AST_BRIDGE_CHANNEL_THREAD_FRAME,
+};
+
 struct ast_bridge_technology;
 struct ast_bridge;
 
@@ -186,6 +195,15 @@ struct ast_bridge_channel {
 	int alert_pipe[2];
 	/*! TRUE if the bridge channel thread is waiting on channels (needs to be atomically settable) */
 	int waiting;
+	/*!
+	 * \brief The bridge channel thread activity.
+	 *
+	 * \details Used by local channel optimization to determine if
+	 * the thread is in an acceptable state to optimize.
+	 *
+	 * \note Needs to be atomically settable.
+	 */
+	enum ast_bridge_channel_thread_state activity;
 };
 
 enum ast_bridge_action_type {
@@ -762,6 +780,20 @@ int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridg
 void ast_bridge_merge_inhibit(struct ast_bridge *bridge, int request);
 
 /*!
+ * \brief Adjust the bridge_channel's bridge merge inhibit request count.
+ * \since 12.0.0
+ *
+ * \param bridge_channel What to operate on.
+ * \param request Inhibit request increment.
+ *     (Positive to add requests.  Negative to remove requests.)
+ *
+ * \note This API call is meant for internal bridging operations.
+ *
+ * \retval bridge adjusted merge inhibit with reference count.
+ */
+struct ast_bridge *ast_bridge_channel_merge_inhibit(struct ast_bridge_channel *bridge_channel, int request);
+
+/*!
  * \brief Suspend a channel temporarily from a bridge
  *
  * \param bridge Bridge to suspend the channel from
@@ -807,6 +839,20 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan);
  *       Doing so may result in bad things happening.
  */
 int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
+
+/*!
+ * \brief Check and optimize out the local channels between bridges.
+ * \since 12.0.0
+ *
+ * \param chan Local channel writing a frame into the channel driver.
+ * \param peer Other local channel in the pair.
+ *
+ * \note It is assumed that chan is locked.
+ *
+ * \retval 0 if local channels were not optimized out.
+ * \retval non-zero if local channels were optimized out.
+ */
+int ast_bridge_local_optimized_out(struct ast_channel *chan, struct ast_channel *peer);
 
 /*!
  * \brief Try locking the bridge_channel.
