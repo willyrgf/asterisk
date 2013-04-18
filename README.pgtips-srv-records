@@ -1,0 +1,41 @@
+Edvina AB
+Olle E. Johansson
+
+Project start: 2013-04-18
+
+
+
+
+
+
+
+
+SRV Support in the SIP channel of Asterisk
+==========================================
+
+
+The Asterisk SIP channel lacks full support of RFC 3263, Locating SIP services. This project
+aims at fixing that.
+
+For every transaction, a SIP client needs to build a list of SIP servers as discovered
+by DNS lookup. The list needs to be prioritized and handled according to a set of
+rules set by RFC 3263 and the RFCs referred to by that document.
+
+- DNS Load balancing
+  For servers in the same priority, select one based on the weight distribution indicated
+  in the records
+- DNS priority and failover
+  Start with lowest priority and work upwards in the set of records.
+
+In addition, address family needs to be handled properly. An IPv4 server needs to ignore
+hosts with only IPv6 records and move on in the process of selecting a server and 
+vice versa for IPv6 only hosts. 
+
+Happy Earballs
+==============
+Dual stack hosts needs to contact both address families at the same time to minimize timeout effects on caller's
+call setup time.
+This is not in scope for this project. Work is in progress in the SIP Forum IPv6 wg
+to define a process for this situation.
+
+This work is funded by Inteno, Sweden.
