@@ -716,8 +716,8 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
 /*!
  * \brief Merge two bridges together
  *
- * \param bridge1 First bridge
- * \param bridge2 Second bridge
+ * \param dst_bridge Destination bridge of merge.
+ * \param src_bridge Source bridge of merge.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -725,18 +725,18 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
  * Example usage:
  *
  * \code
- * ast_bridge_merge(bridge1, bridge2);
+ * ast_bridge_merge(dst_bridge, src_bridge);
  * \endcode
  *
- * This merges the bridge pointed to by bridge2 into the bridge
- * pointed to by bridge1.  In reality all of the channels in
- * bridge2 are moved to bridge1.
+ * This merges the bridge pointed to by src_bridge into the bridge
+ * pointed to by dst_bridge.  In reality all of the channels in
+ * src_bridge are moved to dst_bridge.
  *
- * \note The second bridge has no active channels in it when
- * this operation is completed.  The caller must explicitly call
- * ast_bridge_destroy().
+ * \note The source bridge has no active channels in it when
+ * this operation is completed.  The caller should explicitly
+ * call ast_bridge_destroy().
  */
-int ast_bridge_merge(struct ast_bridge *bridge1, struct ast_bridge *bridge2);
+int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge);
 
 /*!
  * \brief Adjust the bridge merge inhibit request count.

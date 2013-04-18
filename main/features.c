@@ -4750,7 +4750,6 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 	/* Put peer into the bridge */
 	if (ast_bridge_impart(bridge, peer, NULL, peer_features, 1)) {
 		ast_bridge_destroy(bridge);
-		ast_bridge_features_destroy(peer_features);
 		ast_bridge_features_cleanup(&chan_features);
 		bridge_failed_peer_goto(chan, peer);
 		return -1;
