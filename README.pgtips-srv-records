@@ -38,4 +38,32 @@ call setup time.
 This is not in scope for this project. Work is in progress in the SIP Forum IPv6 wg
 to define a process for this situation.
 
-This work is funded by Inteno, Sweden.
+This work is funded by Inteno Broadband Solutions AB, Sweden. http://www.intenogroup.com
+
+Asterisk changes (brainstorm suggestion)
+========================================
+
+- Make sure that the SIP channel gets a list on a SRV lookup, not a single host.
+- Add failover based on that list
+- Make sure the list is searched on every transaction and have failover in a call
+
+Peer matching
+-------------
+This is a bit more interesting. If you connect to a service provider and add
+this to sip.conf
+
+register=user:password@serviceprovider/1234
+
+
+[serviceprovider]
+type=peer
+host=serviceproviderdomain.tld
+context=bazinga
+
+Yyou expect to be able to receive calls from the service provider
+in that peer. Now the service provider has a list of servers using IPv4
+and IPv6 in the SRV records for that name. Should the Asterisk SIP channel
+match the full list?
+Currently Asterisk will resolve to one IP address and use that for matching
+of incoming calls, possibly deny calls from servers that does not match.
+This is NOT the expected solution.
