@@ -210,10 +210,7 @@ void ast_bridge_channel_lock_bridge(struct ast_bridge_channel *bridge_channel)
 		ao2_ref(bridge, +1);
 		ast_bridge_channel_unlock(bridge_channel);
 
-		/*
-		 * The bridge pointer cannot change while the bridge or
-		 * bridge_channel is locked.
-		 */
+		/* Lock the bridge and see if it is still the bridge we need to lock. */
 		ast_bridge_lock(bridge);
 		if (bridge == bridge_channel->bridge) {
 			ao2_ref(bridge, -1);
@@ -419,6 +416,10 @@ static struct ast_bridge_channel *find_bridge_channel(struct ast_bridge *bridge,
 static void bridge_dissolve(struct ast_bridge *bridge)
 {
 	struct ast_bridge_channel *bridge_channel;
+	struct ast_frame action = {
+		.frametype = AST_FRAME_BRIDGE_ACTION,
+		.subclass.integer = AST_BRIDGE_ACTION_DEFERRED_DISSOLVING,
+	};
 
 	if (bridge->dissolved) {
 		return;
@@ -431,7 +432,9 @@ static void bridge_dissolve(struct ast_bridge *bridge)
 	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 	}
-	bridge->v_table->dissolving(bridge);
+
+	/* Must defer dissolving bridge because it is already locked. */
+	ast_bridge_queue_action(bridge, &action);
 }
 
 /*!
@@ -686,6 +689,12 @@ void ast_bridge_notify_talking(struct ast_bridge_channel *bridge_channel, int st
 static void bridge_channel_write_frame(struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
 	ast_bridge_channel_lock_bridge(bridge_channel);
+/*
+ * BUGBUG need to implement a deferred write queue for when there is no peer channel in the bridge (yet or it was kicked).
+ *
+ * The tech decides if a frame needs to be pushed back for deferral.
+ * simple_bridge/native_bridge are likely the only techs that will do this.
+ */
 	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
 	ast_bridge_unlock(bridge_channel->bridge);
 }
@@ -1111,6 +1120,11 @@ static void bridge_action_bridge(struct ast_bridge *bridge, struct ast_frame *ac
 	case AST_BRIDGE_ACTION_DEFERRED_TECH_DESTROY:
 		ast_bridge_unlock(bridge);
 		bridge_tech_deferred_destroy(bridge, action);
+		ast_bridge_lock(bridge);
+		break;
+	case AST_BRIDGE_ACTION_DEFERRED_DISSOLVING:
+		ast_bridge_unlock(bridge);
+		bridge->v_table->dissolving(bridge);
 		ast_bridge_lock(bridge);
 		break;
 	default:
@@ -3010,7 +3024,10 @@ int ast_bridge_depart(struct ast_channel *chan)
 		return -1;
 	}
 
-	/* We are claiming the reference held by the depart thread. */
+	/*
+	 * We are claiming the reference held by the depart bridge
+	 * channel thread.
+	 */
 
 	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 

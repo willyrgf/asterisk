@@ -130,7 +130,12 @@ struct ast_bridge_channel {
 	struct ast_channel *chan;
 	/*! Asterisk channel we are swapping with (if swapping) */
 	struct ast_channel *swap;
-	/*! Bridge this channel is participating in */
+	/*!
+	 * \brief Bridge this channel is participating in
+	 *
+	 * \note The bridge pointer cannot change while the bridge or
+	 * bridge_channel is locked.
+	 */
 	struct ast_bridge *bridge;
 	/*!
 	 * \brief Bridge class private channel data.
@@ -150,6 +155,7 @@ struct ast_bridge_channel {
 	void *tech_pvt;
 	/*! Thread handling the bridged channel (Needed by ast_bridge_depart) */
 	pthread_t thread;
+	/* v-- These flags change while the bridge is locked or before the channel is in the bridge. */
 	/*! TRUE if the channel is in a bridge. */
 	unsigned int in_bridge:1;
 	/*! TRUE if the channel just joined the bridge. */
@@ -158,6 +164,7 @@ struct ast_bridge_channel {
 	unsigned int suspended:1;
 	/*! TRUE if the channel must wait for an ast_bridge_depart to reclaim the channel. */
 	unsigned int depart_wait:1;
+	/* ^-- These flags change while the bridge is locked or before the channel is in the bridge. */
 	/*! Features structure for features that are specific to this channel */
 	struct ast_bridge_features *features;
 	/*! Technology optimization parameters used by bridging technologies capable of
@@ -205,6 +212,8 @@ enum ast_bridge_action_type {
 
 	/*! Bridge reconfiguration deferred technology destruction. */
 	AST_BRIDGE_ACTION_DEFERRED_TECH_DESTROY = 1000,
+	/*! Bridge deferred dissolving. */
+	AST_BRIDGE_ACTION_DEFERRED_DISSOLVING,
 };
 
 enum ast_bridge_video_mode_type {
@@ -261,6 +270,8 @@ typedef void (*ast_bridge_destructor_fn)(struct ast_bridge *self);
  * \details
  * The bridge is being dissolved.  Remove any external
  * references to the bridge so it can be destroyed.
+ *
+ * \note On entry, self must NOT be locked.
  *
  * \return Nothing
  */
@@ -626,7 +637,7 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  *
  * \note The features parameter must be NULL or obtained by
  * ast_bridge_features_new().  You must not dereference features
- * after calling.
+ * after calling even if the call fails.
  *
  * \retval 0 on success
  * \retval -1 on failure
