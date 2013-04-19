@@ -4379,6 +4379,13 @@ static int app_dtmf_feature_hook(struct ast_bridge *bridge, struct ast_bridge_ch
 		run_it = ast_bridge_channel_run_app;
 	}
 
+/*
+ * BUGBUG need to pass to run_it the triggering channel name so DYNAMIC_WHO_TRIGGERED can be set on the channel when it is run.
+ *
+ * This would replace DYNAMIC_PEERNAME which is redundant with
+ * BRIDGEPEER anyway.  The value of DYNAMIC_WHO_TRIGGERED is
+ * really useful in the case of a multi-party bridge.
+ */
 	run_it(bridge_channel, pvt->app_name,
 		pvt->app_args_offset ? &pvt->app_name[pvt->app_args_offset] : NULL,
 		pvt->moh_offset ? &pvt->app_name[pvt->moh_offset] : NULL);
@@ -4456,6 +4463,7 @@ static int setup_bridge_features_dynamic(struct ast_bridge_features *features, s
 		return 0;
 	}
 
+/* BUGBUG need to pass to add_dynamic_dtmf_hook the applicationmap name (feature->sname) so the DYNAMIC_FEATURENAME can be set on the channel when it is run. */
 	res = 0;
 	while ((tok = strsep(&dynamic_features, "#"))) {
 		struct feature_group *fg;
@@ -6041,6 +6049,10 @@ static void process_applicationmap_line(struct ast_variable *var)
 		return;
 	}
 
+	/*
+	 * We will parse and require correct syntax for the ActivatedBy
+	 * option, but the ActivatedBy option is not honored anymore.
+	 */
 	if (ast_strlen_zero(args.activatedby)) {
 		ast_set_flag(feature, AST_FEATURE_FLAG_BYBOTH);
 	} else if (!strcasecmp(args.activatedby, "caller")) {

@@ -81,6 +81,12 @@ Dialplan:
    Uppercase variants apply them to the calling party while lowercase variants
    apply them to the called party.
 
+Features:
+ - The features.conf [applicationmap] <FeatureName>  ActivatedBy option is
+   no longer honored.  The feature is activated by which channel
+   DYNAMIC_FEATURES includes the feature is on.  Use predial to set different
+   values of DYNAMIC_FEATURES on the channels
+
 From 10 to 11:
 
 Voicemail:
