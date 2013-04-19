@@ -152,9 +152,9 @@ struct local_pvt {
 	struct ast_channel *chan;       /*!< Outbound channel - PBX is run here */
 };
 
-#define LOCAL_LAUNCHED_PBX    (1 << 1) /*!< PBX was launched */
-#define LOCAL_NO_OPTIMIZATION (1 << 2) /*!< Do not optimize using masquerading */
-#define LOCAL_MOH_PASSTHRU    (1 << 3) /*!< Pass through music on hold start/stop frames */
+#define LOCAL_LAUNCHED_PBX    (1 << 0) /*!< PBX was launched */
+#define LOCAL_NO_OPTIMIZATION (1 << 1) /*!< Do not optimize using masquerading */
+#define LOCAL_MOH_PASSTHRU    (1 << 2) /*!< Pass through music on hold start/stop frames */
 
 /*!
  * \brief Send a pvt in with no locks held and get all locks
@@ -461,7 +461,7 @@ static int local_answer(struct ast_channel *ast)
  * \retval 0 if local channels were not optimized out.
  * \retval non-zero if local channels were optimized out.
  */
-static int optimized_out(struct ast_channel *ast, struct local_pvt *p)
+static int got_optimized_out(struct ast_channel *ast, struct local_pvt *p)
 {
 	/* Do a few conditional checks early on just to see if this optimization is possible */
 	if (ast_test_flag(p, LOCAL_NO_OPTIMIZATION) || !p->chan || !p->owner) {
@@ -473,7 +473,7 @@ static int optimized_out(struct ast_channel *ast, struct local_pvt *p)
 	if (ast == p->chan) {
 		return ast_bridge_local_optimized_out(p->chan, p->owner);
 	}
-	/* What is ast? */
+	/* ast is not valid to optimize. */
 	return 0;
 }
 
@@ -486,7 +486,6 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 {
 	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res = -1;
-	int isoutbound;
 
 	if (!p) {
 		return -1;
@@ -498,13 +497,12 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 	switch (f->frametype) {
 	case AST_FRAME_VOICE:
 	case AST_FRAME_VIDEO:
-		if (optimized_out(ast, p)) {
+		if (got_optimized_out(ast, p)) {
 			break;
 		}
 		/* fall through */
 	default:
-		isoutbound = IS_OUTBOUND(ast, p);
-		res = local_queue_frame(p, isoutbound, f, ast, 1);
+		res = local_queue_frame(p, IS_OUTBOUND(ast, p), f, ast, 1);
 		break;
 	}
 	ao2_unlock(p);

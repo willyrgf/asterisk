@@ -3178,12 +3178,12 @@ int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridg
  *
  * \param chan Local channel writing a frame into the channel driver.
  *
- * \note It is assumed that chan is locked.
+ * \note It is assumed that chan is already locked.
  *
  * \retval bridge on success with bridge and bridge_channel locked.
  * \retval NULL if cannot do optimization now.
  */
-static struct ast_bridge *lock_local_chan(struct ast_channel *chan)
+static struct ast_bridge *optimize_lock_chan_stack(struct ast_channel *chan)
 {
 	struct ast_bridge *bridge;
 	struct ast_bridge_channel *bridge_channel;
@@ -3223,7 +3223,7 @@ static struct ast_bridge *lock_local_chan(struct ast_channel *chan)
  * \retval bridge on success with bridge, bridge_channel, and peer locked.
  * \retval NULL if cannot do optimization now.
  */
-static struct ast_bridge *lock_local_peer(struct ast_channel *peer)
+static struct ast_bridge *optimize_lock_peer_stack(struct ast_channel *peer)
 {
 	struct ast_bridge *bridge;
 	struct ast_bridge_channel *bridge_channel;
@@ -3268,13 +3268,13 @@ int ast_bridge_local_optimized_out(struct ast_channel *chan, struct ast_channel 
 	struct ast_bridge_channel *peer_bridge_channel;
 	int res = 0;
 
-	chan_bridge = lock_local_chan(chan);
+	chan_bridge = optimize_lock_chan_stack(chan);
 	if (!chan_bridge) {
 		return res;
 	}
 	chan_bridge_channel = ast_channel_internal_bridge_channel(chan);
 
-	peer_bridge = lock_local_peer(peer);
+	peer_bridge = optimize_lock_peer_stack(peer);
 	if (peer_bridge) {
 		struct ast_bridge *dst_bridge = NULL;
 		struct ast_bridge *src_bridge = NULL;

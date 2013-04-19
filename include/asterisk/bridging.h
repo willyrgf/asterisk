@@ -847,7 +847,7 @@ int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
  * \param chan Local channel writing a frame into the channel driver.
  * \param peer Other local channel in the pair.
  *
- * \note It is assumed that chan is locked.
+ * \note It is assumed that chan is already locked.
  *
  * \retval 0 if local channels were not optimized out.
  * \retval non-zero if local channels were optimized out.
