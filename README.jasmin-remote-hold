@@ -1,25 +1,23 @@
 Edvina AB
 Olle E. Johansson
-2013-04-17
 
 
 
 
 
+SIP Remote Hold
+===============
 
+When a bridged channel is put on hold, Asterisk currently maintains the other channel by playing
+music on hold music. In some cases it's a better solution to forward the hold, especially when
+Asterisk operates as an end point, a phone or when one has multiple Asterisks and instead of
+forwarding audio frames wants the server closest to the other end point to generate the music.
 
+In this patch, a new configuration setting is introduced in sip.conf:
 
+remotehold = yes | no
 
+This setting applies to the [general] section as well as to individual devices or
+trunks. Wehn this setting is on, a channel will be put on hold by sending a re-invite
+with an SDP containing a=sendonly instead of generating music.
 
-
-Remote hold support for Asterisk
-================================
-
-Asterisk currently supports playing music on hold when the incoming call on a bridge
-puts the call leg on hold. With the code in this branch, Asterisk will be able to
-put the device on hold using SIP offer/answer. 
-
-The configuration is available in the [general] section of sip.conf as well as
-per device.
-
-This work is funded by Inteno AB, Sweden.
