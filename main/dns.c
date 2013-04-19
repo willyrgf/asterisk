@@ -284,6 +284,8 @@ int ast_search_dns(void *context,
 			ret = 0;
 		} else
 			ret = 1;
+	} else {
+		ast_debug(1, "DNS lookup error %d for %s\n", dname, res);
 	}
 #ifdef HAVE_RES_NINIT
 #ifdef HAVE_RES_NDESTROY

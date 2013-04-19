@@ -57,6 +57,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define T_SRV 33
 #endif
 
+/*! \brief The list of SRV record entries, straight from the DNS response 
+ */
 struct srv_entry {
 	unsigned short priority;
 	unsigned short weight;

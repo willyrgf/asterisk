@@ -657,10 +657,13 @@ struct sip_proxy {
 	char name[MAXHOSTNAMELEN];      /*!< DNS name of domain/host or IP */
 	struct ast_sockaddr ip;          /*!< Currently used IP address and port */
 	int port;
+	unsigned int priority;			/*!< Priority from SRV */
+	unsigned int weight;			/*!< Weight from SRV */
 	time_t last_dnsupdate;          /*!< When this was resolved */
-	enum sip_transport transport;
+	enum sip_transport transport;	/*!< TCP, UDP or TCP/TLS - possibly WS in the future */
 	int force;                      /*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
 	/* Room for a SRV record chain based on the name */
+	struct sip_proxy *next;
 };
 
 /*! \brief argument for the 'show channels|subscriptions' callback. */
