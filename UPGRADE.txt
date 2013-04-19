@@ -69,6 +69,9 @@ chan_dahdi:
    pauses dialing for one second.
  - The default for inband_on_proceeding has changed to no.
 
+chan_local:
+ - The /b option is removed.
+
 Dialplan:
  - All channel and global variable names are evaluated in a case-sensitive manner.
    In previous versions of Asterisk, variables created and evaluated in the
