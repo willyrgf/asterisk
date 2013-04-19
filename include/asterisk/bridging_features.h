@@ -42,9 +42,14 @@ enum ast_bridge_feature_flags {
 	AST_BRIDGE_FLAG_MERGE_INHIBIT_TO = (1 << 4),
 	/*! Bridge channels can be moved to another bridge only by masquerade (ConfBridge) */
 	AST_BRIDGE_FLAG_MASQUERADE_ONLY = (1 << 5),
+};
 
+/*! \brief Flags used for per bridge channel features */
+enum ast_bridge_channel_feature_flags {
+	/*! Upon channel hangup all bridge participants should be kicked out. */
+	AST_BRIDGE_CHANNEL_FLAG_DISSOLVE_HANGUP = (1 << 0),
 	/*! This channel leaves the bridge if all participants have this flag set. */
-	AST_BRIDGE_FLAG_LONELY = (1 << 10),
+	AST_BRIDGE_CHANNEL_FLAG_LONELY = (1 << 1),
 };
 
 /*! \brief Built in DTMF features */
@@ -608,9 +613,9 @@ void ast_bridge_features_limits_destroy(struct ast_bridge_features_limits *limit
 int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits, int remove_on_pull);
 
 /*!
- * \brief Set a flag on a bridge features structure
+ * \brief Set a flag on a bridge channel features structure
  *
- * \param features Bridge features structure
+ * \param features Bridge channel features structure
  * \param flag Flag to enable
  *
  * \return Nothing
@@ -620,13 +625,13 @@ int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct 
  * \code
  * struct ast_bridge_features features;
  * ast_bridge_features_init(&features);
- * ast_bridge_features_set_flag(&features, AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
+ * ast_bridge_features_set_flag(&features, AST_BRIDGE_CHANNEL_FLAG_DISSOLVE_HANGUP);
  * \endcode
  *
- * This sets the AST_BRIDGE_FLAG_DISSOLVE_HANGUP feature to be
- * enabled on the features structure 'features'.
+ * This sets the AST_BRIDGE_CHANNEL_FLAG_DISSOLVE_HANGUP feature
+ * to be enabled on the features structure 'features'.
  */
-void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast_bridge_feature_flags flag);
+void ast_bridge_features_set_flag(struct ast_bridge_features *features, unsigned int flag);
 
 /*!
  * \brief Initialize bridge features structure

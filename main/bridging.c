@@ -469,7 +469,7 @@ static void bridge_dissolve_check(struct ast_bridge_channel *bridge_channel)
 		if (ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_DISSOLVE_HANGUP)
 			|| (bridge_channel->features->usable
 				&& ast_test_flag(&bridge_channel->features->feature_flags,
-					AST_BRIDGE_FLAG_DISSOLVE_HANGUP))) {
+					AST_BRIDGE_CHANNEL_FLAG_DISSOLVE_HANGUP))) {
 			bridge_dissolve(bridge);
 			return;
 		}
@@ -1245,7 +1245,7 @@ struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods
 	return bridge;
 }
 
-struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabilities, int flags)
+struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabilities, unsigned int flags)
 {
 	if (!self) {
 		return NULL;
@@ -1406,7 +1406,7 @@ struct ast_bridge_methods ast_bridge_base_v_table = {
 	.notify_masquerade = bridge_base_notify_masquerade,
 };
 
-struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags)
+struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, unsigned int flags)
 {
 	void *bridge;
 
@@ -3752,7 +3752,7 @@ int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct 
 	return -1;
 }
 
-void ast_bridge_features_set_flag(struct ast_bridge_features *features, enum ast_bridge_feature_flags flag)
+void ast_bridge_features_set_flag(struct ast_bridge_features *features, unsigned int flag)
 {
 	ast_set_flag(&features->feature_flags, flag);
 	features->usable = 1;

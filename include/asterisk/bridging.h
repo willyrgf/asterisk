@@ -498,7 +498,7 @@ extern struct ast_bridge_methods ast_bridge_base_v_table;
  * This creates a no frills two party bridge that will be
  * destroyed once one of the channels hangs up.
  */
-struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabilities, int flags);
+struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabilities, unsigned int flags);
 
 /*!
  * \brief Create a new base class bridge
@@ -519,7 +519,7 @@ struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabi
  * This creates a no frills two party bridge that will be
  * destroyed once one of the channels hangs up.
  */
-struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, int flags);
+struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, unsigned int flags);
 
 /*!
  * \brief Try locking the bridge.
