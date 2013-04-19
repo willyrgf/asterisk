@@ -1,0 +1,756 @@
+Index: README.earl-grey
+===================================================================
+--- README.earl-grey	(.../branches/1.8)	(revision 0)
++++ README.earl-grey	(.../team/oej/earl-grey-sip2cause-configurable-1.8)	(revision 383664)
+@@ -0,0 +1,32 @@
++Edvina AB
++Olle E. Johansson
++
++
++Project start: 2012-11-28
++
++
++
++Earl Grey  - configuring sip2cause tables
++==========================================
++
++Asterisk internally use ISDN cause codes. In the SIP channel, we do have two
++tables - one for translating from an ISDN cause code at hangup, to a SIP response
++code and one for translating the other way. In some edge cases, not very common,
++one wants to modify these tables.
++
++This branch will make the table a configurable option and add a new configuration
++file, sip2cause.conf, that is not needed in normal usage of Asterisk.
++
++When do you need this?
++======================
++If you operate a SIP2ISDN gateway and need to fine-tune conversion between ISDN
++cause codes and Asterisk SIP channel responses, you need a dynamic way to 
++handle the conversion. 
++
++If you operate a SIP server outside of Asterisk, you might want to add extra
++non-standard SIP response codes that is converted to a separate cause code
++that you handle in the dial plan.
++
++Please note the warning in sip2cause.conf.sample. Changing the conversion table
++can lead to all kinds of damage to your Asterisk installation. In most cases,
++no animals will be hurt.
+
+Egenskapsändringar för: README.earl-grey
+___________________________________________________________________
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 383664)
++++ channels/chan_sip.c	(.../team/oej/earl-grey-sip2cause-configurable-1.8)	(revision 383664)
+@@ -271,6 +271,7 @@
+ #include "sip/include/sip_utils.h"
+ #include "sip/include/srtp.h"
+ #include "sip/include/sdp_crypto.h"
++#include "sip/include/sip2cause.h"
+ #include "asterisk/ccss.h"
+ #include "asterisk/xml.h"
+ #include "sip/include/dialog.h"
+@@ -578,6 +579,8 @@
+ 
+ static const char config[] = "sip.conf";                /*!< Main configuration file */
+ static const char notify_config[] = "sip_notify.conf";  /*!< Configuration file for sending Notify with CLI commands to reconfigure or reboot phones */
++static const char sip2cause_config[] = "sip2cause.conf";  /*!< Configuration file for configuration of sip2cause conversions */
++static struct ast_config *sip2cause = NULL;    /*!< Configuration file for sip2cause conversions */
+ 
+ /*! \brief Readable descriptions of device states.
+  *  \note Should be aligned to above table as index */
+@@ -684,6 +687,7 @@
+ static char default_notifymime[AST_MAX_EXTENSION]; /*!< Default MIME media type for MWI notify messages */
+ static char default_vmexten[AST_MAX_EXTENSION];    /*!< Default From Username on MWI updates */
+ static int default_qualify;                        /*!< Default Qualify= setting */
++static int private_sip2cause;			   /*!< Indication of private sip2cause conversion tables */
+ static char default_mohinterpret[MAX_MUSICCLASS];  /*!< Global setting for moh class to use when put on hold */
+ static char default_mohsuggest[MAX_MUSICCLASS];    /*!< Global setting for moh class to suggest when putting
+                                                     *   a bridged channel on hold */
+@@ -6442,176 +6446,7 @@
+ 	return NULL;
+ }
+ 
+-/*! \brief Convert SIP hangup causes to Asterisk hangup causes */
+-int hangup_sip2cause(int cause)
+-{
+-	/* Possible values taken from causes.h */
+ 
+-	switch(cause) {
+-		case 401:	/* Unauthorized */
+-			return AST_CAUSE_CALL_REJECTED;
+-		case 403:	/* Not found */
+-			return AST_CAUSE_CALL_REJECTED;
+-		case 404:	/* Not found */
+-			return AST_CAUSE_UNALLOCATED;
+-		case 405:	/* Method not allowed */
+-			return AST_CAUSE_INTERWORKING;
+-		case 407:	/* Proxy authentication required */
+-			return AST_CAUSE_CALL_REJECTED;
+-		case 408:	/* No reaction */
+-			return AST_CAUSE_NO_USER_RESPONSE;
+-		case 409:	/* Conflict */
+-			return AST_CAUSE_NORMAL_TEMPORARY_FAILURE;
+-		case 410:	/* Gone */
+-			return AST_CAUSE_NUMBER_CHANGED;
+-		case 411:	/* Length required */
+-			return AST_CAUSE_INTERWORKING;
+-		case 413:	/* Request entity too large */
+-			return AST_CAUSE_INTERWORKING;
+-		case 414:	/* Request URI too large */
+-			return AST_CAUSE_INTERWORKING;
+-		case 415:	/* Unsupported media type */
+-			return AST_CAUSE_INTERWORKING;
+-		case 420:	/* Bad extension */
+-			return AST_CAUSE_NO_ROUTE_DESTINATION;
+-		case 480:	/* No answer */
+-			return AST_CAUSE_NO_ANSWER;
+-		case 481:	/* No answer */
+-			return AST_CAUSE_INTERWORKING;
+-		case 482:	/* Loop detected */
+-			return AST_CAUSE_INTERWORKING;
+-		case 483:	/* Too many hops */
+-			return AST_CAUSE_NO_ANSWER;
+-		case 484:	/* Address incomplete */
+-			return AST_CAUSE_INVALID_NUMBER_FORMAT;
+-		case 485:	/* Ambiguous */
+-			return AST_CAUSE_UNALLOCATED;
+-		case 486:	/* Busy everywhere */
+-			return AST_CAUSE_BUSY;
+-		case 487:	/* Request terminated */
+-			return AST_CAUSE_INTERWORKING;
+-		case 488:	/* No codecs approved */
+-			return AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+-		case 491:	/* Request pending */
+-			return AST_CAUSE_INTERWORKING;
+-		case 493:	/* Undecipherable */
+-			return AST_CAUSE_INTERWORKING;
+-		case 500:	/* Server internal failure */
+-			return AST_CAUSE_FAILURE;
+-		case 501:	/* Call rejected */
+-			return AST_CAUSE_FACILITY_REJECTED;
+-		case 502:
+-			return AST_CAUSE_DESTINATION_OUT_OF_ORDER;
+-		case 503:	/* Service unavailable */
+-			return AST_CAUSE_CONGESTION;
+-		case 504:	/* Gateway timeout */
+-			return AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE;
+-		case 505:	/* SIP version not supported */
+-			return AST_CAUSE_INTERWORKING;
+-		case 600:	/* Busy everywhere */
+-			return AST_CAUSE_USER_BUSY;
+-		case 603:	/* Decline */
+-			return AST_CAUSE_CALL_REJECTED;
+-		case 604:	/* Does not exist anywhere */
+-			return AST_CAUSE_UNALLOCATED;
+-		case 606:	/* Not acceptable */
+-			return AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+-		default:
+-			if (cause < 500 && cause >= 400) {
+-				/* 4xx class error that is unknown - someting wrong with our request */
+-				return AST_CAUSE_INTERWORKING;
+-			} else if (cause < 600 && cause >= 500) {
+-				/* 5xx class error - problem in the remote end */
+-				return AST_CAUSE_CONGESTION;
+-			} else if (cause < 700 && cause >= 600) {
+-				/* 6xx - global errors in the 4xx class */
+-				return AST_CAUSE_INTERWORKING;
+-			}
+-			return AST_CAUSE_NORMAL;
+-	}
+-	/* Never reached */
+-	return 0;
+-}
+-
+-/*! \brief Convert Asterisk hangup causes to SIP codes
+-\verbatim
+- Possible values from causes.h
+-        AST_CAUSE_NOTDEFINED    AST_CAUSE_NORMAL        AST_CAUSE_BUSY
+-        AST_CAUSE_FAILURE       AST_CAUSE_CONGESTION    AST_CAUSE_UNALLOCATED
+-
+-	In addition to these, a lot of PRI codes is defined in causes.h
+-	...should we take care of them too ?
+-
+-	Quote RFC 3398
+-
+-   ISUP Cause value                        SIP response
+-   ----------------                        ------------
+-   1  unallocated number                   404 Not Found
+-   2  no route to network                  404 Not found
+-   3  no route to destination              404 Not found
+-   16 normal call clearing                 --- (*)
+-   17 user busy                            486 Busy here
+-   18 no user responding                   408 Request Timeout
+-   19 no answer from the user              480 Temporarily unavailable
+-   20 subscriber absent                    480 Temporarily unavailable
+-   21 call rejected                        403 Forbidden (+)
+-   22 number changed (w/o diagnostic)      410 Gone
+-   22 number changed (w/ diagnostic)       301 Moved Permanently
+-   23 redirection to new destination       410 Gone
+-   26 non-selected user clearing           404 Not Found (=)
+-   27 destination out of order             502 Bad Gateway
+-   28 address incomplete                   484 Address incomplete
+-   29 facility rejected                    501 Not implemented
+-   31 normal unspecified                   480 Temporarily unavailable
+-\endverbatim
+-*/
+-const char *hangup_cause2sip(int cause)
+-{
+-	switch (cause) {
+-		case AST_CAUSE_UNALLOCATED:		/* 1 */
+-		case AST_CAUSE_NO_ROUTE_DESTINATION:	/* 3 IAX2: Can't find extension in context */
+-		case AST_CAUSE_NO_ROUTE_TRANSIT_NET:	/* 2 */
+-			return "404 Not Found";
+-		case AST_CAUSE_CONGESTION:		/* 34 */
+-		case AST_CAUSE_SWITCH_CONGESTION:	/* 42 */
+-			return "503 Service Unavailable";
+-		case AST_CAUSE_NO_USER_RESPONSE:	/* 18 */
+-			return "408 Request Timeout";
+-		case AST_CAUSE_NO_ANSWER:		/* 19 */
+-		case AST_CAUSE_UNREGISTERED:        /* 20 */
+-			return "480 Temporarily unavailable";
+-		case AST_CAUSE_CALL_REJECTED:		/* 21 */
+-			return "403 Forbidden";
+-		case AST_CAUSE_NUMBER_CHANGED:		/* 22 */
+-			return "410 Gone";
+-		case AST_CAUSE_NORMAL_UNSPECIFIED:	/* 31 */
+-			return "480 Temporarily unavailable";
+-		case AST_CAUSE_INVALID_NUMBER_FORMAT:
+-			return "484 Address incomplete";
+-		case AST_CAUSE_USER_BUSY:
+-			return "486 Busy here";
+-		case AST_CAUSE_FAILURE:
+-			return "500 Server internal failure";
+-		case AST_CAUSE_FACILITY_REJECTED:	/* 29 */
+-			return "501 Not Implemented";
+-		case AST_CAUSE_CHAN_NOT_IMPLEMENTED:
+-			return "503 Service Unavailable";
+-		/* Used in chan_iax2 */
+-		case AST_CAUSE_DESTINATION_OUT_OF_ORDER:
+-			return "502 Bad Gateway";
+-		case AST_CAUSE_BEARERCAPABILITY_NOTAVAIL:	/* Can't find codec to connect to host */
+-			return "488 Not Acceptable Here";
+-			
+-		case AST_CAUSE_NOTDEFINED:
+-		default:
+-			ast_debug(1, "AST hangup cause %d (no match found in SIP)\n", cause);
+-			return NULL;
+-	}
+-
+-	/* Never reached */
+-	return 0;
+-}
+-
+ static int reinvite_timeout(const void *data)
+ {
+ 	struct sip_pvt *dialog = (struct sip_pvt *) data;
+@@ -18792,6 +18627,7 @@
+ 	ast_cli(a->fd, "  MWI NOTIFY mime type:   %s\n", default_notifymime);
+ 	ast_cli(a->fd, "  DNS SRV lookup:         %s\n", AST_CLI_YESNO(sip_cfg.srvlookup));
+ 	ast_cli(a->fd, "  Pedantic SIP support:   %s\n", AST_CLI_YESNO(sip_cfg.pedanticsipchecking));
++	ast_cli(a->fd, "  Private SIP2cause:      %s\n", AST_CLI_YESNO(private_sip2cause));
+ 	ast_cli(a->fd, "  Reg. min duration       %d secs\n", min_expiry);
+ 	ast_cli(a->fd, "  Reg. max duration:      %d secs\n", max_expiry);
+ 	ast_cli(a->fd, "  Reg. default duration:  %d secs\n", default_expiry);
+@@ -29680,6 +29516,18 @@
+ 		ast_log(LOG_ERROR, "Contents of %s are invalid and cannot be parsed.\n", notify_config);
+ 		notify_types = NULL;
+ 	}
++	private_sip2cause = 0;
++	if ((sip2cause = ast_config_load(sip2cause_config, config_flags)) == CONFIG_STATUS_FILEINVALID) {
++		ast_log(LOG_ERROR, "Contents of %s are invalid and cannot be parsed.\n", sip2cause_config);
++		sip2cause = NULL;
++		sip2cause_init();	/* Initialize standard settings */
++	} else {
++		sip2cause_free();	/* If it's a reload, free existing settings */
++		sip2cause_init();	/* Initialize standard settings */
++		private_sip2cause = sip2cause_load(sip2cause);
++		/* Now clean up */
++		ast_config_destroy(sip2cause);
++	}
+ 
+ 	/* Done, tell the manager */
+ 	manager_event(EVENT_FLAG_SYSTEM, "ChannelReload", "ChannelType: SIP\r\nReloadReason: %s\r\nRegistry_Count: %d\r\nPeer_Count: %d\r\n", channelreloadreason2txt(reason), registry_count, peer_count);
+@@ -31930,6 +31778,7 @@
+ 	ast_cc_agent_unregister(&sip_cc_agent_callbacks);
+ 
+ 	sip_reqresp_parser_exit();
++	sip2cause_free();
+ 	sip_unregister_tests();
+ 
+ 	return 0;
+Index: channels/sip/sip2cause.c
+===================================================================
+--- channels/sip/sip2cause.c	(.../branches/1.8)	(revision 0)
++++ channels/sip/sip2cause.c	(.../team/oej/earl-grey-sip2cause-configurable-1.8)	(revision 383664)
+@@ -0,0 +1,289 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2012, Digium, inc
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*!
++ * \file
++ * \brief SIP-to-ISDN cause code conversions
++ *
++ * \author Olle E. Johansson <oej@edvina.net>
++ */
++
++/*** MODULEINFO
++	<support_level>core</support_level>
++ ***/
++
++/*
++The sip2causestruct could potentially be used to provide translations of SIP reason codes in the future
++
++*/
++
++#include "asterisk.h"
++#include "asterisk/causes.h"
++#include "asterisk/strings.h"
++
++ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
++#include "include/sip2cause.h"
++
++/*! \brief structure for conversion between ISDN and SIP codes */
++struct sip2causestruct {
++	int	sip;			/*!< SIP code (200-699) - no provisional codes */
++	int	cause;			/*!< ISDN cause code */
++	char	reason[64];		/*!< SIP reason text, like "486 Busy", "404 Inte min dom�n" or "500 Que?" */
++	int	private;		/*!< If 1 = private extension */
++	struct sip2causestruct *next;	/*!< Pointer to next entry */
++};
++
++/*! \brief Main structure for tables, including default values */
++struct sip2causetable {
++	struct sip2causestruct *table;
++	int	defaultcode;
++	char	*defaultreason;
++};
++
++/*! \brief Actual table for sip => ISDN lookups */
++struct sip2causetable sip2causelookup;
++
++/*! \brief Actual table for ISDN => sip lookups */
++struct sip2causetable cause2siplookup;
++
++/*! \brief Add conversion entry to table */
++static struct sip2causestruct *newsip2cause(int sip, int cause, const char *reason, int private, struct sip2causestruct *next)
++{
++	struct sip2causestruct *s2c = ast_calloc(1, sizeof(struct sip2causestruct));
++
++	if (!s2c) {
++		return NULL;
++	}
++	s2c->sip = sip;
++	s2c->cause = cause;
++	ast_copy_string(s2c->reason, reason, sizeof(s2c->reason));
++	s2c->next = next;
++	s2c->private = private;
++	ast_debug(4, "SIP2CAUSE adding %d %s <=> %d (%s) \n", sip, reason, cause, ast_cause2str(cause));
++	return(s2c);
++ }
++
++/*! \brief Initialize structure with default values */
++void sip2cause_init(void)
++{
++	/* Initialize table for SIP => ISDN codes */
++	sip2causelookup.table = newsip2cause(401, /* Unauthorized */ AST_CAUSE_CALL_REJECTED, "", 0, NULL);
++	sip2causelookup.table = newsip2cause(403, /* Not found */ AST_CAUSE_CALL_REJECTED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(404, /* Not found */ AST_CAUSE_UNALLOCATED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(405, /* Method not allowed */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(407, /* Proxy authentication required */ AST_CAUSE_CALL_REJECTED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(408, /* No reaction */ AST_CAUSE_NO_USER_RESPONSE, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(409, /* Conflict */ AST_CAUSE_NORMAL_TEMPORARY_FAILURE, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(410, /* Gone */ AST_CAUSE_NUMBER_CHANGED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(411, /* Length required */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(413, /* Request entity too large */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(414, /* Request URI too large */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(415, /* Unsupported media type */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(420, /* Bad extension */ AST_CAUSE_NO_ROUTE_DESTINATION, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(480, /* No answer */ AST_CAUSE_NO_ANSWER, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(481, /* No answer */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(482, /* Loop detected */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(483, /* Too many hops */ AST_CAUSE_NO_ANSWER, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(484, /* Address incomplete */ AST_CAUSE_INVALID_NUMBER_FORMAT, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(485, /* Ambiguous */ AST_CAUSE_UNALLOCATED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(486, /* Busy everywhere */ AST_CAUSE_BUSY, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(487, /* Request terminated */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(488, /* No codecs approved */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(491, /* Request pending */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(493, /* Undecipherable */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(500, /* Server internal failure */ AST_CAUSE_FAILURE, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(501, /* Call rejected */ AST_CAUSE_FACILITY_REJECTED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(503, /* Service unavailable */ AST_CAUSE_CONGESTION, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(504, /* Gateway timeout */ AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(505, /* SIP version not supported */ AST_CAUSE_INTERWORKING, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(600, /* Busy everywhere */ AST_CAUSE_USER_BUSY, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(603, /* Decline */ AST_CAUSE_CALL_REJECTED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(604, /* Does not exist anywhere */ AST_CAUSE_UNALLOCATED, "", 0, sip2causelookup.table);
++	sip2causelookup.table = newsip2cause(606, /* Not acceptable */ AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "", 0, sip2causelookup.table);
++
++	/* Add the reverse table */
++	cause2siplookup.table = newsip2cause(404, AST_CAUSE_UNALLOCATED, "404 Not Found", 0, NULL);
++	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_DESTINATION, "404 Not Found", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(404, AST_CAUSE_NO_ROUTE_TRANSIT_NET, "404 Not Found", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CONGESTION, "503 Service Unavailable", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(503, AST_CAUSE_SWITCH_CONGESTION, "503 Service Unavailable", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(408, AST_CAUSE_NO_USER_RESPONSE, "408 Request Timeout", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NO_ANSWER, "480 Temporarily unavailable", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(480, AST_CAUSE_UNREGISTERED, "480 Temporarily unavailable", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(403, AST_CAUSE_CALL_REJECTED, "403 Forbidden", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(410, AST_CAUSE_NUMBER_CHANGED, "410 Gone", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(480, AST_CAUSE_NORMAL_UNSPECIFIED, "480 Temporarily unavailable", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(484, AST_CAUSE_INVALID_NUMBER_FORMAT, "484 Address Incomplete", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(486, AST_CAUSE_USER_BUSY, "486 Busy here", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(500, AST_CAUSE_FAILURE, "500 Server internal failure", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(501, AST_CAUSE_FACILITY_REJECTED, "501 Not implemented", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(503, AST_CAUSE_CHAN_NOT_IMPLEMENTED, "503 Service unavailable", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(502, AST_CAUSE_DESTINATION_OUT_OF_ORDER, "502 Bad gateway", 0, cause2siplookup.table);
++	cause2siplookup.table = newsip2cause(488, AST_CAUSE_BEARERCAPABILITY_NOTAVAIL, "488 Not Acceptable Here", 0, cause2siplookup.table);
++
++}
++	
++
++/*! \brief Make sure we free the cause code list from memory */
++void sip2cause_free(void)
++{
++	struct sip2causestruct *s2c = sip2causelookup.table;
++	while (s2c) {
++		struct sip2causestruct *next = s2c->next;
++		ast_free(s2c);
++		s2c = next;
++	}
++	s2c = cause2siplookup.table;
++	while (s2c) {
++		struct sip2causestruct *next = s2c->next;
++		ast_free(s2c);
++		s2c = next;
++	}
++}
++
++
++/*! \brief Convert SIP hangup causes to Asterisk hangup causes */
++int hangup_sip2cause(int sipcode)
++{
++	struct sip2causestruct *s2c = sip2causelookup.table;
++	while (s2c) {
++		if (s2c->sip == sipcode) {
++			ast_debug(1, "SIP2CAUSE returning %d (%s) based on SIP code %d        [%s]\n", s2c->cause, ast_cause2str(s2c->cause), sipcode, s2c->private ? "config" : "default");
++			return s2c->cause;
++		}
++		s2c = s2c->next;
++	}
++
++	/* Possible values taken from causes.h */
++
++	if (sipcode < 500 && sipcode >= 400) {
++		/* 4xx class error that is unknown - someting wrong with our request */
++		ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_INTERWORKING, ast_cause2str(AST_CAUSE_INTERWORKING), sipcode);
++		return AST_CAUSE_INTERWORKING;
++	} else if (sipcode < 600 && sipcode >= 500) {
++		ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_CONGESTION, ast_cause2str(AST_CAUSE_CONGESTION), sipcode);
++		/* 5xx class error - problem in the remote end */
++		return AST_CAUSE_CONGESTION;
++	} else if (sipcode < 700 && sipcode >= 600) {
++		ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_INTERWORKING, ast_cause2str(AST_CAUSE_INTERWORKING), sipcode);
++		/* 6xx - global errors in the 4xx class */
++		return AST_CAUSE_INTERWORKING;
++	}
++	ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", s2c->cause, ast_cause2str(s2c->cause), sipcode);
++	return AST_CAUSE_NORMAL;
++}
++
++/*! \brief Convert Asterisk hangup causes to SIP codes
++\verbatim
++ Possible values from causes.h
++        AST_CAUSE_NOTDEFINED    AST_CAUSE_NORMAL        AST_CAUSE_BUSY
++        AST_CAUSE_FAILURE       AST_CAUSE_CONGESTION    AST_CAUSE_UNALLOCATED
++
++	In addition to these, a lot of PRI codes is defined in causes.h
++	...should we take care of them too ?
++
++	Quote RFC 3398
++
++   ISUP Cause value                        SIP response
++   ----------------                        ------------
++   1  unallocated number                   404 Not Found
++   2  no route to network                  404 Not found
++   3  no route to destination              404 Not found
++   16 normal call clearing                 --- (*)
++   17 user busy                            486 Busy here
++   18 no user responding                   408 Request Timeout
++   19 no answer from the user              480 Temporarily unavailable
++   20 subscriber absent                    480 Temporarily unavailable
++   21 call rejected                        403 Forbidden (+)
++   22 number changed (w/o diagnostic)      410 Gone
++   22 number changed (w/ diagnostic)       301 Moved Permanently
++   23 redirection to new destination       410 Gone
++   26 non-selected user clearing           404 Not Found (=)
++   27 destination out of order             502 Bad Gateway
++   28 address incomplete                   484 Address incomplete
++   29 facility rejected                    501 Not implemented
++   31 normal unspecified                   480 Temporarily unavailable
++\endverbatim
++*/
++char *hangup_cause2sip(int cause)
++{
++	struct sip2causestruct *s2c = cause2siplookup.table;
++	while (s2c) {
++		if (s2c->cause == cause) {
++			ast_debug(4, "cause2sip returning %s based on ISDN cause %d - %s           [%s]\n", s2c->reason, cause, ast_cause2str(cause), s2c->private ? "config" : "default");
++			return s2c->reason;
++		}
++		s2c = s2c->next;
++	}
++	ast_debug(1, "AST hangup cause %d (no match found in SIP)\n", cause);
++	return NULL;
++}
++
++/*! \brief Load configuration
++
++- Check if SIP code is valid
++- Check if we can parse the cause code using functions in channel.c
++
++*/
++int sip2cause_load(struct ast_config *s2c_config)
++{
++	struct ast_variable *v;
++	int respcode;
++	int cause;
++	int number=0;
++
++	ast_debug(2, "AST sip2cause configuration parser");
++	if (!s2c_config) {
++		return 0;
++	}
++	for (v = ast_variable_browse(s2c_config, "sip2cause"); v; v = v->next) {
++		ast_debug(1, "====> SIP2cause ::: Name %s Value %s \n", v->name, v->value);
++		respcode = 42;
++		cause = 0;
++		number = sscanf(v->name, "%d", &respcode);
++		if (number != 1) {
++			ast_log(LOG_ERROR, "Unknown SIP response code format %s in sip2cause.conf section [sip2cause] Respcode %d Number %d\n", v->name, respcode, number);
++			continue;
++		}
++		if (respcode < 200 || respcode > 699) {
++			ast_log(LOG_ERROR, "Bad SIP response code:  Asterisk cause code \'%s=>%s\' in sip2cause.conf section [sip2cause] \n", v->name, v->value);
++			continue;
++		}
++		if ((cause = ast_str2cause(v->value)) == -1) {
++			ast_log(LOG_ERROR, "Unknown Asterisk cause code %s in sip2cause.conf section [sip2cause] Cause %d\n", v->value, cause);
++			continue;
++		} 
++		sip2causelookup.table = newsip2cause(respcode, cause, "", 1, sip2causelookup.table);
++	}
++	for (v = ast_variable_browse(s2c_config, "cause2sip"); v; v = v->next) {
++		ast_debug(1, "====> CAUSE2SIP ::: Name %s Value %s \n", v->name, v->value);
++		if ((cause = ast_str2cause(v->name)) == -1) {
++			ast_log(LOG_ERROR, "Unknown Asterisk cause code %s in sip2cause.conf section [cause2sip] \n", v->name);
++			continue;
++		} 
++		if (sscanf(v->value, "%d ", &respcode) != 1) {
++			ast_log(LOG_ERROR, "Bad syntax:  Asterisk cause code \'%s=>%s\' in sip2cause.conf section [cause2sip] \n", v->name, v->value);
++			continue;
++		}
++		if (respcode < 200 || respcode > 699) {
++			ast_log(LOG_ERROR, "Bad SIP response code:  \'%s=>%s\' in sip2cause.conf section [cause2sip] \n", v->name, v->value);
++			continue;
++		}
++		cause2siplookup.table = newsip2cause(respcode, cause, v->value, 1, cause2siplookup.table);
++	}
++	return 1;
++}
+
+Egenskapsändringar för: channels/sip/sip2cause.c
+___________________________________________________________________
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Index: channels/sip/include/sip_utils.h
+===================================================================
+--- channels/sip/include/sip_utils.h	(.../branches/1.8)	(revision 383664)
++++ channels/sip/include/sip_utils.h	(.../team/oej/earl-grey-sip2cause-configurable-1.8)	(revision 383664)
+@@ -42,42 +42,4 @@
+  */
+ const char *find_closing_quote(const char *start, const char *lim);
+ 
+-
+-/*! \brief Convert SIP hangup causes to Asterisk hangup causes */
+-int hangup_sip2cause(int cause);
+-
+-/*! \brief Convert Asterisk hangup causes to SIP codes
+-\verbatim
+- Possible values from causes.h
+-        AST_CAUSE_NOTDEFINED    AST_CAUSE_NORMAL        AST_CAUSE_BUSY
+-        AST_CAUSE_FAILURE       AST_CAUSE_CONGESTION    AST_CAUSE_UNALLOCATED
+-
+-	In addition to these, a lot of PRI codes is defined in causes.h
+-	...should we take care of them too ?
+-
+-	Quote RFC 3398
+-
+-   ISUP Cause value                        SIP response
+-   ----------------                        ------------
+-   1  unallocated number                   404 Not Found
+-   2  no route to network                  404 Not found
+-   3  no route to destination              404 Not found
+-   16 normal call clearing                 --- (*)
+-   17 user busy                            486 Busy here
+-   18 no user responding                   408 Request Timeout
+-   19 no answer from the user              480 Temporarily unavailable
+-   20 subscriber absent                    480 Temporarily unavailable
+-   21 call rejected                        403 Forbidden (+)
+-   22 number changed (w/o diagnostic)      410 Gone
+-   22 number changed (w/ diagnostic)       301 Moved Permanently
+-   23 redirection to new destination       410 Gone
+-   26 non-selected user clearing           404 Not Found (=)
+-   27 destination out of order             502 Bad Gateway
+-   28 address incomplete                   484 Address incomplete
+-   29 facility rejected                    501 Not implemented
+-   31 normal unspecified                   480 Temporarily unavailable
+-\endverbatim
+-*/
+-const char *hangup_cause2sip(int cause);
+-
+ #endif
+Index: channels/sip/include/sip2cause.h
+===================================================================
+--- channels/sip/include/sip2cause.h	(.../branches/1.8)	(revision 0)
++++ channels/sip/include/sip2cause.h	(.../team/oej/earl-grey-sip2cause-configurable-1.8)	(revision 383664)
+@@ -0,0 +1,42 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2010, Digium, Inc.
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*!
++ * \file
++ * \brief sip2cause header file
++ */
++
++#include "sip.h"
++
++#ifndef _SIP_CAUSE_H
++#define _SIP_CAUSE_H
++
++/*! \brief Convert SIP response code to ISDN or Asterisk-specific cause code */
++int hangup_sip2cause(int cause);
++
++/*! \brief Convert ISDN or Asterisk-specific cause code to SIP response code */
++char *hangup_cause2sip(int cause);
++
++/*! \brief Initialized sip2cause tables */
++void sip2cause_init(void);
++
++/*! \brief Free sip2cause tables */
++void sip2cause_free(void);
++
++/*! \brief Load configuration */
++int sip2cause_load(struct ast_config *s2c_config);
++
++#endif /* defined(_SIP_CAUSE_H) */
+
+Egenskapsändringar för: channels/sip/include/sip2cause.h
+___________________________________________________________________
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Index: configs/sip2cause.conf.sample
+===================================================================
+--- configs/sip2cause.conf.sample	(.../branches/1.8)	(revision 0)
++++ configs/sip2cause.conf.sample	(.../team/oej/earl-grey-sip2cause-configurable-1.8)	(revision 383664)
+@@ -0,0 +1,24 @@
++;
++; Conversion table additions for the translation between SIP hangup codes and ISDN cause codes
++; ============================================================================================
++; This table is used to convert a negative SIP response to an ISDN cause code, that is sent
++; over the PBX call bridge to the calling party, or to convert a received ISDN hangup cause
++; from the called party to a SIP response. Changes will not affect how Asterisk treats a SIP
++; response, but how the other party reacts to it.
++;
++; For reference, check Asterisk source code include/asterisk/causes.h
++; and channels/sip/sip2cause.c
++;
++; Note also that this translation is not used in all cases in the SIP implementation in Asterisk.
++; Fixes are always welcome.
++;
++; !!!!!!!!!!!!!!!!!!!! READ THIS SERIOUSLY !
++; Note: By changing the default translation, you can seriously jeopardize your Asterisk server functionality.
++;       Make sure you understand what you are doing, and that you are testing carefully.
++;       In 99.99% of Asterisk installations, you will not need to add ANYTHING to this file.
++;
++[sip2cause]
++; 404 => USER_BUSY
++
++[cause2sip]
++; USER_BUSY => 403 Forbidden
+
+Egenskapsändringar för: configs/sip2cause.conf.sample
+___________________________________________________________________
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Index: .
