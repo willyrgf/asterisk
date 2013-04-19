@@ -63,7 +63,8 @@ context=bazinga
 Yyou expect to be able to receive calls from the service provider
 in that peer. Now the service provider has a list of servers using IPv4
 and IPv6 in the SRV records for that name. Should the Asterisk SIP channel
-match the full list?
+match the full list? I think it should.
+
 Currently Asterisk will resolve to one IP address and use that for matching
 of incoming calls, possibly deny calls from servers that does not match.
 This is NOT the expected solution.
