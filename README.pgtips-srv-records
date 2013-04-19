@@ -92,3 +92,34 @@ Todo:
 9. Avoid testing. Real developers don't test.
 10. Don't open a bug tracker issue on this project.
 11. Stay calm and carry on.
+
+
+Query on AO2 object stuff:
+==========================
+Olle:
+I would like to be able to add all available IP addresses and ports for matching. Will that work with the ao2object list or will it
+mess up the list to have many hash entries for the same object?
+
+The way I would like to do this is to set up an ACL entry in the peer for the SRV record so we have a list to go through
+and perform the matching on. If that list is empty, we will match as before.
+
+
+Matt:
+ao2 containers work fine with hash collisions. If a hash collision
+occurs, a comparison callback is used to find the explicit object you're
+searching for. They can also be used to store objects with duplicate keys.
+
+The case of duplicate keys is a bit more complex however, as you have to
+know that you won't get back a single object when you do a search. In
+that case, your comparison callback (either the one supplied for the
+container during its creation or one used in an ao2_callback) has to
+return when it has a match (it returns CMP_MATCH) but not instruct the
+ao2 library to stop (it doesn't return CMP_STOP). In addition, you have
+to tell ao2_find or ao2_callback that you expect to get multiple objects
+back by passing it OBJ_MULTIPLE. When you do that, it will return a new
+ao2_iterator with all of the objects that matched.
+
+There's a good example of doing multi-object matching and returning in
+chan_sip's find_call - we do a multi-object match using an ao2_callback
+to find all dialogs that match a call-id, then iterate over each object.
+
