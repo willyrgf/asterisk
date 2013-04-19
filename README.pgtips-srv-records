@@ -68,3 +68,15 @@ match the full list? I think it should.
 Currently Asterisk will resolve to one IP address and use that for matching
 of incoming calls, possibly deny calls from servers that does not match.
 This is NOT the expected solution.
+
+
+Development Notes
+=================
+
+The SIP channel will have to be in control and get the full list of SRV
+records. We can't hide this list.
+
+DNSmanager can still maintain A/AAAA records if enabled, but not SRV
+lists.
+
+
