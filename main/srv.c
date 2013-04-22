@@ -64,6 +64,7 @@ struct srv_entry {
 	unsigned short weight;
 	unsigned short port;
 	unsigned int weight_sum;
+	struct timeval ttl_expire;		/* Expiry time */
 	AST_LIST_ENTRY(srv_entry) list;
 	char host[1];
 };
@@ -72,10 +73,11 @@ struct srv_context {
 	unsigned int have_weights:1;
 	struct srv_entry *prev;
 	unsigned int num_records;
+	struct srv_entry *current;		/* Pointer into the list for failover */
 	AST_LIST_HEAD_NOLOCK(srv_entries, srv_entry) entries;
 };
 
-static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct srv_entry **result)
+static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct srv_entry **result, struct timeval *ttl_expire)
 {
 	struct srv {
 		unsigned short priority;
@@ -109,20 +111,33 @@ static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct 
 	entry->priority = ntohs(srv->priority);
 	entry->weight = ntohs(srv->weight);
 	entry->port = ntohs(srv->port);
+	entry->ttl_expire = *ttl_expire;
 	strcpy(entry->host, repl);
+	if (option_debug > 3) {
+		char exptime[64];
+		struct ast_tm myt;
+		ast_strftime(exptime, sizeof(exptime), "%Y-%m-%d %H:%M:%S.%3q %Z", ast_localtime(ttl_expire, &myt, NULL));
+		ast_debug(3, "DNS SRV ==> Prio %-3.3d Weight %-3.3d Port %-5.5u TTL %s  Hostname %s\n", entry->priority, entry->weight, entry->port, exptime, entry->host);
+	}
 
 	*result = entry;
 	
 	return 0;
 }
 
-static int srv_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
+static int srv_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl)
 {
 	struct srv_context *c = (struct srv_context *) context;
 	struct srv_entry *entry = NULL;
 	struct srv_entry *current;
+	struct timeval expiry  = {0,};
 
-	if (parse_srv(answer, len, fullanswer, &entry))
+	ast_debug(3, " ==> Callback received \n");
+
+	expiry.tv_sec =  (long) ttl;
+	expiry = ast_tvadd(expiry, ast_tvnow());
+
+	if (parse_srv(answer, len, fullanswer, &entry, &expiry))
 		return -1;
 
 	if (entry->weight)
@@ -262,20 +277,40 @@ void ast_srv_cleanup(struct srv_context **context)
 	}
 }
 
-int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, const char *service)
+/*! \brief Free all entries in the context, but not the context itself */
+void ast_srv_context_free_list(struct srv_context *context)
 {
-	struct srv_context context = { .entries = AST_LIST_HEAD_NOLOCK_INIT_VALUE };
 	struct srv_entry *current;
+
+	/* Remove list of SRV entries from memory */
+	while ((current = AST_LIST_REMOVE_HEAD(&context->entries, list))) {
+		ast_free(current);
+	}
+	context->have_weights = 0;
+	context->prev = NULL;
+	context->current = NULL;
+	context->num_records = 0;
+}
+
+int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, const char *service)
+{
 	int ret;
+
+	if (context == NULL) {
+		return -1;
+	}
+
+	ast_debug(3, "==> Searching for %s \n", service);
 
 	if (chan && ast_autoservice_start(chan) < 0) {
 		return -1;
 	}
 
-	ret = ast_search_dns(&context, service, C_IN, T_SRV, srv_callback);
+	ast_debug(3, "==> Searching in DNS for %s \n", service);
+	ret = ast_search_dns(context, service, C_IN, T_SRV, srv_callback);
 
-	if (context.have_weights) {
-		process_weights(&context);
+	if (ret > 0 && context->have_weights) {
+		process_weights(context);
 	}
 
 	if (chan) {
@@ -285,26 +320,47 @@ int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, co
 	/* TODO: there could be a "." entry in the returned list of
 	   answers... if so, this requires special handling */
 
+
+
+	if (option_debug > 3) {
+		ast_srv_debug_print(context);
+	}
+
+
+	return ret;
+}
+
+int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, const char *service)
+{
+	struct srv_context context_data = { .entries = AST_LIST_HEAD_NOLOCK_INIT_VALUE };
+	int res;
+	struct srv_entry *current;
+
+	/* Get the list and save one entry only */
+	res = ast_get_srv_list(&context_data, chan, service);
+
+
 	/* the list of entries will be sorted in the proper selection order
 	   already, so we just need the first one (if any) */
 
-	if ((ret > 0) && (current = AST_LIST_REMOVE_HEAD(&context.entries, list))) {
+	if ((res > 0) && (current = AST_LIST_REMOVE_HEAD(&context_data.entries, list))) {
 		ast_copy_string(host, current->host, hostlen);
 		*port = current->port;
 		ast_free(current);
-		ast_verb(4, "ast_get_srv: SRV lookup for '%s' mapped to host %s, port %d\n",
+		ast_verb(4, "ast_get_srv: SRV lookup for '%s' mapped to primary host %s, port %d\n",
 				    service, host, *port);
 	} else {
+		ast_verb(4, "ast_get_srv: Found no host, sorry\n");
 		host[0] = '\0';
 		*port = -1;
 	}
 
-	while ((current = AST_LIST_REMOVE_HEAD(&context.entries, list))) {
-		ast_free(current);
-	}
+	/* Remove list of SRV entries from memory */
+	ast_srv_context_free_list(&context_data);
 
-	return ret;
+	return res;
 }
+
 
 unsigned int ast_srv_get_record_count(struct srv_context *context)
 {
@@ -322,6 +378,10 @@ int ast_srv_get_nth_record(struct srv_context *context, int record_num, const ch
 		return res;
 	}
 
+	if (context == NULL) {
+		return res;
+	}
+
 	AST_LIST_TRAVERSE(&context->entries, entry, list) {
 		if (i == record_num) {
 			*host = entry->host;
@@ -335,4 +395,22 @@ int ast_srv_get_nth_record(struct srv_context *context, int record_num, const ch
 	}
 
 	return res;
+}
+
+void ast_srv_debug_print(struct srv_context *context)
+{
+	struct srv_entry *entry;
+	int i = 1;
+	char exptime[64];
+	struct ast_tm myt;
+
+	if (context == NULL) {
+		return;
+	}
+
+	AST_LIST_TRAVERSE(&context->entries, entry, list) {
+		ast_strftime(exptime, sizeof(exptime), "%Y-%m-%d %H:%M:%S.%3q %Z", ast_localtime(&entry->ttl_expire, &myt, NULL));
+		ast_debug(0, "DNS SRV Entry %-2.2d : P %-2.2d W %-4.4d Hostname %s Port %d Expire %s\n", i, entry->priority, entry->weight, entry->host, entry->port, exptime);
+		i++;
+	}
 }

@@ -188,7 +188,7 @@ static int skip_name(unsigned char *s, int len)
 /*! \brief Parse DNS lookup result, call callback */
 static int dns_parse_answer(void *context,
 	int class, int type, unsigned char *answer, int len,
-	int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer))
+	int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl))
 {
 	unsigned char *fullanswer = answer;
 	struct dn_answer *ans;
@@ -196,6 +196,7 @@ static int dns_parse_answer(void *context,
 	int ret = 0;
 	int res;
 	int x;
+	ast_debug(3, "==> Parsing answer on DNS query \n");
 
 	h = (dns_HEADER *)answer;
 	answer += sizeof(dns_HEADER);
@@ -235,7 +236,8 @@ static int dns_parse_answer(void *context,
 
 		if (ntohs(ans->class) == class && ntohs(ans->rtype) == type) {
 			if (callback) {
-				if ((res = callback(context, answer, ntohs(ans->size), fullanswer)) < 0) {
+				ast_debug(3, "     ==> Using callback for DNS answer \n");
+				if ((res = callback(context, answer, ntohs(ans->size), fullanswer, ans->ttl)) < 0) {
 					ast_log(LOG_WARNING, "Failed to parse result\n");
 					return -1;
 				}
@@ -258,8 +260,9 @@ not work properly, Asterisk might not start properly or a channel may lock.
 */
 int ast_search_dns(void *context,
 	   const char *dname, int class, int type,
-	   int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer))
+	   int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl))
 {
+	ast_debug(3, "==> Will send query for %s\n", dname);
 #ifdef HAVE_RES_NINIT
 	struct __res_state dnsstate;
 #endif
@@ -275,7 +278,9 @@ int ast_search_dns(void *context,
 	res_init();
 	res = res_search(dname, class, type, answer, sizeof(answer));
 #endif
+	ast_debug(3, "==> Got result on query for %s\n", dname);
 	if (res > 0) {
+		ast_debug(3, "==> Parsing answer for %s\n", dname);
 		if ((res = dns_parse_answer(context, class, type, answer, res, callback)) < 0) {
 			ast_log(LOG_WARNING, "DNS Parse error for %s\n", dname);
 			ret = -1;
@@ -285,7 +290,7 @@ int ast_search_dns(void *context,
 		} else
 			ret = 1;
 	} else {
-		ast_debug(1, "DNS lookup error %d for %s\n", dname, res);
+		ast_debug(1, "DNS lookup error %d for %s\n", res, dname);
 	}
 #ifdef HAVE_RES_NINIT
 #ifdef HAVE_RES_NDESTROY
@@ -299,6 +304,7 @@ int ast_search_dns(void *context,
 #endif
 	ast_mutex_unlock(&res_lock);
 #endif
+	ast_debug(3, "==> Finished query for %s result %d\n", dname, ret);
 
 	return ret;
 }

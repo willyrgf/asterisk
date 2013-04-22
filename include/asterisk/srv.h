@@ -50,16 +50,26 @@ extern int ast_srv_lookup(struct srv_context **context, const char *service, con
  */
 void ast_srv_cleanup(struct srv_context **context);
 
+/*! \brief Free all entries in the context, but not the context itself */
+void ast_srv_context_free_list(struct srv_context *context);
+
 /*! Lookup entry in SRV records Returns 1 if found, 0 if not found, -1 on hangup 
 	Only do SRV record lookup if you get a domain without a port. If you get a port #, it's a DNS host name.
-*/
-/*!	\param	chan Ast channel
+	\param	chan Ast channel
 	\param	host host name (return value)
 	\param	hostlen Length of string "host"
 	\param	port Port number (return value)
 	\param service Service tag for SRV lookup (like "_sip._udp" or "_stun._udp"
 */
 extern int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, const char *service);
+
+/*! Lookup entry in SRV records Returns 1 if found, 0 if not found, -1 on hangup 
+	Only do SRV record lookup if you get a domain without a port. If you get a port #, it's a DNS host name.
+	\param  context A context for SRV lookups that will contain the list. Client needs to free this list with ast_srv_cleanup
+	\param	chan Ast channel
+	\param service Service tag for SRV lookup (like "_sip._udp" or "_stun._udp"
+*/
+extern int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, const char *service);
 
 /*!
  * \brief Get the number of records for a given SRV context
@@ -96,4 +106,8 @@ unsigned int ast_srv_get_record_count(struct srv_context *context);
  */
 int ast_srv_get_nth_record(struct srv_context *context, int record_num, const char **host,
 		unsigned short *port, unsigned short *priority, unsigned short *weight);
+/*!
+ * \brief Print out the complete data in the SRV list
+ */
+void ast_srv_debug_print(struct srv_context *context);
 #endif /* _ASTERISK_SRV_H */
