@@ -7225,8 +7225,11 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				if (c1->_softhangup & AST_SOFTHANGUP_UNBRIDGE) {
 					ast_channel_clear_softhangup(c1, AST_SOFTHANGUP_UNBRIDGE);
 				}
+				ast_channel_lock_both(c0, c1);
 				c0->_bridge = c1;
 				c1->_bridge = c0;
+				ast_channel_unlock(c0);
+				ast_channel_unlock(c1);
 			}
 			continue;
 		}
@@ -7494,8 +7497,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	}
 
 	/* Keep track of bridge */
+	ast_channel_lock_both(c0, c1);
 	c0->_bridge = c1;
 	c1->_bridge = c0;
+	ast_channel_unlock(c0);
+	ast_channel_unlock(c1);
 
 	ast_set_owners_and_peers(c0, c1);
 
@@ -7592,8 +7598,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			if (c1->_softhangup & AST_SOFTHANGUP_UNBRIDGE) {
 				ast_channel_clear_softhangup(c1, AST_SOFTHANGUP_UNBRIDGE);
 			}
+			ast_channel_lock_both(c0, c1);
 			c0->_bridge = c1;
 			c1->_bridge = c0;
+			ast_channel_unlock(c0);
+			ast_channel_unlock(c1);
 			ast_debug(1, "Unbridge signal received. Ending native bridge.\n");
 			continue;
 		}
@@ -7650,8 +7659,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 					continue;
 				}
 
+				ast_channel_lock_both(c0, c1);
 				c0->_bridge = NULL;
 				c1->_bridge = NULL;
+				ast_channel_unlock(c0);
+				ast_channel_unlock(c1);
 				return res;
 			} else {
 				ast_clear_flag(c0, AST_FLAG_NBRIDGE);
@@ -7701,8 +7713,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
 	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
 
+	ast_channel_lock_both(c0, c1);
 	c0->_bridge = NULL;
 	c1->_bridge = NULL;
+	ast_channel_unlock(c0);
+	ast_channel_unlock(c1);
 
 	ast_manager_event_multichan(EVENT_FLAG_CALL, "Unlink", 2, chans,
 		"Channel1: %s\r\n"
