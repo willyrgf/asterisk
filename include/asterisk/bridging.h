@@ -1096,6 +1096,16 @@ void ast_bridge_channel_write_app(struct ast_bridge_channel *bridge_channel, con
 void ast_bridge_channel_queue_app(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class);
 
 /*!
+ * \brief Custom interpretation of the playfile name.
+ *
+ * \param bridge_channel Which channel to play the file on
+ * \param playfile Sound filename to play.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_bridge_custom_play_fn)(struct ast_bridge_channel *bridge_channel, const char *playfile);
+
+/*!
  * \brief Play a file on the bridge channel.
  * \since 12.0.0
  *
@@ -1110,7 +1120,7 @@ void ast_bridge_channel_queue_app(struct ast_bridge_channel *bridge_channel, con
  *
  * \return Nothing
  */
-void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class);
+void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class);
 
 /*!
  * \brief Write a bridge action play file frame into the bridge.
@@ -1127,7 +1137,7 @@ void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, void
  *
  * \return Nothing
  */
-void ast_bridge_channel_write_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class);
+void ast_bridge_channel_write_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class);
 
 /*!
  * \brief Queue a bridge action play file frame onto the bridge channel.
@@ -1144,7 +1154,7 @@ void ast_bridge_channel_write_playfile(struct ast_bridge_channel *bridge_channel
  *
  * \return Nothing
  */
-void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class);
+void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class);
 
 /*!
  * \brief Restore the formats of a bridge channel's channel to how they were before bridge_channel_join
@@ -1305,6 +1315,15 @@ void ast_after_bridge_goto_run(struct ast_channel *chan);
  * \return Nothing
  */
 void ast_after_bridge_goto_discard(struct ast_channel *chan);
+
+/*!
+ * \brief Get a container of all channels in the bridge
+ *
+ * \param bridge The bridge
+ * \retval NULL Failed to create container
+ * \retval non-NULL Container of channels in the bridge
+ */
+struct ao2_container *ast_bridge_peers(struct ast_bridge *bridge);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

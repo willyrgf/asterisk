@@ -827,7 +827,7 @@ void ast_bridge_channel_queue_app(struct ast_bridge_channel *bridge_channel, con
 		bridge_channel, app_name, app_args, moh_class);
 }
 
-void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class)
 {
 	if (moh_class) {
 		if (ast_strlen_zero(moh_class)) {
@@ -839,7 +839,7 @@ void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, void
 		}
 	}
 	if (custom_play) {
-		custom_play(playfile);
+		custom_play(bridge_channel, playfile);
 	} else {
 		ast_stream_and_wait(bridge_channel->chan, playfile, AST_DIGIT_NONE);
 	}
@@ -862,7 +862,7 @@ void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, void
 
 struct bridge_playfile {
 	/*! Call this function to play the playfile. (NULL if normal sound file to play) */
-	void (*custom_play)(const char *playfile);
+	ast_bridge_custom_play_fn custom_play;
 	/*! Offset into playfile[] where the MOH class name starts.  (zero if no MOH)*/
 	int moh_offset;
 	/*! Filename to play. */
@@ -886,7 +886,7 @@ static void bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, s
 }
 
 static void payload_helper_playfile(ast_bridge_channel_post_action_data post_it,
-	struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+	struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class)
 {
 	struct bridge_playfile *payload;
 	size_t len_name = strlen(playfile) + 1;
@@ -905,13 +905,13 @@ static void payload_helper_playfile(ast_bridge_channel_post_action_data post_it,
 	post_it(bridge_channel, AST_BRIDGE_ACTION_PLAY_FILE, payload, len_payload);
 }
 
-void ast_bridge_channel_write_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+void ast_bridge_channel_write_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class)
 {
 	payload_helper_playfile(ast_bridge_channel_write_action_data,
 		bridge_channel, custom_play, playfile, moh_class);
 }
 
-void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel, void (*custom_play)(const char *playfile), const char *playfile, const char *moh_class)
+void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class)
 {
 	payload_helper_playfile(ast_bridge_channel_queue_action_data,
 		bridge_channel, custom_play, playfile, moh_class);
@@ -4187,6 +4187,42 @@ void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *
 		}
 	}
 	ast_bridge_unlock(bridge);
+}
+
+static int channel_hash(const void *obj, int flags)
+{
+	const struct ast_channel *chan = obj;
+	const char *chan_name = flags & OBJ_KEY ? obj : ast_channel_name(chan);
+
+	return ast_str_hash(chan_name);
+}
+
+static int channel_cmp(void *obj, void *arg, int flags)
+{
+	struct ast_channel *chan1 = obj;
+	struct ast_channel *chan2 = arg;
+	const char *chan2_name = flags & OBJ_KEY ? arg : ast_channel_name(chan2);
+
+	return strcmp(ast_channel_name(chan1), chan2_name) ? 0 : CMP_MATCH;
+}
+
+struct ao2_container *ast_bridge_peers(struct ast_bridge *bridge)
+{
+	struct ao2_container *channels;
+	struct ast_bridge_channel *iter;
+
+	channels = ao2_container_alloc(13, channel_hash, channel_cmp);
+	if (!channels) {
+		return NULL;
+	}
+
+	ast_bridge_lock(bridge);
+	AST_LIST_TRAVERSE(&bridge->channels, iter, entry) {
+		ao2_link(channels, iter->chan);
+	}
+	ast_bridge_unlock(bridge);
+
+	return channels;
 }
 
 /*!
