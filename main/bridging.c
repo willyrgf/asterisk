@@ -4192,34 +4192,72 @@ void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *
 static int channel_hash(const void *obj, int flags)
 {
 	const struct ast_channel *chan = obj;
-	const char *chan_name = flags & OBJ_KEY ? obj : ast_channel_name(chan);
+	const char *name = obj;
+	int hash;
 
-	return ast_str_hash(chan_name);
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		name = ast_channel_name(chan);
+		/* Fall through */
+	case OBJ_KEY:
+		hash = ast_str_hash(name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		/* Should never happen in hash callback. */
+		ast_assert(0);
+		hash = 0;
+		break;
+	}
+	return hash;
 }
 
 static int channel_cmp(void *obj, void *arg, int flags)
 {
-	struct ast_channel *chan1 = obj;
-	struct ast_channel *chan2 = arg;
-	const char *chan2_name = flags & OBJ_KEY ? arg : ast_channel_name(chan2);
+	const struct ast_channel *left = obj;
+	const struct ast_channel *right = arg;
+	const char *right_name = arg;
+	int cmp;
 
-	return strcmp(ast_channel_name(chan1), chan2_name) ? 0 : CMP_MATCH;
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_name = ast_channel_name(right);
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcmp(ast_channel_name(left), right_name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncmp(ast_channel_name(left), right_name, strlen(right_name));
+		break;
+	}
+	return cmp ? 0 : CMP_MATCH;
+}
+
+struct ao2_container *ast_bridge_peers_nolock(struct ast_bridge *bridge)
+{
+	struct ao2_container *channels;
+	struct ast_bridge_channel *iter;
+
+	channels = ao2_container_alloc_options(AO2_ALLOC_OPT_LOCK_NOLOCK,
+		13, channel_hash, channel_cmp);
+	if (!channels) {
+		return NULL;
+	}
+
+	AST_LIST_TRAVERSE(&bridge->channels, iter, entry) {
+		ao2_link(channels, iter->chan);
+	}
+
+	return channels;
 }
 
 struct ao2_container *ast_bridge_peers(struct ast_bridge *bridge)
 {
 	struct ao2_container *channels;
-	struct ast_bridge_channel *iter;
-
-	channels = ao2_container_alloc(13, channel_hash, channel_cmp);
-	if (!channels) {
-		return NULL;
-	}
 
 	ast_bridge_lock(bridge);
-	AST_LIST_TRAVERSE(&bridge->channels, iter, entry) {
-		ao2_link(channels, iter->chan);
-	}
+	channels = ast_bridge_peers_nolock(bridge);
 	ast_bridge_unlock(bridge);
 
 	return channels;

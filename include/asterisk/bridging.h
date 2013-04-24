@@ -1318,8 +1318,24 @@ void ast_after_bridge_goto_discard(struct ast_channel *chan);
 
 /*!
  * \brief Get a container of all channels in the bridge
+ * \since 12.0.0
+ *
+ * \param bridge The bridge which is already locked.
+ *
+ * \retval NULL Failed to create container
+ * \retval non-NULL Container of channels in the bridge
+ */
+struct ao2_container *ast_bridge_peers_nolock(struct ast_bridge *bridge);
+
+/*!
+ * \brief Get a container of all channels in the bridge
+ * \since 12.0.0
  *
  * \param bridge The bridge
+ *
+ * \note The returned container is a snapshot of channels in the
+ * bridge when called.
+ *
  * \retval NULL Failed to create container
  * \retval non-NULL Container of channels in the bridge
  */
