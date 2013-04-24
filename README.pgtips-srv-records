@@ -47,6 +47,7 @@ Asterisk changes (brainstorm suggestion)
 - Add failover based on that list
 - Make sure the list is searched on every transaction and have failover in a call
 
+
 Peer matching
 -------------
 This is a bit more interesting. If you connect to a service provider and add
@@ -82,16 +83,22 @@ lists.
 Todo:
 =====
 1. Expose SRV records to the SIP channel. Remove when response is received (1xx or higher).
+	- The API is changed to support a module accessing SRV records.
 2. Make sure SIP channel selects right with IPv4/IPv6. 
+	- Done for [peers] in the sip.conf file.
+	- Not done for calling a DNS name in the dial string (some code is there though)
 3. Provide hooks for happy earballs if server is dual stack and we're dual stack
 4. Implement failover to next server in list if transaction fails.
 5. Add multiple IPs to the peer in an ACL list
+	- Have added some code that fails to work. Is it me or the code?
 6. Add the same IPs to the AO2object for IP matching
 7. Make sure the ACL list is updated by DNS manager
 8. Change peer match by ip/port to use ACL list if available
 9. Avoid testing. Real developers don't test.
 10. Don't open a bug tracker issue on this project.
-11. Stay calm and carry on.
+11. De-install GDB. GDB is for weak developers.
+12. Do not write any documentation, regardless of what people say. It's a SEP.
+13. Stay calm and carry on.
 
 
 Query on AO2 object stuff:
