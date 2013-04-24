@@ -585,6 +585,12 @@ static int resolve_first(struct ast_sockaddr *addr, const char *name, int flag,
 			ast_debug(1, "Multiple addresses. Using the first only\n");
 		}
 		ast_sockaddr_copy(addr, &addrs[0]);
+		if (option_debug > 3) {
+			int i;
+			for (i = 0; i < addrs_cnt; i++) {
+				ast_debug(0, "           => %d: %s resolves into  %s\n", i, name, ast_sockaddr_stringify(&addrs[i]));
+			}
+		}
 		ast_free(addrs);
 	} else {
 		ast_log(LOG_WARNING, "Unable to lookup '%s'\n", name);
@@ -778,3 +784,15 @@ int ast_find_ourip(struct ast_sockaddr *ourip, const struct ast_sockaddr *bindad
 	return res;
 }
 
+
+/*! \brief Print ha list to CLI on the debug channel */
+void ha_list_debug(struct ast_ha *ha)
+{
+	int rulesfound = 0;
+	while (ha) {
+		rulesfound++;
+		ast_debug(0,"     %-3.3d: %s: %s mask %s\n", rulesfound, (ha->sense == AST_SENSE_ALLOW) ? "permit" : "deny  ", 
+			ast_sockaddr_stringify(&ha->addr), ast_sockaddr_stringify(&ha->netmask));
+		ha = ha->next;
+	}
+}

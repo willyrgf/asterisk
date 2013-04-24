@@ -28638,18 +28638,19 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					struct ast_sockaddr ip;
 					/* Get host name */
 					res = ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight);
-					if (res) {
+					if (!res) {
 						res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
+						if (ast_sockaddr_isnull(&ip) || res ) {
+							ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
+						} else {
+							peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
+							ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
+						}
 					}
-					if (res) {
-						int ha_error;
-						peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
-					}
-					if (res) {
-						ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
-					} else {
-						ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
-					}
+				}
+				if (option_debug > 3) {
+					ast_debug(3, "======> List of IP matching entries for %s <============\n", name);
+					ha_list_debug(peer->srventries);
 				}
 
 		} else {
@@ -30705,6 +30706,7 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 {
 	struct ast_sockaddr *addrs;
 	int addrs_cnt;
+	int i;
 
 	addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
 	if (addrs_cnt <= 0) {
@@ -30713,6 +30715,12 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 	if (addrs_cnt > 1) {
 		ast_debug(1, "Multiple addresses, using the first one only\n");
 	}
+	if (option_debug > 3) {
+		for (i = 0; i < addrs_cnt; i++) {
+			ast_debug(0, "           => %d: %s resolves into  %s\n", i, name, ast_sockaddr_stringify(&addrs[i]));
+		}
+	}
+	
 
 	ast_sockaddr_copy(addr, &addrs[0]);
 

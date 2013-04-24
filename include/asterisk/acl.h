@@ -258,6 +258,11 @@ int ast_str2tos(const char *value, unsigned int *tos);
  */
 const char *ast_tos2str(unsigned int tos);
 
+/*!
+ * \brief Print a list of the ha contents in the debug channel 
+ */
+void ha_list_debug(struct ast_ha *ha);
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
