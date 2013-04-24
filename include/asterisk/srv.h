@@ -34,6 +34,13 @@
 /*!\brief An opaque type, for lookup usage */
 struct srv_context;
 
+/*! \brief Allocate a new SRV context 
+*/
+struct srv_context *ast_srv_context_new(void);
+
+/*! \brief Free all entries in the context, but not the context itself */
+void ast_srv_context_free_list(struct srv_context *context);
+
 /*!\brief Retrieve set of SRV lookups, in order
  * \param[in] context A pointer in which to hold the result
  * \param[in] service The service name to look up
@@ -50,8 +57,6 @@ extern int ast_srv_lookup(struct srv_context **context, const char *service, con
  */
 void ast_srv_cleanup(struct srv_context **context);
 
-/*! \brief Free all entries in the context, but not the context itself */
-void ast_srv_context_free_list(struct srv_context *context);
 
 /*! Lookup entry in SRV records Returns 1 if found, 0 if not found, -1 on hangup 
 	Only do SRV record lookup if you get a domain without a port. If you get a port #, it's a DNS host name.
@@ -110,4 +115,5 @@ int ast_srv_get_nth_record(struct srv_context *context, int record_num, const ch
  * \brief Print out the complete data in the SRV list
  */
 void ast_srv_debug_print(struct srv_context *context);
+
 #endif /* _ASTERISK_SRV_H */

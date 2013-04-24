@@ -1211,6 +1211,7 @@ struct sip_peer {
 		AST_STRING_FIELD(useragent);    /*!<  User agent in SIP request (saved from registration) */
 		AST_STRING_FIELD(mwi_from);     /*!< Name to place in From header for outgoing NOTIFY requests */
 		AST_STRING_FIELD(engine);       /*!<  RTP Engine to use */
+		AST_STRING_FIELD(srvdomain);    /*!<  SIP Domain for SRV lookups */
 		AST_STRING_FIELD(unsolicited_mailbox);  /*!< Mailbox to store received unsolicited MWI NOTIFY messages information in */
 		);
 	struct sip_socket socket;       /*!< Socket used for this peer */
@@ -1258,6 +1259,7 @@ struct sip_peer {
 	struct sip_proxy *outboundproxy;/*!< Outbound proxy for this peer */
 	struct ast_dnsmgr_entry *dnsmgr;/*!<  DNS refresh manager for peer */
 	struct ast_sockaddr addr;        /*!<  IP address of peer */
+	struct srv_context *srvcontext;	/*!< DNS SRV lookup chain for failover */
 	unsigned int portinuri:1;       /*!< Whether the port should be included in the URI */
 	struct sip_pvt *call;           /*!<  Call pointer */
 	int pokeexpire;                 /*!<  Qualification: When to expire poke (qualify= checking) */
@@ -1269,6 +1271,7 @@ struct sip_peer {
 	struct ast_ha *ha;              /*!<  Access control list */
 	struct ast_ha *contactha;       /*!<  Restrict what IPs are allowed in the Contact header (for registration) */
 	struct ast_ha *directmediaha;   /*!<  Restrict what IPs are allowed to interchange direct media with */
+	struct ast_ha *srventries;      /*!<  DNS Srv entries at time of peer creation  */
 	struct ast_variable *chanvars;  /*!<  Variables to set for channel created by user */
 	struct sip_pvt *mwipvt;         /*!<  Subscription for MWI */
 	struct sip_st_cfg stimer;       /*!<  SIP Session-Timers */

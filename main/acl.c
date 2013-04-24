@@ -603,11 +603,13 @@ int ast_get_ip_or_srv(struct ast_sockaddr *addr, const char *hostname, const cha
 
 	if (service) {
 		snprintf(srv, sizeof(srv), "%s.%s", service, hostname);
+		ast_debug(3, "==> Looking up %s \n", srv);
 		if ((srv_ret = ast_get_srv(NULL, host, sizeof(host), &tportno, srv)) > 0) {
 			hostname = host;
 		}
 	}
 
+	ast_debug(3, "==> Resolving %s \n", hostname);
 	if (resolve_first(addr, hostname, PARSE_PORT_FORBID, addr->ss.ss_family) != 0) {
 		return -1;
 	}

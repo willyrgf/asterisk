@@ -77,6 +77,14 @@ struct srv_context {
 	AST_LIST_HEAD_NOLOCK(srv_entries, srv_entry) entries;
 };
 
+struct srv_context *ast_srv_context_new()
+{
+	struct srv_context *new = ast_calloc(1, sizeof(struct srv_context));
+	AST_LIST_HEAD_INIT_NOLOCK(&new->entries);
+
+	return new;
+}
+
 static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct srv_entry **result, struct timeval *ttl_expire)
 {
 	struct srv {
@@ -99,6 +107,7 @@ static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct 
 		ast_log(LOG_WARNING, "Failed to expand hostname\n");
 		return -1;
 	}
+	ast_debug(3, "     ===> Parsed Hostname %s \n", repl);
 
 	/* the magic value "." for the target domain means that this service
 	   is *NOT* available at the domain we searched */
@@ -129,13 +138,18 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 {
 	struct srv_context *c = (struct srv_context *) context;
 	struct srv_entry *entry = NULL;
-	struct srv_entry *current;
+	struct srv_entry *current = NULL;
 	struct timeval expiry  = {0,};
 
 	ast_debug(3, " ==> Callback received \n");
 
 	expiry.tv_sec =  (long) ttl;
 	expiry = ast_tvadd(expiry, ast_tvnow());
+
+	if (c == NULL) {
+		ast_debug(3, "   ==> Callback with no context ?? \n");
+		return -1;
+	}
 
 	if (parse_srv(answer, len, fullanswer, &entry, &expiry))
 		return -1;
@@ -144,12 +158,14 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 		c->have_weights = 1;
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&c->entries, current, list) {
+		ast_debug(3, "         ===> Looking at you, %s \n", current->host);
 		/* insert this entry just before the first existing
-		   entry with a higher priority */
+	   	entry with a higher priority */
 		if (current->priority <= entry->priority)
 			continue;
 
 		AST_LIST_INSERT_BEFORE_CURRENT(entry, list);
+		c->num_records++;
 		entry = NULL;
 		break;
 	}
@@ -224,8 +240,10 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 {
 	struct srv_entry *cur;
 
+	ast_debug(3, "    ===> Searching for %s \n", service);
+
 	if (*context == NULL) {
-		if (!(*context = ast_calloc(1, sizeof(struct srv_context)))) {
+		if (!(*context = ast_srv_context_new())) {
 			return -1;
 		}
 		AST_LIST_HEAD_INIT_NOLOCK(&(*context)->entries);
@@ -243,9 +261,6 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 		(*context)->prev = AST_LIST_FIRST(&(*context)->entries);
 		*host = (*context)->prev->host;
 		*port = (*context)->prev->port;
-		AST_LIST_TRAVERSE(&(*context)->entries, cur, list) {
-			++((*context)->num_records);
-		}
 		return 0;
 	}
 
@@ -309,8 +324,15 @@ int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, cons
 	ast_debug(3, "==> Searching in DNS for %s \n", service);
 	ret = ast_search_dns(context, service, C_IN, T_SRV, srv_callback);
 
-	if (ret > 0 && context->have_weights) {
-		process_weights(context);
+	if (ret > 0) {
+		struct srv_entry *cur;
+
+		if(context->have_weights) {
+			process_weights(context);
+		}
+		AST_LIST_TRAVERSE(&context->entries, cur, list) {
+			++(context->num_records);
+		}
 	}
 
 	if (chan) {
@@ -322,7 +344,7 @@ int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, cons
 
 
 
-	if (option_debug > 3) {
+	if (ret > 0 && option_debug > 3) {
 		ast_srv_debug_print(context);
 	}
 
@@ -407,7 +429,12 @@ void ast_srv_debug_print(struct srv_context *context)
 	if (context == NULL) {
 		return;
 	}
+	if (AST_LIST_EMPTY(&context->entries)) {
+		return;
+	}
+	
 
+	ast_debug(0, "  => Number of DNS SRV entries %d \n", context->num_records);
 	AST_LIST_TRAVERSE(&context->entries, entry, list) {
 		ast_strftime(exptime, sizeof(exptime), "%Y-%m-%d %H:%M:%S.%3q %Z", ast_localtime(&entry->ttl_expire, &myt, NULL));
 		ast_debug(0, "DNS SRV Entry %-2.2d : P %-2.2d W %-4.4d Hostname %s Port %d Expire %s\n", i, entry->priority, entry->weight, entry->host, entry->port, exptime);

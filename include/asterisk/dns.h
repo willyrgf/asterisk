@@ -34,6 +34,6 @@
 		services does not work, Asterisk may lock while waiting for response.
 */
 int ast_search_dns(void *context, const char *dname, int class, int type,
-	 int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer));
+	 int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl));
 
 #endif /* _ASTERISK_DNS_H */

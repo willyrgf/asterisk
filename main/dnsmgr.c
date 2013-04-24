@@ -152,11 +152,14 @@ static int internal_dnsmgr_lookup(const char *name, struct ast_sockaddr *result,
 	/* Lookup address family filter. */
 	family = result->ss.ss_family;
 
+	ast_debug(3, "===> Doing dns magic on %s \n", name);
+
 	/*
 	 * If it's actually an IP address and not a name, there's no
 	 * need for a managed lookup.
 	 */
 	if (ast_sockaddr_parse(result, name, PARSE_PORT_FORBID)) {
+		ast_debug(3, "   ==> Not a name, it's an address. Done with %s\n", name);
 		return 0;
 	}
 

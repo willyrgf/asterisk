@@ -5004,10 +5004,17 @@ static void sip_destroy_peer(struct sip_peer *peer)
 		ast_variables_destroy(peer->chanvars);
 		peer->chanvars = NULL;
 	}
+
+	if (peer->srvcontext) {
+		ast_srv_context_free_list(peer->srvcontext);
+		ast_free(peer->srvcontext);
+		peer->srvcontext = NULL;
+	}
 	
 	register_peer_exten(peer, FALSE);
 	ast_free_ha(peer->ha);
 	ast_free_ha(peer->directmediaha);
+	ast_free_ha(peer->srventries);		/* ACL based on IP addresses in SRV list for domain */
 	if (peer->selfdestruct)
 		ast_atomic_fetchadd_int(&apeerobjs, -1);
 	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->is_realtime) {
@@ -5847,18 +5854,47 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 		 * an A record lookup should be used instead of SRV.
 		 */
 		if (!hostport.port && sip_cfg.srvlookup) {
+			struct srv_context *srvcon = ast_srv_context_new();
+
 			snprintf(service, sizeof(service), "_%s._%s.%s", 
 				 get_srv_service(dialog->socket.type),
 				 get_srv_protocol(dialog->socket.type), peername);
-			if ((srv_ret = ast_get_srv(NULL, host, sizeof(host), &tportno,
-						   service)) > 0) {
-				hostn = host;
-			}
-		}
 
-		if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
-			ast_log(LOG_WARNING, "No such host: %s\n", peername);
-			return -1;
+			/* Get the srv list */
+			if ((srv_ret = ast_get_srv_list(srvcon, NULL, service)) > 0) {
+				int rec = 1;
+				unsigned short port, prio, weight;
+				const char *srvhost;
+
+				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(srvcon), hostn);
+				hostn = host;
+				for (rec = 0; rec < ast_srv_get_record_count(srvcon); rec++) {
+					if(ast_srv_get_nth_record(srvcon, rec, &srvhost, &port, &prio, &weight)) {
+						ast_log(LOG_WARNING, "No more SRV records for: %s\n", peername);
+						return -1;
+					}
+					ast_copy_string(host, srvhost, sizeof(host));
+					hostn = host;
+					tportno = (int) port;
+					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostn);
+					if (!ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
+						/* We found a host to try on */
+						break;
+					}
+		
+				}
+
+				ast_debug(3, "   ==> Settling with SRV entry %d:   %s\n", rec, hostn);
+
+			}
+			ast_srv_context_free_list(srvcon);
+			ast_free(srvcon);
+		} else {
+
+			if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
+				ast_log(LOG_WARNING, "No such host: %s\n", peername);
+				return -1;
+			}
 		}
 
 		if (srv_ret > 0) {
@@ -18183,6 +18219,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		ast_cli(fd, "  Timer T1     : %d\n", peer->timer_t1);
 		ast_cli(fd, "  Timer B      : %d\n", peer->timer_b);
+		ast_cli(fd, "  Domain       : %s\n", ast_strlen_zero(peer->srvdomain) ? "N/A" : peer->srvdomain);
 		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
 		ast_cli(fd, "  Addr->IP     : %s\n", ast_sockaddr_stringify(&peer->addr));
 		ast_cli(fd, "  Defaddr->IP  : %s\n", ast_sockaddr_stringify(&peer->defaddr));
@@ -18291,6 +18328,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 
 		/* - is enumerated */
 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
+		astman_append(s, "SipDomain: %s\r\n", ast_strlen_zero(peer->srvdomain) ? "" : peer->srvdomain);
 		astman_append(s, "ToHost: %s\r\n", peer->tohost);
 		astman_append(s, "Address-IP: %s\r\nAddress-Port: %d\r\n", ast_sockaddr_stringify_addr(&peer->addr), ast_sockaddr_port(&peer->addr));
 		astman_append(s, "Default-addr-IP: %s\r\nDefault-addr-port: %d\r\n", ast_sockaddr_stringify_addr(&peer->defaddr), ast_sockaddr_port(&peer->defaddr));
@@ -27986,6 +28024,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	int alt_fullcontact = alt ? 1 : 0, headercount = 0;
 	struct ast_str *fullcontact = ast_str_alloca(512);
 
+	ast_debug(2, "==> Starting to build peer  %s \n", name);
+
 	if (!realtime || ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
 		/* Note we do NOT use find_peer here, to avoid realtime recursion */
 		/* We also use a case-sensitive comparison (unlike find_peer) so
@@ -28516,29 +28556,127 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		}
 	}
 
+	ast_debug(3, " ==> SRV check begins for %s \n", name);
+
+	if(sip_cfg.srvlookup && srvlookup && peer->portinuri == 0 && !ast_sockaddr_parse(NULL, srvlookup, PARSE_PORT_IGNORE)) {
+		/* We have no port, and not an IP address so hostname can be used as domain */
+		ast_string_field_set(peer, srvdomain, srvlookup);	/* Save the domain for future lookups */
+		ast_debug(3, " ==> Host name %s needs SRV lookup \n", srvlookup);
+	} else {
+		ast_debug(3, " ==> Host name %s does not need SRV lookup \n", srvlookup);
+	}
+
+
 	if (srvlookup && peer->dnsmgr == NULL) {
 		char transport[MAXHOSTNAMELEN];
 		char _srvlookup[MAXHOSTNAMELEN];
+		char host[MAXHOSTNAMELEN];
 		char *params;
+		int tportno;
+		int gotsrv = FALSE;
 
 		ast_copy_string(_srvlookup, srvlookup, sizeof(_srvlookup));
 		if ((params = strchr(_srvlookup, ';'))) {
 			*params++ = '\0';
 		}
 
-		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(peer->socket.type), get_srv_protocol(peer->socket.type));
+		ast_debug(2, "==> Going to get SRV records for %s \n", _srvlookup);
 
 		peer->addr.ss.ss_family = get_address_family_filter(peer->socket.type); /* Filter address family */
-		if (ast_dnsmgr_lookup_cb(_srvlookup, &peer->addr, &peer->dnsmgr, sip_cfg.srvlookup && !peer->portinuri ? transport : NULL,
-					on_dns_update_peer, ref_peer(peer, "Store peer on dnsmgr"))) {
-			ast_log(LOG_ERROR, "srvlookup failed for host: %s, on peer %s, removing peer\n", _srvlookup, peer->name);
-			unref_peer(peer, "dnsmgr lookup failed, getting rid of peer dnsmgr ref");
-			unref_peer(peer, "getting rid of a peer pointer");
-			return NULL;
+
+		/* If we don't have an IP address or a port number configured,
+		   check if we can get a DNS SRV list */
+		if (!ast_strlen_zero(peer->srvdomain)) {
+			if (peer->srvcontext) {
+				ast_srv_context_free_list(peer->srvcontext);
+				free(peer->srvcontext);
+			}
+			peer->srvcontext = ast_srv_context_new();
+			if (peer->srvcontext == NULL) {
+				ast_log(LOG_ERROR, "Couldn't allocate DNS SRV memory for peer %s\n", peer->name);
+			} else {
+				snprintf(transport, sizeof(transport), "_%s._%s.%s", get_srv_service(peer->socket.type), get_srv_protocol(peer->socket.type), _srvlookup);
+				gotsrv = ast_get_srv_list(peer->srvcontext, NULL, transport);
+			}
+
 		}
-		if (!peer->dnsmgr) {
-			/* dnsmgr refresh disabeld, release reference */
-			unref_peer(peer, "dnsmgr disabled, unref peer");
+
+		/* If we have a DNS SRV list, go through it to find a candidate that works with our address family 
+		 * We don't use the DNSmanager for SRV records.
+		 */
+		if (gotsrv > 0) {
+				int rec = 0;
+				unsigned short prio, weight;
+				const char *hostname;
+
+				ast_debug(3, "   ==> DNS SRV lookup of %s returned %d entries. \n", transport, ast_srv_get_record_count(peer->srvcontext));
+				/* Try all candidates until we find one that fits our address family 
+  				 * Note that the SRV code lists the candidates in order of weight and priority.
+				 */
+				do {
+					rec++;
+					if(ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight)) {
+						ast_log(LOG_WARNING, "No more hosts: %s\n", peer->srvdomain);
+						unref_peer(peer, "SRV lookup failed, getting rid of peer ref");
+						return NULL;
+					}
+					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostname);
+				} while (ast_sockaddr_resolve_first_transport(&peer->addr, hostname, 0, peer->socket.type));
+
+				/* Set the port number */
+				ast_sockaddr_set_port(&peer->addr, tportno);
+
+				ast_debug(3, "   ==> Settling on SRV entry %d (prio %d weight %d): %s\n", rec - 1, prio, weight, hostname);
+
+				/* Now loop again and fill the ACL 
+				 */
+				if (peer->srventries) {
+					ast_free_ha(peer->srventries);
+				}
+				for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
+					int res;
+					struct ast_sockaddr ip;
+					/* Get host name */
+					res = ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight);
+					if (res) {
+						res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
+					}
+					if (res) {
+						int ha_error;
+						peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
+					}
+					if (res) {
+						ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
+					} else {
+						ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
+					}
+				}
+
+		} else {
+			int res;
+			/* Lookup A/AAAA records - possibly with DNSmanager */
+			if (gotsrv == 0) {
+				ast_debug(3, "==> Looking up A/AAAA DNS records for %s \n", _srvlookup);
+				/* If gotserv is negative we've already tried with SRV  - now look for A /AAAA records */
+				res = ast_dnsmgr_lookup_cb(_srvlookup, &peer->addr, &peer->dnsmgr, NULL, on_dns_update_peer, ref_peer(peer, "Store peer on dnsmgr"));
+			} else {
+				ast_debug(3, "==> Looking up SRV or A/AAAA DNS records for %s \n", _srvlookup);
+				/* If gotserv is negative we've already tried with SRV */
+				snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(peer->socket.type), get_srv_protocol(peer->socket.type));
+				res = ast_dnsmgr_lookup_cb(_srvlookup, &peer->addr, &peer->dnsmgr, sip_cfg.srvlookup && !peer->portinuri ? transport : NULL,
+                                        on_dns_update_peer, ref_peer(peer, "Store peer on dnsmgr"));
+			}
+			if (res) {
+				ast_log(LOG_ERROR, "DNS SRV or A/AAAA lookup failed for host: %s, on peer %s, removing peer\n", _srvlookup, peer->name);
+				unref_peer(peer, "dnsmgr lookup failed, getting rid of peer dnsmgr ref");
+				unref_peer(peer, "getting rid of a peer pointer");
+				return NULL;
+			}
+			ast_debug(2, "==> Got DNS records for %s \n", _srvlookup);
+			if (!peer->dnsmgr) {
+				/* dnsmgr refresh disabled, release reference */
+				unref_peer(peer, "dnsmgr disabled, unref peer");
+			}
 		}
 
 		ast_string_field_set(peer, tohost, srvlookup);
@@ -28555,6 +28693,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		/* force a refresh here on reload if dnsmgr already exists and host is set. */
 		ast_dnsmgr_refresh(peer->dnsmgr);
 	}
+	ast_debug(2, "==> Done with DNS and SRV records for %s \n", srvlookup);
 
 	if (port && !realtime && peer->host_dynamic) {
 		ast_sockaddr_set_port(&peer->defaddr, port);
@@ -28575,6 +28714,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	if (!peer->socket.port) {
 		peer->socket.port = htons(((peer->socket.type & SIP_TRANSPORT_TLS) ? STANDARD_TLS_PORT : STANDARD_SIP_PORT));
 	}
+	ast_debug(3, "==> building peer %s =======\n", peer->name );
 
 	if (!sip_cfg.ignore_regexpire && peer->host_dynamic && realtime) {
 		time_t nowtime = time(NULL);
@@ -28592,6 +28732,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		ref_peer(peer, "schedule qualify");
 		sip_poke_peer(peer, 0);
 	}
+	ast_debug(3, "==> building peer %s =======\n", peer->name );
 
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE)) {
 		sip_cfg.allowsubscribe = TRUE;	/* No global ban any more */
@@ -28611,6 +28752,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		 * way, then we will get events when app_voicemail gets loaded. */
 		sip_send_mwi_to_peer(peer, 1);
 	}
+	ast_debug(3, "==> building peer %s =======\n", peer->name );
 
 	peer->the_mark = 0;
 
@@ -28623,6 +28765,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			ast_free(reg_string);
 		}
 	}
+	ast_debug(3, "==> Done building peer %s =======\n", peer->name );
 	return peer;
 }
 

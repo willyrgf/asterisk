@@ -142,7 +142,7 @@ struct txt_context {
 };
 
 /*! \brief Callback for TXT record lookup, /ol version */
-static int txt_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
+static int txt_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl)
 {
 	struct txt_context *c = context;
 	unsigned int i;
@@ -247,7 +247,7 @@ struct ebl_context {
 };
 
 /*! \brief Callback for EBL record lookup */
-static int ebl_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
+static int ebl_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl)
 {
 	struct ebl_context *c = context;
 	unsigned int i;
@@ -596,7 +596,7 @@ static int parse_naptr(unsigned char *dst, int dstsize, char *tech, int techsize
 #define ENUMLOOKUP_OPTIONS_DIRECT	8
 
 /*! \brief Callback from ENUM lookup function */
-static int enum_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer)
+static int enum_callback(void *context, unsigned char *answer, int len, unsigned char *fullanswer, unsigned int ttl)
 {
 	struct enum_context *c = context;
 	void *p = NULL;
