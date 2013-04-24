@@ -537,36 +537,18 @@ static void bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
  *
  * \note On entry, bridge_channel->bridge is already locked.
  *
- * \return Nothing
+ * \retval 0 on success.
+ * \retval -1 on failure.  The channel did not get pushed.
  */
-static void bridge_channel_push(struct ast_bridge_channel *bridge_channel)
+static int bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 {
 	struct ast_bridge *bridge = bridge_channel->bridge;
 	struct ast_bridge_channel *swap;
-	int chan_leaving;
 
 	ast_assert(!bridge_channel->in_bridge);
 
 	swap = find_bridge_channel(bridge, bridge_channel->swap);
 	bridge_channel->swap = NULL;
-
-	chan_leaving = bridge->dissolved
-		|| !bridge->v_table->can_push(bridge, bridge_channel, swap);
-
-	ast_bridge_channel_lock(bridge_channel);
-	if (chan_leaving) {
-		/*
-		 * Force out channel being pushed into a dissolved bridge or it
-		 * is not allowed into the bridge.
-		 */
-		ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
-	}
-	chan_leaving = bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT;
-	ast_bridge_channel_unlock(bridge_channel);
-	if (chan_leaving) {
-		/* Don't push a channel in the process of leaving. */
-		return;
-	}
 
 	if (swap) {
 		ast_debug(1, "Bridge %s: pushing %p(%s) by swapping with %p(%s)\n",
@@ -578,11 +560,12 @@ static void bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	}
 
 	/* Add channel to the bridge */
-	if (bridge->v_table->push(bridge, bridge_channel, swap)) {
-		ast_log(LOG_ERROR, "Bridge %s: failed to push channel %s into bridge\n",
-			bridge->uniqueid, ast_channel_name(bridge_channel->chan));
-		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
-		return;
+	if (bridge->dissolved
+		|| bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT
+		|| bridge->v_table->push(bridge, bridge_channel, swap)) {
+		ast_debug(1, "Bridge %s: pushing %p(%s) into bridge failed\n",
+			bridge->uniqueid, bridge_channel, ast_channel_name(bridge_channel->chan));
+		return -1;
 	}
 	bridge_channel->in_bridge = 1;
 	bridge_channel->just_joined = 1;
@@ -598,6 +581,7 @@ static void bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 
 	bridge->reconfigured = 1;
 	ast_bridge_publish_enter(bridge, bridge_channel->chan);
+	return 0;
 }
 
 /*! \brief Internal function to handle DTMF from a channel */
@@ -1228,7 +1212,6 @@ struct ast_bridge *ast_bridge_alloc(size_t size, const struct ast_bridge_methods
 		|| !v_table->name
 		|| !v_table->destroy
 		|| !v_table->dissolving
-		|| !v_table->can_push
 		|| !v_table->push
 		|| !v_table->pull
 		|| !v_table->notify_masquerade) {
@@ -1325,25 +1308,6 @@ static void bridge_base_dissolving(struct ast_bridge *self)
 
 /*!
  * \internal
- * \brief ast_bridge base can_push method.
- * \since 12.0.0
- *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel wanting to push.
- * \param swap Bridge channel to swap places with if not NULL.
- *
- * \note On entry, self is already locked.
- * \note Stub because of nothing to do.
- *
- * \retval TRUE if can push this channel into the bridge.
- */
-static int bridge_base_can_push(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap)
-{
-	return 1;
-}
-
-/*!
- * \internal
  * \brief ast_bridge base push method.
  * \since 12.0.0
  *
@@ -1400,7 +1364,6 @@ struct ast_bridge_methods ast_bridge_base_v_table = {
 	.name = "base",
 	.destroy = bridge_base_destroy,
 	.dissolving = bridge_base_dissolving,
-	.can_push = bridge_base_can_push,
 	.push = bridge_base_push,
 	.pull = bridge_base_pull,
 	.notify_masquerade = bridge_base_notify_masquerade,
@@ -2337,7 +2300,9 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		bridge_channel->bridge->callid = ast_read_threadstorage_callid();
 	}
 
-	bridge_channel_push(bridge_channel);
+	if (bridge_channel_push(bridge_channel)) {
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+	}
 	bridge_reconfigured(bridge_channel->bridge);
 
 	if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
@@ -3120,7 +3085,9 @@ static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *sr
 		ast_bridge_channel_unlock(bridge_channel);
 		ao2_ref(src_bridge, -1);
 
-		bridge_channel_push(bridge_channel);
+		if (bridge_channel_push(bridge_channel)) {
+			ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+		}
 	}
 	bridge_reconfigured(dst_bridge);
 	bridge_reconfigured(src_bridge);

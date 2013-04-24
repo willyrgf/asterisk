@@ -296,19 +296,6 @@ typedef void (*ast_bridge_destructor_fn)(struct ast_bridge *self);
 typedef void (*ast_bridge_dissolving_fn)(struct ast_bridge *self);
 
 /*!
- * \brief Can this channel be pushed into the bridge.
- *
- * \param self Bridge to operate upon.
- * \param bridge_channel Bridge channel wanting to push.
- * \param swap Bridge channel to swap places with if not NULL.
- *
- * \note On entry, self is already locked.
- *
- * \retval TRUE if can push this channel into the bridge.
- */
-typedef int (*ast_bridge_can_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
-
-/*!
  * \brief Push this channel into the bridge.
  *
  * \param self Bridge to operate upon.
@@ -323,8 +310,8 @@ typedef int (*ast_bridge_can_push_channel_fn)(struct ast_bridge *self, struct as
  *
  * \note On entry, self is already locked.
  *
- * \retval 0 on success
- * \retval -1 on failure
+ * \retval 0 on success.
+ * \retval -1 on failure.  The channel did not get pushed.
  */
 typedef int (*ast_bridge_push_channel_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap);
 
@@ -374,8 +361,6 @@ struct ast_bridge_methods {
 	ast_bridge_destructor_fn destroy;
 	/*! The bridge is being dissolved.  Remove any references to the bridge. */
 	ast_bridge_dissolving_fn dissolving;
-	/*! TRUE if can push the bridge channel into the bridge. */
-	ast_bridge_can_push_channel_fn can_push;
 	/*! Push the bridge channel into the bridge. */
 	ast_bridge_push_channel_fn push;
 	/*! Pull the bridge channel from the bridge. */
