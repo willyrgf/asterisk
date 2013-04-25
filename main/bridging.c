@@ -2290,6 +2290,9 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		bridge_channel->bridge->uniqueid,
 		bridge_channel, ast_channel_name(bridge_channel->chan));
 
+	/* Add the jitterbuffer if the channel requires it */
+	ast_jb_enable_for_channel(bridge_channel->chan);
+
 	/*
 	 * Directly locking the bridge is safe here because nobody else
 	 * knows about this bridge_channel yet.

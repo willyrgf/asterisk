@@ -61,6 +61,11 @@ AMI (Asterisk Manager Interface)
 
 Channel Drivers
 ------------------
+ * When a channel driver is configured to enable jiterbuffers, they are now
+   applied unconditionally when a channel joins a bridge. If a jitterbuffer
+   is already set for that channel when it enters, such as by the JITTERBUFFER
+   function, then the existing jitterbuffer will be used and the one set by
+   the channel driver will not be applied.
 
 chan_local
 ------------------
@@ -96,6 +101,12 @@ Features
  * You can now have the settings for a channel updated using the FEATURE()
    and FEATUREMAP() functions inherited to child channels by setting
    FEATURE(inherit)=yes.
+
+Functions
+------------------
+ * JITTERBUFFER now accepts an argument of 'disabled' which can be used
+   to remove jitterbuffers previously set on a channel with JITTERBUFFER.
+   The value of this setting is ignored when disabled is used for the argument.
 
 Logging
 -------------------
