@@ -70,15 +70,10 @@ static int simple_bridge_write(struct ast_bridge *bridge, struct ast_bridge_chan
 {
 	struct ast_bridge_channel *other;
 
-	/* If this is the only channel in this bridge then immediately exit */
-	if (AST_LIST_FIRST(&bridge->channels) == AST_LIST_LAST(&bridge->channels)) {
-		return -1;
-	}
-
 	/* Find the channel we actually want to write to */
-	other = AST_LIST_FIRST(&bridge->channels);
-	if (other == bridge_channel) {
-		other = AST_LIST_LAST(&bridge->channels);
+	other = ast_bridge_channel_peer(bridge_channel);
+	if (!other) {
+		return -1;
 	}
 
 	/* The bridging core takes care of freeing the passed in frame. */

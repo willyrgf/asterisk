@@ -349,6 +349,17 @@ typedef void (*ast_bridge_pull_channel_fn)(struct ast_bridge *self, struct ast_b
 typedef void (*ast_bridge_notify_masquerade_fn)(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel);
 
 /*!
+ * \brief Get the merge priority of this bridge.
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \return Merge priority
+ */
+typedef int (*ast_bridge_merge_priority_fn)(struct ast_bridge *self);
+
+/*!
  * \brief Bridge virtual methods table definition.
  *
  * \note Any changes to this struct must be reflected in
@@ -367,6 +378,8 @@ struct ast_bridge_methods {
 	ast_bridge_pull_channel_fn pull;
 	/*! Notify the bridge of a masquerade with the channel. */
 	ast_bridge_notify_masquerade_fn notify_masquerade;
+	/*! Get the bridge merge priority. */
+	ast_bridge_merge_priority_fn get_merge_priority;
 };
 
 /*!
@@ -766,6 +779,21 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
 int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge);
 
 /*!
+ * \brief Move a channel from one bridge to another.
+ * \since 12.0.0
+ *
+ * \param dst_bridge Destination bridge of bridge channel move.
+ * \param src_bridge Source bridge of bridge channel move.
+ * \param chan Channel to move.
+ * \param swap Channel to replace in dst_bridge.
+ * \param attempt_recovery TRUE if failure attempts to push channel back into original bridge.
+ *
+ * \retval 0 on success.
+ * \retval -1 on failure.
+ */
+int ast_bridge_move(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, struct ast_channel *chan, struct ast_channel *swap, int attempt_recovery);
+
+/*!
  * \brief Adjust the bridge merge inhibit request count.
  * \since 12.0.0
  *
@@ -1161,6 +1189,21 @@ void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel
  * \param bridge_channel Channel to restore
  */
 void ast_bridge_channel_restore_formats(struct ast_bridge_channel *bridge_channel);
+
+/*!
+ * \brief Get the peer bridge channel of a two party bridge.
+ * \since 12.0.0
+ *
+ * \param bridge_channel What to get the peer of.
+ *
+ * \note On entry, bridge_channel->bridge is already locked.
+ *
+ * \note This is an internal bridge function.
+ *
+ * \retval peer on success.
+ * \retval NULL no peer channel.
+ */
+struct ast_bridge_channel *ast_bridge_channel_peer(struct ast_bridge_channel *bridge_channel);
 
 /*!
  * \brief Adjust the internal mixing sample rate of a bridge

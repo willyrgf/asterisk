@@ -40,8 +40,12 @@ enum ast_bridge_feature_flags {
 	AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM = (1 << 3),
 	/*! Bridge channels cannot be merged to this bridge. */
 	AST_BRIDGE_FLAG_MERGE_INHIBIT_TO = (1 << 4),
+	/*! Bridge channels cannot be local channel swap optimized from this bridge. */
+	AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM = (1 << 5),
+	/*! Bridge channels cannot be local channel swap optimized to this bridge. */
+	AST_BRIDGE_FLAG_SWAP_INHIBIT_TO = (1 << 6),
 	/*! Bridge channels can be moved to another bridge only by masquerade (ConfBridge) */
-	AST_BRIDGE_FLAG_MASQUERADE_ONLY = (1 << 5),
+	AST_BRIDGE_FLAG_MASQUERADE_ONLY = (1 << 7),
 };
 
 /*! \brief Flags used for per bridge channel features */
