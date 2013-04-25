@@ -546,6 +546,19 @@ static inline void _ast_bridge_unlock(struct ast_bridge *bridge, const char *fil
 	__ao2_unlock(bridge, file, function, line, var);
 }
 
+/*! \brief Lock two bridges. */
+#define ast_bridge_lock_both(bridge1, bridge2)		\
+	do {											\
+		for (;;) {									\
+			ast_bridge_lock(bridge1);				\
+			if (!ast_bridge_trylock(bridge2)) {		\
+				break;								\
+			}										\
+			ast_bridge_unlock(bridge1);				\
+			sched_yield();							\
+		}											\
+	} while (0)
+
 /*!
  * \brief See if it is possible to create a bridge
  *

@@ -3100,15 +3100,7 @@ int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridg
 {
 	int res = -1;
 
-	/* Deadlock avoidance. */
-	for (;;) {
-		ast_bridge_lock(dst_bridge);
-		if (!ast_bridge_trylock(src_bridge)) {
-			break;
-		}
-		ast_bridge_unlock(dst_bridge);
-		sched_yield();
-	}
+	ast_bridge_lock_both(dst_bridge, src_bridge);
 
 	if (dst_bridge->dissolved || src_bridge->dissolved) {
 		ast_debug(1, "Can't merge bridge %s into bridge %s, one or both bridges are dissolved.\n",
@@ -3125,11 +3117,7 @@ int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridg
 		ast_debug(1, "Can't merge bridge %s into bridge %s, multimix is needed and it cannot be acquired.\n",
 			src_bridge->uniqueid, dst_bridge->uniqueid);
 	} else {
-		++dst_bridge->inhibit_merge;
-		++src_bridge->inhibit_merge;
 		bridge_merge_do(dst_bridge, src_bridge, NULL, 0);
-		--src_bridge->inhibit_merge;
-		--dst_bridge->inhibit_merge;
 		res = 0;
 	}
 
