@@ -12437,10 +12437,10 @@ static void build_contact(struct sip_pvt *p, int useinstance)
 	}
 
 	if (p->socket.type == SIP_TRANSPORT_UDP) {
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s%s>", user,
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s>%s", user,
 			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip), instance);
 	} else {
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s%s>", user,
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s>%s", user,
 			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip),
 			get_transport(p->socket.type), instance);
 	}
