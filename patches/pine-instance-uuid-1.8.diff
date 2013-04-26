@@ -1,0 +1,620 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 386614)
++++ channels/chan_sip.c	(.../team/oej/pine-instance-uuid-1.8)	(revision 386614)
+@@ -273,6 +273,7 @@
+ #include "sip/include/sdp_crypto.h"
+ #include "asterisk/ccss.h"
+ #include "asterisk/xml.h"
++#include "asterisk/uuid.h"
+ #include "sip/include/dialog.h"
+ #include "sip/include/dialplan_functions.h"
+ 
+@@ -1538,7 +1539,7 @@
+ static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const struct sip_request *orig, const char *field);
+ static void set_destination(struct sip_pvt *p, char *uri);
+ static void append_date(struct sip_request *req);
+-static void build_contact(struct sip_pvt *p);
++static void build_contact(struct sip_pvt *p, int useinstance);
+ 
+ /*------Request handling functions */
+ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct ast_sockaddr *addr, int *recount, int *nounlock);
+@@ -12424,18 +12425,24 @@
+ }
+ 
+ /*! \brief Build contact header - the contact header we send out */
+-static void build_contact(struct sip_pvt *p)
++static void build_contact(struct sip_pvt *p, int useinstance)
+ {
+ 	char tmp[SIPBUFSIZE];
++	char instance[SIPBUFSIZE/2];
+ 	char *user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 0);
+ 
++	instance[0] = '\0';
++	if (useinstance && ast_test_flag(&p->flags[2], SIP_PAGE3_USE_INSTANCE_ID) && strlen(sip_cfg.instance_id) > 0) {
++		sprintf(instance, ";+sip.instance=\"<urn:uuid:%s>\"", sip_cfg.instance_id);
++	}
++
+ 	if (p->socket.type == SIP_TRANSPORT_UDP) {
+-		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", user,
+-			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip));
++		ast_string_field_build(p, our_contact, "<sip:%s%s%s%s>", user,
++			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip), instance);
+ 	} else {
+-		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s>", user,
++		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s%s>", user,
+ 			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip),
+-			get_transport(p->socket.type));
++			get_transport(p->socket.type), instance);
+ 	}
+ }
+ 
+@@ -12599,7 +12606,7 @@
+ 	add_header(req, "From", from);
+ 	add_header(req, "To", to);
+ 	ast_string_field_set(p, exten, l);
+-	build_contact(p);
++	build_contact(p, FALSE);
+ 	add_header(req, "Contact", p->our_contact);
+ 	add_header(req, "Call-ID", p->callid);
+ 	add_header(req, "CSeq", tmp_n);
+@@ -13012,7 +13019,7 @@
+ 	set_socket_transport(&mwi->call->socket, mwi->transport);
+ 	mwi->call->socket.port = htons(mwi->portno);
+ 	ast_sip_ouraddrfor(&mwi->call->sa, &mwi->call->ourip, mwi->call);
+-	build_contact(mwi->call);
++	build_contact(mwi->call, TRUE);
+ 	build_via(mwi->call);
+ 
+ 	/* Change the dialog callid. */
+@@ -13892,7 +13899,7 @@
+ 		  internal network so we can register through nat
+ 		 */
+ 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
+-		build_contact(p);
++		build_contact(p, TRUE);
+ 	}
+ 
+ 	/* set up a timeout */
+@@ -15378,7 +15385,7 @@
+ 	}
+ 
+ 	ast_string_field_set(p, exten, name);
+-	build_contact(p);
++	build_contact(p, FALSE);
+ 	if (req->ignore) {
+ 		/* Expires is a special case, where we only want to load the peer if this isn't a deregistration attempt */
+ 		const char *expires = get_header(req, "Expires");
+@@ -16783,7 +16790,7 @@
+ 			*t = '\0';
+ 
+ 		if (ast_strlen_zero(p->our_contact))
+-			build_contact(p);
++			build_contact(p, FALSE);
+ 	}
+ 
+ 	of = get_in_brackets(of);
+@@ -17622,6 +17629,21 @@
+ 	return map_x_s(allowoverlapstr, mode, "<error>");
+ }
+ 
++/*! \brief Get SIP.instance UUID from registry. If it doesn't exist,
++    create one.
++ */
++static void initiate_sip_instance(void)
++{
++	if (!ast_db_get("SIP", "instanceid", &sip_cfg.instance_id, sizeof(sip_cfg.instance_id))) {
++		/* We loaded instance ID from astdb. All good */
++		return;
++	}
++	/* Create UUID, store it */
++	ast_uuid_generate_str(&sip_cfg.instance_id, sizeof(sip_cfg.instance_id));
++	ast_db_put("SIP", "instanceid", &sip_cfg.instance_id);
++	return;
++}
++
+ /*! \brief Destroy disused contexts between reloads
+ 	Only used in reload_config so the code for regcontext doesn't get ugly
+ */
+@@ -22651,7 +22673,7 @@
+ 
+ 	/* must go through authentication before getting here */
+ 	gotdest = get_destination(p, req, NULL);
+-	build_contact(p);
++	build_contact(p, FALSE);
+ 
+ 	if (ast_strlen_zero(p->context))
+ 		ast_string_field_set(p, context, sip_cfg.default_context);
+@@ -23369,7 +23391,7 @@
+ 		}
+ 		gotdest = get_destination(p, NULL, &cc_recall_core_id);	/* Get destination right away */
+ 		extract_uri(p, req);			/* Get the Contact URI */
+-		build_contact(p);			/* Build our contact header */
++		build_contact(p, FALSE);		/* Build our contact header */
+ 
+ 		if (p->rtp) {
+ 			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_DTMF, ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
+@@ -25386,7 +25408,7 @@
+ 	/* Get full contact header - this needs to be used as a request URI in NOTIFY's */
+ 	parse_ok_contact(p, req);
+ 
+-	build_contact(p);
++	build_contact(p, FALSE);
+ 	if (gotdest != SIP_GET_DEST_EXTEN_FOUND) {
+ 		if (gotdest == SIP_GET_DEST_INVALID_URI) {
+ 			transmit_response(p, "416 Unsupported URI scheme", req);
+@@ -27629,6 +27651,9 @@
+ 	} else if (!strcasecmp(v->name, "buggymwi")) {
+ 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
+ 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
++	} else if (!strcasecmp(v->name, "use_sip_instance")) {
++		ast_set_flag(&mask[2], SIP_PAGE3_USE_INSTANCE_ID);
++		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_USE_INSTANCE_ID);
+ 	} else
+ 		res = 0;
+ 
+@@ -28918,7 +28943,11 @@
+ 	ast_clear_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT);
+ 	ast_clear_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION);
+ 
++	/* Load the SIP instance UUID from ast_db or create a new one. The UUID should never change,
++	   so we only create it once. */
++	initiate_sip_instance();
+ 
++
+ 	/* Read the [general] config section of sip.conf (or from realtime config) */
+ 	for (v = ast_variable_browse(cfg, "general"); v; v = v->next) {
+ 		if (handle_common_options(&setflags[0], &mask[0], v)) {
+Index: channels/sip/include/sip.h
+===================================================================
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 386614)
++++ channels/sip/include/sip.h	(.../team/oej/pine-instance-uuid-1.8)	(revision 386614)
+@@ -359,9 +359,10 @@
+ 
+ #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+ #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
++#define SIP_PAGE3_USE_INSTANCE_ID	 (1 << 22) /*!< GDP: Use SIP instance ID when registering with remote units */
+ 
+ #define SIP_PAGE3_FLAGS_TO_COPY \
+-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
++	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_INSTANCE_ID)
+ 
+ /*@}*/
+ 
+@@ -716,6 +717,7 @@
+ 	format_t capability;        /*!< Supported codecs */
+ 	int tcp_enabled;
+ 	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
++	char instance_id[37];	     /*!< Unique ID for this domain/configuration to be used as +sip.instance 16 octets, 4 "-" and the end of the string*/
+ };
+ 
+ /*! \brief The SIP socket definition */
+Index: configure.ac
+===================================================================
+--- configure.ac	(.../branches/1.8)	(revision 386614)
++++ configure.ac	(.../team/oej/pine-instance-uuid-1.8)	(revision 386614)
+@@ -466,11 +466,12 @@
+ AC_HEADER_SYS_WAIT
+ AC_CHECK_HEADERS([arpa/inet.h fcntl.h inttypes.h libintl.h limits.h locale.h malloc.h netdb.h netinet/in.h stddef.h stdint.h stdlib.h string.h strings.h sys/event.h sys/file.h sys/ioctl.h sys/param.h sys/socket.h sys/time.h syslog.h termios.h unistd.h utime.h arpa/nameser.h sys/io.h])
+ 
+-# Any one of these 4 packages support a mandatory requirement, so we want to check on them as early as possible.
++# Any one of these 5 packages support a mandatory requirement, so we want to check on them as early as possible.
+ AST_EXT_LIB_CHECK([TERMCAP], [termcap], [tgetent], [])
+ AST_EXT_LIB_CHECK([TINFO], [tinfo], [tgetent], [])
+ AST_EXT_LIB_CHECK([CURSES], [curses], [initscr], [curses.h])
+ AST_EXT_LIB_CHECK([NCURSES], [ncurses], [initscr], [curses.h])
++AST_EXT_LIB_CHECK([UUID], [uuid], [uuid_generate_random], [uuid/uuid.h], [-luuid])
+ 
+ EDITLINE_LIB=""
+ if test "x$TERMCAP_LIB" != "x" ; then
+@@ -486,6 +487,10 @@
+ fi
+ AC_SUBST(EDITLINE_LIB)
+ 
++if test "x$UUID_LIB" == "x"; then
++	AC_MSG_ERROR([*** uuid support not found (this typically means the uuid development package is missing)])
++fi
++
+ # Another mandatory item (unless it's explicitly disabled)
+ AC_ARG_ENABLE([xmldoc],
+ 	[AS_HELP_STRING([--disable-xmldoc],
+Index: include/asterisk/uuid.h
+===================================================================
+--- include/asterisk/uuid.h	(.../branches/1.8)	(revision 0)
++++ include/asterisk/uuid.h	(.../team/oej/pine-instance-uuid-1.8)	(revision 386614)
+@@ -0,0 +1,118 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2012, Digium, Inc.
++ *
++ * Mark Michelson <mmmichelson@digium.com>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ * \brief Universally unique identifier support
++ */
++
++#ifndef _ASTERISK_UUID_H
++#define _ASTERISK_UUID_H
++
++/* Size of an RFC 4122 UUID string plus terminating null byte */
++#define AST_UUID_STR_LEN (36 + 1)
++
++struct ast_uuid;
++
++/*!
++ * \brief Initialize the UUID system
++ */
++void ast_uuid_init(void);
++
++/*!
++ * \brief Generate a UUID
++ *
++ * This function allocates memory on the heap. The returned
++ * pointer must be freed using ast_free()
++ *
++ * \retval NULL Generation failed
++ * \retval non-NULL heap-allocated UUID
++ */
++struct ast_uuid *ast_uuid_generate(void);
++
++/*!
++ * \brief Convert a UUID to a string
++ *
++ * \param uuid The UUID to convert to a string
++ * \param[out] buf The buffer where the UUID string will be stored
++ * \param size The size of the buffer. Must be at least AST_UUID_STR_LEN.
++ * \return The UUID string (a pointer to buf)
++ */
++char *ast_uuid_to_str(const struct ast_uuid *uuid, char *buf, size_t size);
++
++/*!
++ * \brief Generate a UUID string.
++ * \since 12.0.0
++ *
++ * \param buf The buffer where the UUID string will be stored
++ * \param size The size of the buffer. Must be at least AST_UUID_STR_LEN.
++ *
++ * \return The UUID string (a pointer to buf)
++ */
++char *ast_uuid_generate_str(char *buf, size_t size);
++
++/*!
++ * \brief Convert a string to a UUID
++ *
++ * This function allocates memory on the heap. The returned
++ * pointer must be freed using ast_free()
++ *
++ * \param str The string to convert to a UUID
++ * \retval NULL Failed to convert
++ * \retval non-NULL The heap-allocated converted UUID
++ */
++struct ast_uuid *ast_str_to_uuid(const char *str);
++
++/*!
++ * \brief Make a copy of a UUID
++ *
++ * This function allocates memory on the heap. The returned
++ * pointer must be freed using ast_free()
++ *
++ * \param src The source UUID to copy
++ * \retval NULL Failed to copy
++ * \retval non-NULL The heap-allocated duplicate UUID
++ */
++struct ast_uuid *ast_uuid_copy(const struct ast_uuid *src);
++
++/*!
++ * \brief Compare two UUIDs
++ *
++ * \param left First UUID to compare
++ * \param right Second UUID to compare
++ * \retval <0 left is lexicographically less than right
++ * \retval 0 left and right are the same
++ * \retval >0 left is lexicographically greater than right
++ */
++int ast_uuid_compare(const struct ast_uuid *left, const struct ast_uuid *right);
++
++/*!
++ * \brief Clear a UUID by setting it to be a nil UUID (all 0s)
++ *
++ * \param uuid UUID to clear
++ */
++void ast_uuid_clear(struct ast_uuid *uuid);
++
++/*!
++ * \brief Check if a UUID is a nil UUID (all 0s)
++ *
++ * \param uuid UUID to check
++ * \retval 0 The UUID is not nil
++ * \retval non-zero The UUID is nil
++ */
++int ast_uuid_is_nil(const struct ast_uuid *uuid);
++#endif
+
+Egenskapsändringar för: include/asterisk/uuid.h
+___________________________________________________________________
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Index: main/uuid.c
+===================================================================
+--- main/uuid.c	(.../branches/1.8)	(revision 0)
++++ main/uuid.c	(.../team/oej/pine-instance-uuid-1.8)	(revision 386614)
+@@ -0,0 +1,229 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2012, Digium, Inc.
++ *
++ * Mark Michelson <mmmichelson@digium.com>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ * \brief Universally unique identifier support
++ */
++
++#include "asterisk.h"
++#include <uuid/uuid.h>
++#include <fcntl.h>
++
++#include "asterisk/uuid.h"
++#include "asterisk/utils.h"
++#include "asterisk/strings.h"
++#include "asterisk/logger.h"
++#include "asterisk/lock.h"
++
++AST_MUTEX_DEFINE_STATIC(uuid_lock);
++
++static int has_dev_urandom;
++
++struct ast_uuid {
++	uuid_t uu;
++};
++
++/*!
++ * \internal
++ * \brief Generate a UUID.
++ * \since 12.0.0
++ *
++ * \param uuid Fill this with a generated UUID.
++ *
++ * \return Nothing
++ */
++static void generate_uuid(struct ast_uuid *uuid)
++{
++	/* libuuid provides three methods of generating uuids,
++	 * uuid_generate(), uuid_generate_random(), and uuid_generate_time().
++	 *
++	 * uuid_generate_random() creates a UUID based on random numbers. The method
++	 * attempts to use either /dev/urandom or /dev/random to generate random values.
++	 * If these resources are unavailable, then random numbers will be generated
++	 * using C library calls to generate pseudorandom numbers.
++	 * This method of generating UUIDs corresponds to section 4.4 of RFC 4122.
++	 *
++	 * uuid_generate_time() creates a UUID based on the current time plus
++	 * a system identifier (MAC address of the ethernet interface). This
++	 * method of generating UUIDs corresponds to section 4.2 of RFC 4122.
++	 *
++	 * uuid_generate() will check if /dev/urandom or /dev/random is available to
++	 * use. If so, it will use uuid_generate_random(). Otherwise, it will use
++	 * uuid_generate_time(). The idea is that it avoids using pseudorandom
++	 * numbers if necessary.
++	 *
++	 * For our purposes, we do not use the time-based UUID at all. There are
++	 * several reasons for this:
++	 *
++	 * 1) The time-based algorithm makes use of a daemon process (uuidd) in order
++	 * to ensure that any concurrent requests for UUIDs result in unique results.
++	 * Use of this daemon is a bit dodgy for a few reasons
++	 *
++	 *     a) libuuid assumes a hardcoded location for the .pid file of the daemon.
++	 *     However, the daemon could already be running on the system in a different
++	 *     location than expected. If this is the case, then attempting to connect
++	 *     to the daemon will fail, and attempting to launch another instance in
++	 *     the expected location will also fail.
++	 *
++	 *     b) If the daemon is not running, then the first attempt to create a
++	 *     time-based UUID will result in launching the daemon. Because of the hard-
++	 *     coded locations that libuuid assumes for the daemon, Asterisk must be
++	 *     run with permissions that will allow for the daemon to be launched in
++	 *     the expected directories.
++	 *
++	 *     c) Once the daemon is running, concurrent requests for UUIDs are thread-safe.
++	 *     However, the actual launching of the daemon is not thread-safe since libuuid
++	 *     uses no synchronization primitives to ensure that only one thread (or process)
++	 *     launches the daemon.
++	 *
++	 *     d) When libuuid launches the daemon, it sets an inactivity timer.
++	 *     If no UUID generation requests are issued in that time period,
++	 *     then the daemon will exit. If a new request should occur after the daemon
++	 *     exits, then the daemon will be relaunched. Given point c), we cannot
++	 *     necessarily guarantee the thread-safety of time-based UUID generation since
++	 *     we cannot necessarily guarantee the daemon is running as we expect.
++	 *     We could set up a watchdog thread to generate UUIDs at regular intervals to
++	 *     prevent the daemon from exiting, but frankly, that sucks.
++	 *
++	 * 2) Since the MAC address of the Ethernet interface is part of the UUID when
++	 * using the time-based method, there is information leaked.
++	 *
++	 * Given these drawbacks, we stick to only using random UUIDs. The chance of /dev/random
++	 * or /dev/urandom not existing on systems in this age is next to none.
++	 */
++
++	/* XXX Currently, we only protect this call if the user has no /dev/urandon on their system.
++	 * If it turns out that there are issues with UUID generation despite the presence of
++	 * /dev/urandom, then we may need to make the locking/unlocking unconditional.
++	 */
++	if (!has_dev_urandom) {
++		ast_mutex_lock(&uuid_lock);
++	}
++	uuid_generate_random(uuid->uu);
++	if (!has_dev_urandom) {
++		ast_mutex_unlock(&uuid_lock);
++	}
++}
++
++struct ast_uuid *ast_uuid_generate(void)
++{
++	struct ast_uuid *uuid = ast_malloc(sizeof(*uuid));
++
++	if (!uuid) {
++		return NULL;
++	}
++	generate_uuid(uuid);
++	return uuid;
++}
++
++char *ast_uuid_to_str(const struct ast_uuid *uuid, char *buf, size_t size)
++{
++	ast_assert(size >= AST_UUID_STR_LEN);
++	uuid_unparse_lower(uuid->uu, buf);
++	return buf;
++}
++
++char *ast_uuid_generate_str(char *buf, size_t size)
++{
++	struct ast_uuid uuid;
++
++	generate_uuid(&uuid);
++	return ast_uuid_to_str(&uuid, buf, size);
++}
++
++struct ast_uuid *ast_str_to_uuid(const char *str)
++{
++	struct ast_uuid *uuid = ast_malloc(sizeof(*uuid));
++	int res;
++
++	if (!uuid) {
++		return NULL;
++	}
++	res = uuid_parse(str, uuid->uu);
++	if (res) {
++		ast_log(LOG_WARNING, "Unable to convert string %s into a UUID\n", str);
++		ast_free(uuid);
++		return NULL;
++	}
++	return uuid;
++}
++
++struct ast_uuid *ast_uuid_copy(const struct ast_uuid *src)
++{
++	struct ast_uuid *dst = ast_malloc(sizeof(*dst));
++
++	if (!dst) {
++		return NULL;
++	}
++	uuid_copy(dst->uu, src->uu);
++	return dst;
++}
++
++int ast_uuid_compare(const struct ast_uuid *left, const struct ast_uuid *right)
++{
++	return uuid_compare(left->uu, right->uu);
++}
++
++void ast_uuid_clear(struct ast_uuid *uuid)
++{
++	uuid_clear(uuid->uu);
++}
++
++int ast_uuid_is_nil(const struct ast_uuid *uuid)
++{
++	return uuid_is_null(uuid->uu);
++}
++
++void ast_uuid_init(void)
++{
++	/* This requires some explanation.
++	 *
++	 * libuuid generates UUIDs based on random number generation. This involves
++	 * opening a handle to /dev/urandom or /dev/random in order to get random
++	 * data for the UUIDs.
++	 *
++	 * This is thread-safe, to a point. The problem is that the first attempt
++	 * to generate a UUID will result in opening the random number handle. Once
++	 * the handle is opened, all further generation is thread safe. This
++	 * first generation can be potentially risky if multiple threads attempt
++	 * to generate a UUID at the same time, though, since there is no thread
++	 * synchronization used within libuuid. To get around this potential
++	 * issue, we go ahead and generate a UUID up front so that the underlying
++	 * work is done before we start requesting UUIDs for real.
++	 *
++	 * Think of this along the same lines as initializing a singleton.
++	 */
++	uuid_t uu;
++	int dev_urandom_fd;
++
++	dev_urandom_fd = open("/dev/urandom", O_RDONLY);
++	if (dev_urandom_fd < 0) {
++		ast_log(LOG_WARNING, "It appears your system does not have /dev/urandom on it. This\n"
++				"means that UUID generation will use a pseudorandom number generator. Since\n"
++				"the thread-safety of your system's random number generator cannot\n"
++				"be guaranteed, we have to synchronize UUID generation. This may result\n"
++				"in decreased performance. It is highly recommended that you set up your\n"
++				"system to have /dev/urandom\n");
++	} else {
++		has_dev_urandom = 1;
++		close(dev_urandom_fd);
++	}
++	uuid_generate_random(uu);
++
++	ast_debug(1, "UUID system initiated\n");
++}
+
+Egenskapsändringar för: main/uuid.c
+___________________________________________________________________
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Index: configs/sip.conf.sample
+===================================================================
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 386614)
++++ configs/sip.conf.sample	(.../team/oej/pine-instance-uuid-1.8)	(revision 386614)
+@@ -256,6 +256,8 @@
+                                 ; and subscriptions (seconds)
+ ;minexpiry=60                   ; Minimum length of registrations/subscriptions (default 60)
+ ;defaultexpiry=120              ; Default length of incoming/outgoing registration
++;use_sip_instance=n		; Use SIP instance ID when registering. Default off
++				; (also settable on device-level)
+ ;mwiexpiry=3600                 ; Expiry time for outgoing MWI subscriptions
+ ;maxforwards=70			; Setting for the SIP Max-Forwards: header (loop prevention)
+ 				; Default value is 70
