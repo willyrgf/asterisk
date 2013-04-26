@@ -8871,6 +8871,7 @@ static struct ast_custom_function featuremap_function = {
 /*! \internal \brief Clean up resources on Asterisk shutdown */
 static void features_shutdown(void)
 {
+	ast_cli_unregister_multiple(cli_features, ARRAY_LEN(cli_features));
 	ast_devstate_prov_del("Park");
 	ast_custom_function_unregister(&featuremap_function);
 	ast_custom_function_unregister(&feature_function);
@@ -8883,6 +8884,9 @@ static void features_shutdown(void)
 	ast_unregister_application(app_bridge);
 
 	pthread_cancel(parking_thread);
+	pthread_kill(parking_thread, SIGURG);
+	pthread_join(parking_thread, NULL);
+	ast_context_destroy(NULL, registrar);
 	ao2_ref(parkinglots, -1);
 }
 
