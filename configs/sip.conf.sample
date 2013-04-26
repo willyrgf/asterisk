@@ -256,6 +256,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; and subscriptions (seconds)
 ;minexpiry=60                   ; Minimum length of registrations/subscriptions (default 60)
 ;defaultexpiry=120              ; Default length of incoming/outgoing registration
+;use_sip_instance=n		; Use SIP instance ID when registering. Default off
+				; (also settable on device-level)
 ;mwiexpiry=3600                 ; Expiry time for outgoing MWI subscriptions
 ;maxforwards=70			; Setting for the SIP Max-Forwards: header (loop prevention)
 				; Default value is 70

@@ -273,6 +273,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip/include/sdp_crypto.h"
 #include "asterisk/ccss.h"
 #include "asterisk/xml.h"
+#include "asterisk/uuid.h"
 #include "sip/include/dialog.h"
 #include "sip/include/dialplan_functions.h"
 
@@ -1538,7 +1539,7 @@ static int copy_all_header(struct sip_request *req, const struct sip_request *or
 static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const struct sip_request *orig, const char *field);
 static void set_destination(struct sip_pvt *p, char *uri);
 static void append_date(struct sip_request *req);
-static void build_contact(struct sip_pvt *p);
+static void build_contact(struct sip_pvt *p, int useinstance);
 
 /*------Request handling functions */
 static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct ast_sockaddr *addr, int *recount, int *nounlock);
@@ -12424,18 +12425,24 @@ static void extract_uri(struct sip_pvt *p, struct sip_request *req)
 }
 
 /*! \brief Build contact header - the contact header we send out */
-static void build_contact(struct sip_pvt *p)
+static void build_contact(struct sip_pvt *p, int useinstance)
 {
 	char tmp[SIPBUFSIZE];
+	char instance[SIPBUFSIZE/2];
 	char *user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 0);
 
+	instance[0] = '\0';
+	if (useinstance && ast_test_flag(&p->flags[2], SIP_PAGE3_USE_INSTANCE_ID) && strlen(sip_cfg.instance_id) > 0) {
+		sprintf(instance, ";+sip.instance=\"<urn:uuid:%s>\"", sip_cfg.instance_id);
+	}
+
 	if (p->socket.type == SIP_TRANSPORT_UDP) {
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", user,
-			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip));
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s%s>", user,
+			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip), instance);
 	} else {
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s>", user,
+		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s%s>", user,
 			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip),
-			get_transport(p->socket.type));
+			get_transport(p->socket.type), instance);
 	}
 }
 
@@ -12599,7 +12606,7 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 	add_header(req, "From", from);
 	add_header(req, "To", to);
 	ast_string_field_set(p, exten, l);
-	build_contact(p);
+	build_contact(p, FALSE);
 	add_header(req, "Contact", p->our_contact);
 	add_header(req, "Call-ID", p->callid);
 	add_header(req, "CSeq", tmp_n);
@@ -13012,7 +13019,7 @@ static int __sip_subscribe_mwi_do(struct sip_subscription_mwi *mwi)
 	set_socket_transport(&mwi->call->socket, mwi->transport);
 	mwi->call->socket.port = htons(mwi->portno);
 	ast_sip_ouraddrfor(&mwi->call->sa, &mwi->call->ourip, mwi->call);
-	build_contact(mwi->call);
+	build_contact(mwi->call, TRUE);
 	build_via(mwi->call);
 
 	/* Change the dialog callid. */
@@ -13892,7 +13899,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		  internal network so we can register through nat
 		 */
 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
-		build_contact(p);
+		build_contact(p, TRUE);
 	}
 
 	/* set up a timeout */
@@ -15378,7 +15385,7 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 	}
 
 	ast_string_field_set(p, exten, name);
-	build_contact(p);
+	build_contact(p, FALSE);
 	if (req->ignore) {
 		/* Expires is a special case, where we only want to load the peer if this isn't a deregistration attempt */
 		const char *expires = get_header(req, "Expires");
@@ -16783,7 +16790,7 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 			*t = '\0';
 
 		if (ast_strlen_zero(p->our_contact))
-			build_contact(p);
+			build_contact(p, FALSE);
 	}
 
 	of = get_in_brackets(of);
@@ -17620,6 +17627,21 @@ static const struct _map_x_s allowoverlapstr[] = {
 static const char *allowoverlap2str(int mode)
 {
 	return map_x_s(allowoverlapstr, mode, "<error>");
+}
+
+/*! \brief Get SIP.instance UUID from registry. If it doesn't exist,
+    create one.
+ */
+static void initiate_sip_instance(void)
+{
+	if (!ast_db_get("SIP", "instanceid", &sip_cfg.instance_id, sizeof(sip_cfg.instance_id))) {
+		/* We loaded instance ID from astdb. All good */
+		return;
+	}
+	/* Create UUID, store it */
+	ast_uuid_generate_str(&sip_cfg.instance_id, sizeof(sip_cfg.instance_id));
+	ast_db_put("SIP", "instanceid", &sip_cfg.instance_id);
+	return;
 }
 
 /*! \brief Destroy disused contexts between reloads
@@ -22651,7 +22673,7 @@ static int handle_request_options(struct sip_pvt *p, struct sip_request *req, st
 
 	/* must go through authentication before getting here */
 	gotdest = get_destination(p, req, NULL);
-	build_contact(p);
+	build_contact(p, FALSE);
 
 	if (ast_strlen_zero(p->context))
 		ast_string_field_set(p, context, sip_cfg.default_context);
@@ -23369,7 +23391,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 		}
 		gotdest = get_destination(p, NULL, &cc_recall_core_id);	/* Get destination right away */
 		extract_uri(p, req);			/* Get the Contact URI */
-		build_contact(p);			/* Build our contact header */
+		build_contact(p, FALSE);		/* Build our contact header */
 
 		if (p->rtp) {
 			ast_rtp_instance_set_prop(p->rtp, AST_RTP_PROPERTY_DTMF, ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833);
@@ -25386,7 +25408,7 @@ static int handle_request_subscribe(struct sip_pvt *p, struct sip_request *req, 
 	/* Get full contact header - this needs to be used as a request URI in NOTIFY's */
 	parse_ok_contact(p, req);
 
-	build_contact(p);
+	build_contact(p, FALSE);
 	if (gotdest != SIP_GET_DEST_EXTEN_FOUND) {
 		if (gotdest == SIP_GET_DEST_INVALID_URI) {
 			transmit_response(p, "416 Unsupported URI scheme", req);
@@ -27629,6 +27651,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "buggymwi")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
+	} else if (!strcasecmp(v->name, "use_sip_instance")) {
+		ast_set_flag(&mask[2], SIP_PAGE3_USE_INSTANCE_ID);
+		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_USE_INSTANCE_ID);
 	} else
 		res = 0;
 
@@ -28917,6 +28942,10 @@ static int reload_config(enum channelreloadreason reason)
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_VIDEOSUPPORT_ALWAYS);
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT);
 	ast_clear_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION);
+
+	/* Load the SIP instance UUID from ast_db or create a new one. The UUID should never change,
+	   so we only create it once. */
+	initiate_sip_instance();
 
 
 	/* Read the [general] config section of sip.conf (or from realtime config) */

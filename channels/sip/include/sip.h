@@ -359,9 +359,10 @@
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
 #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
+#define SIP_PAGE3_USE_INSTANCE_ID	 (1 << 22) /*!< GDP: Use SIP instance ID when registering with remote units */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
+	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_USE_INSTANCE_ID)
 
 /*@}*/
 
@@ -716,6 +717,7 @@ struct sip_settings {
 	format_t capability;        /*!< Supported codecs */
 	int tcp_enabled;
 	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
+	char instance_id[37];	     /*!< Unique ID for this domain/configuration to be used as +sip.instance 16 octets, 4 "-" and the end of the string*/
 };
 
 /*! \brief The SIP socket definition */
