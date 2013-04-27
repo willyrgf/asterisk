@@ -54,6 +54,8 @@ enum ast_bridge_channel_feature_flags {
 	AST_BRIDGE_CHANNEL_FLAG_DISSOLVE_HANGUP = (1 << 0),
 	/*! This channel leaves the bridge if all participants have this flag set. */
 	AST_BRIDGE_CHANNEL_FLAG_LONELY = (1 << 1),
+	/*! This channel cannot be moved to another bridge. */
+	AST_BRIDGE_CHANNEL_FLAG_IMMOVABLE = (1 << 2),
 };
 
 /*! \brief Built in DTMF features */

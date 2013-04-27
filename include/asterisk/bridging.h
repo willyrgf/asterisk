@@ -450,9 +450,8 @@ struct ast_bridge {
  * \note This must be done after a bridge constructor has
  * completed setting up the new bridge but before it returns.
  *
- * \note After a bridge is registered, the bridge must be
- * explicitly destroyed by ast_bridge_destroy() to get rid of
- * the bridge.
+ * \note After a bridge is registered, ast_bridge_destroy() must
+ * eventually be called to get rid of the bridge.
  *
  * \retval bridge on success.
  * \retval NULL on error.
@@ -758,6 +757,9 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
  *
  * \param dst_bridge Destination bridge of merge.
  * \param src_bridge Source bridge of merge.
+ * \param merge_best_direction TRUE if don't care about which bridge merges into the other.
+ * \param kick_me Array of channels to kick from the bridges.
+ * \param num_kick Number of channels in the kick_me array.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -765,18 +767,13 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
  * Example usage:
  *
  * \code
- * ast_bridge_merge(dst_bridge, src_bridge);
+ * ast_bridge_merge(dst_bridge, src_bridge, 0, NULL, 0);
  * \endcode
  *
- * This merges the bridge pointed to by src_bridge into the bridge
- * pointed to by dst_bridge.  In reality all of the channels in
- * src_bridge are moved to dst_bridge.
- *
- * \note The source bridge has no active channels in it when
- * this operation is completed.  The caller should explicitly
- * call ast_bridge_destroy().
+ * This moves the channels in src_bridge into the bridge pointed
+ * to by dst_bridge.
  */
-int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge);
+int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, int merge_best_direction, struct ast_channel **kick_me, unsigned int num_kick);
 
 /*!
  * \brief Move a channel from one bridge to another.

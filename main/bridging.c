@@ -477,6 +477,7 @@ static void bridge_dissolve_check(struct ast_bridge_channel *bridge_channel)
 	default:
 		break;
 	}
+/* BUGBUG need to implement AST_BRIDGE_CHANNEL_FLAG_LONELY support here */
 }
 
 /*!
@@ -562,6 +563,7 @@ static int bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	/* Add channel to the bridge */
 	if (bridge->dissolved
 		|| bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT
+		|| (swap && swap->state != AST_BRIDGE_CHANNEL_STATE_WAIT)
 		|| bridge->v_table->push(bridge, bridge_channel, swap)) {
 		ast_debug(1, "Bridge %s: pushing %p(%s) into bridge failed\n",
 			bridge->uniqueid, bridge_channel, ast_channel_name(bridge_channel->chan));
@@ -3069,35 +3071,53 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan)
  *
  * \note The two bridges are assumed already locked.
  *
- * This merges the bridge pointed to by src_bridge into the bridge
- * pointed to by dst_bridge.  In reality all of the channels in
- * src_bridge are moved to dst_bridge.
- *
- * \note The source bridge has no active channels in it when
- * this operation is completed.  The caller should explicitly
- * call ast_bridge_destroy().
+ * This moves the channels in src_bridge into the bridge pointed
+ * to by dst_bridge.
  */
-static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, struct ast_bridge_channel **kick_me, int num_kick)
+static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, struct ast_bridge_channel **kick_me, unsigned int num_kick)
 {
 	struct ast_bridge_channel *bridge_channel;
+	unsigned int idx;
 
 	ast_debug(1, "Merging bridge %s into bridge %s\n",
 		src_bridge->uniqueid, dst_bridge->uniqueid);
 
 	ast_bridge_publish_merge(dst_bridge, src_bridge);
 
-	if (kick_me) {
-		unsigned int idx;
-
-		for (idx = 0; idx < num_kick; ++idx) {
-			ast_bridge_change_state(kick_me[idx], AST_BRIDGE_CHANNEL_STATE_HANGUP);
-			bridge_channel_pull(kick_me[idx]);
+	/*
+	 * Move channels from src_bridge over to dst_bridge.
+	 *
+	 * We must use AST_LIST_TRAVERSE_SAFE_BEGIN() because
+	 * bridge_channel_pull() alters the list we are traversing.
+	 */
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&src_bridge->channels, bridge_channel, entry) {
+		if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			/*
+			 * The channel is already leaving let it leave normally because
+			 * pulling it may delete hooks that should run for this channel.
+			 */
+			continue;
 		}
-	}
+		if (ast_test_flag(&bridge_channel->features->feature_flags,
+			AST_BRIDGE_CHANNEL_FLAG_IMMOVABLE)) {
+			continue;
+		}
 
-	/* Move channels from src_bridge over to dst_bridge */
-	while ((bridge_channel = AST_LIST_FIRST(&src_bridge->channels))) {
+		if (kick_me) {
+			for (idx = 0; idx < num_kick; ++idx) {
+				if (bridge_channel == kick_me[idx]) {
+					ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+				}
+			}
+		}
 		bridge_channel_pull(bridge_channel);
+		if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			/*
+			 * The channel died as a result of being pulled or it was
+			 * kicked.  Leave it pointing to the original bridge.
+			 */
+			continue;
+		}
 
 		/* Point to new bridge.*/
 		ao2_ref(dst_bridge, +1);
@@ -3110,6 +3130,24 @@ static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *sr
 			ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 		}
 	}
+	AST_LIST_TRAVERSE_SAFE_END;
+
+	if (kick_me) {
+		/*
+		 * Now we can kick any channels in the dst_bridge without
+		 * potentially dissolving the bridge.
+		 */
+		for (idx = 0; idx < num_kick; ++idx) {
+			bridge_channel = kick_me[idx];
+			ast_bridge_channel_lock(bridge_channel);
+			if (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
+				ast_bridge_change_state_nolock(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+				bridge_channel_pull(bridge_channel);
+			}
+			ast_bridge_channel_unlock(bridge_channel);
+		}
+	}
+
 	bridge_reconfigured(dst_bridge);
 	bridge_reconfigured(src_bridge);
 
@@ -3117,31 +3155,180 @@ static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *sr
 		src_bridge->uniqueid, dst_bridge->uniqueid);
 }
 
-int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge)
+struct merge_direction {
+	/*! Destination merge bridge. */
+	struct ast_bridge *dest;
+	/*! Source merge bridge. */
+	struct ast_bridge *src;
+};
+
+/*!
+ * \internal
+ * \brief Determine which bridge should merge into the other.
+ * \since 12.0.0
+ *
+ * \param bridge1 A bridge for merging
+ * \param bridge2 A bridge for merging
+ *
+ * \note The two bridges are assumed already locked.
+ *
+ * \return Which bridge merges into which or NULL bridges if cannot merge.
+ */
+static struct merge_direction bridge_merge_determine_direction(struct ast_bridge *bridge1, struct ast_bridge *bridge2)
 {
-	int res = -1;
+	struct merge_direction merge = { NULL, NULL };
+	int bridge1_priority;
+	int bridge2_priority;
 
-	ast_bridge_lock_both(dst_bridge, src_bridge);
-
-	if (dst_bridge->dissolved || src_bridge->dissolved) {
-		ast_debug(1, "Can't merge bridge %s into bridge %s, one or both bridges are dissolved.\n",
-			src_bridge->uniqueid, dst_bridge->uniqueid);
-	} else if (dst_bridge->inhibit_merge || src_bridge->inhibit_merge
-		|| ast_test_flag(&dst_bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY | AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
-		|| ast_test_flag(&src_bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
-		/* Merging is inhibited by either bridge. */
-		ast_debug(1, "Can't merge bridge %s into bridge %s, merging inhibited.\n",
-			src_bridge->uniqueid, dst_bridge->uniqueid);
-	} else if (2 < dst_bridge->num_channels + src_bridge->num_channels
-		&& !(dst_bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
-		&& !ast_test_flag(&dst_bridge->feature_flags, AST_BRIDGE_FLAG_SMART)) {
-		ast_debug(1, "Can't merge bridge %s into bridge %s, multimix is needed and it cannot be acquired.\n",
-			src_bridge->uniqueid, dst_bridge->uniqueid);
-	} else {
-		bridge_merge_do(dst_bridge, src_bridge, NULL, 0);
-		res = 0;
+	if (!ast_test_flag(&bridge1->feature_flags,
+			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)
+		&& !ast_test_flag(&bridge2->feature_flags,
+			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
+		/*
+		 * Can merge either way.  Merge to the higher priority merge
+		 * bridge.  Otherwise merge to the larger bridge.
+		 */
+		bridge1_priority = bridge1->v_table->get_merge_priority(bridge1);
+		bridge2_priority = bridge2->v_table->get_merge_priority(bridge2);
+		if (bridge2_priority < bridge1_priority) {
+			merge.dest = bridge1;
+			merge.src = bridge2;
+		} else if (bridge1_priority < bridge2_priority) {
+			merge.dest = bridge2;
+			merge.src = bridge1;
+		} else {
+			/* Merge to the larger bridge. */
+			if (bridge2->num_channels <= bridge1->num_channels) {
+				merge.dest = bridge1;
+				merge.src = bridge2;
+			} else {
+				merge.dest = bridge2;
+				merge.src = bridge1;
+			}
+		}
+	} else if (!ast_test_flag(&bridge1->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
+		&& !ast_test_flag(&bridge2->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
+		/* Can merge only one way. */
+		merge.dest = bridge1;
+		merge.src = bridge2;
+	} else if (!ast_test_flag(&bridge2->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
+		&& !ast_test_flag(&bridge1->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
+		/* Can merge only one way. */
+		merge.dest = bridge2;
+		merge.src = bridge1;
 	}
 
+	return merge;
+}
+
+/*!
+ * \internal
+ * \brief Merge two bridges together
+ * \since 12.0.0
+ *
+ * \param dst_bridge Destination bridge of merge.
+ * \param src_bridge Source bridge of merge.
+ * \param merge_best_direction TRUE if don't care about which bridge merges into the other.
+ * \param kick_me Array of channels to kick from the bridges.
+ * \param num_kick Number of channels in the kick_me array.
+ *
+ * \note The dst_bridge and src_bridge are assumed already locked.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+static int bridge_merge_locked(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, int merge_best_direction, struct ast_channel **kick_me, unsigned int num_kick)
+{
+	struct merge_direction merge;
+	struct ast_bridge_channel **kick_them = NULL;
+
+	/* Sanity check. */
+	ast_assert(dst_bridge && src_bridge && dst_bridge != src_bridge && (!num_kick || kick_me));
+
+	if (dst_bridge->dissolved || src_bridge->dissolved) {
+		ast_debug(1, "Can't merge bridges %s and %s, at least one bridge is dissolved.\n",
+			src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
+	if (ast_test_flag(&dst_bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY)
+		|| ast_test_flag(&src_bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY)) {
+		ast_debug(1, "Can't merge bridges %s and %s, masquerade only.\n",
+			src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
+	if (dst_bridge->inhibit_merge || src_bridge->inhibit_merge) {
+		ast_debug(1, "Can't merge bridges %s and %s, merging temporarily inhibited.\n",
+			src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
+
+	if (merge_best_direction) {
+		merge = bridge_merge_determine_direction(dst_bridge, src_bridge);
+	} else {
+		merge.dest = dst_bridge;
+		merge.src = src_bridge;
+	}
+
+	if (!merge.dest
+		|| ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
+		|| ast_test_flag(&merge.src->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
+		ast_debug(1, "Can't merge bridges %s and %s, merging inhibited.\n",
+			src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
+	if (merge.src->num_channels < 2) {
+		/*
+		 * For a two party bridge, a channel may be temporarily removed
+		 * from the source bridge or the initial bridge members have not
+		 * joined yet.
+		 */
+		ast_debug(1, "Can't merge bridge %s into bridge %s, not enough channels in source bridge.\n",
+			merge.src->uniqueid, merge.dest->uniqueid);
+		return -1;
+	}
+	if (2 + num_kick < merge.dest->num_channels + merge.src->num_channels
+		&& !(merge.dest->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
+		&& !ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_SMART)) {
+		ast_debug(1, "Can't merge bridge %s into bridge %s, multimix is needed and it cannot be acquired.\n",
+			merge.src->uniqueid, merge.dest->uniqueid);
+		return -1;
+	}
+
+	if (num_kick) {
+		unsigned int num_to_kick = 0;
+		unsigned int idx;
+
+		kick_them = ast_alloca(num_kick * sizeof(*kick_them));
+		for (idx = 0; idx < num_kick; ++idx) {
+			kick_them[num_to_kick] = find_bridge_channel(merge.src, kick_me[idx]);
+			if (!kick_them[num_to_kick]) {
+				kick_them[num_to_kick] = find_bridge_channel(merge.dest, kick_me[idx]);
+			}
+			if (kick_them[num_to_kick]) {
+				++num_to_kick;
+			}
+		}
+
+		if (num_to_kick != num_kick) {
+			ast_debug(1, "Can't merge bridge %s into bridge %s, at least one kicked channel is not in either bridge.\n",
+				merge.src->uniqueid, merge.dest->uniqueid);
+			return -1;
+		}
+	}
+
+	bridge_merge_do(merge.dest, merge.src, kick_them, num_kick);
+	return 0;
+}
+
+int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, int merge_best_direction, struct ast_channel **kick_me, unsigned int num_kick)
+{
+	int res;
+
+	/* Sanity check. */
+	ast_assert(dst_bridge && src_bridge);
+
+	ast_bridge_lock_both(dst_bridge, src_bridge);
+	res = bridge_merge_locked(dst_bridge, src_bridge, merge_best_direction, kick_me, num_kick);
 	ast_bridge_unlock(src_bridge);
 	ast_bridge_unlock(dst_bridge);
 	return res;
@@ -3181,6 +3368,14 @@ static int bridge_move_do(struct ast_bridge *dst_bridge, struct ast_bridge_chann
 	was_in_bridge = bridge_channel->in_bridge;
 
 	bridge_channel_pull(bridge_channel);
+	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+		/*
+		 * The channel died as a result of being pulled.  Leave it
+		 * pointing to the original bridge.
+		 */
+		bridge_reconfigured(orig_bridge);
+		return -1;
+	}
 
 	/* Point to new bridge.*/
 	ao2_ref(dst_bridge, +1);
@@ -3213,28 +3408,89 @@ static int bridge_move_do(struct ast_bridge *dst_bridge, struct ast_bridge_chann
 	return res;
 }
 
-int ast_bridge_move(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, struct ast_channel *chan, struct ast_channel *swap, int attempt_recovery)
+/*!
+ * \internal
+ * \brief Move a channel from one bridge to another.
+ * \since 12.0.0
+ *
+ * \param dst_bridge Destination bridge of bridge channel move.
+ * \param src_bridge Source bridge of bridge channel move.
+ * \param chan Channel to move.
+ * \param swap Channel to replace in dst_bridge.
+ * \param attempt_recovery TRUE if failure attempts to push channel back into original bridge.
+ *
+ * \note The dst_bridge and src_bridge are assumed already locked.
+ *
+ * \retval 0 on success.
+ * \retval -1 on failure.
+ */
+static int bridge_move_locked(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, struct ast_channel *chan, struct ast_channel *swap, int attempt_recovery)
 {
 	struct ast_bridge_channel *bridge_channel;
-	int res = -1;
 
-	ast_bridge_lock_both(dst_bridge, src_bridge);
+	if (dst_bridge->dissolved || src_bridge->dissolved) {
+		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, at least one bridge is dissolved.\n",
+			ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
+	if (ast_test_flag(&dst_bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY)
+		|| ast_test_flag(&src_bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY)) {
+		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, masquerade only.\n",
+			ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
+	if (dst_bridge->inhibit_merge || src_bridge->inhibit_merge) {
+		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, temporarily inhibited.\n",
+			ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid);
+		return -1;
+	}
 
 	bridge_channel = find_bridge_channel(src_bridge, chan);
 	if (!bridge_channel) {
 		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, channel not in bridge.\n",
 			ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid);
-	} else if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+		return -1;
+	}
+	if (bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
 		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, channel leaving bridge.\n",
 			ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid);
-	} else if (dst_bridge->dissolved || src_bridge->dissolved) {
-		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, one or both bridges are dissolved.\n",
+		return -1;
+	}
+	if (ast_test_flag(&bridge_channel->features->feature_flags,
+		AST_BRIDGE_CHANNEL_FLAG_IMMOVABLE)) {
+		ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, channel immovable.\n",
 			ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid);
-	} else {
-		bridge_channel->swap = swap;
-		res = bridge_move_do(dst_bridge, bridge_channel, attempt_recovery);
+		return -1;
 	}
 
+	if (swap) {
+		struct ast_bridge_channel *bridge_channel_swap;
+
+		bridge_channel_swap = find_bridge_channel(dst_bridge, swap);
+		if (!bridge_channel_swap) {
+			ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, swap channel %s not in bridge.\n",
+				ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid,
+				ast_channel_name(swap));
+			return -1;
+		}
+		if (bridge_channel_swap->state != AST_BRIDGE_CHANNEL_STATE_WAIT) {
+			ast_debug(1, "Can't move channel %s from bridge %s into bridge %s, swap channel %s leaving bridge.\n",
+				ast_channel_name(chan), src_bridge->uniqueid, dst_bridge->uniqueid,
+				ast_channel_name(swap));
+			return -1;
+		}
+	}
+
+	bridge_channel->swap = swap;
+	return bridge_move_do(dst_bridge, bridge_channel, attempt_recovery);
+}
+
+int ast_bridge_move(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridge, struct ast_channel *chan, struct ast_channel *swap, int attempt_recovery)
+{
+	int res;
+
+	ast_bridge_lock_both(dst_bridge, src_bridge);
+	res = bridge_move_locked(dst_bridge, src_bridge, chan, swap, attempt_recovery);
 	ast_bridge_unlock(src_bridge);
 	ast_bridge_unlock(dst_bridge);
 	return res;
@@ -3417,7 +3673,7 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 
 		res = 1;
 		other = ast_bridge_channel_peer(src_bridge_channel);
-		if (other) {
+		if (other && other->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
 			ast_debug(1, "Move-swap optimizing %s <-- %s.\n",
 				ast_channel_name(dst_bridge_channel->chan),
 				ast_channel_name(other->chan));
@@ -3449,74 +3705,36 @@ static int check_merge_optimize_out(struct ast_bridge *chan_bridge,
 	struct ast_bridge_channel *chan_bridge_channel, struct ast_bridge *peer_bridge,
 	struct ast_bridge_channel *peer_bridge_channel)
 {
-	struct ast_bridge *dst_bridge = NULL;
-	struct ast_bridge *src_bridge = NULL;
-	int peer_priority;
-	int chan_priority;
+	struct merge_direction merge;
 	int res = 0;
 
-	if (!ast_test_flag(&chan_bridge->feature_flags,
-			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)
-		&& !ast_test_flag(&peer_bridge->feature_flags,
-			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
-		/*
-		 * Can merge either way.  Merge to the higher priority merge
-		 * bridge.  Otherwise merge to the larger bridge.
-		 */
-		chan_priority = chan_bridge->v_table->get_merge_priority(chan_bridge);
-		peer_priority = peer_bridge->v_table->get_merge_priority(peer_bridge);
-		if (peer_priority < chan_priority) {
-			dst_bridge = chan_bridge;
-			src_bridge = peer_bridge;
-		} else if (chan_priority < peer_priority) {
-			dst_bridge = peer_bridge;
-			src_bridge = chan_bridge;
-		} else {
-			/* Merge to the larger bridge. */
-			if (peer_bridge->num_channels <= chan_bridge->num_channels) {
-				dst_bridge = chan_bridge;
-				src_bridge = peer_bridge;
-			} else {
-				dst_bridge = peer_bridge;
-				src_bridge = chan_bridge;
-			}
-		}
-	} else if (!ast_test_flag(&chan_bridge->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
-		&& !ast_test_flag(&peer_bridge->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
-		/* Can merge only one way. */
-		dst_bridge = chan_bridge;
-		src_bridge = peer_bridge;
-	} else if (!ast_test_flag(&peer_bridge->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_TO)
-		&& !ast_test_flag(&chan_bridge->feature_flags, AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM)) {
-		/* Can merge only one way. */
-		dst_bridge = peer_bridge;
-		src_bridge = chan_bridge;
+	merge = bridge_merge_determine_direction(chan_bridge, peer_bridge);
+	if (!merge.dest) {
+		return res;
 	}
+	if (merge.src->num_channels < 2) {
+		ast_debug(4, "Can't optimize %s -- %s out, not enough channels in bridge %s.\n",
+			ast_channel_name(chan_bridge_channel->chan),
+			ast_channel_name(peer_bridge_channel->chan),
+			merge.src->uniqueid);
+	} else if ((2 + 2) < merge.dest->num_channels + merge.src->num_channels
+		&& !(merge.dest->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
+		&& !ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_SMART)) {
+		ast_debug(4, "Can't optimize %s -- %s out, multimix is needed and it cannot be acquired.\n",
+			ast_channel_name(chan_bridge_channel->chan),
+			ast_channel_name(peer_bridge_channel->chan));
+	} else {
+		struct ast_bridge_channel *kick_me[] = {
+			chan_bridge_channel,
+			peer_bridge_channel,
+			};
 
-	if (dst_bridge) {
-		if (src_bridge->num_channels < 2 || dst_bridge->num_channels < 2) {
-			ast_debug(4, "Can't optimize %s -- %s out, not enough channels in a bridge.\n",
-				ast_channel_name(chan_bridge_channel->chan),
-				ast_channel_name(peer_bridge_channel->chan));
-		} else if ((2 + 2) < dst_bridge->num_channels + src_bridge->num_channels
-			&& !(dst_bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
-			&& !ast_test_flag(&dst_bridge->feature_flags, AST_BRIDGE_FLAG_SMART)) {
-			ast_debug(4, "Can't optimize %s -- %s out, multimix is needed and it cannot be acquired.\n",
-				ast_channel_name(chan_bridge_channel->chan),
-				ast_channel_name(peer_bridge_channel->chan));
-		} else {
-			struct ast_bridge_channel *kick_me[] = {
-				chan_bridge_channel,
-				peer_bridge_channel,
-				};
+		ast_debug(1, "Merge optimizing %s -- %s out.\n",
+			ast_channel_name(chan_bridge_channel->chan),
+			ast_channel_name(peer_bridge_channel->chan));
 
-			ast_debug(1, "Merge optimizing %s -- %s out.\n",
-				ast_channel_name(chan_bridge_channel->chan),
-				ast_channel_name(peer_bridge_channel->chan));
-
-			bridge_merge_do(dst_bridge, src_bridge, kick_me, ARRAY_LEN(kick_me));
-			res = -1;
-		}
+		bridge_merge_do(merge.dest, merge.src, kick_me, ARRAY_LEN(kick_me));
+		res = -1;
 	}
 
 	return res;
