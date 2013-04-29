@@ -151,6 +151,7 @@ extern "C" {
 #include "asterisk/ccss.h"
 #include "asterisk/framehook.h"
 #include "asterisk/stasis.h"
+#include "asterisk/json.h"
 
 #define DATASTORE_INHERIT_FOREVER	INT_MAX
 
@@ -364,7 +365,7 @@ struct ast_party_dialed {
  * PSTN gateway).
  *
  * \todo Implement settings for transliteration between UTF8 Caller ID names in
- *       to ASCII Caller ID's (DAHDI). Östen Åsklund might be transliterated into
+ *       to ASCII Caller ID's (DAHDI). Ã–sten Ã…sklund might be transliterated into
  *       Osten Asklund or Oesten Aasklund depending upon language and person...
  *       We need automatic routines for incoming calls and static settings for
  *       our own accounts.
@@ -3014,7 +3015,7 @@ void ast_party_id_reset(struct ast_party_id *id);
  *
  * \details
  * This function will generate an effective party id.
- * 
+ *
  * Each party id component of the party id 'base' is overwritten
  * by components of the party id 'overlay' if the overlay
  * component is marked as valid.  However the component 'tag' of
@@ -3787,7 +3788,7 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
 void ast_channel_unlink(struct ast_channel *chan);
 
 /*!
- * \brief Sets the HANGUPCAUSE hash and optionally the SIP_CAUSE hash 
+ * \brief Sets the HANGUPCAUSE hash and optionally the SIP_CAUSE hash
  * on the given channel
  *
  * \param chan channel on which to set the cause information
@@ -4105,116 +4106,36 @@ struct ast_flags *ast_channel_flags(struct ast_channel *chan);
 
 /*!
  * \since 12
- * \brief Structure representing a snapshot of channel state.
- *
- * While not enforced programmatically, this object is shared across multiple
- * threads, and should be threated as an immutable object.
+ * \brief Sets the variables to be stored in the \a manager_vars field of all
+ * snapshots.
+ * \param varc Number of variable names.
+ * \param vars Array of variable names.
  */
-struct ast_channel_snapshot {
-	AST_DECLARE_STRING_FIELDS(
-		AST_STRING_FIELD(name);			/*!< ASCII unique channel name */
-		AST_STRING_FIELD(accountcode);		/*!< Account code for billing */
-		AST_STRING_FIELD(peeraccount);		/*!< Peer account code for billing */
-		AST_STRING_FIELD(userfield);		/*!< Userfield for CEL billing */
-		AST_STRING_FIELD(uniqueid);		/*!< Unique Channel Identifier */
-		AST_STRING_FIELD(linkedid);		/*!< Linked Channel Identifier -- gets propagated by linkage */
-		AST_STRING_FIELD(parkinglot);		/*!< Default parking lot, if empty, default parking lot */
-		AST_STRING_FIELD(hangupsource);		/*!< Who is responsible for hanging up this channel */
-		AST_STRING_FIELD(appl);			/*!< Current application */
-		AST_STRING_FIELD(data);			/*!< Data passed to current application */
-		AST_STRING_FIELD(context);		/*!< Dialplan: Current extension context */
-		AST_STRING_FIELD(exten);		/*!< Dialplan: Current extension number */
-		AST_STRING_FIELD(caller_name);		/*!< Caller ID Name */
-		AST_STRING_FIELD(caller_number);	/*!< Caller ID Number */
-		AST_STRING_FIELD(connected_name);	/*!< Connected Line Name */
-		AST_STRING_FIELD(connected_number);	/*!< Connected Line Number */
-	);
-
-	struct timeval creationtime;	/*!< The time of channel creation */
-	enum ast_channel_state state;	/*!< State of line */
-	int priority;			/*!< Dialplan: Current extension priority */
-	int amaflags;			/*!< AMA flags for billing */
-	int hangupcause;		/*!< Why is the channel hanged up. See causes.h */
-	struct ast_flags flags;		/*!< channel flags of AST_FLAG_ type */
-};
+void ast_channel_set_manager_vars(size_t varc, char **vars);
 
 /*!
  * \since 12
- * \brief Generate a snapshot of the channel state. This is an ao2 object, so
- * ao2_cleanup() to deallocate.
+ * \brief Gets the variables for a given channel, as specified by ast_channel_set_manager_vars().
  *
- * \param chan The channel from which to generate a snapshot
+ * The returned variable list is an AO2 object, so ao2_cleanup() to free it.
  *
- * \retval pointer on success (must be ast_freed)
- * \retval NULL on error
+ * \param chan Channel to get variables for.
+ * \return List of channel variables.
+ * \return \c NULL on error
  */
-struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *chan);
-
-/*!
- * \since 12
- * \brief Message type for \ref ast_channel_snapshot.
- *
- * \retval Message type for \ref ast_channel_snapshot.
- */
-struct stasis_message_type *ast_channel_snapshot(void);
+struct varshead *ast_channel_get_manager_vars(struct ast_channel *chan);
 
 /*!
  * \since 12
  * \brief A topic which publishes the events for a particular channel.
  *
- * \param chan Channel.
+ * If the given \a chan is \c NULL, ast_channel_topic_all() is returned.
+ *
+ * \param chan Channel, or \c NULL.
  *
  * \retval Topic for channel's events.
- * \retval \c NULL if \a chan is \c NULL.
+ * \retval ast_channel_topic_all() if \a chan is \c NULL.
  */
 struct stasis_topic *ast_channel_topic(struct ast_channel *chan);
-
-/*!
- * \since 12
- * \brief A topic which publishes the events for all channels.
- * \retval Topic for all channel events.
- */
-struct stasis_topic *ast_channel_topic_all(void);
-
-/*!
- * \since 12
- * \brief A caching topic which caches \ref ast_channel_snapshot messages from
- * ast_channel_events_all(void).
- *
- * \retval Topic for all channel events.
- */
-struct stasis_caching_topic *ast_channel_topic_all_cached(void);
-
-/*!
- * \since 12
- * \brief Variable set event.
- */
-struct ast_channel_varset {
-	/*! Channel variable was set on (or NULL for global variable) */
-	struct ast_channel_snapshot *snapshot;
-	/*! Variable name */
-	char *variable;
-	/*! New value */
-	char *value;
-};
-
-/*!
- * \since 12
- * \brief Message type for \ref ast_channel_varset messages.
- *
- * \retval Message type for \ref ast_channel_varset messages.
- */
-struct stasis_message_type *ast_channel_varset(void);
-
-/*!
- * \since 12
- * \brief Publish a \ref ast_channel_varset for a channel.
- *
- * \param chan Channel to pulish the event for, or \c NULL for 'none'.
- * \param variable Name of the variable being set
- * \param value Value.
- */
-void ast_channel_publish_varset(struct ast_channel *chan,
-				const char *variable, const char *value);
 
 #endif /* _ASTERISK_CHANNEL_H */

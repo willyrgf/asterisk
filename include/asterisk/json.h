@@ -33,6 +33,11 @@
 /*!@{*/
 
 /*!
+ * \brief Initialize the JSON library.
+ */
+void ast_json_init(void);
+
+/*!
  * \brief Set custom allocators instead of the standard ast_malloc() and ast_free().
  * \since 12.0.0
  *
@@ -581,16 +586,33 @@ int ast_json_object_iter_set(struct ast_json *object, struct ast_json_iter *iter
 /*!@{*/
 
 /*!
+ * \brief Encoding format type.
+ * \since 12.0.0
+ */
+enum ast_json_encoding_format
+{
+	/*! Compact format, low human readability */
+	AST_JSON_COMPACT,
+	/*! Formatted for human readability */
+	AST_JSON_PRETTY,
+};
+
+#define ast_json_dump_string(root) ast_json_dump_string_format(root, AST_JSON_COMPACT)
+
+/*!
  * \brief Encode a JSON value to a string.
  * \since 12.0.0
  *
  * Returned string must be freed by calling ast_free().
  *
- * \param JSON value.
+ * \param root JSON value.
+ * \param format encoding format type.
  * \return String encoding of \a root.
  * \return \c NULL on error.
  */
-char *ast_json_dump_string(struct ast_json *root);
+char *ast_json_dump_string_format(struct ast_json *root, enum ast_json_encoding_format format);
+
+#define ast_json_dump_str(root, dst) ast_json_dump_str_format(root, dst, AST_JSON_COMPACT)
 
 /*!
  * \brief Encode a JSON value to an \ref ast_str.
@@ -600,10 +622,13 @@ char *ast_json_dump_string(struct ast_json *root);
  *
  * \param root JSON value.
  * \param dst \ref ast_str to store JSON encoding.
+ * \param format encoding format type.
  * \return 0 on success.
  * \return -1 on error. The contents of \a dst are undefined.
  */
-int ast_json_dump_str(struct ast_json *root, struct ast_str **dst);
+int ast_json_dump_str_format(struct ast_json *root, struct ast_str **dst, enum ast_json_encoding_format format);
+
+#define ast_json_dump_file(root, output) ast_json_dump_file_format(root, output, AST_JSON_COMPACT)
 
 /*!
  * \brief Encode a JSON value to a \c FILE.
@@ -611,10 +636,13 @@ int ast_json_dump_str(struct ast_json *root, struct ast_str **dst);
  *
  * \param root JSON value.
  * \param output File to write JSON encoding to.
+ * \param format encoding format type.
  * \return 0 on success.
  * \return -1 on error. The contents of \a output are undefined.
  */
-int ast_json_dump_file(struct ast_json *root, FILE *output);
+int ast_json_dump_file_format(struct ast_json *root, FILE *output, enum ast_json_encoding_format format);
+
+#define ast_json_dump_new_file(root, path) ast_json_dump_new_file_format(root, path, AST_JSON_COMPACT)
 
 /*!
  * \brief Encode a JSON value to a file at the given location.
@@ -622,10 +650,11 @@ int ast_json_dump_file(struct ast_json *root, FILE *output);
  *
  * \param root JSON value.
  * \param path Path to file to write JSON encoding to.
+ * \param format encoding format type.
  * \return 0 on success.
  * \return -1 on error. The contents of \a output are undefined.
  */
-int ast_json_dump_new_file(struct ast_json *root, const char *path);
+int ast_json_dump_new_file_format(struct ast_json *root, const char *path, enum ast_json_encoding_format format);
 
 #define AST_JSON_ERROR_TEXT_LENGTH    160
 #define AST_JSON_ERROR_SOURCE_LENGTH   80
@@ -756,6 +785,50 @@ struct ast_json *ast_json_copy(const struct ast_json *value);
  * \return \c NULL on error.
  */
 struct ast_json *ast_json_deep_copy(const struct ast_json *value);
+
+/*!@}*/
+
+/*!@{*/
+
+/*!
+ * \brief Common JSON rendering functions for common 'objects'.
+ */
+
+/*!
+ * \brief Simple name/number pair.
+ * \param name Name
+ * \param number Number
+ * \return NULL if error (non-UTF8 characters, NULL inputs, etc.)
+ * \return JSON object with name and number fields
+ */
+struct ast_json *ast_json_name_number(const char *name, const char *number);
+
+/*!
+ * \brief Construct a timeval as JSON.
+ *
+ * JSON does not define a standard date format (boo), but the de facto standard
+ * is to use ISO 8601 formatted string. We build a millisecond resolution string
+ * from the \c timeval
+ *
+ * \param tv \c timeval to encode.
+ * \param zone Text string of a standard system zoneinfo file.  If NULL, the system localtime will be used.
+ * \return JSON string with ISO 8601 formatted date/time.
+ * \return \c NULL on error.
+ */
+struct ast_json *ast_json_timeval(const struct timeval tv, const char *zone);
+
+/*!
+ * \brief Construct a context/exten/priority as JSON.
+ *
+ * If a \c NULL is passed for \c context or \c exten, or -1 for \c priority,
+ * the fields is set to ast_json_null().
+ *
+ * \param context Context name.
+ * \param exten Extension.
+ * \param priority Dialplan priority.
+ * \return JSON object with \c context, \c exten and \c priority fields
+ */
+struct ast_json *ast_json_dialplan_cep(const char *context, const char *exten, int priority);
 
 /*!@}*/
 

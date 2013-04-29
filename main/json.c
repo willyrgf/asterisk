@@ -36,10 +36,12 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/json.h"
+#include "asterisk/localtime.h"
 #include "asterisk/module.h"
 #include "asterisk/utils.h"
 
 #include <jansson.h>
+#include <time.h>
 
 /*!
  * \brief Function wrapper around ast_malloc macro.
@@ -336,20 +338,15 @@ int ast_json_object_iter_set(struct ast_json *object, struct ast_json_iter *iter
 /*!
  * \brief Default flags for JSON encoding.
  */
-static size_t dump_flags(void)
+static size_t dump_flags(enum ast_json_encoding_format format)
 {
-	/* There's a chance this could become a runtime flag */
-	int flags = JSON_COMPACT;
-#ifdef AST_DEVMODE
-	/* In dev mode, write readable JSON */
-	flags = JSON_INDENT(2) | JSON_PRESERVE_ORDER;
-#endif
-	return flags;
+	return format == AST_JSON_PRETTY ?
+		JSON_INDENT(2) | JSON_PRESERVE_ORDER : JSON_COMPACT;
 }
 
-char *ast_json_dump_string(struct ast_json *root)
+char *ast_json_dump_string_format(struct ast_json *root, enum ast_json_encoding_format format)
 {
-	return json_dumps((json_t *)root, dump_flags());
+	return json_dumps((json_t *)root, dump_flags(format));
 }
 
 static int write_to_ast_str(const char *buffer, size_t size, void *data)
@@ -383,25 +380,25 @@ static int write_to_ast_str(const char *buffer, size_t size, void *data)
 	return 0;
 }
 
-int ast_json_dump_str(struct ast_json *root, struct ast_str **dst)
+int ast_json_dump_str_format(struct ast_json *root, struct ast_str **dst, enum ast_json_encoding_format format)
 {
-	return json_dump_callback((json_t *)root, write_to_ast_str, dst, dump_flags());
+	return json_dump_callback((json_t *)root, write_to_ast_str, dst, dump_flags(format));
 }
 
 
-int ast_json_dump_file(struct ast_json *root, FILE *output)
+int ast_json_dump_file_format(struct ast_json *root, FILE *output, enum ast_json_encoding_format format)
 {
 	if (!root || !output) {
 		return -1;
 	}
-	return json_dumpf((json_t *)root, output, dump_flags());
+	return json_dumpf((json_t *)root, output, dump_flags(format));
 }
-int ast_json_dump_new_file(struct ast_json *root, const char *path)
+int ast_json_dump_new_file_format(struct ast_json *root, const char *path, enum ast_json_encoding_format format)
 {
 	if (!root || !path) {
 		return -1;
 	}
-	return json_dump_file((json_t *)root, path, dump_flags());
+	return json_dump_file((json_t *)root, path, dump_flags(format));
 }
 
 /*!
@@ -502,19 +499,35 @@ struct ast_json *ast_json_deep_copy(const struct ast_json *value)
 	return (struct ast_json *)json_deep_copy((json_t *)value);
 }
 
-static int unload_module(void)
+struct ast_json *ast_json_name_number(const char *name, const char *number)
 {
-	/* Nothing to do */
-	return 0;
+	return ast_json_pack("{s: s, s: s}",
+			     "name", name,
+			     "number", number);
 }
 
-static int load_module(void)
+struct ast_json *ast_json_dialplan_cep(const char *context, const char *exten, int priority)
+{
+	return ast_json_pack("{s: o, s: o, s: o}",
+			     "context", context ? ast_json_string_create(context) : ast_json_null(),
+			     "exten", exten ? ast_json_string_create(exten) : ast_json_null(),
+			     "priority", priority != -1 ? ast_json_integer_create(priority) : ast_json_null());
+}
+
+struct ast_json *ast_json_timeval(const struct timeval tv, const char *zone)
+{
+	char buf[AST_ISO8601_LEN];
+	struct ast_tm tm = {};
+
+	ast_localtime(&tv, &tm, zone);
+
+	ast_strftime(buf, sizeof(buf),AST_ISO8601_FORMAT, &tm);
+
+	return ast_json_string_create(buf);
+}
+
+void ast_json_init(void)
 {
 	/* Setup to use Asterisk custom allocators */
 	ast_json_reset_alloc_funcs();
-	return AST_MODULE_LOAD_SUCCESS;
 }
-
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "JSON library",
-		.load = load_module,
-		.unload = unload_module);

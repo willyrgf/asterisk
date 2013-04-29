@@ -32,10 +32,13 @@ PACKAGES_RH="automake gcc gcc-c++ ncurses-devel openssl-devel libxml2-devel unix
 PACKAGES_RH="$PACKAGES_RH spandsp-devel freetds-devel net-snmp-devel iksemel-devel corosynclib-devel newt-devel popt-devel libtool-ltdl-devel lua-devel"
 PACKAGES_RH="$PACKAGES_RH libsqlite3x-devel radiusclient-ng-devel portaudio-devel postgresql-devel libresample-devel neon-devel libical-devel"
 PACKAGES_RH="$PACKAGES_RH openldap-devel gmime22-devel sqlite2-devel mysql-devel bluez-libs-devel jack-audio-connection-kit-devel gsm-devel libedit-devel libuuid-devel"
+PACKAGES_RH="$PACKAGES_RH jansson-devel"
 
 PACKAGES_OBSD="popt gmake wget libxml libogg libvorbis curl iksemel spandsp speex iodbc freetds-0.63p1-msdblib mysql-client gmime sqlite sqlite3 jack"
 
 KVERS=`uname -r`
+
+JANSSON_VER=2.4
 
 case "$1" in
 test)    testcmd=echo ;;
@@ -79,20 +82,16 @@ check_installed_pkgs() {
 }
 
 handle_debian() {
-	# echo "# Distribution is Debian or compatible"
 	extra_packs=`check_installed_debs $PACKAGES_DEBIAN`
 	$testcmd aptitude install -y $extra_packs
 }
 
 handle_rh() {
-	# echo "# Distribution is RedHat-based or compatible"
 	extra_packs=`check_installed_rpms $PACKAGES_RH`
-        # FIXME: is there yum with RHEL 4?
 	$testcmd yum install -y $extra_packs
 }
 
 handle_obsd() {
-	# echo "# Distribution is OpenBSD or compatible"
 	extra_packs=`check_installed_pkgs $PACKAGES_OBSD`
 	$testcmd pkg_add $extra_packs
 }
@@ -104,11 +103,25 @@ install_unpackaged() {
 	make && make install
 	cd ..
 
-	echo "*** Installing libresample ***"
-	svn co http://svn.digium.com/svn/thirdparty/libresample/trunk libresample-trunk
-	cd libresample-trunk
-	./configure && make && make install
-	cd ..
+	# Only install libresample if it wasn't installed via package
+	if ! test -f /usr/include/libresample.h; then
+	    echo "*** Installing libresample ***"
+	    svn co http://svn.digium.com/svn/thirdparty/libresample/trunk libresample-trunk
+	    cd libresample-trunk
+	    ./configure && make && make install
+	    cd ..
+	fi
+
+	# Only install Jansson if it wasn't installed via package
+	if ! test -f /usr/include/jansson.h; then
+		echo "*** Installing jansson ***"
+		wget -O - http://www.digip.org/jansson/releases/jansson-${JANSSON_VER}.tar.gz | zcat | tar -xf -
+		cd jansson-${JANSSON_VER}
+		./configure && make all && make install
+		cd ..
+		echo "/usr/local/lib" > /etc/ld.so.conf.d/usr_local.conf
+		/sbin/ldconfig
+	fi
 }
 
 if in_test_mode; then

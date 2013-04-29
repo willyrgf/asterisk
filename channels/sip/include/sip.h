@@ -514,7 +514,6 @@ enum check_auth_result {
 	AUTH_SECRET_FAILED = -1,
 	AUTH_USERNAME_MISMATCH = -2,
 	AUTH_NOT_FOUND = -3,	/*!< returned by register_verify */
-	AUTH_FAKE_AUTH = -4,
 	AUTH_UNKNOWN_DOMAIN = -5,
 	AUTH_PEER_NOT_DYNAMIC = -6,
 	AUTH_ACL_FAILED = -7,
@@ -1277,7 +1276,7 @@ struct sip_pkt {
  */
 struct sip_mailbox {
 	/*! Associated MWI subscription */
-	struct ast_event_sub *event_sub;
+	struct stasis_subscription *event_sub;
 	AST_LIST_ENTRY(sip_mailbox) entry;
 	unsigned int delme:1;
 	char *context;

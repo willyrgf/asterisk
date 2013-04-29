@@ -74,6 +74,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel_internal.h"
 #include "asterisk/features.h"
 #include "asterisk/test.h"
+#include "asterisk/stasis_channels.h"
 
 /*** DOCUMENTATION
  ***/
@@ -152,15 +153,6 @@ static AST_RWLIST_HEAD_STATIC(backends, chanlist);
 /*! \brief All active channels on the system */
 static struct ao2_container *channels;
 
-/*! \brief Message type for channel snapshot events */
-static struct stasis_message_type *__channel_snapshot;
-
-static struct stasis_message_type *__channel_varset;
-
-struct stasis_topic *__channel_topic_all;
-
-struct stasis_caching_topic *__channel_topic_all_cached;
-
 /*! \brief map AST_CAUSE's to readable string representations
  *
  * \ref causes.h
@@ -222,77 +214,6 @@ static const struct causes_map causes[] = {
 	{ AST_CAUSE_PROTOCOL_ERROR, "PROTOCOL_ERROR", "Protocol error, unspecified" },
 	{ AST_CAUSE_INTERWORKING, "INTERWORKING", "Interworking, unspecified" },
 };
-
-static void publish_channel_state(struct ast_channel *chan)
-{
-	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
-
-	snapshot = ast_channel_snapshot_create(chan);
-	if (!snapshot) {
-		ast_log(LOG_ERROR, "Allocation error\n");
-		return;
-	}
-
-	message = stasis_message_create(ast_channel_snapshot(), snapshot);
-	if (!message) {
-		return;
-	}
-
-	ast_assert(ast_channel_topic(chan) != NULL);
-	stasis_publish(ast_channel_topic(chan), message);
-}
-
-static void channel_varset_dtor(void *obj)
-{
-	struct ast_channel_varset *event = obj;
-	ao2_cleanup(event->snapshot);
-	ast_free(event->variable);
-	ast_free(event->value);
-}
-
-void ast_channel_publish_varset(struct ast_channel *chan, const char *name, const char *value)
-{
-	RAII_VAR(struct ast_channel_varset *, event, NULL, ao2_cleanup);
-	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
-
-	event = ao2_alloc(sizeof(*event), channel_varset_dtor);
-	if (!event) {
-		return;
-	}
-
-	if (chan) {
-		event->snapshot = ast_channel_snapshot_create(chan);
-		if (event->snapshot == NULL) {
-			return;
-		}
-	}
-	event->variable = ast_strdup(name);
-	event->value = ast_strdup(value);
-	if (event->variable == NULL || event->value == NULL) {
-		return;
-	}
-
-	msg = stasis_message_create(ast_channel_varset(), event);
-	if (!msg) {
-		return;
-	}
-
-	if (chan) {
-		stasis_publish(ast_channel_topic(chan), msg);
-	} else {
-		stasis_publish(ast_channel_topic_all(), msg);
-	}
-}
-
-
-static void publish_cache_clear(struct ast_channel *chan)
-{
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
-
-	message = stasis_cache_clear_create(ast_channel_snapshot(), ast_channel_uniqueid(chan));
-	stasis_publish(ast_channel_topic(chan), message);
-}
 
 struct ast_variable *ast_channeltype_list(void)
 {
@@ -895,6 +816,34 @@ int ast_str2cause(const char *name)
 	return -1;
 }
 
+static void publish_channel_state(struct ast_channel *chan)
+{
+	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
+
+	snapshot = ast_channel_snapshot_create(chan);
+	if (!snapshot) {
+		ast_log(LOG_ERROR, "Allocation error\n");
+		return;
+	}
+
+	message = stasis_message_create(ast_channel_snapshot_type(), snapshot);
+	if (!message) {
+		return;
+	}
+
+	ast_assert(ast_channel_topic(chan) != NULL);
+	stasis_publish(ast_channel_topic(chan), message);
+}
+
+static void publish_cache_clear(struct ast_channel *chan)
+{
+	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
+
+	message = stasis_cache_clear_create(ast_channel_snapshot_type(), ast_channel_uniqueid(chan));
+	stasis_publish(ast_channel_topic(chan), message);
+}
+
 /*! \brief Gives the string form of a given channel state.
  *
  * \note This function is not reentrant.
@@ -1418,25 +1367,31 @@ int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *fin)
 	return __ast_queue_frame(chan, fin, 1, NULL);
 }
 
+/*! \internal \brief Publish a channel blob message */
+static void publish_channel_blob(struct ast_channel *chan, struct ast_json *blob)
+{
+	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
+	if (blob) {
+		message = ast_channel_blob_create(chan, blob);
+	}
+	if (message) {
+		stasis_publish(ast_channel_topic(chan), message);
+	}
+}
+
 /*! \brief Queue a hangup frame for channel */
 int ast_queue_hangup(struct ast_channel *chan)
 {
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_HANGUP };
 	int res;
 
 	/* Yeah, let's not change a lock-critical value without locking */
 	ast_channel_lock(chan);
 	ast_channel_softhangup_internal_flag_add(chan, AST_SOFTHANGUP_DEV);
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a hangup is requested with no set cause.</synopsis>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "HangupRequest",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan));
+	blob = ast_json_pack("{s: s}", "type", "hangup_request");
+	publish_channel_blob(chan, blob);
 
 	res = ast_queue_frame(chan, &f);
 	ast_channel_unlock(chan);
@@ -1446,6 +1401,8 @@ int ast_queue_hangup(struct ast_channel *chan)
 /*! \brief Queue a hangup frame for channel */
 int ast_queue_hangup_with_cause(struct ast_channel *chan, int cause)
 {
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_HANGUP };
 	int res;
 
@@ -1459,21 +1416,10 @@ int ast_queue_hangup_with_cause(struct ast_channel *chan, int cause)
 	if (cause < 0) {
 		f.data.uint32 = ast_channel_hangupcause(chan);
 	}
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a hangup is requested with a specific cause code.</synopsis>
-				<syntax>
-					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Hangup']/managerEventInstance/syntax/parameter[@name='Cause'])" />
-				</syntax>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "HangupRequest",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Cause: %d\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan),
-		cause);
+	blob = ast_json_pack("{s: s, s: i}",
+			     "type", "hangup_request",
+			     "cause", cause);
+	publish_channel_blob(chan, blob);
 
 	res = ast_queue_frame(chan, &f);
 	ast_channel_unlock(chan);
@@ -2776,25 +2722,16 @@ int ast_softhangup_nolock(struct ast_channel *chan, int cause)
 /*! \brief Softly hangup a channel, lock */
 int ast_softhangup(struct ast_channel *chan, int cause)
 {
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
 	int res;
 
 	ast_channel_lock(chan);
 	res = ast_softhangup_nolock(chan, cause);
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a soft hangup is requested with a specific cause code.</synopsis>
-				<syntax>
-					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Hangup']/managerEventInstance/syntax/parameter[@name='Cause'])" />
-				</syntax>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "SoftHangupRequest",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Cause: %d\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan),
-		cause);
+	blob = ast_json_pack("{s: s, s: i, s: b}",
+			     "type", "hangup_request",
+			     "cause", cause,
+			     "soft", 1);
+	publish_channel_blob(chan, blob);
 	ast_channel_unlock(chan);
 
 	return res;
@@ -3777,42 +3714,56 @@ int ast_waitfordigit_full(struct ast_channel *c, int timeout_ms, int audiofd, in
 	return 0; /* Time is up */
 }
 
-static void send_dtmf_event(struct ast_channel *chan, const char *direction, const char digit, const char *begin, const char *end)
+enum DtmfDirection {
+	DTMF_RECEIVED,
+	DTMF_SENT
+};
+
+static const char *dtmf_direction_to_string(enum DtmfDirection direction)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a DTMF digit has started or ended on a channel.</synopsis>
-				<syntax>
-					<parameter name="Direction">
-						<enumlist>
-							<enum name="Received"/>
-							<enum name="Sent"/>
-						</enumlist>
-					</parameter>
-					<parameter name="Begin">
-						<enumlist>
-							<enum name="Yes"/>
-							<enum name="No"/>
-						</enumlist>
-					</parameter>
-					<parameter name="End">
-						<enumlist>
-							<enum name="Yes"/>
-							<enum name="No"/>
-						</enumlist>
-					</parameter>
-				</syntax>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_DTMF,
-			"DTMF",
-			"Channel: %s\r\n"
-			"Uniqueid: %s\r\n"
-			"Digit: %c\r\n"
-			"Direction: %s\r\n"
-			"Begin: %s\r\n"
-			"End: %s\r\n",
-			ast_channel_name(chan), ast_channel_uniqueid(chan), digit, direction, begin, end);
+	switch (direction) {
+	case DTMF_RECEIVED:
+		return "Received";
+	case DTMF_SENT:
+		return "Sent";
+	}
+
+	return "?";
+}
+
+static void send_dtmf_begin_event(struct ast_channel *chan,
+	enum DtmfDirection direction, const char digit)
+{
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+	char digit_str[] = { digit, '\0' };
+
+	blob = ast_json_pack("{ s: s, s: s, s: s }",
+		"type", "dtmf_begin",
+		"digit", digit_str,
+		"direction", dtmf_direction_to_string(direction));
+	if (!blob) {
+		return;
+	}
+
+	publish_channel_blob(chan, blob);
+}
+
+static void send_dtmf_end_event(struct ast_channel *chan,
+	enum DtmfDirection direction, const char digit, long duration_ms)
+{
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+	char digit_str[] = { digit, '\0' };
+
+	blob = ast_json_pack("{ s: s, s: s, s: s, s: i }",
+		"type", "dtmf_end",
+		"digit", digit_str,
+		"direction", dtmf_direction_to_string(direction),
+		"duration_ms", duration_ms);
+	if (!blob) {
+		return;
+	}
+
+	publish_channel_blob(chan, blob);
 }
 
 static void ast_read_generator_actions(struct ast_channel *chan, struct ast_frame *f)
@@ -4167,7 +4118,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			break;
 		case AST_FRAME_DTMF_END:
-			send_dtmf_event(chan, "Received", f->subclass.integer, "No", "Yes");
+			send_dtmf_end_event(chan, DTMF_RECEIVED, f->subclass.integer, f->len);
 			ast_log(LOG_DTMF, "DTMF end '%c' received on %s, duration %ld ms\n", f->subclass.integer, ast_channel_name(chan), f->len);
 			/* Queue it up if DTMF is deferred, or if DTMF emulation is forced. */
 			if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_DEFER_DTMF) || ast_test_flag(ast_channel_flags(chan), AST_FLAG_EMULATE_DTMF)) {
@@ -4253,7 +4204,7 @@ static struct ast_frame *__ast_read(struct ast_channel *chan, int dropaudio)
 			}
 			break;
 		case AST_FRAME_DTMF_BEGIN:
-			send_dtmf_event(chan, "Received", f->subclass.integer, "Yes", "No");
+			send_dtmf_begin_event(chan, DTMF_RECEIVED, f->subclass.integer);
 			ast_log(LOG_DTMF, "DTMF begin '%c' received on %s\n", f->subclass.integer, ast_channel_name(chan));
 			if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_DEFER_DTMF | AST_FLAG_END_DTMF_ONLY | AST_FLAG_EMULATE_DTMF) ||
 			    (!ast_tvzero(*ast_channel_dtmf_tv(chan)) &&
@@ -5105,7 +5056,7 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 			if (old_frame != fr)
 				f = fr;
 		}
-		send_dtmf_event(chan, "Sent", fr->subclass.integer, "Yes", "No");
+		send_dtmf_begin_event(chan, DTMF_SENT, fr->subclass.integer);
 		ast_clear_flag(ast_channel_flags(chan), AST_FLAG_BLOCKING);
 		ast_channel_unlock(chan);
 		res = ast_senddigit_begin(chan, fr->subclass.integer);
@@ -5121,7 +5072,7 @@ int ast_write(struct ast_channel *chan, struct ast_frame *fr)
 				ast_frfree(new_frame);
 			}
 		}
-		send_dtmf_event(chan, "Sent", fr->subclass.integer, "No", "Yes");
+		send_dtmf_end_event(chan, DTMF_SENT, fr->subclass.integer, fr->len);
 		ast_clear_flag(ast_channel_flags(chan), AST_FLAG_BLOCKING);
 		ast_channel_unlock(chan);
 		res = ast_senddigit_end(chan, fr->subclass.integer, fr->len);
@@ -6795,39 +6746,6 @@ static void ast_set_owners_and_peers(struct ast_channel *chan1,
 }
 
 /*!
- * \pre chan is locked
- */
-static void report_new_callerid(struct ast_channel *chan)
-{
-	int pres;
-
-	pres = ast_party_id_presentation(&ast_channel_caller(chan)->id);
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a channel receives new Caller ID information.</synopsis>
-			<syntax>
-				<parameter name="CID-CallingPres">
-					<para>A description of the Caller ID presentation.</para>
-				</parameter>
-			</syntax>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "NewCallerid",
-		"Channel: %s\r\n"
-		"CallerIDNum: %s\r\n"
-		"CallerIDName: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"CID-CallingPres: %d (%s)\r\n",
-		ast_channel_name(chan),
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, ""),
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, ""),
-		ast_channel_uniqueid(chan),
-		pres,
-		ast_describe_caller_presentation(pres)
-		);
-}
-
-/*!
  * \internal
  * \brief Transfer COLP between target and transferee channels.
  * \since 1.8
@@ -7231,7 +7149,7 @@ void ast_do_masquerade(struct ast_channel *original)
 	ast_channel_redirecting_set(original, ast_channel_redirecting(clonechan));
 	ast_channel_redirecting_set(clonechan, &exchange.redirecting);
 
-	report_new_callerid(original);
+	publish_channel_state(original);
 
 	/* Restore original timing file descriptor */
 	ast_channel_set_fd(original, AST_TIMING_FD, ast_channel_timingfd(original));
@@ -7397,7 +7315,7 @@ void ast_set_callerid(struct ast_channel *chan, const char *cid_num, const char 
 		ast_cdr_setcid(ast_channel_cdr(chan), chan);
 	}
 
-	report_new_callerid(chan);
+	publish_channel_state(chan);
 
 	ast_channel_unlock(chan);
 }
@@ -7416,26 +7334,14 @@ void ast_channel_set_caller(struct ast_channel *chan, const struct ast_party_cal
 
 void ast_channel_set_caller_event(struct ast_channel *chan, const struct ast_party_caller *caller, const struct ast_set_party_caller *update)
 {
-	const char *pre_set_number;
-	const char *pre_set_name;
-
 	if (ast_channel_caller(chan) == caller) {
 		/* Don't set to self */
 		return;
 	}
 
 	ast_channel_lock(chan);
-	pre_set_number =
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL);
-	pre_set_name = S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, NULL);
 	ast_party_caller_set(ast_channel_caller(chan), caller, update);
-	if (S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, NULL)
-			!= pre_set_number
-		|| S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, NULL)
-			!= pre_set_name) {
-		/* The caller id name or number changed. */
-		report_new_callerid(chan);
-	}
+	publish_channel_state(chan);
 	if (ast_channel_cdr(chan)) {
 		ast_cdr_setcid(ast_channel_cdr(chan), chan);
 	}
@@ -7610,8 +7516,11 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				if (ast_channel_softhangup_internal_flag(c1) & AST_SOFTHANGUP_UNBRIDGE) {
 					ast_channel_clear_softhangup(c1, AST_SOFTHANGUP_UNBRIDGE);
 				}
+				ast_channel_lock_both(c0, c1);
 				ast_channel_internal_bridged_channel_set(c0, c1);
 				ast_channel_internal_bridged_channel_set(c1, c0);
+				ast_channel_unlock(c0);
+				ast_channel_unlock(c1);
 			}
 			continue;
 		}
@@ -7893,8 +7802,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	}
 
 	/* Keep track of bridge */
+	ast_channel_lock_both(c0, c1);
 	ast_channel_internal_bridged_channel_set(c0, c1);
 	ast_channel_internal_bridged_channel_set(c1, c0);
+	ast_channel_unlock(c0);
+	ast_channel_unlock(c1);
 
 	ast_set_owners_and_peers(c0, c1);
 
@@ -7990,8 +7902,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			if (ast_channel_softhangup_internal_flag(c1) & AST_SOFTHANGUP_UNBRIDGE) {
 				ast_channel_clear_softhangup(c1, AST_SOFTHANGUP_UNBRIDGE);
 			}
+			ast_channel_lock_both(c0, c1);
 			ast_channel_internal_bridged_channel_set(c0, c1);
 			ast_channel_internal_bridged_channel_set(c1, c0);
+			ast_channel_unlock(c0);
+			ast_channel_unlock(c1);
 		}
 
 		/* Stop if we're a zombie or need a soft hangup */
@@ -8084,8 +7999,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
 	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
 
+	ast_channel_lock_both(c0, c1);
 	ast_channel_internal_bridged_channel_set(c0, NULL);
 	ast_channel_internal_bridged_channel_set(c1, NULL);
+	ast_channel_unlock(c0);
+	ast_channel_unlock(c1);
 
 	manager_bridge_event(0, 1, c0, c1);
 	ast_debug(1, "Bridge stops bridging channels %s and %s\n", ast_channel_name(c0), ast_channel_name(c1));
@@ -8629,16 +8547,112 @@ static void prnt_channel_key(void *v_obj, void *where, ao2_prnt_fn *prnt)
 	prnt(where, "%s", ast_channel_name(chan));
 }
 
+/*!
+ * \brief List of channel variables to append to all channel-related events.
+ */
+struct manager_channel_variable {
+	AST_LIST_ENTRY(manager_channel_variable) entry;
+	unsigned int isfunc:1;
+	char name[];
+};
+
+static AST_RWLIST_HEAD_STATIC(channelvars, manager_channel_variable);
+
+static void free_channelvars(void)
+{
+	struct manager_channel_variable *var;
+	AST_RWLIST_WRLOCK(&channelvars);
+	while ((var = AST_RWLIST_REMOVE_HEAD(&channelvars, entry))) {
+		ast_free(var);
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
+}
+
+void ast_channel_set_manager_vars(size_t varc, char **vars)
+{
+	size_t i;
+
+	free_channelvars();
+	AST_RWLIST_WRLOCK(&channelvars);
+	for (i = 0; i < varc; ++i) {
+		const char *var = vars[i];
+		struct manager_channel_variable *mcv;
+		if (!(mcv = ast_calloc(1, sizeof(*mcv) + strlen(var) + 1))) {
+			break;
+		}
+		strcpy(mcv->name, var); /* SAFE */
+		if (strchr(var, '(')) {
+			mcv->isfunc = 1;
+		}
+		AST_RWLIST_INSERT_TAIL(&channelvars, mcv, entry);
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
+}
+
+/*!
+ * \brief Destructor for the return value from ast_channel_get_manager_vars().
+ * \param obj AO2 object.
+ */
+static void varshead_dtor(void *obj)
+{
+	struct varshead *head = obj;
+	struct ast_var_t *var;
+
+	while ((var = AST_RWLIST_REMOVE_HEAD(head, entries))) {
+		ast_var_delete(var);
+	}
+}
+
+struct varshead *ast_channel_get_manager_vars(struct ast_channel *chan)
+{
+	RAII_VAR(struct varshead *, ret, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_str *, tmp, NULL, ast_free);
+	struct manager_channel_variable *mcv;
+
+	ret = ao2_alloc(sizeof(*ret), varshead_dtor);
+	tmp = ast_str_create(16);
+
+	if (!ret || !tmp) {
+		return NULL;
+	}
+
+	AST_RWLIST_RDLOCK(&channelvars);
+	AST_LIST_TRAVERSE(&channelvars, mcv, entry) {
+		const char *val = NULL;
+		struct ast_var_t *var;
+
+		if (mcv->isfunc) {
+			if (ast_func_read2(chan, mcv->name, &tmp, 0) == 0) {
+				val = ast_str_buffer(tmp);
+			} else {
+				ast_log(LOG_ERROR,
+					"Error invoking function %s\n", mcv->name);
+			}
+		} else {
+			val = pbx_builtin_getvar_helper(chan, mcv->name);
+		}
+
+		var = ast_var_assign(mcv->name, val ? val : "");
+		if (!var) {
+			AST_RWLIST_UNLOCK(&channelvars);
+			return NULL;
+		}
+
+		AST_RWLIST_INSERT_TAIL(ret, var, entries);
+	}
+	AST_RWLIST_UNLOCK(&channelvars);
+
+	ao2_ref(ret, +1);
+	return ret;
+}
+
 static void channels_shutdown(void)
 {
-	ao2_cleanup(__channel_snapshot);
-	__channel_snapshot = NULL;
-	ao2_cleanup(__channel_varset);
-	__channel_varset = NULL;
-	ao2_cleanup(__channel_topic_all);
-	__channel_topic_all = NULL;
-	stasis_caching_unsubscribe(__channel_topic_all_cached);
-	__channel_topic_all_cached = NULL;
+
+	ast_stasis_channels_shutdown();
+
+	free_channelvars();
+
 	ast_data_unregister(NULL);
 	ast_cli_unregister_multiple(cli_channel, ARRAY_LEN(cli_channel));
 	if (channels) {
@@ -8646,16 +8660,6 @@ static void channels_shutdown(void)
 		ao2_ref(channels, -1);
 		channels = NULL;
 	}
-}
-
-static const char *channel_snapshot_get_id(struct stasis_message *message)
-{
-	struct ast_channel_snapshot *snapshot;
-	if (ast_channel_snapshot() != stasis_message_type(message)) {
-		return NULL;
-	}
-	snapshot = stasis_message_data(message);
-	return snapshot->uniqueid;
 }
 
 void ast_channels_init(void)
@@ -8666,11 +8670,7 @@ void ast_channels_init(void)
 		ao2_container_register("channels", channels, prnt_channel_key);
 	}
 
-	__channel_snapshot = stasis_message_type_create("ast_channel_snapshot");
-	__channel_varset = stasis_message_type_create("ast_channel_varset");
-
-	__channel_topic_all = stasis_topic_create("ast_channel_topic_all");
-	__channel_topic_all_cached = stasis_caching_topic_create(__channel_topic_all, channel_snapshot_get_id);
+	ast_stasis_channels_init();
 
 	ast_cli_register_multiple(cli_channel, ARRAY_LEN(cli_channel));
 
@@ -11251,79 +11251,6 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
 		*slash = '\0';
 	}
 	return 0;
-}
-
-static void ast_channel_snapshot_dtor(void *obj)
-{
-	struct ast_channel_snapshot *snapshot = obj;
-	ast_string_field_free_memory(snapshot);
-}
-
-struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *chan)
-{
-	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
-
-	snapshot = ao2_alloc(sizeof(*snapshot), ast_channel_snapshot_dtor);
-	if (ast_string_field_init(snapshot, 1024)) {
-		return NULL;
-	}
-
-	ast_string_field_set(snapshot, name, ast_channel_name(chan));
-	ast_string_field_set(snapshot, accountcode, ast_channel_accountcode(chan));
-	ast_string_field_set(snapshot, peeraccount, ast_channel_peeraccount(chan));
-	ast_string_field_set(snapshot, userfield, ast_channel_userfield(chan));
-	ast_string_field_set(snapshot, uniqueid, ast_channel_uniqueid(chan));
-	ast_string_field_set(snapshot, linkedid, ast_channel_linkedid(chan));
-	ast_string_field_set(snapshot, parkinglot, ast_channel_parkinglot(chan));
-	ast_string_field_set(snapshot, hangupsource, ast_channel_hangupsource(chan));
-	if (ast_channel_appl(chan)) {
-		ast_string_field_set(snapshot, appl, ast_channel_appl(chan));
-	}
-	if (ast_channel_data(chan)) {
-		ast_string_field_set(snapshot, data, ast_channel_data(chan));
-	}
-	ast_string_field_set(snapshot, context, ast_channel_context(chan));
-	ast_string_field_set(snapshot, exten, ast_channel_exten(chan));
-
-	ast_string_field_set(snapshot, caller_name,
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, ""));
-	ast_string_field_set(snapshot, caller_number,
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, ""));
-
-	ast_string_field_set(snapshot, connected_name,
-		S_COR(ast_channel_connected(chan)->id.name.valid, ast_channel_connected(chan)->id.name.str, ""));
-	ast_string_field_set(snapshot, connected_number,
-		S_COR(ast_channel_connected(chan)->id.number.valid, ast_channel_connected(chan)->id.number.str, ""));
-
-	snapshot->creationtime = ast_channel_creationtime(chan);
-	snapshot->state = ast_channel_state(chan);
-	snapshot->priority = ast_channel_priority(chan);
-	snapshot->amaflags = ast_channel_amaflags(chan);
-	snapshot->hangupcause = ast_channel_hangupcause(chan);
-	snapshot->flags = *ast_channel_flags(chan);
-
-	ao2_ref(snapshot, +1);
-	return snapshot;
-}
-
-struct stasis_message_type *ast_channel_varset(void)
-{
-	return __channel_varset;
-}
-
-struct stasis_message_type *ast_channel_snapshot(void)
-{
-	return __channel_snapshot;
-}
-
-struct stasis_topic *ast_channel_topic_all(void)
-{
-	return __channel_topic_all;
-}
-
-struct stasis_caching_topic *ast_channel_topic_all_cached(void)
-{
-	return __channel_topic_all_cached;
 }
 
 /* DO NOT PUT ADDITIONAL FUNCTIONS BELOW THIS BOUNDARY

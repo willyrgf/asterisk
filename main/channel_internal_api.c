@@ -42,6 +42,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/data.h"
 #include "asterisk/indications.h"
+#include "asterisk/stasis_channels.h"
 #include "asterisk/channel_internal.h"
 #include "asterisk/test.h"
 
@@ -1385,7 +1386,7 @@ int ast_channel_internal_is_finalized(struct ast_channel *chan)
 
 struct stasis_topic *ast_channel_topic(struct ast_channel *chan)
 {
-	return chan->topic;
+	return chan ? chan->topic : ast_channel_topic_all();
 }
 
 void ast_channel_internal_setup_topics(struct ast_channel *chan)
@@ -1400,4 +1401,7 @@ void ast_channel_internal_setup_topics(struct ast_channel *chan)
 
 	chan->topic = stasis_topic_create(topic_name);
 	chan->forwarder = stasis_forward_all(chan->topic, ast_channel_topic_all());
+
+	ast_assert(chan->topic != NULL);
+	ast_assert(chan->forwarder != NULL);
 }

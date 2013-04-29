@@ -831,10 +831,10 @@ static int xmpp_resource_hash(const void *obj, const int flags)
 /*! \brief Comparator function for XMPP resource */
 static int xmpp_resource_cmp(void *obj, void *arg, int flags)
 {
-	struct ast_xmpp_resource *resource1 = obj, *resource2 = arg;
+	struct ast_xmpp_resource *resource1 = obj;
 	const char *resource = arg;
 
-	return !strcmp(resource1->resource, flags & OBJ_KEY ? resource : resource2->resource) ? CMP_MATCH | CMP_STOP : 0;
+	return !strcmp(resource1->resource, resource) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 /*! \brief Destructor callback function for XMPP buddy */
@@ -1319,24 +1319,30 @@ static void xmpp_pubsub_publish_device_state(struct ast_xmpp_client *client, con
  * \param data void pointer to ast_client structure
  * \return void
  */
-static void xmpp_pubsub_mwi_cb(const struct ast_event *ast_event, void *data)
+static void xmpp_pubsub_mwi_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
 	struct ast_xmpp_client *client = data;
 	const char *mailbox, *context;
 	char oldmsgs[10], newmsgs[10];
+	struct stasis_mwi_state *mwi_state;
 
-	if (ast_eid_cmp(&ast_eid_default, ast_event_get_ie_raw(ast_event, AST_EVENT_IE_EID))) {
-		/* If the event didn't originate from this server, don't send it back out. */
-		ast_debug(1, "Returning here\n");
+	if (!stasis_subscription_is_subscribed(sub) || stasis_mwi_state_type() != stasis_message_type(msg)) {
 		return;
 	}
 
-	mailbox = ast_event_get_ie_str(ast_event, AST_EVENT_IE_MAILBOX);
-	context = ast_event_get_ie_str(ast_event, AST_EVENT_IE_CONTEXT);
+	mwi_state = stasis_message_data(msg);
+
+	if (ast_eid_cmp(&ast_eid_default, &mwi_state->eid)) {
+		/* If the event didn't originate from this server, don't send it back out. */
+		return;
+	}
+
+	mailbox = mwi_state->mailbox;
+	context = mwi_state->context;
 	snprintf(oldmsgs, sizeof(oldmsgs), "%d",
-		 ast_event_get_ie_uint(ast_event, AST_EVENT_IE_OLDMSGS));
+		 mwi_state->old_msgs);
 	snprintf(newmsgs, sizeof(newmsgs), "%d",
-		 ast_event_get_ie_uint(ast_event, AST_EVENT_IE_NEWMSGS));
+		 mwi_state->new_msgs);
 	xmpp_pubsub_publish_mwi(client, mailbox, context, oldmsgs, newmsgs);
 }
 
@@ -1346,22 +1352,22 @@ static void xmpp_pubsub_mwi_cb(const struct ast_event *ast_event, void *data)
  * \param data void pointer to ast_client structure
  * \return void
  */
-static void xmpp_pubsub_devstate_cb(const struct ast_event *ast_event, void *data)
+static void xmpp_pubsub_devstate_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
 	struct ast_xmpp_client *client = data;
-	const char *device, *device_state;
-	unsigned int cachable;
+	struct ast_device_state_message *dev_state;
 
-	if (ast_eid_cmp(&ast_eid_default, ast_event_get_ie_raw(ast_event, AST_EVENT_IE_EID))) {
-		/* If the event didn't originate from this server, don't send it back out. */
-		ast_debug(1, "Returning here\n");
+	if (!stasis_subscription_is_subscribed(sub) || ast_device_state_message_type() != stasis_message_type(msg)) {
 		return;
 	}
 
-	device = ast_event_get_ie_str(ast_event, AST_EVENT_IE_DEVICE);
-	device_state = ast_devstate_str(ast_event_get_ie_uint(ast_event, AST_EVENT_IE_STATE));
-	cachable = ast_event_get_ie_uint(ast_event, AST_EVENT_IE_CACHABLE);
-	xmpp_pubsub_publish_device_state(client, device, device_state, cachable);
+	dev_state = stasis_message_data(msg);
+	if (!dev_state->eid || ast_eid_cmp(&ast_eid_default, dev_state->eid)) {
+		/* If the event is aggregate or didn't originate from this server, don't send it out. */
+		return;
+	}
+
+	xmpp_pubsub_publish_device_state(client, dev_state->device, ast_devstate_str(dev_state->state), dev_state->cachable);
 }
 
 /*!
@@ -1464,29 +1470,23 @@ static int xmpp_pubsub_handle_event(void *data, ikspak *pak)
 		return IKS_FILTER_EAT;
 	}
 	if (!strcasecmp(iks_name(item_content), "state")) {
-		device_state = iks_find_cdata(item, "state");
-		if ((cachable_str = iks_find_cdata(item, "cachable"))) {
+		if ((cachable_str = iks_find_attrib(item_content, "cachable"))) {
 			sscanf(cachable_str, "%30d", &cachable);
 		}
-		if (!(event = ast_event_new(AST_EVENT_DEVICE_STATE_CHANGE,
-					    AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, item_id, AST_EVENT_IE_STATE,
-					    AST_EVENT_IE_PLTYPE_UINT, ast_devstate_val(device_state), AST_EVENT_IE_EID,
-					    AST_EVENT_IE_PLTYPE_RAW, &pubsub_eid, sizeof(pubsub_eid),
-					    AST_EVENT_IE_END))) {
-			return IKS_FILTER_EAT;
-		}
+		device_state = iks_find_cdata(item, "state");
+		ast_publish_device_state_full(item_id,
+						ast_devstate_val(device_state),
+						cachable == AST_DEVSTATE_CACHABLE ? AST_DEVSTATE_CACHABLE : AST_DEVSTATE_NOT_CACHABLE,
+						&pubsub_eid);
+		return IKS_FILTER_EAT;
 	} else if (!strcasecmp(iks_name(item_content), "mailbox")) {
 		context = strsep(&item_id, "@");
 		sscanf(iks_find_cdata(item_content, "OLDMSGS"), "%10d", &oldmsgs);
 		sscanf(iks_find_cdata(item_content, "NEWMSGS"), "%10d", &newmsgs);
-		if (!(event = ast_event_new(AST_EVENT_MWI, AST_EVENT_IE_MAILBOX,
-					    AST_EVENT_IE_PLTYPE_STR, item_id, AST_EVENT_IE_CONTEXT,
-					    AST_EVENT_IE_PLTYPE_STR, context, AST_EVENT_IE_OLDMSGS,
-					    AST_EVENT_IE_PLTYPE_UINT, oldmsgs, AST_EVENT_IE_NEWMSGS,
-					    AST_EVENT_IE_PLTYPE_UINT, newmsgs, AST_EVENT_IE_EID, AST_EVENT_IE_PLTYPE_RAW,
-					    &pubsub_eid, sizeof(pubsub_eid), AST_EVENT_IE_END))) {
-			return IKS_FILTER_EAT;
-		}
+
+		stasis_publish_mwi_state_full(item_id, context, newmsgs, oldmsgs, &pubsub_eid);
+
+		return IKS_FILTER_EAT;
 	} else {
 		ast_debug(1, "Don't know how to handle PubSub event of type %s\n",
 			  iks_name(item_content));
@@ -1570,6 +1570,14 @@ static int xmpp_pubsub_handle_error(void *data, ikspak *pak)
 	return IKS_FILTER_EAT;
 }
 
+static int cached_devstate_cb(void *obj, void *arg, int flags)
+{
+	struct stasis_message *msg = obj;
+	struct ast_xmpp_client *client = arg;
+	xmpp_pubsub_devstate_cb(client, client->device_state_sub, NULL, msg);
+	return 0;
+}
+
 /*!
  * \brief Initialize collections for event distribution
  * \param client the configured XMPP client we use to connect to a XMPP server
@@ -1579,6 +1587,7 @@ static void xmpp_init_event_distribution(struct ast_xmpp_client *client)
 {
 	RAII_VAR(struct xmpp_config *, cfg, ao2_global_obj_ref(globals), ao2_cleanup);
 	RAII_VAR(struct ast_xmpp_client_config *, clientcfg, NULL, ao2_cleanup);
+	RAII_VAR(struct ao2_container *, cached, NULL, ao2_cleanup);
 
 	if (!cfg || !cfg->clients || !(clientcfg = xmpp_config_find(cfg->clients, client->name))) {
 		return;
@@ -1587,24 +1596,17 @@ static void xmpp_init_event_distribution(struct ast_xmpp_client *client)
 	xmpp_pubsub_unsubscribe(client, "device_state");
 	xmpp_pubsub_unsubscribe(client, "message_waiting");
 
-	if (!(client->mwi_sub = ast_event_subscribe(AST_EVENT_MWI, xmpp_pubsub_mwi_cb, "xmpp_pubsub_mwi_subscription",
-						    client, AST_EVENT_IE_END))) {
+	if (!(client->mwi_sub = stasis_subscribe(stasis_mwi_topic_all(), xmpp_pubsub_mwi_cb, client))) {
 		return;
 	}
 
-	if (ast_enable_distributed_devstate()) {
-		return;
-	}
-	
-
-	if (!(client->device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE_CHANGE,
-							     xmpp_pubsub_devstate_cb, "xmpp_pubsub_devstate_subscription", client, AST_EVENT_IE_END))) {
-		ast_event_unsubscribe(client->mwi_sub);
-		client->mwi_sub = NULL;
+	if (!(client->device_state_sub = stasis_subscribe(ast_device_state_topic_all(), xmpp_pubsub_devstate_cb, client))) {
+		client->mwi_sub = stasis_unsubscribe(client->mwi_sub);
 		return;
 	}
 
-	ast_event_dump_cache(client->device_state_sub);
+	cached = stasis_cache_dump(ast_device_state_topic_cached(), NULL);
+	ao2_callback(cached, OBJ_NODATA, cached_devstate_cb, client);
 
 	xmpp_pubsub_subscribe(client, "device_state");
 	xmpp_pubsub_subscribe(client, "message_waiting");
@@ -1681,7 +1683,7 @@ static int xmpp_status_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 
-	if (ast_strlen_zero(jid.resource) || !(resource = ao2_find(buddy->resources, jid.resource, OBJ_KEY))) {
+	if (ast_strlen_zero(jid.resource) || !(resource = ao2_callback(buddy->resources, 0, xmpp_resource_cmp, jid.resource))) {
 		resource = ao2_callback(buddy->resources, OBJ_NODATA, xmpp_resource_immediate, NULL);
 	}
 
@@ -1752,7 +1754,7 @@ static int acf_jabberstatus_read(struct ast_channel *chan, const char *name, cha
 		return -1;
 	}
 
-	if (ast_strlen_zero(jid.resource) || !(resource = ao2_find(buddy->resources, jid.resource, OBJ_KEY))) {
+	if (ast_strlen_zero(jid.resource) || !(resource = ao2_callback(buddy->resources, 0, xmpp_resource_cmp, jid.resource))) {
 		resource = ao2_callback(buddy->resources, OBJ_NODATA, xmpp_resource_immediate, NULL);
 	}
 
@@ -2480,7 +2482,7 @@ static int xmpp_client_service_discovery_result_hook(void *data, ikspak *pak)
 		return IKS_FILTER_EAT;
 	}
 
-	if (!(resource = ao2_find(buddy->resources, pak->from->resource, OBJ_KEY))) {
+	if (!(resource = ao2_callback(buddy->resources, 0, xmpp_resource_cmp, pak->from->resource))) {
 		ao2_ref(buddy, -1);
 		return IKS_FILTER_EAT;
 	}
@@ -3244,6 +3246,14 @@ static int xmpp_client_send_disco_info_request(struct ast_xmpp_client *client, c
 	return res;
 }
 
+/*! \brief Callback function which returns when the resource is available */
+static int xmpp_resource_is_available(void *obj, void *arg, int flags)
+{
+	struct ast_xmpp_resource *resource = obj;
+
+	return (resource->status == IKS_SHOW_AVAILABLE) ? CMP_MATCH | CMP_STOP : 0;
+}
+
 /*! \brief Internal function called when a presence message is received */
 static int xmpp_pak_presence(struct ast_xmpp_client *client, struct ast_xmpp_client_config *cfg, iks *node, ikspak *pak)
 {
@@ -3251,6 +3261,7 @@ static int xmpp_pak_presence(struct ast_xmpp_client *client, struct ast_xmpp_cli
 	struct ast_xmpp_resource *resource;
 	char *type = iks_find_attrib(pak->x, "type");
 	int status = pak->show ? pak->show : STATUS_DISAPPEAR;
+	enum ast_device_state state = AST_DEVICE_UNAVAILABLE;
 
 	/* If no resource is available this is a general buddy presence update, which we will ignore */
 	if (!pak->from->resource) {
@@ -3273,7 +3284,7 @@ static int xmpp_pak_presence(struct ast_xmpp_client *client, struct ast_xmpp_cli
 
 	ao2_lock(buddy->resources);
 
-	if (!(resource = ao2_find(buddy->resources, pak->from->resource, OBJ_KEY | OBJ_NOLOCK))) {
+	if (!(resource = ao2_callback(buddy->resources, OBJ_NOLOCK, xmpp_resource_cmp, pak->from->resource))) {
 		/* Only create the new resource if it is not going away - in reality this should not happen */
 		if (status != STATUS_DISAPPEAR) {
 			if (!(resource = ao2_alloc(sizeof(*resource), xmpp_resource_destructor))) {
@@ -3357,9 +3368,17 @@ static int xmpp_pak_presence(struct ast_xmpp_client *client, struct ast_xmpp_cli
 			      client->name, pak->from->partial, pak->show ? pak->show : IKS_SHOW_UNAVAILABLE);
 	}
 
+	/* Determine if at least one resource is available for device state purposes */
+	if ((resource = ao2_callback(buddy->resources, OBJ_NOLOCK, xmpp_resource_is_available, NULL))) {
+		state = AST_DEVICE_NOT_INUSE;
+		ao2_ref(resource, -1);
+	}
+
 	ao2_unlock(buddy->resources);
 
 	ao2_ref(buddy, -1);
+
+	ast_devstate_changed(state, AST_DEVSTATE_CACHABLE, "XMPP/%s/%s", client->name, pak->from->partial);
 
 	return 0;
 }
@@ -3507,14 +3526,12 @@ int ast_xmpp_client_disconnect(struct ast_xmpp_client *client)
 	}
 
 	if (client->mwi_sub) {
-		ast_event_unsubscribe(client->mwi_sub);
-		client->mwi_sub = NULL;
+		client->mwi_sub = stasis_unsubscribe(client->mwi_sub);
 		xmpp_pubsub_unsubscribe(client, "message_waiting");
 	}
 
 	if (client->device_state_sub) {
-		ast_event_unsubscribe(client->device_state_sub);
-		client->device_state_sub = NULL;
+		client->device_state_sub = stasis_unsubscribe(client->device_state_sub);
 		xmpp_pubsub_unsubscribe(client, "device_state");
 	}
 

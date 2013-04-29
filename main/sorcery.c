@@ -169,11 +169,6 @@ static int sockaddr_handler_fn(const void *obj, const intptr_t *args, char **buf
 	return !(*buf = ast_strdup(ast_sockaddr_stringify(field))) ? -1 : 0;
 }
 
-static int noop_handler_fn(const void *obj, const intptr_t *args, char **buf)
-{
-	return 0;
-}
-
 static int chararray_handler_fn(const void *obj, const intptr_t *args, char **buf)
 {
 	char *field = (char *)(obj + args[0]);
@@ -187,7 +182,6 @@ static sorcery_field_handler sorcery_field_default_handler(enum aco_option_type 
 	case OPT_CHAR_ARRAY_T: return chararray_handler_fn;
 	case OPT_DOUBLE_T: return double_handler_fn;
 	case OPT_INT_T: return int_handler_fn;
-	case OPT_NOOP_T: return noop_handler_fn;
 	case OPT_SOCKADDR_T: return sockaddr_handler_fn;
 	case OPT_STRINGFIELD_T: return stringfield_handler_fn;
 	case OPT_UINT_T: return uint_handler_fn;
@@ -481,6 +475,7 @@ int ast_sorcery_object_register(struct ast_sorcery *sorcery, const char *type, a
 		return -1;
 	}
 
+	object_type->type.name = object_type->name;
 	object_type->type.type = ACO_ITEM;
 	object_type->type.category = "";
 	object_type->type.item_alloc = alloc;
@@ -545,7 +540,7 @@ int __ast_sorcery_object_field_register(struct ast_sorcery *sorcery, const char 
 	int pos;
 	va_list args;
 
-	if (!object_type || !object_type->type.item_alloc) {
+	if (!strcmp(type, "id") || !object_type || !object_type->type.item_alloc) {
 		return -1;
 	}
 
@@ -745,7 +740,7 @@ int ast_sorcery_objectset_apply(const struct ast_sorcery *sorcery, void *object,
 	}
 
 	if (!res && object_type->apply) {
-		object_type->apply(sorcery, object);
+		res = object_type->apply(sorcery, object);
 	}
 
 	return res;
@@ -813,15 +808,7 @@ void *ast_sorcery_alloc(const struct ast_sorcery *sorcery, const char *type, con
 	}
 
 	if (ast_strlen_zero(id)) {
-		struct ast_uuid *uuid = ast_uuid_generate();
-
-		if (!uuid) {
-			ao2_ref(details, -1);
-			return NULL;
-		}
-
-		ast_uuid_to_str(uuid, details->id, AST_UUID_STR_LEN);
-		ast_free(uuid);
+		ast_uuid_generate_str(details->id, sizeof(details->id));
 	} else {
 		ast_copy_string(details->id, id, sizeof(details->id));
 	}
@@ -888,16 +875,25 @@ int ast_sorcery_diff(const struct ast_sorcery *sorcery, const void *original, co
 	}
 }
 
+/*! \brief Structure used when calling create, update, or delete */
+struct sorcery_details {
+	/*! \brief Pointer to the sorcery instance */
+	const struct ast_sorcery *sorcery;
+	/*! \brief Pointer to the object itself */
+	void *obj;
+};
+
 /*! \brief Internal function used to create an object in caching wizards */
 static int sorcery_cache_create(void *obj, void *arg, int flags)
 {
-	struct ast_sorcery_object_wizard *object_wizard = obj;
+	const struct ast_sorcery_object_wizard *object_wizard = obj;
+	const struct sorcery_details *details = arg;
 
 	if (!object_wizard->caching || !object_wizard->wizard->create) {
 		return 0;
 	}
 
-	object_wizard->wizard->create(object_wizard->data, arg);
+	object_wizard->wizard->create(details->sorcery, object_wizard->data, details->obj);
 
 	return 0;
 }
@@ -944,6 +940,7 @@ void *ast_sorcery_retrieve_by_fields(const struct ast_sorcery *sorcery, const ch
 	unsigned int cached = 0;
 
 	if (!object_type) {
+		ast_log(LOG_NOTICE, "Can't find object type '%s'\n", type);
 		return NULL;
 	}
 
@@ -1014,8 +1011,9 @@ struct ao2_container *ast_sorcery_retrieve_by_regex(const struct ast_sorcery *so
 static int sorcery_wizard_create(void *obj, void *arg, int flags)
 {
 	const struct ast_sorcery_object_wizard *object_wizard = obj;
+	const struct sorcery_details *details = arg;
 
-	return (!object_wizard->caching && !object_wizard->wizard->create(object_wizard->data, arg)) ? CMP_MATCH | CMP_STOP : 0;
+	return (!object_wizard->caching && !object_wizard->wizard->create(details->sorcery, object_wizard->data, details->obj)) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 int ast_sorcery_create(const struct ast_sorcery *sorcery, void *object)
@@ -1023,12 +1021,16 @@ int ast_sorcery_create(const struct ast_sorcery *sorcery, void *object)
 	const struct ast_sorcery_object_details *details = object;
 	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, details->type, OBJ_KEY), ao2_cleanup);
 	RAII_VAR(struct ast_sorcery_object_wizard *, object_wizard, NULL, ao2_cleanup);
+	struct sorcery_details sdetails = {
+		.sorcery = sorcery,
+		.obj = object,
+	};
 
 	if (!object_type) {
 		return -1;
 	}
 
-	object_wizard = ao2_callback(object_type->wizards, 0, sorcery_wizard_create, object);
+	object_wizard = ao2_callback(object_type->wizards, 0, sorcery_wizard_create, &sdetails);
 
 	return object_wizard ? 0 : -1;
 }
@@ -1037,8 +1039,9 @@ int ast_sorcery_create(const struct ast_sorcery *sorcery, void *object)
 static int sorcery_wizard_update(void *obj, void *arg, int flags)
 {
 	const struct ast_sorcery_object_wizard *object_wizard = obj;
+	const struct sorcery_details *details = arg;
 
-	return (object_wizard->wizard->update && !object_wizard->wizard->update(object_wizard->data, arg) &&
+	return (object_wizard->wizard->update && !object_wizard->wizard->update(details->sorcery, object_wizard->data, details->obj) &&
 		!object_wizard->caching) ? CMP_MATCH | CMP_STOP : 0;
 }
 
@@ -1047,12 +1050,16 @@ int ast_sorcery_update(const struct ast_sorcery *sorcery, void *object)
 	const struct ast_sorcery_object_details *details = object;
 	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, details->type, OBJ_KEY), ao2_cleanup);
 	RAII_VAR(struct ast_sorcery_object_wizard *, object_wizard, NULL, ao2_cleanup);
+	struct sorcery_details sdetails = {
+		.sorcery = sorcery,
+		.obj = object,
+	};
 
 	if (!object_type) {
 		return -1;
 	}
 
-	object_wizard = ao2_callback(object_type->wizards, 0, sorcery_wizard_update, object);
+	object_wizard = ao2_callback(object_type->wizards, 0, sorcery_wizard_update, &sdetails);
 
 	return object_wizard ? 0 : -1;
 }
@@ -1061,8 +1068,9 @@ int ast_sorcery_update(const struct ast_sorcery *sorcery, void *object)
 static int sorcery_wizard_delete(void *obj, void *arg, int flags)
 {
 	const struct ast_sorcery_object_wizard *object_wizard = obj;
+	const struct sorcery_details *details = arg;
 
-	return (object_wizard->wizard->delete && !object_wizard->wizard->delete(object_wizard->data, arg) &&
+	return (object_wizard->wizard->delete && !object_wizard->wizard->delete(details->sorcery, object_wizard->data, details->obj) &&
 		!object_wizard->caching) ? CMP_MATCH | CMP_STOP : 0;
 }
 
@@ -1071,12 +1079,16 @@ int ast_sorcery_delete(const struct ast_sorcery *sorcery, void *object)
 	const struct ast_sorcery_object_details *details = object;
 	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, details->type, OBJ_KEY), ao2_cleanup);
 	RAII_VAR(struct ast_sorcery_object_wizard *, object_wizard, NULL, ao2_cleanup);
+	struct sorcery_details sdetails = {
+		.sorcery = sorcery,
+		.obj = object,
+	};
 
 	if (!object_type) {
 		return -1;
 	}
 
-	object_wizard = ao2_callback(object_type->wizards, 0, sorcery_wizard_delete, object);
+	object_wizard = ao2_callback(object_type->wizards, 0, sorcery_wizard_delete, &sdetails);
 
 	return object_wizard ? 0 : -1;
 }

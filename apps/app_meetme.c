@@ -5926,7 +5926,16 @@ static void sla_handle_dial_state_event(void)
 			ringing_trunk = sla_choose_ringing_trunk(ringing_station->station, &s_trunk_ref, 1);
 			ast_mutex_unlock(&sla.lock);
 			if (!ringing_trunk) {
+				/* This case happens in a bit of a race condition.  If two stations answer
+				 * the outbound call at the same time, the first one will get connected to
+				 * the trunk.  When the second one gets here, it will not see any trunks
+				 * ringing so we have no idea what to conect it to.  So, we just hang up
+				 * on it. */
 				ast_debug(1, "Found no ringing trunk for station '%s' to answer!\n", ringing_station->station->name);
+				ast_dial_join(ringing_station->station->dial);
+				ast_dial_destroy(ringing_station->station->dial);
+				ringing_station->station->dial = NULL;
+				ast_free(ringing_station);
 				break;
 			}
 			/* Track the channel that answered this trunk */
@@ -6428,17 +6437,18 @@ static int sla_process_timers(struct timespec *ts)
 
 static int sla_load_config(int reload);
 
-/*! \brief Check if we can do a reload of SLA, and do it if we can */
+/*!
+ * \internal
+ * \brief Check if we can do a reload of SLA, and do it if we can
+ * \pre sla.lock is locked.
+ */
 static void sla_check_reload(void)
 {
 	struct sla_station *station;
 	struct sla_trunk *trunk;
 
-	ast_mutex_lock(&sla.lock);
-
 	if (!AST_LIST_EMPTY(&sla.event_q) || !AST_LIST_EMPTY(&sla.ringing_trunks) 
 		|| !AST_LIST_EMPTY(&sla.ringing_stations)) {
-		ast_mutex_unlock(&sla.lock);
 		return;
 	}
 
@@ -6449,7 +6459,6 @@ static void sla_check_reload(void)
 	}
 	AST_RWLIST_UNLOCK(&sla_stations);
 	if (station) {
-		ast_mutex_unlock(&sla.lock);
 		return;
 	}
 
@@ -6460,15 +6469,12 @@ static void sla_check_reload(void)
 	}
 	AST_RWLIST_UNLOCK(&sla_trunks);
 	if (trunk) {
-		ast_mutex_unlock(&sla.lock);
 		return;
 	}
 
 	/* yay */
 	sla_load_config(1);
 	sla.reload = 0;
-
-	ast_mutex_unlock(&sla.lock);
 }
 
 static void *sla_thread(void *data)

@@ -72,6 +72,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/taskprocessor.h"
 #include "asterisk/xmldoc.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/stasis_channels.h"
 
 /*!
  * \note I M P O R T A N T :
@@ -818,8 +819,6 @@ AST_APP_OPTIONS(waitexten_opts, {
 struct ast_context;
 struct ast_app;
 
-static struct ast_taskprocessor *extension_state_tps;
-
 AST_THREADSTORAGE(switch_data);
 AST_THREADSTORAGE(extensionstate_buf);
 
@@ -1122,18 +1121,6 @@ static const struct cfextension_states {
 	{ AST_EXTENSION_INUSE | AST_EXTENSION_ONHOLD,  "InUse&Hold" }
 };
 
-struct presencechange {
-	char *provider;
-	int state;
-	char *subtype;
-	char *message;
-};
-
-struct statechange {
-	AST_LIST_ENTRY(statechange) entry;
-	char dev[0];
-};
-
 struct pbx_exception {
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(context);	/*!< Context associated with this exception */
@@ -1299,9 +1286,9 @@ static int extenpatternmatchnew = 0;
 static char *overrideswitch = NULL;
 
 /*! \brief Subscription for device state change events */
-static struct ast_event_sub *device_state_sub;
+static struct stasis_subscription *device_state_sub;
 /*! \brief Subscription for presence state change events */
-static struct ast_event_sub *presence_state_sub;
+static struct stasis_subscription *presence_state_sub;
 
 AST_MUTEX_DEFINE_STATIC(maxcalllock);
 static int countcalls;
@@ -4655,8 +4642,9 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 	int res;
 	struct pbx_find_info q = { .stacklen = 0 }; /* the rest is reset in pbx_find_extension */
 	char passdata[EXT_DATA_SIZE];
-
 	int matching_action = (action == E_MATCH || action == E_CANMATCH || action == E_MATCHMORE);
+	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 
 	ast_rdlock_contexts();
 	if (found)
@@ -4700,28 +4688,18 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 					COLORIZE(COLOR_BRMAGENTA, 0, passdata),
 					"in new stack");
 			}
-			/*** DOCUMENTATION
-				<managerEventInstance>
-					<synopsis>Raised when a channel enters a new context, extension, priority.</synopsis>
-					<syntax>
-						<parameter name="Application">
-							<para>The application about to be executed.</para>
-						</parameter>
-						<parameter name="AppData">
-							<para>The data to be passed to the application.</para>
-						</parameter>
-					</syntax>
-				</managerEventInstance>
-			***/
-			manager_event(EVENT_FLAG_DIALPLAN, "Newexten",
-					"Channel: %s\r\n"
-					"Context: %s\r\n"
-					"Extension: %s\r\n"
-					"Priority: %d\r\n"
-					"Application: %s\r\n"
-					"AppData: %s\r\n"
-					"Uniqueid: %s\r\n",
-					ast_channel_name(c), ast_channel_context(c), ast_channel_exten(c), ast_channel_priority(c), app->name, passdata, ast_channel_uniqueid(c));
+			snapshot = ast_channel_snapshot_create(c);
+			if (snapshot) {
+				/* pbx_exec sets application name and data, but we don't want to log
+				 * every exec. Just update the snapshot here instead.
+				 */
+				ast_string_field_set(snapshot, appl, app->name);
+				ast_string_field_set(snapshot, data, passdata);
+				msg = stasis_message_create(ast_channel_snapshot_type(), snapshot);
+				if (msg) {
+					stasis_publish(ast_channel_topic(c), msg);
+				}
+			}
 			return pbx_exec(c, app, passdata);	/* 0 on success, -1 on failure */
 		}
 	} else if (q.swo) {	/* not found here, but in another switch */
@@ -5055,125 +5033,6 @@ static int execute_state_callback(ast_state_cb_type cb,
 	return res;
 }
 
-static int handle_presencechange(void *datap)
-{
-	struct ast_hint *hint;
-	struct ast_str *hint_app = NULL;
-	struct presencechange *pc = datap;
-	struct ao2_iterator i;
-	struct ao2_iterator cb_iter;
-	char context_name[AST_MAX_CONTEXT];
-	char exten_name[AST_MAX_EXTENSION];
-	int res = -1;
-
-	hint_app = ast_str_create(1024);
-	if (!hint_app) {
-		goto presencechange_cleanup;
-	}
-
-	ast_mutex_lock(&context_merge_lock);/* Hold off ast_merge_contexts_and_delete */
-	i = ao2_iterator_init(hints, 0);
-	for (; (hint = ao2_iterator_next(&i)); ao2_ref(hint, -1)) {
-		struct ast_state_cb *state_cb;
-		const char *app;
-		char *parse;
-
-		ao2_lock(hint);
-
-		if (!hint->exten) {
-			/* The extension has already been destroyed */
-			ao2_unlock(hint);
-			continue;
-		}
-
-		/* Does this hint monitor the device that changed state? */
-		app = ast_get_extension_app(hint->exten);
-		if (ast_strlen_zero(app)) {
-			/* The hint does not monitor presence at all. */
-			ao2_unlock(hint);
-			continue;
-		}
-
-		ast_str_set(&hint_app, 0, "%s", app);
-		parse = parse_hint_presence(hint_app);
-		if (ast_strlen_zero(parse)) {
-			ao2_unlock(hint);
-			continue;
-		}
-		if (strcasecmp(parse, pc->provider)) {
-			/* The hint does not monitor the presence provider. */
-			ao2_unlock(hint);
-			continue;
-		}
-
-		/*
-		 * Save off strings in case the hint extension gets destroyed
-		 * while we are notifying the watchers.
-		 */
-		ast_copy_string(context_name,
-			ast_get_context_name(ast_get_extension_context(hint->exten)),
-			sizeof(context_name));
-		ast_copy_string(exten_name, ast_get_extension_name(hint->exten),
-			sizeof(exten_name));
-		ast_str_set(&hint_app, 0, "%s", ast_get_extension_app(hint->exten));
-
-		/* Check to see if update is necessary */
-		if ((hint->last_presence_state == pc->state) &&
-			((hint->last_presence_subtype && pc->subtype && !strcmp(hint->last_presence_subtype, pc->subtype)) || (!hint->last_presence_subtype && !pc->subtype)) &&
-			((hint->last_presence_message && pc->message && !strcmp(hint->last_presence_message, pc->message)) || (!hint->last_presence_message && !pc->message))) {
-
-			/* this update is the same as the last, do nothing */
-			ao2_unlock(hint);
-			continue;
-		}
-
-		/* update new values */
-		ast_free(hint->last_presence_subtype);
-		ast_free(hint->last_presence_message);
-		hint->last_presence_state = pc->state;
-		hint->last_presence_subtype = pc->subtype ? ast_strdup(pc->subtype) : NULL;
-		hint->last_presence_message = pc->message ? ast_strdup(pc->message) : NULL;
-
-		ao2_unlock(hint);
-
-		/* For general callbacks */
-		cb_iter = ao2_iterator_init(statecbs, 0);
-		for (; (state_cb = ao2_iterator_next(&cb_iter)); ao2_ref(state_cb, -1)) {
-			execute_state_callback(state_cb->change_cb,
-				context_name,
-				exten_name,
-				state_cb->data,
-				AST_HINT_UPDATE_PRESENCE,
-				hint,
-				NULL);
-		}
-		ao2_iterator_destroy(&cb_iter);
-
-		/* For extension callbacks */
-		cb_iter = ao2_iterator_init(hint->callbacks, 0);
-		for (; (state_cb = ao2_iterator_next(&cb_iter)); ao2_ref(state_cb, -1)) {
-			execute_state_callback(state_cb->change_cb,
-				context_name,
-				exten_name,
-				state_cb->data,
-				AST_HINT_UPDATE_PRESENCE,
-				hint,
-				NULL);
-		}
-		ao2_iterator_destroy(&cb_iter);
-	}
-	ao2_iterator_destroy(&i);
-	ast_mutex_unlock(&context_merge_lock);
-
-	res = 0;
-
-presencechange_cleanup:
-	ast_free(hint_app);
-	ao2_ref(pc, -1);
-
-	return res;
-}
-
 /*!
  * /internal
  * /brief Identify a channel for every device which is supposedly responsible for the device state.
@@ -5255,32 +5114,40 @@ static void get_device_state_causing_channels(struct ao2_container *c)
 	ao2_iterator_destroy(&iter);
 }
 
-static int handle_statechange(void *datap)
+static void device_state_cb(void *unused, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
+	struct ast_device_state_message *dev_state;
 	struct ast_hint *hint;
 	struct ast_str *hint_app;
 	struct ast_hintdevice *device;
 	struct ast_hintdevice *cmpdevice;
-	struct statechange *sc = datap;
 	struct ao2_iterator *dev_iter;
 	struct ao2_iterator cb_iter;
 	char context_name[AST_MAX_CONTEXT];
 	char exten_name[AST_MAX_EXTENSION];
 
+	if (ast_device_state_message_type() != stasis_message_type(msg)) {
+		return;
+	}
+
+	dev_state = stasis_message_data(msg);
+	if (dev_state->eid) {
+		/* ignore non-aggregate states */
+		return;
+	}
+
 	if (ao2_container_count(hintdevices) == 0) {
 		/* There are no hints monitoring devices. */
-		ast_free(sc);
-		return 0;
+		return;
 	}
 
 	hint_app = ast_str_create(1024);
 	if (!hint_app) {
-		ast_free(sc);
-		return -1;
+		return;
 	}
 
-	cmpdevice = ast_alloca(sizeof(*cmpdevice) + strlen(sc->dev));
-	strcpy(cmpdevice->hintdevice, sc->dev);
+	cmpdevice = ast_alloca(sizeof(*cmpdevice) + strlen(dev_state->device));
+	strcpy(cmpdevice->hintdevice, dev_state->device);
 
 	ast_mutex_lock(&context_merge_lock);/* Hold off ast_merge_contexts_and_delete */
 	dev_iter = ao2_t_callback(hintdevices,
@@ -5291,8 +5158,7 @@ static int handle_statechange(void *datap)
 	if (!dev_iter) {
 		ast_mutex_unlock(&context_merge_lock);
 		ast_free(hint_app);
-		ast_free(sc);
-		return -1;
+		return;
 	}
 
 	for (; (device = ao2_iterator_next(dev_iter)); ao2_t_ref(device, -1, "Next device")) {
@@ -5389,8 +5255,7 @@ static int handle_statechange(void *datap)
 
 	ao2_iterator_destroy(dev_iter);
 	ast_free(hint_app);
-	ast_free(sc);
-	return 0;
+	return;
 }
 
 /*!
@@ -8854,7 +8719,7 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 
 	/*
 	 * Notify watchers of all removed hints with the same lock
-	 * environment as handle_statechange().
+	 * environment as device_state_cb().
 	 */
 	while ((saved_hint = AST_LIST_REMOVE_HEAD(&hints_removed, list))) {
 		/* this hint has been removed, notify the watchers */
@@ -11670,68 +11535,112 @@ static int pbx_builtin_sayphonetic(struct ast_channel *chan, const char *data)
 	return res;
 }
 
-static void presencechange_destroy(void *data)
+static void presence_state_cb(void *unused, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
-	struct presencechange *pc = data;
-	ast_free(pc->provider);
-	ast_free(pc->subtype);
-	ast_free(pc->message);
-}
+	struct ast_presence_state_message *presence_state = stasis_message_data(msg);
+	struct ast_hint *hint;
+	struct ast_str *hint_app = NULL;
+	struct ao2_iterator hint_iter;
+	struct ao2_iterator cb_iter;
+	char context_name[AST_MAX_CONTEXT];
+	char exten_name[AST_MAX_EXTENSION];
 
-static void presence_state_cb(const struct ast_event *event, void *unused)
-{
-	struct presencechange *pc;
-	const char *tmp;
-
-	if (!(pc = ao2_alloc(sizeof(*pc), presencechange_destroy))) {
+	if (stasis_message_type(msg) != ast_presence_state_message_type()) {
 		return;
 	}
 
-	tmp = ast_event_get_ie_str(event, AST_EVENT_IE_PRESENCE_PROVIDER);
-	if (ast_strlen_zero(tmp)) {
-		ast_log(LOG_ERROR, "Received invalid event that had no presence provider IE\n");
-		ao2_ref(pc, -1);
-		return;
-	}
-	pc->provider = ast_strdup(tmp);
-
-	pc->state = ast_event_get_ie_uint(event, AST_EVENT_IE_PRESENCE_STATE);
-	if (pc->state < 0) {
-		ao2_ref(pc, -1);
+	hint_app = ast_str_create(1024);
+	if (!hint_app) {
 		return;
 	}
 
-	if ((tmp = ast_event_get_ie_str(event, AST_EVENT_IE_PRESENCE_SUBTYPE))) {
-		pc->subtype = ast_strdup(tmp);
-	}
+	ast_mutex_lock(&context_merge_lock);/* Hold off ast_merge_contexts_and_delete */
+	hint_iter = ao2_iterator_init(hints, 0);
+	for (; (hint = ao2_iterator_next(&hint_iter)); ao2_cleanup(hint)) {
+		struct ast_state_cb *state_cb;
+		const char *app;
+		char *parse;
+		SCOPED_AO2LOCK(lock, hint);
 
-	if ((tmp = ast_event_get_ie_str(event, AST_EVENT_IE_PRESENCE_MESSAGE))) {
-		pc->message = ast_strdup(tmp);
-	}
+		if (!hint->exten) {
+			/* The extension has already been destroyed */
+			continue;
+		}
 
-	/* The task processor thread is taking our reference to the presencechange object. */
-	if (ast_taskprocessor_push(extension_state_tps, handle_presencechange, pc) < 0) {
-		ao2_ref(pc, -1);
-	}
-}
+		/* Does this hint monitor the device that changed state? */
+		app = ast_get_extension_app(hint->exten);
+		if (ast_strlen_zero(app)) {
+			/* The hint does not monitor presence at all. */
+			continue;
+		}
 
-static void device_state_cb(const struct ast_event *event, void *unused)
-{
-	const char *device;
-	struct statechange *sc;
+		ast_str_set(&hint_app, 0, "%s", app);
+		parse = parse_hint_presence(hint_app);
+		if (ast_strlen_zero(parse)) {
+			continue;
+		}
+		if (strcasecmp(parse, presence_state->provider)) {
+			/* The hint does not monitor the presence provider. */
+			continue;
+		}
 
-	device = ast_event_get_ie_str(event, AST_EVENT_IE_DEVICE);
-	if (ast_strlen_zero(device)) {
-		ast_log(LOG_ERROR, "Received invalid event that had no device IE\n");
-		return;
-	}
+		/*
+		 * Save off strings in case the hint extension gets destroyed
+		 * while we are notifying the watchers.
+		 */
+		ast_copy_string(context_name,
+			ast_get_context_name(ast_get_extension_context(hint->exten)),
+			sizeof(context_name));
+		ast_copy_string(exten_name, ast_get_extension_name(hint->exten),
+			sizeof(exten_name));
+		ast_str_set(&hint_app, 0, "%s", ast_get_extension_app(hint->exten));
 
-	if (!(sc = ast_calloc(1, sizeof(*sc) + strlen(device) + 1)))
-		return;
-	strcpy(sc->dev, device);
-	if (ast_taskprocessor_push(extension_state_tps, handle_statechange, sc) < 0) {
-		ast_free(sc);
+		/* Check to see if update is necessary */
+		if ((hint->last_presence_state == presence_state->state) &&
+			((hint->last_presence_subtype && presence_state->subtype && !strcmp(hint->last_presence_subtype, presence_state->subtype)) || (!hint->last_presence_subtype && !presence_state->subtype)) &&
+			((hint->last_presence_message && presence_state->message && !strcmp(hint->last_presence_message, presence_state->message)) || (!hint->last_presence_message && !presence_state->message))) {
+
+			/* this update is the same as the last, do nothing */
+			continue;
+		}
+
+		/* update new values */
+		ast_free(hint->last_presence_subtype);
+		ast_free(hint->last_presence_message);
+		hint->last_presence_state = presence_state->state;
+		hint->last_presence_subtype = presence_state->subtype ? ast_strdup(presence_state->subtype) : NULL;
+		hint->last_presence_message = presence_state->message ? ast_strdup(presence_state->message) : NULL;
+
+		/* For general callbacks */
+		cb_iter = ao2_iterator_init(statecbs, 0);
+		for (; (state_cb = ao2_iterator_next(&cb_iter)); ao2_ref(state_cb, -1)) {
+			execute_state_callback(state_cb->change_cb,
+				context_name,
+				exten_name,
+				state_cb->data,
+				AST_HINT_UPDATE_PRESENCE,
+				hint,
+				NULL);
+		}
+		ao2_iterator_destroy(&cb_iter);
+
+		/* For extension callbacks */
+		cb_iter = ao2_iterator_init(hint->callbacks, 0);
+		for (; (state_cb = ao2_iterator_next(&cb_iter)); ao2_cleanup(state_cb)) {
+			execute_state_callback(state_cb->change_cb,
+				context_name,
+				exten_name,
+				state_cb->data,
+				AST_HINT_UPDATE_PRESENCE,
+				hint,
+				NULL);
+		}
+		ao2_iterator_destroy(&cb_iter);
 	}
+	ao2_iterator_destroy(&hint_iter);
+	ast_mutex_unlock(&context_merge_lock);
+
+	ast_free(hint_app);
 }
 
 /*!
@@ -11791,10 +11700,10 @@ static void unload_pbx(void)
 	int x;
 
 	if (presence_state_sub) {
-		presence_state_sub = ast_event_unsubscribe(presence_state_sub);
+		presence_state_sub = stasis_unsubscribe(presence_state_sub);
 	}
 	if (device_state_sub) {
-		device_state_sub = ast_event_unsubscribe(device_state_sub);
+		device_state_sub = stasis_unsubscribe(device_state_sub);
 	}
 
 	/* Unregister builtin applications */
@@ -11806,9 +11715,6 @@ static void unload_pbx(void)
 	ast_custom_function_unregister(&exception_function);
 	ast_custom_function_unregister(&testtime_function);
 	ast_data_unregister(NULL);
-	if (extension_state_tps) {
-		extension_state_tps = ast_taskprocessor_unreference(extension_state_tps);
-	}
 }
 
 int load_pbx(void)
@@ -11819,9 +11725,6 @@ int load_pbx(void)
 
 	/* Initialize the PBX */
 	ast_verb(1, "Asterisk PBX Core Initializing\n");
-	if (!(extension_state_tps = ast_taskprocessor_get("pbx-core", 0))) {
-		ast_log(LOG_WARNING, "failed to create pbx-core taskprocessor\n");
-	}
 
 	ast_verb(1, "Registering builtin applications:\n");
 	ast_cli_register_multiple(pbx_cli, ARRAY_LEN(pbx_cli));
@@ -11841,13 +11744,11 @@ int load_pbx(void)
 	/* Register manager application */
 	ast_manager_register_xml_core("ShowDialPlan", EVENT_FLAG_CONFIG | EVENT_FLAG_REPORTING, manager_show_dialplan);
 
-	if (!(device_state_sub = ast_event_subscribe(AST_EVENT_DEVICE_STATE, device_state_cb, "pbx Device State Change", NULL,
-			AST_EVENT_IE_END))) {
+	if (!(device_state_sub = stasis_subscribe(ast_device_state_topic_all(), device_state_cb, NULL))) {
 		return -1;
 	}
 
-	if (!(presence_state_sub = ast_event_subscribe(AST_EVENT_PRESENCE_STATE, presence_state_cb, "pbx Presence State Change", NULL,
-			AST_EVENT_IE_END))) {
+	if (!(presence_state_sub = stasis_subscribe(ast_presence_state_topic_all(), presence_state_cb, NULL))) {
 		return -1;
 	}
 

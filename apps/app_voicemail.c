@@ -974,10 +974,8 @@ static ast_cond_t poll_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t poll_thread = AST_PTHREADT_NULL;
 static unsigned char poll_thread_run;
 
-/*! Subscription to ... MWI event subscriptions */
-static struct ast_event_sub *mwi_sub_sub;
-/*! Subscription to ... MWI event un-subscriptions */
-static struct ast_event_sub *mwi_unsub_sub;
+/*! Subscription to MWI event subscription changes */
+static struct stasis_subscription *mwi_sub_sub;
 
 /*!
  * \brief An MWI subscription
@@ -991,15 +989,23 @@ struct mwi_sub {
 	int old_urgent;
 	int old_new;
 	int old_old;
-	uint32_t uniqueid;
+	char *uniqueid;
 	char mailbox[1];
 };
 
 struct mwi_sub_task {
 	const char *mailbox;
 	const char *context;
-	uint32_t uniqueid;
+	const char *uniqueid;
 };
+
+static void mwi_sub_task_dtor(struct mwi_sub_task *mwist)
+{
+	ast_free((void *) mwist->mailbox);
+	ast_free((void *) mwist->context);
+	ast_free((void *) mwist->uniqueid);
+	ast_free(mwist);
+}
 
 static struct ast_taskprocessor *mwi_subscription_tps;
 
@@ -1713,6 +1719,14 @@ static int reset_user_pw(const char *context, const char *mailbox, const char *n
 	return res;
 }
 
+/*!
+ * \brief Check if configuration file is valid
+ */
+static inline int valid_config(const struct ast_config *cfg)
+{
+	return cfg && cfg != CONFIG_STATUS_FILEINVALID;
+}
+
 /*! 
  * \brief The handler for the change password option.
  * \param vmu The voicemail user to work with.
@@ -1749,7 +1763,7 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 		}
 		/* Fall-through */
 	case OPT_PWLOC_VOICEMAILCONF:
-		if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) && cfg != CONFIG_STATUS_FILEINVALID) {
+		if ((cfg = ast_config_load(VOICEMAIL_CONFIG, config_flags)) && valid_config(cfg)) {
 			while ((category = ast_category_browse(cfg, category))) {
 				if (!strcasecmp(category, vmu->context)) {
 					if (!(tmp = ast_variable_retrieve(cfg, category, vmu->mailbox))) {
@@ -1778,14 +1792,17 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 				reset_user_pw(vmu->context, vmu->mailbox, newpassword);
 				ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
 				ast_config_text_file_save(VOICEMAIL_CONFIG, cfg, "AppVoicemail");
+				ast_config_destroy(cfg);
 				break;
 			}
+
+			ast_config_destroy(cfg);
 		}
 		/* Fall-through */
 	case OPT_PWLOC_USERSCONF:
 		/* check users.conf and update the password stored for the mailbox */
 		/* if no vmsecret entry exists create one. */
-		if ((cfg = ast_config_load("users.conf", config_flags)) && cfg != CONFIG_STATUS_FILEINVALID) {
+		if ((cfg = ast_config_load("users.conf", config_flags)) && valid_config(cfg)) {
 			ast_debug(4, "we are looking for %s\n", vmu->mailbox);
 			for (category = ast_category_browse(cfg, NULL); category; category = ast_category_browse(cfg, category)) {
 				ast_debug(4, "users.conf: %s\n", category);
@@ -1819,6 +1836,8 @@ static void vm_change_password(struct ast_vm_user *vmu, const char *newpassword)
 				ast_copy_string(vmu->password, newpassword, sizeof(vmu->password));
 				ast_config_text_file_save("users.conf", cfg, "AppVoicemail");
 			}
+
+			ast_config_destroy(cfg);
 		}
 	}
 }
@@ -4173,7 +4192,7 @@ static int store_file(const char *dir, const char *mailboxuser, const char *mail
 			res = -1;
 			break;
 		}
-		if (cfg && cfg != CONFIG_STATUS_FILEINVALID) {
+		if (valid_config(cfg)) {
 			if (!(idata.context = ast_variable_retrieve(cfg, "message", "context"))) {
 				idata.context = "";
 			}
@@ -4229,7 +4248,7 @@ static int store_file(const char *dir, const char *mailboxuser, const char *mail
 	if (obj) {
 		ast_odbc_release_obj(obj);
 	}
-	if (cfg)
+	if (valid_config(cfg))
 		ast_config_destroy(cfg);
 	if (fdm != MAP_FAILED)
 		munmap(fdm, fdlen);
@@ -4708,7 +4727,7 @@ static void prep_email_sub_vars(struct ast_channel *ast, struct ast_vm_user *vmu
 	if (strlen(fromfile) < sizeof(fromfile) - 5) {
 		strcat(fromfile, ".txt");
 	}
-	if (!(msg_cfg = ast_config_load(fromfile, config_flags))) {
+	if (!(msg_cfg = ast_config_load(fromfile, config_flags)) || !(valid_config(msg_cfg))) {
 		ast_debug(1, "Config load for message text file '%s' failed\n", fromfile);
 		return;
 	}
@@ -5100,7 +5119,7 @@ static void make_email_file(FILE *p,
 			if (strlen(fromfile) < sizeof(fromfile) - 5) {
 				strcat(fromfile, ".txt");
 			}
-			if ((msg_cfg = ast_config_load(fromfile, config_flags))) {
+			if ((msg_cfg = ast_config_load(fromfile, config_flags)) && valid_config(msg_cfg)) {
 				if ((v = ast_variable_retrieve(msg_cfg, "message", "callerid"))) {
 					ast_copy_string(origcallerid, v, sizeof(origcallerid));
 				}
@@ -5938,7 +5957,10 @@ static void run_externnotify(char *context, char *extension, const char *flag)
 		if (inboxcount2(ext_context, &urgentvoicemails, &newvoicemails, &oldvoicemails)) {
 			ast_log(AST_LOG_ERROR, "Problem in calculating number of voicemail messages available for extension %s\n", extension);
 		} else {
-			snprintf(arguments, sizeof(arguments), "%s %s %s %d %d %d &", externnotify, context, extension, newvoicemails, oldvoicemails, urgentvoicemails);
+			snprintf(arguments, sizeof(arguments), "%s %s %s %d %d %d &",
+				externnotify, S_OR(context, "\"\""),
+				extension, newvoicemails,
+				oldvoicemails, urgentvoicemails);
 			ast_debug(1, "Executing %s\n", arguments);
 			ast_safe_system(arguments);
 		}
@@ -7583,7 +7605,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 	strncat(backup, "-bak", sizeof(backup) - strlen(backup) - 1);
 	strncat(backup_textfile, "-bak.txt", sizeof(backup_textfile) - strlen(backup_textfile) - 1);
 
-	if ((msg_cfg = ast_config_load(textfile, config_flags)) && msg_cfg != CONFIG_STATUS_FILEINVALID && (duration_str = ast_variable_retrieve(msg_cfg, "message", "duration"))) {
+	if ((msg_cfg = ast_config_load(textfile, config_flags)) && valid_config(msg_cfg) && (duration_str = ast_variable_retrieve(msg_cfg, "message", "duration"))) {
 		*duration = atoi(duration_str);
 	} else {
 		*duration = 0;
@@ -7619,7 +7641,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 			*duration = 0;
 
 			/* if we can't read the message metadata, stop now */
-			if (!msg_cfg) {
+			if (!valid_config(msg_cfg)) {
 				cmd = 0;
 				break;
 			}
@@ -7703,7 +7725,7 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 		}
 	}
 
-	if (msg_cfg)
+	if (valid_config(msg_cfg))
 		ast_config_destroy(msg_cfg);
 	if (prepend_duration)
 		*duration = prepend_duration;
@@ -7721,25 +7743,16 @@ static int vm_forwardoptions(struct ast_channel *chan, struct ast_vm_user *vmu, 
 
 static void queue_mwi_event(const char *box, int urgent, int new, int old)
 {
-	struct ast_event *event;
 	char *mailbox, *context;
 
 	/* Strip off @default */
 	context = mailbox = ast_strdupa(box);
 	strsep(&context, "@");
-	if (ast_strlen_zero(context))
+	if (ast_strlen_zero(context)) {
 		context = "default";
-
-	if (!(event = ast_event_new(AST_EVENT_MWI,
-			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
-			AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_UINT, (new+urgent),
-			AST_EVENT_IE_OLDMSGS, AST_EVENT_IE_PLTYPE_UINT, old,
-			AST_EVENT_IE_END))) {
-		return;
 	}
 
-	ast_event_queue_and_cache(event);
+	stasis_publish_mwi_state(mailbox, context, new + urgent, old);
 }
 
 /*!
@@ -8463,7 +8476,7 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 	snprintf(filename, sizeof(filename), "%s.txt", vms->fn);
 	RETRIEVE(vms->curdir, vms->curmsg, vmu->mailbox, vmu->context);
 	msg_cfg = ast_config_load(filename, config_flags);
-	if (!msg_cfg || msg_cfg == CONFIG_STATUS_FILEINVALID) {
+	if (!valid_config(msg_cfg)) {
 		ast_log(LOG_WARNING, "No message attribute file?!! (%s)\n", filename);
 		return 0;
 	}
@@ -8541,7 +8554,7 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 		}
 	}
 
-	if (!msg_cfg) {
+	if (!valid_config(msg_cfg)) {
 		ast_log(AST_LOG_WARNING, "No message attribute file?!! (%s)\n", filename);
 		return 0;
 	}
@@ -10953,7 +10966,6 @@ static int vm_execmain(struct ast_channel *chan, const char *data)
 	/* If ADSI is supported, setup login screen */
 	adsi_begin(chan, &useadsi);
 
-	ast_test_suite_assert(valid);
 	if (!valid) {
 		goto out;
 	}
@@ -12533,28 +12545,28 @@ static void *mb_poll_thread(void *data)
 
 static void mwi_sub_destroy(struct mwi_sub *mwi_sub)
 {
+	ast_free(mwi_sub->uniqueid);
 	ast_free(mwi_sub);
 }
 
 static int handle_unsubscribe(void *datap)
 {
 	struct mwi_sub *mwi_sub;
-	uint32_t *uniqueid = datap;
-	
+	char *uniqueid = datap;
+
 	AST_RWLIST_WRLOCK(&mwi_subs);
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&mwi_subs, mwi_sub, entry) {
-		if (mwi_sub->uniqueid == *uniqueid) {
+		if (!strcmp(mwi_sub->uniqueid, uniqueid)) {
 			AST_LIST_REMOVE_CURRENT(entry);
-			break;
+			/* Don't break here since a duplicate uniqueid
+			 * may have been added as a result of a cache dump. */
+			mwi_sub_destroy(mwi_sub);
 		}
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END
 	AST_RWLIST_UNLOCK(&mwi_subs);
 
-	if (mwi_sub)
-		mwi_sub_destroy(mwi_sub);
-
-	ast_free(uniqueid);	
+	ast_free(uniqueid);
 	return 0;
 }
 
@@ -12574,7 +12586,7 @@ static int handle_subscribe(void *datap)
 	if (!(mwi_sub = ast_calloc(1, len)))
 		return -1;
 
-	mwi_sub->uniqueid = p->uniqueid;
+	mwi_sub->uniqueid = ast_strdup(p->uniqueid);
 	if (!ast_strlen_zero(p->mailbox))
 		strcpy(mwi_sub->mailbox, p->mailbox);
 
@@ -12586,75 +12598,85 @@ static int handle_subscribe(void *datap)
 	AST_RWLIST_WRLOCK(&mwi_subs);
 	AST_RWLIST_INSERT_TAIL(&mwi_subs, mwi_sub, entry);
 	AST_RWLIST_UNLOCK(&mwi_subs);
-	ast_free((void *) p->mailbox);
-	ast_free((void *) p->context);
-	ast_free(p);
+	mwi_sub_task_dtor(p);
 	poll_subscribed_mailbox(mwi_sub);
 	return 0;
 }
 
-static void mwi_unsub_event_cb(const struct ast_event *event, void *userdata)
+static void mwi_unsub_event_cb(struct stasis_subscription_change *change)
 {
-	uint32_t u, *uniqueid = ast_calloc(1, sizeof(*uniqueid));
+	char *uniqueid = ast_strdup(change->uniqueid);
 
 	if (!uniqueid) {
 		ast_log(LOG_ERROR, "Unable to allocate memory for uniqueid\n");
 		return;
 	}
 
-	if (ast_event_get_type(event) != AST_EVENT_UNSUB) {
-		ast_free(uniqueid);
-		return;
-	}
-
-	if (ast_event_get_ie_uint(event, AST_EVENT_IE_EVENTTYPE) != AST_EVENT_MWI) {
-		ast_free(uniqueid);
-		return;
-	}
-
-	u = ast_event_get_ie_uint(event, AST_EVENT_IE_UNIQUEID);
-	*uniqueid = u;
 	if (ast_taskprocessor_push(mwi_subscription_tps, handle_unsubscribe, uniqueid) < 0) {
 		ast_free(uniqueid);
 	}
 }
 
-static void mwi_sub_event_cb(const struct ast_event *event, void *userdata)
+static void mwi_sub_event_cb(struct stasis_subscription_change *change)
 {
 	struct mwi_sub_task *mwist;
-	
-	if (ast_event_get_type(event) != AST_EVENT_SUB)
-		return;
-
-	if (ast_event_get_ie_uint(event, AST_EVENT_IE_EVENTTYPE) != AST_EVENT_MWI)
-		return;
+	char *context = ast_strdupa(stasis_topic_name(change->topic));
+	char *mailbox;
 
 	if ((mwist = ast_calloc(1, (sizeof(*mwist)))) == NULL) {
-		ast_log(LOG_ERROR, "could not allocate a mwi_sub_task\n");
 		return;
 	}
-	mwist->mailbox = ast_strdup(ast_event_get_ie_str(event, AST_EVENT_IE_MAILBOX));
-	mwist->context = ast_strdup(ast_event_get_ie_str(event, AST_EVENT_IE_CONTEXT));
-	mwist->uniqueid = ast_event_get_ie_uint(event, AST_EVENT_IE_UNIQUEID);
-	
+
+	mailbox = strsep(&context, "@");
+
+	mwist->mailbox = ast_strdup(mailbox);
+	mwist->context = ast_strdup(context);
+	mwist->uniqueid = ast_strdup(change->uniqueid);
+
 	if (ast_taskprocessor_push(mwi_subscription_tps, handle_subscribe, mwist) < 0) {
-		ast_free(mwist);
+		mwi_sub_task_dtor(mwist);
 	}
+}
+
+static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+{
+	struct stasis_subscription_change *change;
+	/* Only looking for subscription change notices here */
+	if (stasis_message_type(msg) != stasis_subscription_change_type()) {
+		return;
+	}
+
+	change = stasis_message_data(msg);
+	if (change->topic == stasis_mwi_topic_all()) {
+		return;
+	}
+
+	if (!strcmp(change->description, "Subscribe")) {
+		mwi_sub_event_cb(change);
+	} else if (!strcmp(change->description, "Unsubscribe")) {
+		mwi_unsub_event_cb(change);
+	}
+}
+
+static int dump_cache(void *obj, void *arg, int flags)
+{
+	struct stasis_message *msg = obj;
+	mwi_event_cb(NULL, NULL, NULL, msg);
+	return 0;
 }
 
 static void start_poll_thread(void)
 {
 	int errcode;
-	mwi_sub_sub = ast_event_subscribe(AST_EVENT_SUB, mwi_sub_event_cb, "Voicemail MWI subscription", NULL,
-		AST_EVENT_IE_EVENTTYPE, AST_EVENT_IE_PLTYPE_UINT, AST_EVENT_MWI,
-		AST_EVENT_IE_END);
+	mwi_sub_sub = stasis_subscribe(stasis_mwi_topic_all(), mwi_event_cb, NULL);
 
-	mwi_unsub_sub = ast_event_subscribe(AST_EVENT_UNSUB, mwi_unsub_event_cb, "Voicemail MWI subscription", NULL,
-		AST_EVENT_IE_EVENTTYPE, AST_EVENT_IE_PLTYPE_UINT, AST_EVENT_MWI,
-		AST_EVENT_IE_END);
-
-	if (mwi_sub_sub)
-		ast_event_report_subs(mwi_sub_sub);
+	if (mwi_sub_sub) {
+		struct ao2_container *cached = stasis_cache_dump(stasis_mwi_topic_cached(), stasis_subscription_change_type());
+		if (cached) {
+			ao2_callback(cached, OBJ_MULTIPLE | OBJ_NODATA, dump_cache, NULL);
+		}
+		ao2_cleanup(cached);
+	}
 
 	poll_thread_run = 1;
 
@@ -12668,13 +12690,7 @@ static void stop_poll_thread(void)
 	poll_thread_run = 0;
 
 	if (mwi_sub_sub) {
-		ast_event_unsubscribe(mwi_sub_sub);
-		mwi_sub_sub = NULL;
-	}
-
-	if (mwi_unsub_sub) {
-		ast_event_unsubscribe(mwi_unsub_sub);
-		mwi_unsub_sub = NULL;
+		mwi_sub_sub = stasis_unsubscribe(mwi_sub_sub);
 	}
 
 	ast_mutex_lock(&poll_lock);
@@ -13634,7 +13650,7 @@ static void read_password_from_file(const char *secretfn, char *password, int pa
 	struct ast_flags config_flags = { 0 };
 
 	pwconf = ast_config_load(secretfn, config_flags);
-	if (pwconf) {
+	if (valid_config(pwconf)) {
 		const char *val = ast_variable_retrieve(pwconf, "general", "password");
 		if (val) {
 			ast_copy_string(password, val, passwordlen);
@@ -14121,7 +14137,7 @@ AST_TEST_DEFINE(test_voicemail_load_config)
 	fputs("00000002 => 9999,Mrs. Test\n", file);
 	fclose(file);
 
-	if (!(cfg = ast_config_load(config_filename, config_flags))) {
+	if (!(cfg = ast_config_load(config_filename, config_flags)) || !valid_config(cfg)) {
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -14451,7 +14467,7 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 	RETRIEVE(vms->curdir, vms->curmsg, vmu->mailbox, vmu->context);
 	msg_cfg = ast_config_load(filename, config_flags);
 	DISPOSE(vms->curdir, vms->curmsg);
-	if (!msg_cfg || msg_cfg == CONFIG_STATUS_FILEINVALID) {
+	if (!valid_config(msg_cfg)) {
 		ast_log(AST_LOG_WARNING, "No message attribute file?!! (%s)\n", filename);
 		return 0;
 	}
@@ -14613,9 +14629,9 @@ static int advanced_options(struct ast_channel *chan, struct ast_vm_user *vmu, s
 		break;
 	}
 
-#ifndef IMAP_STORAGE
 	ast_config_destroy(msg_cfg);
 
+#ifndef IMAP_STORAGE
 	if (!res) {
 		make_file(vms->fn, sizeof(vms->fn), vms->curdir, msg);
 		vms->heard[msg] = 1;
@@ -14894,8 +14910,8 @@ static int vm_test_destroy_user(const char *context, const char *mailbox)
 
 	AST_LIST_LOCK(&users);
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&users, vmu, list) {
-		if (!strncmp(context, vmu->context, sizeof(context))
-			&& !strncmp(mailbox, vmu->mailbox, sizeof(mailbox))) {
+		if (!strcmp(context, vmu->context)
+			&& !strcmp(mailbox, vmu->mailbox)) {
 			AST_LIST_REMOVE_CURRENT(list);
 			ast_free(vmu);
 			break;

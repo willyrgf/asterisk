@@ -41,12 +41,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*! Initial size of the subscribers list. */
 #define INITIAL_SUBSCRIBERS_MAX 4
 
+/*! The number of buckets to use for topic pools */
+#define TOPIC_POOL_BUCKETS 57
+
 /*! Threadpool for dispatching notifications to subscribers */
 static struct ast_threadpool *pool;
 
 static struct stasis_message_type *__subscription_change_message_type;
 
-/*! \private */
+/*! \internal */
 struct stasis_topic {
 	char *name;
 	/*! Variable length array of the subscribers (raw pointer to avoid cyclic references) */
@@ -58,7 +61,6 @@ struct stasis_topic {
 };
 
 /* Forward declarations for the tightly-coupled subscription object */
-struct stasis_subscription;
 static int topic_add_subscription(struct stasis_topic *topic, struct stasis_subscription *sub);
 
 static void topic_dtor(void *obj)
@@ -86,7 +88,7 @@ struct stasis_topic *stasis_topic_create(const char *name)
 	}
 
 	topic->num_subscribers_max = INITIAL_SUBSCRIBERS_MAX;
-	topic->subscribers = ast_calloc(topic->num_subscribers_max, sizeof(topic->subscribers));
+	topic->subscribers = ast_calloc(topic->num_subscribers_max, sizeof(*topic->subscribers));
 	if (!topic->subscribers) {
 		return NULL;
 	}
@@ -100,10 +102,10 @@ const char *stasis_topic_name(const struct stasis_topic *topic)
 	return topic->name;
 }
 
-/*! \private */
+/*! \internal */
 struct stasis_subscription {
 	/*! Unique ID for this subscription */
-	char *uniqueid;
+	char uniqueid[AST_UUID_STR_LEN];
 	/*! Topic subscribed to. */
 	struct stasis_topic *topic;
 	/*! Mailbox for processing incoming messages. */
@@ -118,41 +120,53 @@ static void subscription_dtor(void *obj)
 {
 	struct stasis_subscription *sub = obj;
 	ast_assert(!stasis_subscription_is_subscribed(sub));
-	ast_free(sub->uniqueid);
-	sub->uniqueid = NULL;
 	ao2_cleanup(sub->topic);
 	sub->topic = NULL;
 	ast_taskprocessor_unreference(sub->mailbox);
 	sub->mailbox = NULL;
 }
 
+/*!
+ * \brief Invoke the subscription's callback.
+ * \param sub Subscription to invoke.
+ * \param topic Topic message was published to.
+ * \param message Message to send.
+ */
+static void subscription_invoke(struct stasis_subscription *sub,
+				  struct stasis_topic *topic,
+				  struct stasis_message *message)
+{
+	/* Since sub->topic doesn't change, no need to lock sub */
+	sub->callback(sub->data,
+		      sub,
+		      topic,
+		      message);
+}
+
 static void send_subscription_change_message(struct stasis_topic *topic, char *uniqueid, char *description);
 
-static struct stasis_subscription *__stasis_subscribe(struct stasis_topic *topic, stasis_subscription_cb callback, void *data, int needs_mailbox)
+static struct stasis_subscription *__stasis_subscribe(
+	struct stasis_topic *topic,
+	stasis_subscription_cb callback,
+	void *data,
+	int needs_mailbox)
 {
 	RAII_VAR(struct stasis_subscription *, sub, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_uuid *, id, NULL, ast_free);
-	char uniqueid[AST_UUID_STR_LEN];
 
 	sub = ao2_alloc(sizeof(*sub), subscription_dtor);
 	if (!sub) {
 		return NULL;
 	}
 
-	id = ast_uuid_generate();
-	if (!id) {
-		ast_log(LOG_ERROR, "UUID generation failed\n");
-		return NULL;
-	}
-	ast_uuid_to_str(id, uniqueid, sizeof(uniqueid));
+	ast_uuid_generate_str(sub->uniqueid, sizeof(sub->uniqueid));
+
 	if (needs_mailbox) {
-		sub->mailbox = ast_threadpool_serializer(uniqueid, pool);
+		sub->mailbox = ast_threadpool_serializer(sub->uniqueid, pool);
 		if (!sub->mailbox) {
 			return NULL;
 		}
 	}
 
-	sub->uniqueid = ast_strdup(uniqueid);
 	ao2_ref(topic, +1);
 	sub->topic = topic;
 	sub->callback = callback;
@@ -161,13 +175,16 @@ static struct stasis_subscription *__stasis_subscribe(struct stasis_topic *topic
 	if (topic_add_subscription(topic, sub) != 0) {
 		return NULL;
 	}
-	send_subscription_change_message(topic, uniqueid, "Subscribe");
+	send_subscription_change_message(topic, sub->uniqueid, "Subscribe");
 
 	ao2_ref(sub, +1);
 	return sub;
 }
 
-struct stasis_subscription *stasis_subscribe(struct stasis_topic *topic, stasis_subscription_cb callback, void *data)
+struct stasis_subscription *stasis_subscribe(
+	struct stasis_topic *topic,
+	stasis_subscription_cb callback,
+	void *data)
 {
 	return __stasis_subscribe(topic, callback, data, 1);
 }
@@ -220,7 +237,7 @@ const char *stasis_subscription_uniqueid(const struct stasis_subscription *sub)
 int stasis_subscription_final_message(struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	struct stasis_subscription_change *change;
-	if (stasis_message_type(msg) != stasis_subscription_change()) {
+	if (stasis_message_type(msg) != stasis_subscription_change_type()) {
 		return 0;
 	}
 
@@ -264,7 +281,7 @@ static int topic_add_subscription(struct stasis_topic *topic, struct stasis_subs
 }
 
 /*!
- * \private
+ * \internal
  * \brief Information needed to dispatch a message to a subscription
  */
 struct dispatch {
@@ -318,50 +335,23 @@ static struct dispatch *dispatch_create(struct stasis_topic *topic, struct stasi
 static int dispatch_exec(void *data)
 {
 	RAII_VAR(struct dispatch *, dispatch, data, ao2_cleanup);
-	RAII_VAR(struct stasis_topic *, sub_topic, NULL, ao2_cleanup);
 
-	/* Since sub->topic doesn't change, no need to lock sub */
-	ast_assert(dispatch->sub->topic != NULL);
-	ao2_ref(dispatch->sub->topic, +1);
-	sub_topic = dispatch->sub->topic;
-
-	dispatch->sub->callback(dispatch->sub->data,
-				dispatch->sub,
-				sub_topic,
-				dispatch->message);
+	subscription_invoke(dispatch->sub, dispatch->topic, dispatch->message);
 
 	return 0;
 }
 
 void stasis_forward_message(struct stasis_topic *topic, struct stasis_topic *publisher_topic, struct stasis_message *message)
 {
-	struct stasis_subscription **subscribers = NULL;
-	size_t num_subscribers, i;
+	size_t i;
+	SCOPED_AO2LOCK(lock, topic);
 
 	ast_assert(topic != NULL);
 	ast_assert(publisher_topic != NULL);
 	ast_assert(message != NULL);
 
-	/* Copy the subscribers, so we don't have to hold the mutex for long */
-	{
-		SCOPED_AO2LOCK(lock, topic);
-		num_subscribers = topic->num_subscribers_current;
-		subscribers = ast_malloc(num_subscribers * sizeof(*subscribers));
-		if (subscribers) {
-			for (i = 0; i < num_subscribers; ++i) {
-				ao2_ref(topic->subscribers[i], +1);
-				subscribers[i] = topic->subscribers[i];
-			}
-		}
-	}
-
-	if (!subscribers) {
-		ast_log(LOG_ERROR, "Dropping message\n");
-		return;
-	}
-
-	for (i = 0; i < num_subscribers; ++i) {
-		struct stasis_subscription *sub = subscribers[i];
+	for (i = 0; i < topic->num_subscribers_current; ++i) {
+		struct stasis_subscription *sub = topic->subscribers[i];
 
 		ast_assert(sub != NULL);
 
@@ -375,18 +365,17 @@ void stasis_forward_message(struct stasis_topic *topic, struct stasis_topic *pub
 			}
 
 			if (ast_taskprocessor_push(sub->mailbox, dispatch_exec, dispatch) == 0) {
-				dispatch = NULL; /* Ownership transferred to mailbox */
+				/* Ownership transferred to mailbox.
+				 * Don't increment ref, b/c the task processor
+				 * may have already gotten rid of the object.
+				 */
+				dispatch = NULL;
 			}
 		} else {
-			/* No mailbox; dispatch directly */
-			sub->callback(sub->data, sub, sub->topic, message);
+			/* Dispatch directly */
+			subscription_invoke(sub, publisher_topic, message);
 		}
 	}
-
-	for (i = 0; i < num_subscribers; ++i) {
-		ao2_cleanup(subscribers[i]);
-	}
-	ast_free(subscribers);
 }
 
 void stasis_publish(struct stasis_topic *topic, struct stasis_message *message)
@@ -411,7 +400,11 @@ struct stasis_subscription *stasis_forward_all(struct stasis_topic *from_topic, 
 	if (!from_topic || !to_topic) {
 		return NULL;
 	}
-	/* Subscribe without a mailbox, since we're just forwarding messages */
+
+	/* Forwarding subscriptions should dispatch directly instead of having a
+	 * mailbox. Otherwise, messages forwarded to the same topic from
+	 * different topics may get reordered. Which is bad.
+	 */
 	sub = __stasis_subscribe(from_topic, stasis_forward_cb, to_topic, 0);
 	if (sub) {
 		/* hold a ref to to_topic for this forwarding subscription */
@@ -445,7 +438,7 @@ static struct stasis_subscription_change *subscription_change_alloc(struct stasi
 	return change;
 }
 
-struct stasis_message_type *stasis_subscription_change(void)
+struct stasis_message_type *stasis_subscription_change_type(void)
 {
 	return __subscription_change_message_type;
 }
@@ -461,13 +454,103 @@ static void send_subscription_change_message(struct stasis_topic *topic, char *u
 		return;
 	}
 
-	msg = stasis_message_create(stasis_subscription_change(), change);
+	msg = stasis_message_create(stasis_subscription_change_type(), change);
 
 	if (!msg) {
 		return;
 	}
 
 	stasis_publish(topic, msg);
+}
+
+struct topic_pool_entry {
+	struct stasis_subscription *forward;
+	struct stasis_topic *topic;
+};
+
+static void topic_pool_entry_dtor(void *obj)
+{
+	struct topic_pool_entry *entry = obj;
+	entry->forward = stasis_unsubscribe(entry->forward);
+	ao2_cleanup(entry->topic);
+	entry->topic = NULL;
+}
+
+static struct topic_pool_entry *topic_pool_entry_alloc(void)
+{
+	return ao2_alloc(sizeof(struct topic_pool_entry), topic_pool_entry_dtor);
+}
+
+struct stasis_topic_pool {
+	struct ao2_container *pool_container;
+	struct stasis_topic *pool_topic;
+};
+
+static void topic_pool_dtor(void *obj)
+{
+	struct stasis_topic_pool *pool = obj;
+	ao2_cleanup(pool->pool_container);
+	pool->pool_container = NULL;
+	ao2_cleanup(pool->pool_topic);
+	pool->pool_topic = NULL;
+}
+
+static int topic_pool_entry_hash(const void *obj, const int flags)
+{
+	const char *topic_name = (flags & OBJ_KEY) ? obj : stasis_topic_name(((struct topic_pool_entry*) obj)->topic);
+	return ast_str_case_hash(topic_name);
+}
+
+static int topic_pool_entry_cmp(void *obj, void *arg, int flags)
+{
+	struct topic_pool_entry *opt1 = obj, *opt2 = arg;
+	const char *topic_name = (flags & OBJ_KEY) ? arg : stasis_topic_name(opt2->topic);
+	return strcasecmp(stasis_topic_name(opt1->topic), topic_name) ? 0 : CMP_MATCH | CMP_STOP;
+}
+
+struct stasis_topic_pool *stasis_topic_pool_create(struct stasis_topic *pooled_topic)
+{
+	RAII_VAR(struct stasis_topic_pool *, pool, ao2_alloc(sizeof(*pool), topic_pool_dtor), ao2_cleanup);
+	if (!pool) {
+		return NULL;
+	}
+	pool->pool_container = ao2_container_alloc(TOPIC_POOL_BUCKETS, topic_pool_entry_hash, topic_pool_entry_cmp);
+	ao2_ref(pooled_topic, +1);
+	pool->pool_topic = pooled_topic;
+
+	ao2_ref(pool, +1);
+	return pool;
+}
+
+struct stasis_topic *stasis_topic_pool_get_topic(struct stasis_topic_pool *pool, const char *topic_name)
+{
+	RAII_VAR(struct topic_pool_entry *, topic_pool_entry, NULL, ao2_cleanup);
+	SCOPED_AO2LOCK(topic_container_lock, pool->pool_container);
+	topic_pool_entry = ao2_find(pool->pool_container, topic_name, OBJ_KEY | OBJ_NOLOCK);
+
+	if (topic_pool_entry) {
+		return topic_pool_entry->topic;
+	}
+
+	topic_pool_entry = topic_pool_entry_alloc();
+
+	if (!topic_pool_entry) {
+		return NULL;
+	}
+
+	topic_pool_entry->topic = stasis_topic_create(topic_name);
+	if (!topic_pool_entry->topic) {
+		return NULL;
+	}
+
+	topic_pool_entry->forward = stasis_forward_all(topic_pool_entry->topic, pool->pool_topic);
+	if (!topic_pool_entry->forward) {
+		return NULL;
+	}
+
+	ao2_link_flags(pool->pool_container, topic_pool_entry, OBJ_NOLOCK);
+
+	return topic_pool_entry->topic;
 }
 
 /*! \brief Cleanup function */

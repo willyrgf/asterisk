@@ -92,6 +92,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/presencestate.h"
 #include "asterisk/stasis.h"
+#include "asterisk/test.h"
+#include "asterisk/json.h"
 
 /*** DOCUMENTATION
 	<manager name="Ping" language="en_US">
@@ -964,73 +966,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
                         manager.conf will be present upon starting a new session.</para>
 		</description>
 	</manager>
-	<managerEvent language="en_US" name="Newchannel">
-		<managerEventInstance class="EVENT_FLAG_CALL">
-			<synopsis>Raised when a new channel is created.</synopsis>
-			<syntax>
-				<parameter name="Channel">
-				</parameter>
-				<parameter name="ChannelState">
-					<para>A numeric code for the channel's current state, related to ChannelStateDesc</para>
-				</parameter>
-				<parameter name="ChannelStateDesc">
-					<enumlist>
-						<enum name="Down"/>
-						<enum name="Rsrvd"/>
-						<enum name="OffHook"/>
-						<enum name="Dialing"/>
-						<enum name="Ring"/>
-						<enum name="Ringing"/>
-						<enum name="Up"/>
-						<enum name="Busy"/>
-						<enum name="Dialing Offhook"/>
-						<enum name="Pre-ring"/>
-						<enum name="Unknown"/>
-					</enumlist>
-				</parameter>
-				<parameter name="CallerIDNum">
-				</parameter>
-				<parameter name="CallerIDName">
-				</parameter>
-				<parameter name="ConnectedLineNum">
-				</parameter>
-				<parameter name="ConnectedLineName">
-				</parameter>
-				<parameter name="AccountCode">
-				</parameter>
-				<parameter name="Context">
-				</parameter>
-				<parameter name="Exten">
-				</parameter>
-				<parameter name="Priority">
-				</parameter>
-				<parameter name="Uniqueid">
-				</parameter>
-				<parameter name="Cause">
-					<para>A numeric cause code for why the channel was hung up.</para>
-				</parameter>
-				<parameter name="Cause-txt">
-					<para>A description of why the channel was hung up.</para>
-				</parameter>
-			</syntax>
-		</managerEventInstance>
-	</managerEvent>
-	<managerEvent language="en_US" name="Newstate">
-		<managerEventInstance class="EVENT_FLAG_CALL">
-			<synopsis>Raised when a channel's state changes.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
-			</syntax>
-		</managerEventInstance>
-	</managerEvent>
-	<managerEvent language="en_US" name="Hangup">
-		<managerEventInstance class="EVENT_FLAG_CALL">
-			<synopsis>Raised when a channel is hung up.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
-			</syntax>
-		</managerEventInstance>
-	</managerEvent>
  ***/
 
 /*! \addtogroup Group_AMI AMI functions
@@ -1109,6 +1044,8 @@ static struct ast_event_sub *acl_change_event_subscription;
 
 #define MGR_SHOW_TERMINAL_WIDTH 80
 
+#define MAX_VARS 128
+
 /*! \brief
  * Descriptor for a manager session, either on the AMI socket or over HTTP.
  *
@@ -1127,8 +1064,6 @@ static const struct {
 	{{ "module", "unload", NULL }},
 	{{ "restart", "gracefully", NULL }},
 };
-
-static struct stasis_subscription *channel_state_sub;
 
 static void acl_change_event_cb(const struct ast_event *event, void *userdata);
 
@@ -1236,14 +1171,6 @@ struct mansession {
 
 static struct ao2_container *sessions = NULL;
 
-struct manager_channel_variable {
-	AST_LIST_ENTRY(manager_channel_variable) entry;
-	unsigned int isfunc:1;
-	char name[0]; /* allocate off the end the real size. */
-};
-
-static AST_RWLIST_HEAD_STATIC(channelvars, manager_channel_variable);
-
 /*! \brief user descriptor, as read from the config file.
  *
  * \note It is still missing some fields -- e.g. we can have multiple permit and deny
@@ -1277,8 +1204,6 @@ static AST_RWLIST_HEAD_STATIC(manager_hooks, manager_custom_hook);
 
 /*! \brief A container of event documentation nodes */
 AO2_GLOBAL_OBJ_STATIC(event_docs);
-
-static void free_channelvars(void);
 
 static enum add_filter_result manager_add_filter(const char *filter_pattern, struct ao2_container *whitefilters, struct ao2_container *blackfilters);
 
@@ -3977,7 +3902,10 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	if (!(atxfer_feature = ast_find_call_feature("atxfer"))) {
+	ast_rdlock_call_features();
+	atxfer_feature = ast_find_call_feature("atxfer");
+	ast_unlock_call_features();
+	if (!atxfer_feature) {
 		astman_send_error(s, m, "No attended transfer feature found");
 		return 0;
 	}
@@ -5719,30 +5647,16 @@ static int append_event(const char *str, int category)
 	return 0;
 }
 
-AST_THREADSTORAGE(manager_event_funcbuf);
-
 static void append_channel_vars(struct ast_str **pbuf, struct ast_channel *chan)
 {
-	struct manager_channel_variable *var;
+	RAII_VAR(struct varshead *, vars, NULL, ao2_cleanup);
+	struct ast_var_t *var;
 
-	AST_RWLIST_RDLOCK(&channelvars);
-	AST_LIST_TRAVERSE(&channelvars, var, entry) {
-		const char *val;
-		struct ast_str *res;
+	vars = ast_channel_get_manager_vars(chan);
 
-		if (var->isfunc) {
-			res = ast_str_thread_get(&manager_event_funcbuf, 16);
-			if (res && ast_func_read2(chan, var->name, &res, 0) == 0) {
-				val = ast_str_buffer(res);
-			} else {
-				val = NULL;
-			}
-		} else {
-			val = pbx_builtin_getvar_helper(chan, var->name);
-		}
-		ast_str_append(pbuf, 0, "ChanVariable(%s): %s=%s\r\n", ast_channel_name(chan), var->name, val ? val : "");
+	AST_LIST_TRAVERSE(vars, var, entries) {
+		ast_str_append(pbuf, 0, "ChanVariable(%s): %s=%s\r\n", ast_channel_name(chan), var->name, var->value);
 	}
-	AST_RWLIST_UNLOCK(&channelvars);
 }
 
 /* XXX see if can be moved inside the function */
@@ -5769,7 +5683,7 @@ int __ast_manager_event_multichan(int category, const char *event, int chancount
 		return -1;
 	}
 
-	cat_str = authority_to_str(category, &auth);
+	cat_str = authority_to_str (category, &auth);
 	ast_str_set(&buf, 0,
 			"Event: %s\r\nPrivilege: %s\r\n",
 			 event, cat_str);
@@ -7419,153 +7333,64 @@ static struct ast_cli_entry cli_manager[] = {
  */
 static void load_channelvars(struct ast_variable *var)
 {
-	struct manager_channel_variable *mcv;
-	char *remaining = ast_strdupa(var->value);
-	char *next;
+        char *parse = NULL;
+        AST_DECLARE_APP_ARGS(args,
+                AST_APP_ARG(vars)[MAX_VARS];
+        );
 
 	ast_free(manager_channelvars);
 	manager_channelvars = ast_strdup(var->value);
 
-	/*
-	 * XXX TODO: To allow dialplan functions to have more than one
-	 * parameter requires eliminating the '|' as a separator so we
-	 * could use AST_STANDARD_APP_ARGS() to separate items.
-	 */
-	free_channelvars();
-	AST_RWLIST_WRLOCK(&channelvars);
-	while ((next = strsep(&remaining, ",|"))) {
-		if (!(mcv = ast_calloc(1, sizeof(*mcv) + strlen(next) + 1))) {
-			break;
-		}
-		strcpy(mcv->name, next); /* SAFE */
-		if (strchr(next, '(')) {
-			mcv->isfunc = 1;
-		}
-		AST_RWLIST_INSERT_TAIL(&channelvars, mcv, entry);
-	}
-	AST_RWLIST_UNLOCK(&channelvars);
+	/* parse the setting */
+	parse = ast_strdupa(manager_channelvars);
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	ast_channel_set_manager_vars(args.argc, args.vars);
 }
 
-/*!
- * \brief Generate the AMI message body from a channel snapshot
- * \internal
- *
- * \param snapshot the channel snapshot for which to generate an AMI message body
- *
- * \retval NULL on error
- * \retval ast_str* on success (must be ast_freed by caller)
- */
-static struct ast_str *manager_build_channel_state_string(const struct ast_channel_snapshot *snapshot)
+#ifdef TEST_FRAMEWORK
+
+static void test_suite_event_cb(void *data, struct stasis_subscription *sub,
+		struct stasis_topic *topic,
+		struct stasis_message *message)
 {
-	struct ast_str *out = ast_str_create(1024);
-	int res = 0;
-	if (!out) {
-		return NULL;
-	}
-	res = ast_str_set(&out, 0,
-		"Channel: %s\r\n"
-		"ChannelState: %d\r\n"
-		"ChannelStateDesc: %s\r\n"
-		"CallerIDNum: %s\r\n"
-		"CallerIDName: %s\r\n"
-		"ConnectedLineNum: %s\r\n"
-		"ConnectedLineName: %s\r\n"
-		"AccountCode: %s\r\n"
-		"Context: %s\r\n"
-		"Exten: %s\r\n"
-		"Priority: %d\r\n"
-		"Uniqueid: %s\r\n"
-		"Cause: %d\r\n"
-		"Cause-txt: %s\r\n",
-		snapshot->name,
-		snapshot->state,
-		ast_state2str(snapshot->state),
-		snapshot->caller_number,
-		snapshot->caller_name,
-		snapshot->connected_number,
-		snapshot->connected_name,
-		snapshot->accountcode,
-		snapshot->context,
-		snapshot->exten,
-		snapshot->priority,
-		snapshot->uniqueid,
-		snapshot->hangupcause,
-		ast_cause2str(snapshot->hangupcause));
+	struct ast_test_suite_message_payload *payload;
+	struct ast_json *blob;
+	const char *type;
 
-	if (!res) {
-		return NULL;
-	}
-
-	return out;
-}
-
-static void channel_snapshot_update(struct ast_channel_snapshot *old_snapshot, struct ast_channel_snapshot *new_snapshot)
-{
-	int is_hungup;
-	char *manager_event = NULL;
-
-	if (!new_snapshot) {
-		/* Ignore cache clearing events; we'll see the hangup first */
+	if (stasis_message_type(message) != ast_test_suite_message_type()) {
 		return;
 	}
 
-	is_hungup = ast_test_flag(&new_snapshot->flags, AST_FLAG_ZOMBIE) ? 1 : 0;
-
-	if (!old_snapshot) {
-		manager_event = "Newchannel";
+	payload = stasis_message_data(message);
+	if (!payload) {
+		return;
+	}
+	blob = ast_test_suite_get_blob(payload);
+	if (!blob) {
+		return;
 	}
 
-	if (old_snapshot && old_snapshot->state != new_snapshot->state) {
-		manager_event = "Newstate";
+	type = ast_json_string_get(ast_json_object_get(blob, "type"));
+	if (ast_strlen_zero(type) || strcmp("testevent", type)) {
+		return;
 	}
 
-	if (old_snapshot && is_hungup) {
-		manager_event = "Hangup";
-	}
-
-	if (manager_event) {
-		RAII_VAR(struct ast_str *, channel_event_string, NULL, ast_free);
-
-		channel_event_string = manager_build_channel_state_string(new_snapshot);
-		if (channel_event_string) {
-			manager_event(EVENT_FLAG_CALL, manager_event, "%s", ast_str_buffer(channel_event_string));
-		}
-	}
+	manager_event(EVENT_FLAG_TEST, "TestEvent",
+		"Type: StateChange\r\n"
+		"State: %s\r\n"
+		"AppFile: %s\r\n"
+		"AppFunction: %s\r\n"
+		"AppLine: %jd\r\n"
+		"%s\r\n",
+		ast_json_string_get(ast_json_object_get(blob, "state")),
+		ast_json_string_get(ast_json_object_get(blob, "appfile")),
+		ast_json_string_get(ast_json_object_get(blob, "appfunction")),
+		ast_json_integer_get(ast_json_object_get(blob, "line")),
+		ast_json_string_get(ast_json_object_get(blob, "data")));
 }
 
-static void channel_varset(const char *channel_name, const char *uniqueid, const char *name, const char *value)
-{
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a variable is set to a particular value.</synopsis>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_DIALPLAN, "VarSet",
-		      "Channel: %s\r\n"
-		      "Variable: %s\r\n"
-		      "Value: %s\r\n"
-		      "Uniqueid: %s\r\n",
-		      channel_name, name, value, uniqueid);
-}
-
-static void channel_event_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message)
-{
-	if (stasis_message_type(message) == stasis_cache_update()) {
-		struct stasis_cache_update *update = stasis_message_data(message);
-		if (ast_channel_snapshot() == update->type) {
-			struct ast_channel_snapshot *old_snapshot =
-				stasis_message_data(update->old_snapshot);
-			struct ast_channel_snapshot *new_snapshot =
-				stasis_message_data(update->new_snapshot);
-			channel_snapshot_update(old_snapshot, new_snapshot);
-		}
-	} else if (stasis_message_type(message) == ast_channel_varset()) {
-		struct ast_channel_varset *varset = stasis_message_data(message);
-		const char *name = varset->snapshot ? varset->snapshot->name : "none";
-		const char *uniqueid = varset->snapshot ? varset->snapshot->uniqueid : "none";
-		channel_varset(name, uniqueid, varset->variable, varset->value);
-	}
-}
+#endif
 
 /*! \internal \brief Free a user record.  Should already be removed from the list */
 static void manager_free_user(struct ast_manager_user *user)
@@ -7589,8 +7414,6 @@ static void manager_free_user(struct ast_manager_user *user)
 static void manager_shutdown(void)
 {
 	struct ast_manager_user *user;
-
-	channel_state_sub = stasis_unsubscribe(channel_state_sub);
 
 	if (registered) {
 		ast_manager_unregister("Ping");
@@ -7683,10 +7506,8 @@ static int __init_manager(int reload, int by_external_config)
 
 	manager_enabled = 0;
 
-	if (!channel_state_sub) {
-		channel_state_sub = stasis_subscribe(
-			stasis_caching_get_topic(ast_channel_topic_all_cached()),
-			channel_event_cb, NULL);
+	if (manager_channels_init()) {
+		return -1;
 	}
 
 	if (!registered) {
@@ -7726,6 +7547,10 @@ static int __init_manager(int reload, int by_external_config)
 		ast_manager_register_xml_core("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck);
 		ast_manager_register_xml_core("AOCMessage", EVENT_FLAG_AOC, action_aocmessage);
 		ast_manager_register_xml_core("Filter", EVENT_FLAG_SYSTEM, action_filter);
+
+#ifdef TEST_FRAMEWORK
+		stasis_subscribe(ast_test_suite_topic(), test_suite_event_cb, NULL);
+#endif
 
 		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
 		__ast_custom_function_register(&managerclient_function, NULL);
@@ -7788,8 +7613,6 @@ static int __init_manager(int reload, int by_external_config)
 		ast_free(ami_tls_cfg.cipher);
 	}
 	ami_tls_cfg.cipher = ast_strdup("");
-
-	free_channelvars();
 
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
 		val = var->value;
@@ -8147,17 +7970,6 @@ static void acl_change_event_cb(const struct ast_event *event, void *userdata)
 	/* For now, this is going to be performed simply and just execute a forced reload. */
 	ast_log(LOG_NOTICE, "Reloading manager in response to ACL change event.\n");
 	__init_manager(1, 1);
-}
-
-/* clear out every entry in the channelvar list */
-static void free_channelvars(void)
-{
-	struct manager_channel_variable *var;
-	AST_RWLIST_WRLOCK(&channelvars);
-	while ((var = AST_RWLIST_REMOVE_HEAD(&channelvars, entry))) {
-		ast_free(var);
-	}
-	AST_RWLIST_UNLOCK(&channelvars);
 }
 
 int init_manager(void)

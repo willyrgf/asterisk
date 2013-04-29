@@ -54,9 +54,7 @@
  * enforced in code). Messages themselves are reference-counted, AO2 objects,
  * along with their values. By being both reference counted and immutable,
  * messages can be shared throughout the system without any concerns for
- * threading. (Well, the objects must be allocated with \ref
- * AO2_ALLOC_OPT_LOCK_MUTEX so that the reference counting operations are thread
- * safe. But other than that, no worries).
+ * threading.
  *
  * The type of a message is defined by an instance of \ref stasis_message_type,
  * which can be created by calling stasis_message_type_create(). Message types
@@ -358,6 +356,10 @@ int stasis_subscription_is_subscribed(const struct stasis_subscription *sub);
  */
 int stasis_subscription_final_message(struct stasis_subscription *sub, struct stasis_message *msg);
 
+/*! \addtogroup StasisTopicsAndMessages
+ * @{
+ */
+
 /*!
  * \brief Holds details about changes to subscriptions for the specified topic
  * \since 12
@@ -375,24 +377,43 @@ struct stasis_subscription_change {
  * \return The stasis_message_type for subscription change notices
  * \since 12
  */
-struct stasis_message_type *stasis_subscription_change(void);
+struct stasis_message_type *stasis_subscription_change_type(void);
 
 /*! @} */
 
-/*! @{ */
+/*!
+ * \brief Pool for topic aggregation
+ */
+struct stasis_topic_pool;
 
 /*!
- * \brief A topic wrapper, which caches certain messages.
- * \since 12
+ * \brief Create a topic pool that routes messages from dynamically generated topics to the given topic
+ * \param pooled_topic Topic to which messages will be routed
+ * \retval the new stasis_topic_pool or NULL on failure
  */
-struct stasis_caching_topic;
+struct stasis_topic_pool *stasis_topic_pool_create(struct stasis_topic *pooled_topic);
+
+/*!
+ * \brief Find or create a topic in the pool
+ * \param pool Pool for which to get the topic
+ * \param topic_name Name of the topic to get
+ * \retval The already stored or newly allocated topic
+ * \retval NULL if the topic was not found and could not be allocated
+ */
+struct stasis_topic *stasis_topic_pool_get_topic(struct stasis_topic_pool *pool, const char *topic_name);
+
+/*! @} */
+
+/*! \addtogroup StasisTopicsAndMessages
+ * @{
+ */
 
 /*!
  * \brief Message type for cache update messages.
  * \return Message type for cache update messages.
  * \since 12
  */
-struct stasis_message_type *stasis_cache_update(void);
+struct stasis_message_type *stasis_cache_update_type(void);
 
 /*!
  * \brief Cache update message
@@ -418,6 +439,16 @@ struct stasis_cache_update {
  * \since 12
  */
 struct stasis_message *stasis_cache_clear_create(struct stasis_message_type *type, const char *id);
+
+/*! @} */
+
+/*! @{ */
+
+/*!
+ * \brief A topic wrapper, which caches certain messages.
+ * \since 12
+ */
+struct stasis_caching_topic;
 
 /*!
  * \brief Callback extract a unique identity from a snapshot message.
@@ -513,5 +544,12 @@ int stasis_init(void);
 int stasis_cache_init(void);
 
 /*! @} */
+
+/*!
+ * \defgroup StasisTopicsAndMessages Stasis topics, and their messages.
+ *
+ * This group contains the topics, messages and corresponding message types
+ * found within Asterisk.
+ */
 
 #endif /* _ASTERISK_STASIS_H */

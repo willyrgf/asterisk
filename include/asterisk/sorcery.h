@@ -44,7 +44,7 @@
  * override configured mappings. They are only used in the case where no configured mapping exists.
  *
  * Configuring object mappings implicitly creates a basic version of an object type. The object type
- * must be fully registered, however, using the \ref ast_sorcery_object_type_register API call before any
+ * must be fully registered, however, using the \ref ast_sorcery_object_register API call before any
  * objects of the type can be allocated, created, or retrieved.
  *
  * Once the object type itself has been fully registered the individual fields within the object must
@@ -157,10 +157,15 @@ typedef struct ast_variable *(*sorcery_transform_handler)(struct ast_variable *s
 /*!
  * \brief A callback function for when an object set is successfully applied to an object
  *
+ * \note On a failure return, the state of the object is left undefined. It is a bad
+ * idea to try to use this object.
+ *
  * \param sorcery Sorcery structure in use
  * \param obj The object itself
+ * \retval 0 Success
+ * \retval non-zero Failure
  */
-typedef void (*sorcery_apply_handler)(const struct ast_sorcery *sorcery, void *obj);
+typedef int (*sorcery_apply_handler)(const struct ast_sorcery *sorcery, void *obj);
 
 /*!
  * \brief A callback function for copying the contents of one object to another
@@ -203,7 +208,7 @@ struct ast_sorcery_wizard {
 	void (*reload)(void *data, const struct ast_sorcery *sorcery, const char *type);
 
 	/*! \brief Callback for creating an object */
-	int (*create)(void *data, void *object);
+	int (*create)(const struct ast_sorcery *sorcery, void *data, void *object);
 
 	/*! \brief Callback for retrieving an object using an id */
 	void *(*retrieve_id)(const struct ast_sorcery *sorcery, void *data, const char *type, const char *id);
@@ -218,10 +223,10 @@ struct ast_sorcery_wizard {
 	void (*retrieve_multiple)(const struct ast_sorcery *sorcery, void *data, const char *type, struct ao2_container *objects, const struct ast_variable *fields);
 
 	/*! \brief Callback for updating an object */
-	int (*update)(void *data, void *object);
+	int (*update)(const struct ast_sorcery *sorcery, void *data, void *object);
 
 	/*! \brief Callback for deleting an object */
-	int (*delete)(void *data, void *object);
+	int (*delete)(const struct ast_sorcery *sorcery, void *data, void *object);
 
 	/*! \brief Callback for closing a wizard */
 	void (*close)(void *data);

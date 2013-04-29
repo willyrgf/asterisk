@@ -533,7 +533,7 @@ struct iax2_peer {
 
 	int expire;					/*!< Schedule entry for expiry */
 	int expiry;					/*!< How soon to expire */
-	iax2_format capability;        /*!< Capability */
+	iax2_format capability;				/*!< Capability */
 
 	/* Qualification */
 	int callno;					/*!< Call number of POKE request */
@@ -545,12 +545,12 @@ struct iax2_peer {
 	int pokefreqnotok;				/*!< How often to check when the host has been determined to be down */
 	int historicms;					/*!< How long recent average responses took */
 	int smoothing;					/*!< Sample over how many units to determine historic ms */
-	uint16_t maxcallno;					/*!< Max call number limit for this peer.  Set on registration */
+	uint16_t maxcallno;				/*!< Max call number limit for this peer.  Set on registration */
 
-	struct ast_event_sub *mwi_event_sub;
+	struct stasis_subscription *mwi_event_sub;	/*!< This subscription lets pollmailboxes know which mailboxes need to be polled */
 
 	struct ast_acl_list *acl;
-	enum calltoken_peer_enum calltoken_required;        /*!< Is calltoken validation required or not, can be YES, NO, or AUTO */
+	enum calltoken_peer_enum calltoken_required;	/*!< Is calltoken validation required or not, can be YES, NO, or AUTO */
 };
 
 #define IAX2_TRUNK_PREFACE (sizeof(struct iax_frame) + sizeof(struct ast_iax2_meta_hdr) + sizeof(struct ast_iax2_meta_trunk_hdr))
@@ -1316,7 +1316,7 @@ static void iax2_lock_owner(int callno)
 	}
 }
 
-static void mwi_event_cb(const struct ast_event *event, void *userdata)
+static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
 	/* The MWI subscriptions exist just so the core knows we care about those
 	 * mailboxes.  However, we just grab the events out of the cache when it
@@ -8743,23 +8743,24 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 		iax_ie_append_short(&ied, IAX_IE_REFRESH, p->expiry);
 		iax_ie_append_addr(&ied, IAX_IE_APPARENT_ADDR, &peer_addr);
 		if (!ast_strlen_zero(p->mailbox)) {
-			struct ast_event *event;
 			int new, old;
 			char *mailbox, *context;
+			RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+			struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
 			context = mailbox = ast_strdupa(p->mailbox);
 			strsep(&context, "@");
-			if (ast_strlen_zero(context))
+			if (ast_strlen_zero(context)) {
 				context = "default";
+			}
 
-			event = ast_event_get_cached(AST_EVENT_MWI,
-				AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-				AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
-				AST_EVENT_IE_END);
-			if (event) {
-				new = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
-				old = ast_event_get_ie_uint(event, AST_EVENT_IE_OLDMSGS);
-				ast_event_destroy(event);
+			ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
+			msg = stasis_cache_get(stasis_mwi_topic_cached(), stasis_mwi_state_type(), ast_str_buffer(uniqueid));
+
+			if (msg) {
+				struct stasis_mwi_state *mwi_state = stasis_message_data(msg);
+				new = mwi_state->new_msgs;
+				old = mwi_state->old_msgs;
 			} else { /* Fall back on checking the mailbox directly */
 				ast_app_inboxcount(p->mailbox, &new, &old);
 			}
@@ -9513,6 +9514,9 @@ static void defer_full_frame(struct iax2_thread *from_here, struct iax2_thread *
 
 	if (!cur_pkt_buf)
 		AST_LIST_INSERT_TAIL(&to_here->full_frames, pkt_buf, entry);
+
+	to_here->iostate = IAX_IOSTATE_READY;
+	ast_cond_signal(&to_here->cond);
 
 	ast_mutex_unlock(&to_here->lock);
 }
@@ -12231,16 +12235,26 @@ static int start_network_thread(void)
 			ast_cond_init(&thread->cond, NULL);
 			ast_mutex_init(&thread->init_lock);
 			ast_cond_init(&thread->init_cond, NULL);
+
+			ast_mutex_lock(&thread->init_lock);
+
 			if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
 				ast_log(LOG_WARNING, "Failed to create new thread!\n");
 				ast_mutex_destroy(&thread->lock);
 				ast_cond_destroy(&thread->cond);
+				ast_mutex_unlock(&thread->init_lock);
 				ast_mutex_destroy(&thread->init_lock);
 				ast_cond_destroy(&thread->init_cond);
 				ast_free(thread);
 				thread = NULL;
 				continue;
 			}
+			/* Wait for the thread to be ready */
+			ast_cond_wait(&thread->init_cond, &thread->init_lock);
+
+			/* Done with init_lock */
+			ast_mutex_unlock(&thread->init_lock);
+
 			AST_LIST_LOCK(&idle_list);
 			AST_LIST_INSERT_TAIL(&idle_list, thread, list);
 			AST_LIST_UNLOCK(&idle_list);
@@ -12392,8 +12406,9 @@ static void peer_destructor(void *obj)
 	if (peer->dnsmgr)
 		ast_dnsmgr_release(peer->dnsmgr);
 
-	if (peer->mwi_event_sub)
-		ast_event_unsubscribe(peer->mwi_event_sub);
+	if (peer->mwi_event_sub) {
+		peer->mwi_event_sub = stasis_unsubscribe(peer->mwi_event_sub);
+	}
 
 	ast_string_field_free_memory(peer);
 }
@@ -12667,14 +12682,21 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 
 	if (!ast_strlen_zero(peer->mailbox)) {
 		char *mailbox, *context;
+		struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
+		struct stasis_topic *mailbox_specific_topic;
+
 		context = mailbox = ast_strdupa(peer->mailbox);
 		strsep(&context, "@");
-		if (ast_strlen_zero(context))
+		if (ast_strlen_zero(context)) {
 			context = "default";
-		peer->mwi_event_sub = ast_event_subscribe(AST_EVENT_MWI, mwi_event_cb, "IAX MWI subscription", NULL,
-			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
-			AST_EVENT_IE_END);
+		}
+
+		ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
+
+		mailbox_specific_topic = stasis_mwi_topic(ast_str_buffer(uniqueid));
+		if (mailbox_specific_topic) {
+			peer->mwi_event_sub = stasis_subscribe(mailbox_specific_topic, mwi_event_cb, NULL);
+		}
 	}
 
 	if (subscribe_acl_change) {

@@ -41,6 +41,24 @@ AMI (Asterisk Manager Interface)
    mechanisms (such as the Playback application), the audio can be stopped,
    reversed, or skipped forward.
 
+ * Channel related events now contain a snapshot of channel state, adding new
+   fields to many of these events.
+
+ * The AMI event 'Newexten' field 'Extension' is deprecated, and may be removed
+   in a future release. Please use the common 'Exten' field instead.
+
+ * The AMI event 'UserEvent' from app_userevent now contains the channel state
+   fields. The channel state fields will come before the body fields.
+
+ * The deprecated use of | (pipe) as a separator in the channelvars setting in
+   manager.conf has been removed.
+
+ * Channel Variables conveyed with a channel no longer contain the name of the
+   channel as part of the key field, i.e., ChanVariable(SIP/foo): bar=baz is now
+   ChanVariable: bar=baz. When multiple channels are present in a single AMI
+   event, the various ChanVariable fields will contain a suffix that specifies
+   which channel they correspond to.
+
 Channel Drivers
 ------------------
 
@@ -70,6 +88,10 @@ Features
 
  * PARKINGSLOT and PARKEDLOT channel variables will now be set for a parked
    channel even when comebactoorigin=yes
+
+ * You can now have the settings for a channel updated using the FEATURE()
+   and FEATUREMAP() functions inherited to child channels by setting
+   FEATURE(inherit)=yes.
 
 Logging
 -------------------
@@ -116,6 +138,20 @@ RTP
  * ICE/STUN/TURN support in res_rtp_asterisk has been made optional.  To enable
    them, an Asterisk-specific version of pjproject needs to be installed.
    Tarballs are available from https://github.com/asterisk/pjproject/tags/.
+
+XMPP
+------------------
+ * Device state for XMPP buddies is now available using the following format:
+   XMPP/<client name>/<buddy address>
+   If any resource is available the device state is considered to be not in use.
+   If no resources exist or all are unavailable the device state is considered
+   to be unavailable.
+
+Sorcery
+------------------
+ * All future modules which utilize Sorcery for object persistence must have a
+   column named "id" within their schema when using the Sorcery realtime module.
+   This column must be able to contain a string of up to 128 characters in length.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 10 to Asterisk 11 --------------------
