@@ -404,7 +404,7 @@ struct {
 	{ RTCP_PT_TOKEN,"Port mapping, RFC 6284", },
 };
 
-const char *find_rtcp_pt(int payload)
+static const char *find_rtcp_pt(int payload)
 {
 	int x;
 
@@ -2235,9 +2235,9 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 				ast_verbose("   Received an SDES from %s - Total length %d (%d bytes)\n", ast_sockaddr_stringify(&rtp->rtcp->them), length-i, ((length-i)*4) - 6);
 			}
 			while (j < length * 4) {
-				sdestype = (int) *sdes;
+				sdestype = (uint8_t) *sdes;
 				sdes++;
-				sdeslength = (int) *sdes;
+				sdeslength = (uint8_t) *sdes;
 				sdes++;
 				if (rtcp_debug_test_addr(&addr)) {
 					ast_verbose(" --- SDES Type %u, Length %u Curj %d)\n", sdestype, sdeslength, j);
@@ -2245,6 +2245,9 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp_instance *insta
 				switch (sdestype) {
 				case SDES_CNAME:
 					if (!ast_strlen_zero(rtp->rtcp->theircname)) {
+						if (sdeslength > sizeof(rtp->rtcp->theircname)) {
+							sdeslength = sizeof(rtp->rtcp->theircname) - 1;
+						}
 						if (strncmp(rtp->rtcp->theircname, sdes, sdeslength)) {
 							ast_log(LOG_WARNING, "New RTP stream received (new RTCP CNAME for session. Old name: %s\n", rtp->rtcp->theircname);
 						}
