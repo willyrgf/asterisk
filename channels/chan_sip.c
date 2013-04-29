@@ -14102,12 +14102,9 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 {
 	struct ast_rtp_quality *qual;
 	char *rtpqstring = NULL;
-	int qosrealtime = ast_check_realtime("rtpqos");
 	unsigned int duration;	/* Duration in secs */
  	int readtrans = FALSE, writetrans = FALSE;
 
-	memset(&qual, sizeof(qual), 0);
-  
 	if (p && p->owner) {
 		struct ast_channel *bridgepeer = ast_bridged_channel(p->owner);
 		if (bridgepeer) {
@@ -14221,7 +14218,7 @@ static void sip_rtcp_report(struct sip_pvt *p, struct ast_rtp *rtp, enum media_t
 	   the quality report structure in the PVT and let the function that kills the pvt store the stuff in the
 	   monitor thread instead.
 	 */
-	if (reporttype == 1 {
+	if (reporttype == 1) {
 		if (type == SDP_AUDIO) {  /* Audio */
 			p->audioqual = ast_calloc(sizeof(struct ast_rtp_quality), 1);
 			(* p->audioqual) = *qual;
@@ -16881,7 +16878,7 @@ static int acf_channel_read(struct ast_channel *chan, char *funcname, char *prep
 		all = ast_rtp_get_quality(p->vrtp);
 		qos = ast_rtp_get_qualdata(p->vrtp);
 	} else {
-		ast_log(LOG_WARNING, "Unrecognized stream '%s in call to %s'\n", args.typecname, funcname);
+		ast_log(LOG_WARNING, "Unrecognized stream '%s in call to %s'\n", args.type, funcname);
 		return -1;
 		
 	}

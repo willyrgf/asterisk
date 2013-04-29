@@ -1208,9 +1208,9 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 				ast_verbose("   Received an SDES from %s:%d - Total length %d (%d bytes)\n", ast_inet_ntoa(rtp->rtcp->them.sin_addr), ntohs(rtp->rtcp->them.sin_port), length-i, ((length-i)*4) - 6);
 			}
 			while (j < length * 4) {
-				sdestype = (int) *sdes;
+				sdestype = (uint8_t) *sdes;
 				sdes++;
-				sdeslength = (int) *sdes;
+				sdeslength = (uint8_t) *sdes;
 				sdes++;
 				if (rtcp_debug_test_addr(&sin)) {
 					ast_verbose(" --- SDES Type %u, Length %u Curj %d)\n", sdestype, sdeslength, j);
@@ -1218,6 +1218,9 @@ static struct ast_frame *ast_rtcp_read_fd(int fd, struct ast_rtp *rtp)
 				switch (sdestype) {
 				case SDES_CNAME:
 					if (!ast_strlen_zero(rtp->rtcp->theircname)) {
+						if (sdeslength > sizeof(rtp->rtcp->theircname)) {
+							sdeslength = sizeof(rtp->rtcp->theircname) - 1;
+						}
 						if (strncmp(rtp->rtcp->theircname, sdes, sdeslength)) {
 							ast_log(LOG_WARNING, "New RTP stream received (new RTCP CNAME for session. Old name: %s\n", rtp->rtcp->theircname);
 						}
