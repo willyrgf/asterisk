@@ -366,7 +366,7 @@ static int manager_bridge_info(struct mansession *s, const struct message *m)
 		return -1;
 	}
 
-	if (!ast_strlen_zero(bridge_uniqueid)) {
+	if (ast_strlen_zero(bridge_uniqueid)) {
 		astman_send_error(s, m, "BridgeUniqueid must be provided");
 		return -1;
 	}
