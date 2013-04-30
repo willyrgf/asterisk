@@ -3621,7 +3621,6 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 	struct ast_bridge_channel *peer_bridge_channel)
 {
 	struct ast_bridge *dst_bridge = NULL;
-	struct ast_bridge *src_bridge = NULL;
 	struct ast_bridge_channel *dst_bridge_channel = NULL;
 	struct ast_bridge_channel *src_bridge_channel = NULL;
 	int peer_priority;
@@ -3641,13 +3640,11 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 		if (chan_bridge->num_channels == 2
 			&& chan_priority <= peer_priority) {
 			dst_bridge = peer_bridge;
-			src_bridge = chan_bridge;
 			dst_bridge_channel = peer_bridge_channel;
 			src_bridge_channel = chan_bridge_channel;
 		} else if (peer_bridge->num_channels == 2
 			&& peer_priority <= chan_priority) {
 			dst_bridge = chan_bridge;
-			src_bridge = peer_bridge;
 			dst_bridge_channel = chan_bridge_channel;
 			src_bridge_channel = peer_bridge_channel;
 		}
@@ -3656,7 +3653,6 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 		&& !ast_test_flag(&peer_bridge->feature_flags, AST_BRIDGE_FLAG_SWAP_INHIBIT_TO)) {
 		/* Can swap optimize only one way. */
 		dst_bridge = peer_bridge;
-		src_bridge = chan_bridge;
 		dst_bridge_channel = peer_bridge_channel;
 		src_bridge_channel = chan_bridge_channel;
 	} else if (peer_bridge->num_channels == 2
@@ -3664,7 +3660,6 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 		&& !ast_test_flag(&chan_bridge->feature_flags, AST_BRIDGE_FLAG_SWAP_INHIBIT_TO)) {
 		/* Can swap optimize only one way. */
 		dst_bridge = chan_bridge;
-		src_bridge = peer_bridge;
 		dst_bridge_channel = chan_bridge_channel;
 		src_bridge_channel = peer_bridge_channel;
 	}
