@@ -1061,75 +1061,64 @@ static struct local_pvt *local_alloc(const char *data, struct ast_format_cap *ca
 /*! \brief Start new local channel */
 static struct ast_channel *local_new(struct local_pvt *p, int state, const char *linkedid, struct ast_callid *callid)
 {
-	struct ast_channel *tmp = NULL, *tmp2 = NULL;
+	struct ast_channel *owner;
+	struct ast_channel *chan;
 	struct ast_format fmt;
 	int generated_seqno = ast_atomic_fetchadd_int((int *)&name_sequence, +1);
-	const char *t;
-	int ama;
 
-	/* Allocate two new Asterisk channels */
-	/* safe accountcode */
-	if (p->owner && ast_channel_accountcode(p->owner))
-		t = ast_channel_accountcode(p->owner);
-	else
-		t = "";
-
-	if (p->owner)
-		ama = ast_channel_amaflags(p->owner);
-	else
-		ama = 0;
-
-	/* Make sure that the ;2 channel gets the same linkedid as ;1. You can't pass linkedid to both
-	 * allocations since if linkedid isn't set, then each channel will generate its own linkedid. */
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%08x;1", p->exten, p->context, generated_seqno))
-		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, ast_channel_linkedid(tmp), ama, "Local/%s@%s-%08x;2", p->exten, p->context, generated_seqno))) {
-		if (tmp) {
-			tmp = ast_channel_release(tmp);
+	/*
+	 * Allocate two new Asterisk channels
+	 *
+	 * Make sure that the ;2 channel gets the same linkedid as ;1.
+	 * You can't pass linkedid to both allocations since if linkedid
+	 * isn't set, then each channel will generate its own linkedid.
+	 */
+	if (!(owner = ast_channel_alloc(1, state, NULL, NULL, NULL,
+			p->exten, p->context, linkedid, 0,
+			"Local/%s@%s-%08x;1", p->exten, p->context, generated_seqno))
+		|| !(chan = ast_channel_alloc(1, AST_STATE_RING, NULL, NULL, NULL,
+			p->exten, p->context, ast_channel_linkedid(owner), 0,
+			"Local/%s@%s-%08x;2", p->exten, p->context, generated_seqno))) {
+		if (owner) {
+			owner = ast_channel_release(owner);
 		}
 		ast_log(LOG_WARNING, "Unable to allocate channel structure(s)\n");
 		return NULL;
 	}
 
 	if (callid) {
-		ast_channel_callid_set(tmp, callid);
-		ast_channel_callid_set(tmp2, callid);
+		ast_channel_callid_set(owner, callid);
+		ast_channel_callid_set(chan, callid);
 	}
 
-	ast_channel_tech_set(tmp, &local_tech);
-	ast_channel_tech_set(tmp2, &local_tech);
+	ast_channel_tech_set(owner, &local_tech);
+	ast_channel_tech_set(chan, &local_tech);
+	ast_channel_tech_pvt_set(owner, p);
+	ast_channel_tech_pvt_set(chan, p);
 
-	ast_format_cap_copy(ast_channel_nativeformats(tmp), p->reqcap);
-	ast_format_cap_copy(ast_channel_nativeformats(tmp2), p->reqcap);
+	ast_format_cap_copy(ast_channel_nativeformats(owner), p->reqcap);
+	ast_format_cap_copy(ast_channel_nativeformats(chan), p->reqcap);
 
 	/* Determine our read/write format and set it on each channel */
 	ast_best_codec(p->reqcap, &fmt);
-	ast_format_copy(ast_channel_writeformat(tmp), &fmt);
-	ast_format_copy(ast_channel_writeformat(tmp2), &fmt);
-	ast_format_copy(ast_channel_rawwriteformat(tmp), &fmt);
-	ast_format_copy(ast_channel_rawwriteformat(tmp2), &fmt);
-	ast_format_copy(ast_channel_readformat(tmp), &fmt);
-	ast_format_copy(ast_channel_readformat(tmp2), &fmt);
-	ast_format_copy(ast_channel_rawreadformat(tmp), &fmt);
-	ast_format_copy(ast_channel_rawreadformat(tmp2), &fmt);
+	ast_format_copy(ast_channel_writeformat(owner), &fmt);
+	ast_format_copy(ast_channel_writeformat(chan), &fmt);
+	ast_format_copy(ast_channel_rawwriteformat(owner), &fmt);
+	ast_format_copy(ast_channel_rawwriteformat(chan), &fmt);
+	ast_format_copy(ast_channel_readformat(owner), &fmt);
+	ast_format_copy(ast_channel_readformat(chan), &fmt);
+	ast_format_copy(ast_channel_rawreadformat(owner), &fmt);
+	ast_format_copy(ast_channel_rawreadformat(chan), &fmt);
 
-	ast_channel_tech_pvt_set(tmp, p);
-	ast_channel_tech_pvt_set(tmp2, p);
+	ast_set_flag(ast_channel_flags(owner), AST_FLAG_DISABLE_DEVSTATE_CACHE);
+	ast_set_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE);
 
-	ast_set_flag(ast_channel_flags(tmp), AST_FLAG_DISABLE_DEVSTATE_CACHE);
-	ast_set_flag(ast_channel_flags(tmp2), AST_FLAG_DISABLE_DEVSTATE_CACHE);
+	p->owner = owner;
+	p->chan = chan;
 
-	p->owner = tmp;
-	p->chan = tmp2;
+	ast_jb_configure(owner, &p->jb_conf);
 
-	ast_channel_context_set(tmp, p->context);
-	ast_channel_context_set(tmp2, p->context);
-	ast_channel_exten_set(tmp2, p->exten);
-	ast_channel_priority_set(tmp, 1);
-	ast_channel_priority_set(tmp2, 1);
-
-	ast_jb_configure(tmp, &p->jb_conf);
-
-	return tmp;
+	return owner;
 }
 
 /*! \brief Part of PBX interface */
@@ -1210,10 +1199,9 @@ static struct ast_cli_entry cli_local[] = {
 static int manager_optimize_away(struct mansession *s, const struct message *m)
 {
 	const char *channel;
-	struct local_pvt *p, *tmp = NULL;
-	struct ast_channel *c;
-	int found = 0;
-	struct ao2_iterator it;
+	struct local_pvt *p;
+	struct local_pvt *found;
+	struct ast_channel *chan;
 
 	channel = astman_get_header(m, "Channel");
 	if (ast_strlen_zero(channel)) {
@@ -1221,31 +1209,21 @@ static int manager_optimize_away(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	c = ast_channel_get_by_name(channel);
-	if (!c) {
+	chan = ast_channel_get_by_name(channel);
+	if (!chan) {
 		astman_send_error(s, m, "Channel does not exist.");
 		return 0;
 	}
 
-	p = ast_channel_tech_pvt(c);
-	ast_channel_unref(c);
-	c = NULL;
+	p = ast_channel_tech_pvt(chan);
+	ast_channel_unref(chan);
 
-	it = ao2_iterator_init(locals, 0);
-	while ((tmp = ao2_iterator_next(&it))) {
-		if (tmp == p) {
-			ao2_lock(tmp);
-			found = 1;
-			ast_clear_flag(tmp, LOCAL_NO_OPTIMIZATION);
-			ao2_unlock(tmp);
-			ao2_ref(tmp, -1);
-			break;
-		}
-		ao2_ref(tmp, -1);
-	}
-	ao2_iterator_destroy(&it);
-
+	found = p ? ao2_find(locals, p, 0) : NULL;
 	if (found) {
+		ao2_lock(found);
+		ast_clear_flag(found, LOCAL_NO_OPTIMIZATION);
+		ao2_unlock(found);
+		ao2_ref(found, -1);
 		astman_send_ack(s, m, "Queued channel to be optimized away");
 	} else {
 		astman_send_error(s, m, "Unable to find channel");
