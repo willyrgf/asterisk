@@ -320,6 +320,8 @@ static int manager_bridges_list(struct mansession *s, const struct message *m)
 		return -1;
 	}
 
+	astman_send_ack(s, m, "Bridge listing will follow");
+
 	if (!ast_strlen_zero(type_filter)) {
 		char *type_filter_dup = ast_strdupa(type_filter);
 		ao2_callback(bridges, OBJ_MULTIPLE | OBJ_NODATA | OBJ_UNLINK, filter_bridge_type_cb, type_filter_dup);
