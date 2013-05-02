@@ -383,6 +383,8 @@ static int manager_bridge_info(struct mansession *s, const struct message *m)
 		return -1;
 	}
 
+	astman_send_ack(s, m, "Bridge channel listing will follow");
+
 	snapshot = stasis_message_data(msg);
 	bridge_info = ast_manager_build_bridge_state_string(snapshot, "");
 
