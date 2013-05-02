@@ -36,4 +36,44 @@
 int ast_search_dns(void *context, const char *dname, int class, int type,
 	 int (*callback)(void *context, unsigned char *answer, int len, unsigned char *fullanswer));
 
+/*!
+ * \since 1.8
+ *
+ * \brief
+ * Parses a string with an IPv4 or IPv6 address and place results into an array
+ *
+ * \details
+ * Parses a string containing a host name or an IPv4 or IPv6 address followed
+ * by an optional port (separated by a colon).  The result is returned into a
+ * array of struct ast_sockaddr. Allowed formats for str are the following:
+ *
+ * hostname:port
+ * host.example.com:port
+ * a.b.c.d
+ * a.b.c.d:port
+ * a:b:c:...:d
+ * [a:b:c:...:d]
+ * [a:b:c:...:d]:port
+ *
+ * \param[out] addrs The resulting array of ast_sockaddrs
+ * \param str The string to parse
+ * \param flags If set to zero, a port MAY be present. If set to
+ * PARSE_PORT_IGNORE, a port MAY be present but will be ignored. If set to
+ * PARSE_PORT_REQUIRE, a port MUST be present. If set to PARSE_PORT_FORBID, a
+ * port MUST NOT be present.
+ *
+ * \param family Only addresses of the given family will be returned. Use 0 or
+ * AST_AF_UNSPEC to get addresses of all families.
+ *
+ * \retval 0 Failure
+ * \retval non-zero The number of elements in addrs array.
+ */
+int ast_sockaddr_resolve(struct ast_sockaddr **addrs, const char *str, int flags, int family);
+
+/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by address family
+ *
+ * \warning Using this function probably means you have a faulty design.
+ */
+int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr, const char *name, int flag, int family);
+
 #endif /* _ASTERISK_DNS_H */

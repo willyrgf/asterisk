@@ -46,6 +46,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #endif
 #include <resolv.h>
 
+#include "asterisk/netsock2.h"
 #include "asterisk/channel.h"
 #include "asterisk/srv.h"
 #include "asterisk/dns.h"

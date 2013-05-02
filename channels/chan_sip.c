@@ -295,6 +295,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip/include/security_events.h"
 #include "asterisk/sip_api.h"
 #include "asterisk/app.h"
+#include "asterisk/dns.h"
 
 /*** DOCUMENTATION
 	<application name="SIPDtmfMode" language="en_US">
@@ -1338,12 +1339,6 @@ static int sip_dtmfmode(struct ast_channel *chan, const char *data);
 static int sip_addheader(struct ast_channel *chan, const char *data);
 static int sip_do_reload(enum channelreloadreason reason);
 static char *sip_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
-static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
-				      const char *name, int flag, int family);
-static int ast_sockaddr_resolve_first(struct ast_sockaddr *addr,
-				      const char *name, int flag);
-static int ast_sockaddr_resolve_first_transport(struct ast_sockaddr *addr,
-						const char *name, int flag, unsigned int transport);
 
 /*--- Debugging
 	Functions for enabling debug per IP or fully, or enabling history logging for
@@ -4022,7 +4017,7 @@ static void ast_sip_ouraddrfor(const struct ast_sockaddr *them, struct ast_socka
 	    (!sip_cfg.matchexternaddrlocally || !ast_apply_ha(localaddr, us)) ) {
 		/* if we used externhost, see if it is time to refresh the info */
 		if (externexpire && time(NULL) >= externexpire) {
-			if (ast_sockaddr_resolve_first(&externaddr, externhost, 0)) {
+			if (ast_sockaddr_resolve_first_af(&externaddr, externhost, 0, get_address_family_filter(SIP_TRANSPORT_UDP))) {
 				ast_log(LOG_NOTICE, "Warning: Re-lookup of '%s' failed!\n", externhost);
 			}
 			externexpire = time(NULL) + externrefresh;
@@ -6296,7 +6291,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 			}
 		}
 
-		if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
+		if (ast_sockaddr_resolve_first_af(&dialog->sa, hostn, 0, get_address_family_filter(dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP))) {
 			ast_log(LOG_WARNING, "No such host: %s\n", peername);
 			return -1;
 		}
@@ -8889,7 +8884,7 @@ static int process_via(struct sip_pvt *p, const struct sip_request *req)
 	}
 
 	if (via->maddr) {
-		if (ast_sockaddr_resolve_first_transport(&p->sa, via->maddr, PARSE_PORT_FORBID, p->socket.type)) {
+		if (ast_sockaddr_resolve_first_af(&p->sa, via->maddr, PARSE_PORT_FORBID, get_address_family_filter(p->socket.type))) {
 			ast_log(LOG_WARNING, "Can't find address for maddr '%s'\n", via->maddr);
 			ast_log(LOG_ERROR, "error processing via header\n");
 			free_via(via);
@@ -10914,7 +10909,7 @@ static int process_sdp_c(const char *c, struct ast_sockaddr *addr)
 			ast_log(LOG_WARNING, "Unknown protocol '%s'.\n", proto);
 			return FALSE;
 		}
-		if (ast_sockaddr_resolve_first_af(addr, host, 0, af)) {
+		if (ast_sockaddr_resolve_first_af(addr, host, 0, get_address_family_filter(af))) {
 			ast_log(LOG_WARNING, "Unable to lookup RTP Audio host in c= line, '%s'\n", c);
 			return FALSE;
 		}
@@ -11634,7 +11629,7 @@ static void set_destination(struct sip_pvt *p, char *uri)
 
 	/*! \todo XXX If we have sip_cfg.srvlookup on, then look for NAPTR/SRV,
 	 * otherwise, just look for A records */
-	if (ast_sockaddr_resolve_first_transport(&p->sa, hostname, 0, p->socket.type)) {
+	if (ast_sockaddr_resolve_first_af(&p->sa, hostname, 0, get_address_family_filter(p->socket.type))) {
 		ast_log(LOG_WARNING, "Can't find address for host '%s'\n", hostname);
 		return;
 	}
@@ -11655,7 +11650,7 @@ static void set_destination(struct sip_pvt *p, char *uri)
 
 		/*! \todo XXX If we have sip_cfg.srvlookup on, then look for
 		 * NAPTR/SRV, otherwise, just look for A records */
-		if (ast_sockaddr_resolve_first_transport(&p->sa, hostname, PARSE_PORT_FORBID, p->socket.type)) {
+		if (ast_sockaddr_resolve_first_af(&p->sa, hostname, PARSE_PORT_FORBID, get_address_family_filter(p->socket.type))) {
 			ast_log(LOG_WARNING, "Can't find address for host '%s'\n", hostname);
 			return;
 		}
@@ -15930,7 +15925,7 @@ static int __set_address_from_contact(const char *fullcontact, struct ast_sockad
 		return -1;
 	}
 
-	if (ast_sockaddr_resolve_first_transport(addr, hostport, 0, get_transport_str2enum(transport))) {
+	if (ast_sockaddr_resolve_first_af(addr, hostport, 0, get_address_family_filter(get_transport_str2enum(transport)))) {
 		ast_log(LOG_WARNING, "Invalid host name in Contact: (can't "
 			"resolve in DNS) : '%s'\n", hostport);
 		return -1;
@@ -16076,7 +16071,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		ast_debug(1, "Store REGISTER's Contact header for call routing.\n");
 		/* XXX This could block for a long time XXX */
 		/*! \todo Check NAPTR/SRV if we have not got a port in the URI */
-		if (ast_sockaddr_resolve_first_transport(&testsa, hostport, 0, peer->socket.type)) {
+		if (ast_sockaddr_resolve_first_af(&testsa, hostport, 0, get_address_family_filter(peer->socket.type))) {
 			ast_log(LOG_WARNING, "Invalid hostport '%s'\n", hostport);
 			ast_string_field_set(peer, fullcontact, "");
 			ast_string_field_set(pvt, our_contact, "");
@@ -18256,11 +18251,11 @@ static void check_via(struct sip_pvt *p, const struct sip_request *req)
 			return;
 		}
 
-		if (maddr && ast_sockaddr_resolve_first(&p->sa, maddr, 0)) {
+		if (maddr && ast_sockaddr_resolve_first_af(&p->sa, maddr, 0, get_address_family_filter(SIP_TRANSPORT_UDP))) {
 			p->sa = p->recv;
 		}
 
-		if (ast_sockaddr_resolve_first(&tmp, c, 0)) {
+		if (ast_sockaddr_resolve_first_af(&tmp, c, 0, get_address_family_filter(SIP_TRANSPORT_UDP))) {
 			ast_log(LOG_WARNING, "Could not resolve socket address for '%s'\n", c);
 			port = STANDARD_SIP_PORT;
 		} else if (!(port = ast_sockaddr_port(&tmp))) {
@@ -21747,7 +21742,7 @@ static void handle_request_info(struct sip_pvt *p, struct sip_request *req)
 /*! \brief Enable SIP Debugging for a single IP */
 static char *sip_do_debug_ip(int fd, const char *arg)
 {
-	if (ast_sockaddr_resolve_first_af(&debugaddr, arg, 0, 0)) {
+	if (ast_sockaddr_resolve_first_af(&debugaddr, arg, 0, get_address_family_filter(0))) {
 		return CLI_SHOWUSAGE;
 	}
 
@@ -32095,7 +32090,7 @@ static int reload_config(enum channelreloadreason reason)
 			externexpire = 0;
 		} else if (!strcasecmp(v->name, "externhost")) {
 			ast_copy_string(externhost, v->value, sizeof(externhost));
-			if (ast_sockaddr_resolve_first(&externaddr, externhost, 0)) {
+			if (ast_sockaddr_resolve_first_af(&externaddr, externhost, 0, get_address_family_filter(SIP_TRANSPORT_UDP))) {
 				ast_log(LOG_WARNING, "Invalid address for externhost keyword: %s\n", externhost);
 			}
 			externexpire = time(NULL);
@@ -33478,50 +33473,6 @@ static int reload(void)
 		return 0;
 	}
 	return 1;
-}
-
-/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by address family
- *
- * \warning Using this function probably means you have a faulty design.
- */
-static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
-				      const char* name, int flag, int family)
-{
-	struct ast_sockaddr *addrs;
-	int addrs_cnt;
-
-	addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
-	if (addrs_cnt <= 0) {
-		return 1;
-	}
-	if (addrs_cnt > 1) {
-		ast_debug(1, "Multiple addresses, using the first one only\n");
-	}
-
-	ast_sockaddr_copy(addr, &addrs[0]);
-
-	ast_free(addrs);
-	return 0;
-}
-
-/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by family of binddaddr
- *
- * \warning Using this function probably means you have a faulty design.
- */
-static int ast_sockaddr_resolve_first(struct ast_sockaddr *addr,
-				      const char* name, int flag)
-{
-	return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(SIP_TRANSPORT_UDP));
-}
-
-/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by family of binddaddr
- *
- * \warning Using this function probably means you have a faulty design.
- */
-static int ast_sockaddr_resolve_first_transport(struct ast_sockaddr *addr,
-						const char* name, int flag, unsigned int transport)
-{
-        return ast_sockaddr_resolve_first_af(addr, name, flag, get_address_family_filter(transport));
 }
 
 /*! \brief

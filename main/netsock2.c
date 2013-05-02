@@ -245,58 +245,6 @@ int ast_sockaddr_parse(struct ast_sockaddr *addr, const char *str, int flags)
 	return 1;
 }
 
-int ast_sockaddr_resolve(struct ast_sockaddr **addrs, const char *str,
-			 int flags, int family)
-{
-	struct addrinfo hints, *res, *ai;
-	char *s, *host, *port;
-	int	e, i, res_cnt;
-
-	if (!str) {
-		return 0;
-	}
-
-	s = ast_strdupa(str);
-	if (!ast_sockaddr_split_hostport(s, &host, &port, flags)) {
-		return 0;
-	}
-
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = family;
-	hints.ai_socktype = SOCK_DGRAM;
-
-	if ((e = getaddrinfo(host, port, &hints, &res))) {
-		ast_log(LOG_ERROR, "getaddrinfo(\"%s\", \"%s\", ...): %s\n",
-			host, S_OR(port, "(null)"), gai_strerror(e));
-		return 0;
-	}
-
-	res_cnt = 0;
-	for (ai = res; ai; ai = ai->ai_next) {
-		res_cnt++;
-	}
-
-	if (res_cnt == 0) {
-		goto cleanup;
-	}
-
-	if ((*addrs = ast_malloc(res_cnt * sizeof(struct ast_sockaddr))) == NULL) {
-		res_cnt = 0;
-		goto cleanup;
-	}
-
-	i = 0;
-	for (ai = res; ai; ai = ai->ai_next) {
-		(*addrs)[i].len = ai->ai_addrlen;
-		memcpy(&(*addrs)[i].ss, ai->ai_addr, ai->ai_addrlen);
-		++i;
-	}
-
-cleanup:
-	freeaddrinfo(res);
-	return res_cnt;
-}
-
 int ast_sockaddr_cmp(const struct ast_sockaddr *a, const struct ast_sockaddr *b)
 {
 	const struct ast_sockaddr *a_tmp, *b_tmp;

@@ -42,9 +42,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <resolv.h>
 
 #include "asterisk/channel.h"
+#include "asterisk/netsock2.h"
 #include "asterisk/dns.h"
 #include "asterisk/endian.h"
-
 #define MAX_SIZE 4096
 
 #ifdef __PDP_ENDIAN
@@ -299,4 +299,78 @@ int ast_search_dns(void *context,
 #endif
 
 	return ret;
+}
+
+int ast_sockaddr_resolve(struct ast_sockaddr **addrs, const char *str, int flags, int family)
+{
+	struct addrinfo hints, *res, *ai;
+	char *s, *host, *port;
+	int	e, i, res_cnt;
+
+	if (!str) {
+		return 0;
+	}
+
+	s = ast_strdupa(str);
+	if (!ast_sockaddr_split_hostport(s, &host, &port, flags)) {
+		return 0;
+	}
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = family;
+	hints.ai_socktype = SOCK_DGRAM;
+
+	if ((e = getaddrinfo(host, port, &hints, &res))) {
+		ast_log(LOG_ERROR, "getaddrinfo(\"%s\", \"%s\", ...): %s\n",
+			host, S_OR(port, "(null)"), gai_strerror(e));
+		return 0;
+	}
+
+	res_cnt = 0;
+	for (ai = res; ai; ai = ai->ai_next) {
+		res_cnt++;
+	}
+
+	if (res_cnt == 0) {
+		goto cleanup;
+	}
+
+	if ((*addrs = ast_malloc(res_cnt * sizeof(struct ast_sockaddr))) == NULL) {
+		res_cnt = 0;
+		goto cleanup;
+	}
+
+	i = 0;
+	for (ai = res; ai; ai = ai->ai_next) {
+		(*addrs)[i].len = ai->ai_addrlen;
+		memcpy(&(*addrs)[i].ss, ai->ai_addr, ai->ai_addrlen);
+		++i;
+	}
+
+cleanup:
+	freeaddrinfo(res);
+	return res_cnt;
+}
+
+/*! \brief  Return the first entry from ast_sockaddr_resolve filtered by address family
+ *
+ * \warning Using this function probably means you have a faulty design.
+ */
+int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr, const char* name, int flag, int family)
+{
+	struct ast_sockaddr *addrs;
+	int addrs_cnt;
+
+	addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
+	if (addrs_cnt <= 0) {
+		return 1;
+	}
+	if (addrs_cnt > 1) {
+		ast_debug(1, "Multiple addresses, using the first one only\n");
+	}
+
+	ast_sockaddr_copy(addr, &addrs[0]);
+
+	ast_free(addrs);
+	return 0;
 }
