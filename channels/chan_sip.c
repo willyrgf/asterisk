@@ -7085,7 +7085,10 @@ static int sip_senddigit_continue(struct ast_channel *ast, char digit, unsigned 
 	struct sip_pvt *p = ast->tech_pvt;
 	int res = 0;
 
-	ast_log(LOG_DEBUG, " DTMF CONTINUE HERE!!! \n");
+	if (!p) {
+		ast_debug(1, "Asked to continue DTMF on channel %s with no pvt, ignoring\n", ast_channel_name(ast));
+		return res;
+	}
 
 	sip_pvt_lock(p);
 	switch (ast_test_flag(&p->flags[0], SIP_DTMF)) {

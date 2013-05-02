@@ -864,7 +864,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr remote_address = { {0,} };
-	int hdrlen = 12, res = 0, i = 0;
+	int hdrlen = 12, res = -1, i = 0;
 	char data[256];
 	unsigned int *rtpheader = (unsigned int*)data;
 	unsigned int measured_samples;
@@ -874,7 +874,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 
 	/* Make sure we know where the remote side is so we can send them the packet we construct */
 	if (ast_sockaddr_isnull(&remote_address)) {
-		return -1;
+		goto cleanup;
 	}
 	dursamples =  duration * (8000 / 1000);     /* How do we get the sample rate for the primary media in this call? */
 
@@ -902,7 +902,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 		digit = digit - 'a' + 12;
 	} else {
 		ast_log(LOG_WARNING, "Don't know how to represent '%c'\n", digit);
-		return -1;
+		goto cleanup;
 	}
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
@@ -937,13 +937,14 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 
 		rtp->seqno++;
 	}
+	res = 0;
 
 	/* Oh and we can't forget to turn off the stuff that says we are sending DTMF */
 	rtp->lastts += rtp->send_duration;
 	rtp->sending_dtmf = DTMF_NOT_SENDING;
 	rtp->send_digit = 0;
 
-	return 0;
+	return res;
 }
 
 static int ast_rtp_dtmf_end(struct ast_rtp_instance *instance, char digit)
