@@ -325,8 +325,8 @@ static int local_devicestate(const char *data)
 static int local_queryoption(struct ast_channel *ast, int option, void *data, int *datalen)
 {
 	struct local_pvt *p;
-	struct ast_channel *bridged = NULL;
-	struct ast_channel *tmp = NULL;
+	struct ast_channel *peer;
+	struct ast_channel *other;
 	int res = 0;
 
 	if (option != AST_OPTION_T38_STATE) {
@@ -340,31 +340,21 @@ static int local_queryoption(struct ast_channel *ast, int option, void *data, in
 	}
 
 	ao2_lock(p);
-	if (!(tmp = IS_OUTBOUND(ast, p) ? p->owner : p->chan)) {
+	other = IS_OUTBOUND(ast, p) ? p->owner : p->chan;
+	if (!other) {
 		ao2_unlock(p);
 		return -1;
 	}
-	ast_channel_ref(tmp);
+	ast_channel_ref(other);
 	ao2_unlock(p);
 	ast_channel_unlock(ast); /* Held when called, unlock before locking another channel */
 
-	ast_channel_lock(tmp);
-	if (!(bridged = ast_bridged_channel(tmp))) {
-		res = -1;
-		ast_channel_unlock(tmp);
-		goto query_cleanup;
+	peer = ast_channel_bridge_peer(other);
+	if (peer) {
+		res = ast_channel_queryoption(peer, option, data, datalen, 0);
+		ast_channel_unref(peer);
 	}
-	ast_channel_ref(bridged);
-	ast_channel_unlock(tmp);
-
-query_cleanup:
-	if (bridged) {
-		res = ast_channel_queryoption(bridged, option, data, datalen, 0);
-		bridged = ast_channel_unref(bridged);
-	}
-	if (tmp) {
-		tmp = ast_channel_unref(tmp);
-	}
+	ast_channel_unref(other);
 	ast_channel_lock(ast); /* Lock back before we leave */
 
 	return res;
@@ -510,6 +500,8 @@ static int local_write(struct ast_channel *ast, struct ast_frame *f)
 static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 {
 	struct local_pvt *p = ast_channel_tech_pvt(newchan);
+	struct ast_bridge *bridge_owner;
+	struct ast_bridge *bridge_chan;
 
 	if (!p) {
 		return -1;
@@ -528,10 +520,15 @@ static int local_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 		p->chan = newchan;
 	}
 
+	if (ast_check_hangup(newchan) || !p->owner || !p->chan) {
+		ao2_unlock(p);
+		return 0;
+	}
+
 	/* Do not let a masquerade cause a Local channel to be bridged to itself! */
-	if (!ast_check_hangup(newchan)
-		&& ((p->owner && ast_channel_internal_bridged_channel(p->owner) == p->chan)
-			|| (p->chan && ast_channel_internal_bridged_channel(p->chan) == p->owner))) {
+	bridge_owner = ast_channel_internal_bridge(p->owner);
+	bridge_chan = ast_channel_internal_bridge(p->chan);
+	if (bridge_owner && bridge_owner == bridge_chan) {
 		ast_log(LOG_WARNING, "You can not bridge a Local channel to itself!\n");
 		ao2_unlock(p);
 		ast_queue_hangup(newchan);
