@@ -289,7 +289,7 @@ all: _all
 	@echo " +               $(mK) install               +"  
 	@echo " +-------------------------------------------+"  
 
-_all: cleantest makeopts $(SUBDIRS) doc/core-en_US.xml
+_all: .lastclean makeopts $(SUBDIRS) doc/core-en_US.xml
 
 makeopts: configure
 	@echo "****"
@@ -350,30 +350,30 @@ $(MOD_SUBDIRS):
 $(OTHER_SUBDIRS):
 	+@_ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS)" _ASTLDFLAGS="$(_ASTLDFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
-defaults.h: makeopts
+defaults.h: makeopts .lastclean
 	@build_tools/make_defaults_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-main/version.c: FORCE
+main/version.c: FORCE .lastclean
 	@build_tools/make_version_c > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/version.h: FORCE
+include/asterisk/version.h: FORCE .lastclean
 	@build_tools/make_version_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/buildopts.h: menuselect.makeopts
+include/asterisk/buildopts.h: menuselect.makeopts .lastclean
 	@build_tools/make_buildopts_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/build.h:
-	@build_tools/make_build_h > $@.tmp
-	@cmp -s $@.tmp $@ || mv $@.tmp $@
-	@rm -f $@.tmp
+# build.h must depend on .lastclean, or parallel make may wipe it out after it's
+# been created.
+include/asterisk/build.h: .lastclean
+	@build_tools/make_build_h > $@
 
 $(SUBDIRS_CLEAN):
 	+@$(SUBMAKE) -C $(@:-clean=) clean
@@ -420,7 +420,7 @@ datafiles: _all doc/core-en_US.xml
 	done
 	$(MAKE) -C sounds install
 
-doc/core-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+doc/core-en_US.xml: .lastclean $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
@@ -761,8 +761,8 @@ sounds:
 # .cleancount is the global clean count, and .lastclean is the 
 # last clean count we had
 
-cleantest:
-	@cmp -s .cleancount .lastclean || $(MAKE) clean
+.lastclean: .cleancount
+	@$(MAKE) clean
 
 $(SUBDIRS_UNINSTALL):
 	+@$(SUBMAKE) -C $(@:-uninstall=) uninstall
@@ -875,7 +875,6 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 .PHONY: distclean
 .PHONY: all
 .PHONY: prereqs
-.PHONY: cleantest
 .PHONY: uninstall
 .PHONY: _uninstall
 .PHONY: uninstall-all

@@ -4208,17 +4208,6 @@ int ast_bridge_call(struct ast_channel *chan, struct ast_channel *peer, struct a
 		if (!f || (f->frametype == AST_FRAME_CONTROL &&
 				(f->subclass.integer == AST_CONTROL_HANGUP || f->subclass.integer == AST_CONTROL_BUSY ||
 					f->subclass.integer == AST_CONTROL_CONGESTION))) {
-			/*
-			 * If the bridge was broken for a hangup that isn't real,
-			 * then don't run the h extension, because the channel isn't
-			 * really hung up. This should really only happen with AST_SOFTHANGUP_ASYNCGOTO,
-			 * but it doesn't hurt to check AST_SOFTHANGUP_UNBRIDGE either.
-			 */
-			ast_channel_lock(chan);
-			if (chan->_softhangup & (AST_SOFTHANGUP_ASYNCGOTO | AST_SOFTHANGUP_UNBRIDGE)) {
-				ast_set_flag(chan, AST_FLAG_BRIDGE_HANGUP_DONT);
-			}
-			ast_channel_unlock(chan);
 			res = -1;
 			break;
 		}
@@ -4404,9 +4393,17 @@ before_you_go:
 
 	/* run the hangup exten on the chan object IFF it was NOT involved in a parking situation 
 	 * if it were, then chan belongs to a different thread now, and might have been hung up long
-     * ago.
+	 * ago.
 	 */
-	if (ast_test_flag(&config->features_caller, AST_FEATURE_NO_H_EXTEN)) {
+	if (chan->_softhangup & (AST_SOFTHANGUP_ASYNCGOTO | AST_SOFTHANGUP_UNBRIDGE)) {
+		/*
+		 * If the bridge was broken for a hangup that isn't real,
+		 * then don't run the h extension, because the channel isn't
+		 * really hung up. This should really only happen with AST_SOFTHANGUP_ASYNCGOTO,
+		 * but it doesn't hurt to check AST_SOFTHANGUP_UNBRIDGE either.
+		 */
+		h_context = NULL;
+	} else if (ast_test_flag(&config->features_caller, AST_FEATURE_NO_H_EXTEN)) {
 		h_context = NULL;
 	} else if (ast_exists_extension(chan, chan->context, "h", 1,
 		S_COR(chan->caller.id.number.valid, chan->caller.id.number.str, NULL))) {
@@ -8269,6 +8266,7 @@ exit_features_test:
 /*! \internal \brief Clean up resources on Asterisk shutdown */
 static void features_shutdown(void)
 {
+	ast_cli_unregister_multiple(cli_features, ARRAY_LEN(cli_features));
 	ast_devstate_prov_del("Park");
 	ast_manager_unregister("Bridge");
 	ast_manager_unregister("Park");
@@ -8279,6 +8277,9 @@ static void features_shutdown(void)
 	ast_unregister_application(app_bridge);
 
 	pthread_cancel(parking_thread);
+	pthread_kill(parking_thread, SIGURG);
+	pthread_join(parking_thread, NULL);
+	ast_context_destroy(NULL, registrar);
 	ao2_ref(parkinglots, -1);
 }
 
