@@ -23,6 +23,9 @@
  * \author Matthew Fredrickson <creslin@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
 
 #include "asterisk.h"
 
@@ -50,8 +53,12 @@
 
 #include "sig_pri.h"
 #ifndef PRI_EVENT_FACILITY
-#error please update libpri
+#error "Upgrade your libpri"
 #endif
+
+/*** DOCUMENTATION
+ ***/
+
 
 /* define this to send PRI user-user information elements */
 #undef SUPPORT_USERUSER
@@ -115,13 +122,6 @@ static int pri_gendigittimeout = 8000;
 
 #define DCHAN_AVAILABLE	(DCHAN_NOTINALARM | DCHAN_UP)
 
-#define PRI_DEADLOCK_AVOIDANCE(p) \
-	do { \
-		sig_pri_unlock_private(p); \
-		usleep(1); \
-		sig_pri_lock_private(p); \
-	} while (0)
-
 static int pri_active_dchan_index(struct sig_pri_span *pri);
 
 static const char *sig_pri_call_level2str(enum sig_pri_call_level level)
@@ -161,30 +161,31 @@ static unsigned int PVT_TO_CHANNEL(struct sig_pri_chan *p)
 
 static void sig_pri_handle_dchan_exception(struct sig_pri_span *pri, int index)
 {
-	if (pri->calls->handle_dchan_exception)
-		pri->calls->handle_dchan_exception(pri, index);
+	if (sig_pri_callbacks.handle_dchan_exception) {
+		sig_pri_callbacks.handle_dchan_exception(pri, index);
+	}
 }
 
 static void sig_pri_set_dialing(struct sig_pri_chan *p, int is_dialing)
 {
-	if (p->calls->set_dialing) {
-		p->calls->set_dialing(p->chan_pvt, is_dialing);
+	if (sig_pri_callbacks.set_dialing) {
+		sig_pri_callbacks.set_dialing(p->chan_pvt, is_dialing);
 	}
 }
 
 static void sig_pri_set_digital(struct sig_pri_chan *p, int is_digital)
 {
 	p->digital = is_digital;
-	if (p->calls->set_digital) {
-		p->calls->set_digital(p->chan_pvt, is_digital);
+	if (sig_pri_callbacks.set_digital) {
+		sig_pri_callbacks.set_digital(p->chan_pvt, is_digital);
 	}
 }
 
 static void sig_pri_set_outgoing(struct sig_pri_chan *p, int is_outgoing)
 {
 	p->outgoing = is_outgoing;
-	if (p->calls->set_outgoing) {
-		p->calls->set_outgoing(p->chan_pvt, is_outgoing);
+	if (sig_pri_callbacks.set_outgoing) {
+		sig_pri_callbacks.set_outgoing(p->chan_pvt, is_outgoing);
 	}
 }
 
@@ -203,15 +204,15 @@ void sig_pri_set_alarm(struct sig_pri_chan *p, int in_alarm)
 	p->resetting = SIG_PRI_RESET_IDLE;
 
 	p->inalarm = in_alarm;
-	if (p->calls->set_alarm) {
-		p->calls->set_alarm(p->chan_pvt, in_alarm);
+	if (sig_pri_callbacks.set_alarm) {
+		sig_pri_callbacks.set_alarm(p->chan_pvt, in_alarm);
 	}
 }
 
 static const char *sig_pri_get_orig_dialstring(struct sig_pri_chan *p)
 {
-	if (p->calls->get_orig_dialstring) {
-		return p->calls->get_orig_dialstring(p->chan_pvt);
+	if (sig_pri_callbacks.get_orig_dialstring) {
+		return sig_pri_callbacks.get_orig_dialstring(p->chan_pvt);
 	}
 	ast_log(LOG_ERROR, "get_orig_dialstring callback not defined\n");
 	return "";
@@ -220,8 +221,8 @@ static const char *sig_pri_get_orig_dialstring(struct sig_pri_chan *p)
 #if defined(HAVE_PRI_CCSS)
 static void sig_pri_make_cc_dialstring(struct sig_pri_chan *p, char *buf, size_t buf_size)
 {
-	if (p->calls->make_cc_dialstring) {
-		p->calls->make_cc_dialstring(p->chan_pvt, buf, buf_size);
+	if (sig_pri_callbacks.make_cc_dialstring) {
+		sig_pri_callbacks.make_cc_dialstring(p->chan_pvt, buf, buf_size);
 	} else {
 		ast_log(LOG_ERROR, "make_cc_dialstring callback not defined\n");
 		buf[0] = '\0';
@@ -231,8 +232,8 @@ static void sig_pri_make_cc_dialstring(struct sig_pri_chan *p, char *buf, size_t
 
 static void sig_pri_dial_digits(struct sig_pri_chan *p, const char *dial_string)
 {
-	if (p->calls->dial_digits) {
-		p->calls->dial_digits(p->chan_pvt, dial_string);
+	if (sig_pri_callbacks.dial_digits) {
+		sig_pri_callbacks.dial_digits(p->chan_pvt, dial_string);
 	}
 }
 
@@ -249,8 +250,8 @@ static void sig_pri_dial_digits(struct sig_pri_chan *p, const char *dial_string)
  */
 static void sig_pri_span_devstate_changed(struct sig_pri_span *pri)
 {
-	if (pri->calls->update_span_devstate) {
-		pri->calls->update_span_devstate(pri);
+	if (sig_pri_callbacks.update_span_devstate) {
+		sig_pri_callbacks.update_span_devstate(pri);
 	}
 }
 
@@ -267,7 +268,7 @@ static void sig_pri_set_caller_id(struct sig_pri_chan *p)
 {
 	struct ast_party_caller caller;
 
-	if (p->calls->set_callerid) {
+	if (sig_pri_callbacks.set_callerid) {
 		ast_party_caller_init(&caller);
 
 		caller.id.name.str = p->cid_name;
@@ -293,7 +294,7 @@ static void sig_pri_set_caller_id(struct sig_pri_chan *p)
 		caller.ani.number.valid = 1;
 
 		caller.ani2 = p->cid_ani2;
-		p->calls->set_callerid(p->chan_pvt, &caller);
+		sig_pri_callbacks.set_callerid(p->chan_pvt, &caller);
 	}
 }
 
@@ -309,8 +310,8 @@ static void sig_pri_set_caller_id(struct sig_pri_chan *p)
  */
 static void sig_pri_set_dnid(struct sig_pri_chan *p, const char *dnid)
 {
-	if (p->calls->set_dnid) {
-		p->calls->set_dnid(p->chan_pvt, dnid);
+	if (sig_pri_callbacks.set_dnid) {
+		sig_pri_callbacks.set_dnid(p->chan_pvt, dnid);
 	}
 }
 
@@ -326,46 +327,48 @@ static void sig_pri_set_dnid(struct sig_pri_chan *p, const char *dnid)
  */
 static void sig_pri_set_rdnis(struct sig_pri_chan *p, const char *rdnis)
 {
-	if (p->calls->set_rdnis) {
-		p->calls->set_rdnis(p->chan_pvt, rdnis);
+	if (sig_pri_callbacks.set_rdnis) {
+		sig_pri_callbacks.set_rdnis(p->chan_pvt, rdnis);
 	}
 }
 
 static void sig_pri_unlock_private(struct sig_pri_chan *p)
 {
-	if (p->calls->unlock_private)
-		p->calls->unlock_private(p->chan_pvt);
+	if (sig_pri_callbacks.unlock_private) {
+		sig_pri_callbacks.unlock_private(p->chan_pvt);
+	}
 }
 
 static void sig_pri_lock_private(struct sig_pri_chan *p)
 {
-	if (p->calls->lock_private)
-		p->calls->lock_private(p->chan_pvt);
+	if (sig_pri_callbacks.lock_private) {
+		sig_pri_callbacks.lock_private(p->chan_pvt);
+	}
 }
 
 static void sig_pri_deadlock_avoidance_private(struct sig_pri_chan *p)
 {
-	if (p->calls->deadlock_avoidance_private) {
-		p->calls->deadlock_avoidance_private(p->chan_pvt);
+	if (sig_pri_callbacks.deadlock_avoidance_private) {
+		sig_pri_callbacks.deadlock_avoidance_private(p->chan_pvt);
 	} else {
 		/* Fallback to the old way if callback not present. */
-		PRI_DEADLOCK_AVOIDANCE(p);
+		sig_pri_unlock_private(p);
+		sched_yield();
+		sig_pri_lock_private(p);
 	}
 }
 
 static void pri_grab(struct sig_pri_chan *p, struct sig_pri_span *pri)
 {
-	int res;
-
 	/* Grab the lock first */
-	do {
-		res = ast_mutex_trylock(&pri->lock);
-		if (res) {
-			sig_pri_deadlock_avoidance_private(p);
-		}
-	} while (res);
+	while (ast_mutex_trylock(&pri->lock)) {
+		/* Avoid deadlock */
+		sig_pri_deadlock_avoidance_private(p);
+	}
 	/* Then break the poll */
-	pthread_kill(pri->master, SIGURG);
+	if (pri->master != AST_PTHREADT_NULL) {
+		pthread_kill(pri->master, SIGURG);
+	}
 }
 
 /*!
@@ -903,15 +906,18 @@ static void sig_pri_redirecting_update(struct sig_pri_chan *pvt, struct ast_chan
 {
 	struct pri_party_redirecting pri_redirecting;
 	const struct ast_party_redirecting *ast_redirecting;
+	struct ast_party_id redirecting_from = ast_channel_redirecting_effective_from(ast);
+	struct ast_party_id redirecting_to = ast_channel_redirecting_effective_to(ast);
+	struct ast_party_id redirecting_orig = ast_channel_redirecting_effective_orig(ast);
 
 	memset(&pri_redirecting, 0, sizeof(pri_redirecting));
 	ast_redirecting = ast_channel_redirecting(ast);
-	sig_pri_party_id_from_ast(&pri_redirecting.from, &ast_redirecting->from);
-	sig_pri_party_id_from_ast(&pri_redirecting.to, &ast_redirecting->to);
-	sig_pri_party_id_from_ast(&pri_redirecting.orig_called, &ast_redirecting->orig);
+	sig_pri_party_id_from_ast(&pri_redirecting.from, &redirecting_from);
+	sig_pri_party_id_from_ast(&pri_redirecting.to, &redirecting_to);
+	sig_pri_party_id_from_ast(&pri_redirecting.orig_called, &redirecting_orig);
 	pri_redirecting.count = ast_redirecting->count;
-	pri_redirecting.orig_reason = ast_to_pri_reason(ast_redirecting->orig_reason);
-	pri_redirecting.reason = ast_to_pri_reason(ast_redirecting->reason);
+	pri_redirecting.orig_reason = ast_to_pri_reason(ast_redirecting->orig_reason.code);
+	pri_redirecting.reason = ast_to_pri_reason(ast_redirecting->reason.code);
 
 	pri_redirecting_update(pvt->pri->pri, pvt->call, &pri_redirecting);
 }
@@ -927,39 +933,42 @@ static void sig_pri_redirecting_update(struct sig_pri_chan *pvt, struct ast_chan
  */
 static void sig_pri_dsp_reset_and_flush_digits(struct sig_pri_chan *p)
 {
-	if (p->calls->dsp_reset_and_flush_digits) {
-		p->calls->dsp_reset_and_flush_digits(p->chan_pvt);
+	if (sig_pri_callbacks.dsp_reset_and_flush_digits) {
+		sig_pri_callbacks.dsp_reset_and_flush_digits(p->chan_pvt);
 	}
 }
 
 static int sig_pri_set_echocanceller(struct sig_pri_chan *p, int enable)
 {
-	if (p->calls->set_echocanceller)
-		return p->calls->set_echocanceller(p->chan_pvt, enable);
-	else
+	if (sig_pri_callbacks.set_echocanceller) {
+		return sig_pri_callbacks.set_echocanceller(p->chan_pvt, enable);
+	} else {
 		return -1;
+	}
 }
 
 static void sig_pri_fixup_chans(struct sig_pri_chan *old_chan, struct sig_pri_chan *new_chan)
 {
-	if (old_chan->calls->fixup_chans)
-		old_chan->calls->fixup_chans(old_chan->chan_pvt, new_chan->chan_pvt);
+	if (sig_pri_callbacks.fixup_chans) {
+		sig_pri_callbacks.fixup_chans(old_chan->chan_pvt, new_chan->chan_pvt);
+	}
 }
 
 static int sig_pri_play_tone(struct sig_pri_chan *p, enum sig_pri_tone tone)
 {
-	if (p->calls->play_tone)
-		return p->calls->play_tone(p->chan_pvt, tone);
-	else
+	if (sig_pri_callbacks.play_tone) {
+		return sig_pri_callbacks.play_tone(p->chan_pvt, tone);
+	} else {
 		return -1;
+	}
 }
 
 static struct ast_channel *sig_pri_new_ast_channel(struct sig_pri_chan *p, int state, int ulaw, int transfercapability, char *exten, const struct ast_channel *requestor)
 {
 	struct ast_channel *c;
 
-	if (p->calls->new_ast_channel) {
-		c = p->calls->new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
+	if (sig_pri_callbacks.new_ast_channel) {
+		c = sig_pri_callbacks.new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
 	} else {
 		return NULL;
 	}
@@ -1001,8 +1010,8 @@ static void sig_pri_open_media(struct sig_pri_chan *p)
 		return;
 	}
 
-	if (p->calls->open_media) {
-		p->calls->open_media(p->chan_pvt);
+	if (sig_pri_callbacks.open_media) {
+		sig_pri_callbacks.open_media(p->chan_pvt);
 	}
 }
 
@@ -1019,8 +1028,8 @@ static void sig_pri_open_media(struct sig_pri_chan *p)
  */
 static void sig_pri_ami_channel_event(struct sig_pri_chan *p)
 {
-	if (p->calls->ami_channel_event) {
-		p->calls->ami_channel_event(p->chan_pvt, p->owner);
+	if (sig_pri_callbacks.ami_channel_event) {
+		sig_pri_callbacks.ami_channel_event(p->chan_pvt, p->owner);
 	}
 }
 
@@ -1205,10 +1214,11 @@ static void sig_pri_lock_owner(struct sig_pri_span *pri, int chanpos)
 			/* We got the lock */
 			break;
 		}
-		/* We must unlock the PRI to avoid the possibility of a deadlock */
-		ast_mutex_unlock(&pri->lock);
-		sig_pri_deadlock_avoidance_private(pri->pvts[chanpos]);
-		ast_mutex_lock(&pri->lock);
+
+		/* Avoid deadlock */
+		sig_pri_unlock_private(pri->pvts[chanpos]);
+		DEADLOCK_AVOIDANCE(&pri->lock);
+		sig_pri_lock_private(pri->pvts[chanpos]);
 	}
 }
 
@@ -1254,12 +1264,45 @@ static void pri_queue_control(struct sig_pri_span *pri, int chanpos, int subclas
 	struct ast_frame f = {AST_FRAME_CONTROL, };
 	struct sig_pri_chan *p = pri->pvts[chanpos];
 
-	if (p->calls->queue_control) {
-		p->calls->queue_control(p->chan_pvt, subclass);
+	if (sig_pri_callbacks.queue_control) {
+		sig_pri_callbacks.queue_control(p->chan_pvt, subclass);
 	}
 
 	f.subclass.integer = subclass;
 	pri_queue_frame(pri, chanpos, &f);
+}
+
+/*!
+ * \internal
+ * \brief Queue a PVT_CAUSE_CODE frame onto the owner channel.
+ * \since 11
+ *
+ * \param pri PRI span control structure.
+ * \param chanpos Channel position in the span.
+ * \param cause String describing the cause to be placed into the frame.
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ *
+ * \return Nothing
+ */
+static void pri_queue_pvt_cause_data(struct sig_pri_span *pri, int chanpos, const char *cause, int ast_cause)
+{
+	struct ast_channel *chan;
+	struct ast_control_pvt_cause_code *cause_code;
+
+	sig_pri_lock_owner(pri, chanpos);
+	chan = pri->pvts[chanpos]->owner;
+	if (chan) {
+		int datalen = sizeof(*cause_code) + strlen(cause);
+		cause_code = ast_alloca(datalen);
+		cause_code->ast_cause = ast_cause;
+		ast_copy_string(cause_code->chan_name, ast_channel_name(chan), AST_CHANNEL_NAME);
+		ast_copy_string(cause_code->code, cause, datalen + 1 - sizeof(*cause_code));
+		ast_queue_control_data(chan, AST_CONTROL_PVT_CAUSE_CODE, cause_code, datalen);
+		ast_channel_hangupcause_hash_set(chan, cause_code, datalen);
+		ast_channel_unlock(chan);
+	}
 }
 
 /*!
@@ -1750,8 +1793,8 @@ static void sig_pri_init_config(struct sig_pri_chan *pvt, struct sig_pri_span *p
 	ast_copy_string(pvt->context, pri->ch_cfg.context, sizeof(pvt->context));
 	ast_copy_string(pvt->mohinterpret, pri->ch_cfg.mohinterpret, sizeof(pvt->mohinterpret));
 
-	if (pri->calls->init_config) {
-		pri->calls->init_config(pvt->chan_pvt, pri);
+	if (sig_pri_callbacks.init_config) {
+		sig_pri_callbacks.init_config(pvt->chan_pvt, pri);
 	}
 }
 #endif	/* defined(HAVE_PRI_CALL_WAITING) */
@@ -1822,8 +1865,8 @@ static int pri_find_empty_nobch(struct sig_pri_span *pri)
 	}
 
 	/* Need to create a new interface. */
-	if (pri->calls->new_nobch_intf) {
-		idx = pri->calls->new_nobch_intf(pri);
+	if (sig_pri_callbacks.new_nobch_intf) {
+		idx = sig_pri_callbacks.new_nobch_intf(pri);
 	} else {
 		idx = -1;
 	}
@@ -1838,7 +1881,15 @@ static void *do_idle_thread(void *v_pvt)
 	struct ast_frame *f;
 	char ex[80];
 	/* Wait up to 30 seconds for an answer */
-	int newms, ms = 30000;
+	int timeout_ms = 30000;
+	int ms;
+	struct timeval start;
+	struct ast_callid *callid;
+
+	if ((callid = ast_channel_callid(chan))) {
+		ast_callid_threadassoc_add(callid);
+		callid = ast_callid_unref(callid);
+	}
 
 	ast_verb(3, "Initiating idle call on channel %s\n", ast_channel_name(chan));
 	snprintf(ex, sizeof(ex), "%d/%s", pvt->channel, pvt->pri->idledial);
@@ -1847,7 +1898,12 @@ static void *do_idle_thread(void *v_pvt)
 		ast_hangup(chan);
 		return NULL;
 	}
-	while ((newms = ast_waitfor(chan, ms)) > 0) {
+	start = ast_tvnow();
+	while ((ms = ast_remaining_ms(start, timeout_ms))) {
+		if (ast_waitfor(chan, ms) <= 0) {
+			break;
+		}
+
 		f = ast_read(chan);
 		if (!f) {
 			/* Got hangup */
@@ -1873,7 +1929,6 @@ static void *do_idle_thread(void *v_pvt)
 			};
 		}
 		ast_frfree(f);
-		ms = newms;
 	}
 	/* Hangup the channel since nothing happend */
 	ast_hangup(chan);
@@ -1888,10 +1943,16 @@ static void *pri_ss_thread(void *data)
 	int res;
 	int len;
 	int timeout;
+	struct ast_callid *callid;
 
 	if (!chan) {
 		/* We lost the owner before we could get started. */
 		return NULL;
+	}
+
+	if ((callid = ast_channel_callid(chan))) {
+		ast_callid_threadassoc_add(callid);
+		ast_callid_unref(callid);
 	}
 
 	/*
@@ -2122,8 +2183,8 @@ static void sig_pri_redirecting_convert(struct ast_party_redirecting *ast_redire
 	sig_pri_party_id_convert(&ast_redirecting->from, &pri_redirecting->from, pri);
 	sig_pri_party_id_convert(&ast_redirecting->to, &pri_redirecting->to, pri);
 	ast_redirecting->count = pri_redirecting->count;
-	ast_redirecting->reason = pri_to_ast_reason(pri_redirecting->reason);
-	ast_redirecting->orig_reason = pri_to_ast_reason(pri_redirecting->orig_reason);
+	ast_redirecting->reason.code = pri_to_ast_reason(pri_redirecting->reason);
+	ast_redirecting->orig_reason.code = pri_to_ast_reason(pri_redirecting->orig_reason);
 }
 
 /*!
@@ -2610,7 +2671,7 @@ static void sig_pri_cc_monitor_instance_destroy(void *data)
 		pri_cc_cancel(monitor_instance->pri->pri, monitor_instance->cc_id);
 		ast_mutex_unlock(&monitor_instance->pri->lock);
 	}
-	monitor_instance->pri->calls->module_unref();
+	sig_pri_callbacks.module_unref();
 }
 #endif	/* defined(HAVE_PRI_CCSS) */
 
@@ -2637,7 +2698,7 @@ static struct sig_pri_cc_monitor_instance *sig_pri_cc_monitor_instance_init(int 
 {
 	struct sig_pri_cc_monitor_instance *monitor_instance;
 
-	if (!pri->calls->module_ref || !pri->calls->module_unref) {
+	if (!sig_pri_callbacks.module_ref || !sig_pri_callbacks.module_unref) {
 		return NULL;
 	}
 
@@ -2652,7 +2713,7 @@ static struct sig_pri_cc_monitor_instance *sig_pri_cc_monitor_instance_init(int 
 	monitor_instance->core_id = core_id;
 	strcpy(monitor_instance->name, device_name);
 
-	pri->calls->module_ref();
+	sig_pri_callbacks.module_ref();
 
 	ao2_link(sig_pri_cc_monitors, monitor_instance);
 	return monitor_instance;
@@ -4196,6 +4257,12 @@ static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int ev
 				ast_channel_set_redirecting(owner, &ast_redirecting, NULL);
 				if (event_id != PRI_EVENT_RING) {
 					/* This redirection was not from a SETUP message. */
+
+					/* Invalidate any earlier private redirecting id representations */
+					ast_party_id_invalidate(&ast_redirecting.priv_orig);
+					ast_party_id_invalidate(&ast_redirecting.priv_from);
+					ast_party_id_invalidate(&ast_redirecting.priv_to);
+
 					ast_channel_queue_redirecting_update(owner, &ast_redirecting, NULL);
 				}
 				ast_party_redirecting_free(&ast_redirecting);
@@ -4691,6 +4758,12 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_notify(struct ast_channel *chan, s
 
 	next_state = pvt->moh_state;
 	switch (event) {
+	case SIG_PRI_MOH_EVENT_HOLD:
+		if (strcasecmp(pvt->mohinterpret, "passthrough")) {
+			/* Restart MOH in case it was stopped by other means. */
+			ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+		}
+		break;
 	case SIG_PRI_MOH_EVENT_UNHOLD:
 		pri_notify(pvt->pri->pri, pvt->call, pvt->prioffset, PRI_NOTIFY_REMOTE_RETRIEVAL);
 		/* Fall through */
@@ -4725,6 +4798,10 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_moh(struct ast_channel *chan, stru
 
 	next_state = pvt->moh_state;
 	switch (event) {
+	case SIG_PRI_MOH_EVENT_HOLD:
+		/* Restart MOH in case it was stopped by other means. */
+		ast_moh_start(chan, pvt->moh_suggested, pvt->mohinterpret);
+		break;
 	case SIG_PRI_MOH_EVENT_RESET:
 	case SIG_PRI_MOH_EVENT_UNHOLD:
 		ast_moh_stop(chan);
@@ -5113,6 +5190,19 @@ static void sig_pri_moh_fsm_event(struct ast_channel *chan, struct sig_pri_chan 
  */
 static void sig_pri_ami_hold_event(struct ast_channel *chan, int is_held)
 {
+	/*** DOCUMENTATION
+		<managerEventInstance>
+			<synopsis>Raised when a PRI channel is put on Hold.</synopsis>
+			<syntax>
+				<parameter name="Status">
+					<enumlist>
+						<enum name="On"/>
+						<enum name="Off"/>
+					</enumlist>
+				</parameter>
+			</syntax>
+		</managerEventInstance>
+	***/
 	ast_manager_event(chan, EVENT_FLAG_CALL, "Hold",
 		"Status: %s\r\n"
 		"Channel: %s\r\n"
@@ -5122,6 +5212,60 @@ static void sig_pri_ami_hold_event(struct ast_channel *chan, int is_held)
 		ast_channel_uniqueid(chan));
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
+
+/*!
+ * \internal
+ * \brief Set callid threadstorage for the pri_dchannel thread when a new call is created
+ *
+ * \return A new callid which has been bound to threadstorage. The return must be
+ *         unreffed and the threadstorage should be unbound when the pri_dchannel
+ *         primary loop wraps.
+ */
+static struct ast_callid *func_pri_dchannel_new_callid(void)
+{
+	struct ast_callid *callid = ast_create_callid();
+
+	if (callid) {
+		ast_callid_threadassoc_add(callid);
+	}
+
+	return callid;
+}
+
+/*!
+ * \internal
+ * \brief Set callid threadstorage for the pri_dchannel thread to that of an existing channel
+ *
+ * \param pri PRI span control structure.
+ * \param chanpos channel position in the span
+ *
+ * \note Assumes the pri->lock is already obtained.
+ * \note Assumes the sig_pri_lock_private(pri->pvts[chanpos]) is already obtained.
+ *
+ * \return a reference to the callid bound to the channel which has also
+ *         been bound to threadstorage if it exists. If this returns non-NULL,
+ *         the callid must be unreffed and the threadstorage should be unbound
+ *         when the pri_dchannel primary loop wraps.
+ */
+static struct ast_callid *func_pri_dchannel_chanpos_callid(struct sig_pri_span *pri, int chanpos)
+{
+	if (chanpos < 0) {
+		return NULL;
+	}
+
+	sig_pri_lock_owner(pri, chanpos);
+	if (pri->pvts[chanpos]->owner) {
+		struct ast_callid *callid;
+		callid = ast_channel_callid(pri->pvts[chanpos]->owner);
+		ast_channel_unlock(pri->pvts[chanpos]->owner);
+		if (callid) {
+			ast_callid_threadassoc_add(callid);
+			return callid;
+		}
+	}
+
+	return NULL;
+}
 
 #if defined(HAVE_PRI_CALL_HOLD)
 /*!
@@ -5143,6 +5287,7 @@ static int sig_pri_handle_hold(struct sig_pri_span *pri, pri_event *ev)
 	int chanpos_old;
 	int chanpos_new;
 	struct ast_channel *owner;
+	struct ast_callid *callid = NULL;
 
 	chanpos_old = pri_find_principle_by_call(pri, ev->hold.call);
 	if (chanpos_old < 0) {
@@ -5162,6 +5307,13 @@ static int sig_pri_handle_hold(struct sig_pri_span *pri, pri_event *ev)
 	if (!owner) {
 		goto done_with_private;
 	}
+
+	callid = ast_channel_callid(owner);
+
+	if (callid) {
+		ast_callid_threadassoc_add(callid);
+	}
+
 	if (pri->pvts[chanpos_old]->call_level != SIG_PRI_CALL_LEVEL_CONNECT) {
 		/*
 		 * Make things simple.  Don't allow placing a call on hold that
@@ -5196,6 +5348,11 @@ done_with_private:;
 		retval = 0;
 	}
 
+	if (callid) {
+		ast_callid_unref(callid);
+		ast_callid_threadassoc_remove();
+	}
+
 	return retval;
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
@@ -5216,6 +5373,7 @@ done_with_private:;
 static void sig_pri_handle_hold_ack(struct sig_pri_span *pri, pri_event *ev)
 {
 	int chanpos;
+	struct ast_callid *callid;
 
 	/*
 	 * We were successfully put on hold by the remote party
@@ -5238,11 +5396,18 @@ static void sig_pri_handle_hold_ack(struct sig_pri_span *pri, pri_event *ev)
 	}
 
 	sig_pri_lock_private(pri->pvts[chanpos]);
+	callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->hold_ack.subcmds, ev->hold_ack.call);
 	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
 		SIG_PRI_MOH_EVENT_HOLD_ACK);
 	sig_pri_unlock_private(pri->pvts[chanpos]);
 	sig_pri_span_devstate_changed(pri);
+
+	if (callid) {
+		ast_callid_unref(callid);
+		ast_callid_threadassoc_remove();
+	}
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -5262,6 +5427,7 @@ static void sig_pri_handle_hold_ack(struct sig_pri_span *pri, pri_event *ev)
 static void sig_pri_handle_hold_rej(struct sig_pri_span *pri, pri_event *ev)
 {
 	int chanpos;
+	struct ast_callid *callid;
 
 	chanpos = pri_find_principle(pri, ev->hold_rej.channel, ev->hold_rej.call);
 	if (chanpos < 0) {
@@ -5281,10 +5447,17 @@ static void sig_pri_handle_hold_rej(struct sig_pri_span *pri, pri_event *ev)
 		ev->hold_rej.cause, pri_cause2str(ev->hold_rej.cause));
 
 	sig_pri_lock_private(pri->pvts[chanpos]);
+	callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->hold_rej.subcmds, ev->hold_rej.call);
 	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
 		SIG_PRI_MOH_EVENT_HOLD_REJ);
 	sig_pri_unlock_private(pri->pvts[chanpos]);
+
+	if (callid) {
+		ast_callid_unref(callid);
+		ast_callid_threadassoc_remove();
+	}
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -5304,6 +5477,7 @@ static void sig_pri_handle_hold_rej(struct sig_pri_span *pri, pri_event *ev)
 static void sig_pri_handle_retrieve(struct sig_pri_span *pri, pri_event *ev)
 {
 	int chanpos;
+	struct ast_callid *callid;
 
 	if (!(ev->retrieve.channel & PRI_HELD_CALL)) {
 		/* The call is not currently held. */
@@ -5345,6 +5519,7 @@ static void sig_pri_handle_retrieve(struct sig_pri_span *pri, pri_event *ev)
 		return;
 	}
 	sig_pri_lock_private(pri->pvts[chanpos]);
+	callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
 	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->retrieve.subcmds, ev->retrieve.call);
 	sig_pri_lock_owner(pri, chanpos);
 	pri_queue_control(pri, chanpos, AST_CONTROL_UNHOLD);
@@ -5358,6 +5533,11 @@ static void sig_pri_handle_retrieve(struct sig_pri_span *pri, pri_event *ev)
 		SIG_PRI_MOH_EVENT_REMOTE_RETRIEVE_ACK);
 	sig_pri_unlock_private(pri->pvts[chanpos]);
 	sig_pri_span_devstate_changed(pri);
+
+	if (callid) {
+		ast_callid_unref(callid);
+		ast_callid_threadassoc_remove();
+	}
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -5377,6 +5557,7 @@ static void sig_pri_handle_retrieve(struct sig_pri_span *pri, pri_event *ev)
 static void sig_pri_handle_retrieve_ack(struct sig_pri_span *pri, pri_event *ev)
 {
 	int chanpos;
+	struct ast_callid *callid;
 
 	chanpos = pri_find_fixup_principle(pri, ev->retrieve_ack.channel,
 		ev->retrieve_ack.call);
@@ -5385,12 +5566,19 @@ static void sig_pri_handle_retrieve_ack(struct sig_pri_span *pri, pri_event *ev)
 	}
 
 	sig_pri_lock_private(pri->pvts[chanpos]);
+	callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->retrieve_ack.subcmds,
 		ev->retrieve_ack.call);
 	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
 		SIG_PRI_MOH_EVENT_RETRIEVE_ACK);
 	sig_pri_unlock_private(pri->pvts[chanpos]);
 	sig_pri_span_devstate_changed(pri);
+
+	if (callid) {
+		ast_callid_unref(callid);
+		ast_callid_threadassoc_remove();
+	}
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -5410,6 +5598,7 @@ static void sig_pri_handle_retrieve_ack(struct sig_pri_span *pri, pri_event *ev)
 static void sig_pri_handle_retrieve_rej(struct sig_pri_span *pri, pri_event *ev)
 {
 	int chanpos;
+	struct ast_callid *callid;
 
 	chanpos = pri_find_principle(pri, ev->retrieve_rej.channel, ev->retrieve_rej.call);
 	if (chanpos < 0) {
@@ -5429,11 +5618,18 @@ static void sig_pri_handle_retrieve_rej(struct sig_pri_span *pri, pri_event *ev)
 		ev->retrieve_rej.cause, pri_cause2str(ev->retrieve_rej.cause));
 
 	sig_pri_lock_private(pri->pvts[chanpos]);
+	callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 	sig_pri_handle_subcmds(pri, chanpos, ev->e, ev->retrieve_rej.subcmds,
 		ev->retrieve_rej.call);
 	sig_pri_moh_fsm_event(pri->pvts[chanpos]->owner, pri->pvts[chanpos],
 		SIG_PRI_MOH_EVENT_RETRIEVE_REJ);
 	sig_pri_unlock_private(pri->pvts[chanpos]);
+
+	if (callid) {
+		ast_callid_unref(callid);
+		ast_callid_threadassoc_remove();
+	}
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) */
 
@@ -5443,7 +5639,6 @@ static void *pri_dchannel(void *vpri)
 	pri_event *e;
 	struct pollfd fds[SIG_PRI_NUM_DCHANS];
 	int res;
-	int chanpos = 0;
 	int x;
 	int law;
 	struct ast_channel *c;
@@ -5488,6 +5683,8 @@ static void *pri_dchannel(void *vpri)
 			ast_log(LOG_WARNING, "Idle dial string '%s' lacks '@context'\n", pri->idleext);
 	}
 	for (;;) {
+		struct ast_callid *callid = NULL;
+
 		for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
 			if (!pri->dchans[i])
 				break;
@@ -5651,6 +5848,9 @@ static void *pri_dchannel(void *vpri)
 			ast_log(LOG_WARNING, "pri_event returned error %d (%s)\n", errno, strerror(errno));
 
 		if (e) {
+			int chanpos = -1;
+			char cause_str[35];
+
 			if (pri->debug) {
 				ast_verbose("Span %d: Processing event %s(%d)\n",
 					pri->span, pri_event2str(e->e), e->e);
@@ -5794,6 +5994,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->digit.subcmds,
 					e->digit.call);
 				/* queue DTMF frame if the PBX for this call was already started (we're forwarding KEYPAD_DIGITs further on */
@@ -5825,6 +6028,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->ring.subcmds, e->ring.call);
 				/* queue DTMF frame if the PBX for this call was already started (we're forwarding INFORMATION further on */
 				if ((pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)
@@ -5924,6 +6130,9 @@ static void *pri_dchannel(void *vpri)
 				if (e->ring.channel == -1 || PRI_CHANNEL(e->ring.channel) == 0xFF) {
 					/* Any channel requested. */
 					chanpos = pri_find_empty_chan(pri, 1);
+					if (-1 < chanpos) {
+						callid = func_pri_dchannel_new_callid();
+					}
 				} else if (PRI_CHANNEL(e->ring.channel) == 0x00) {
 					/* No channel specified. */
 #if defined(HAVE_PRI_CALL_WAITING)
@@ -5941,11 +6150,15 @@ static void *pri_dchannel(void *vpri)
 						pri_hangup(pri->pri, e->ring.call, PRI_CAUSE_NORMAL_CIRCUIT_CONGESTION);
 						break;
 					}
+
+					callid = func_pri_dchannel_new_callid();
+
 					/* Setup the call interface to use. */
 					sig_pri_init_config(pri->pvts[chanpos], pri);
 #endif	/* defined(HAVE_PRI_CALL_WAITING) */
 				} else {
 					/* A channel is specified. */
+					callid = func_pri_dchannel_new_callid();
 					chanpos = pri_find_principle(pri, e->ring.channel, e->ring.call);
 					if (chanpos < 0) {
 						ast_log(LOG_WARNING,
@@ -6197,6 +6410,10 @@ static void *pri_dchannel(void *vpri)
 
 							snprintf(calledtonstr, sizeof(calledtonstr), "%d", e->ring.calledplan);
 							pbx_builtin_setvar_helper(c, "CALLEDTON", calledtonstr);
+							ast_channel_lock(c);
+							ast_channel_dialed(c)->number.plan = e->ring.calledplan;
+							ast_channel_unlock(c);
+
 							if (e->ring.redirectingreason >= 0) {
 								/* This is now just a status variable.  Use REDIRECTING() dialplan function. */
 								pbx_builtin_setvar_helper(c, "PRIREDIRECTREASON", redirectingreason2str(e->ring.redirectingreason));
@@ -6335,6 +6552,9 @@ static void *pri_dchannel(void *vpri)
 
 							snprintf(calledtonstr, sizeof(calledtonstr), "%d", e->ring.calledplan);
 							pbx_builtin_setvar_helper(c, "CALLEDTON", calledtonstr);
+							ast_channel_lock(c);
+							ast_channel_dialed(c)->number.plan = e->ring.calledplan;
+							ast_channel_unlock(c);
 
 							sig_pri_handle_subcmds(pri, chanpos, e->e, e->ring.subcmds,
 								e->ring.call);
@@ -6388,6 +6608,8 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
 
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->ringing.subcmds,
 					e->ringing.call);
@@ -6447,10 +6669,18 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->proceeding.subcmds,
 					e->proceeding.call);
 
 				if (e->proceeding.cause > -1) {
+					if (pri->pvts[chanpos]->owner) {
+						snprintf(cause_str, sizeof(cause_str), "PRI PRI_EVENT_PROGRESS (%d)", e->proceeding.cause);
+						pri_queue_pvt_cause_data(pri, chanpos, cause_str, e->proceeding.cause);
+					}
+
 					ast_verb(3, "PROGRESS with cause code %d received\n", e->proceeding.cause);
 
 					/* Work around broken, out of spec USER_BUSY cause in a progress message */
@@ -6497,6 +6727,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->proceeding.subcmds,
 					e->proceeding.call);
 				if (pri->pvts[chanpos]->call_level < SIG_PRI_CALL_LEVEL_PROCEEDING) {
@@ -6519,9 +6752,11 @@ static void *pri_dchannel(void *vpri)
 					/* Bring voice path up */
 					pri_queue_control(pri, chanpos, AST_CONTROL_PROGRESS);
 					pri->pvts[chanpos]->progress = 1;
+					sig_pri_set_dialing(pri->pvts[chanpos], 0);
 					sig_pri_open_media(pri->pvts[chanpos]);
+				} else if (pri->inband_on_proceeding) {
+					sig_pri_set_dialing(pri->pvts[chanpos], 0);
 				}
-				sig_pri_set_dialing(pri->pvts[chanpos], 0);
 				sig_pri_unlock_private(pri->pvts[chanpos]);
 				break;
 			case PRI_EVENT_FACILITY:
@@ -6543,6 +6778,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 #if defined(HAVE_PRI_CALL_REROUTING)
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->facility.subcmds,
 					e->facility.subcall);
@@ -6626,6 +6864,8 @@ static void *pri_dchannel(void *vpri)
 #endif	/* defined(HAVE_PRI_CALL_WAITING) */
 				sig_pri_lock_private(pri->pvts[chanpos]);
 
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 #if defined(HAVE_PRI_CALL_WAITING)
 				if (pri->pvts[chanpos]->is_call_waiting) {
 					pri->pvts[chanpos]->is_call_waiting = 0;
@@ -6687,6 +6927,9 @@ static void *pri_dchannel(void *vpri)
 				}
 
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->connect_ack.subcmds,
 					e->connect_ack.call);
 				sig_pri_open_media(pri->pvts[chanpos]);
@@ -6711,6 +6954,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->hangup.subcmds,
 					e->hangup.call);
 				switch (e->hangup.cause) {
@@ -6738,6 +6984,9 @@ static void *pri_dchannel(void *vpri)
 					}
 					if (pri->pvts[chanpos]->owner) {
 						int do_hangup = 0;
+
+						snprintf(cause_str, sizeof(cause_str), "PRI PRI_EVENT_HANGUP (%d)", e->hangup.cause);
+						pri_queue_pvt_cause_data(pri, chanpos, cause_str, e->hangup.cause);
 
 						/* Queue a BUSY instead of a hangup if our cause is appropriate */
 						ast_channel_hangupcause_set(pri->pvts[chanpos]->owner, e->hangup.cause);
@@ -6853,6 +7102,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->hangup.subcmds,
 					e->hangup.call);
 #if defined(HAVE_PRI_CALL_HOLD)
@@ -6887,6 +7139,9 @@ static void *pri_dchannel(void *vpri)
 				}
 				if (pri->pvts[chanpos]->owner) {
 					int do_hangup = 0;
+
+					snprintf(cause_str, sizeof(cause_str), "PRI PRI_EVENT_HANGUP_REQ (%d)", e->hangup.cause);
+					pri_queue_pvt_cause_data(pri, chanpos, cause_str, e->hangup.cause);
 
 					ast_channel_hangupcause_set(pri->pvts[chanpos]->owner, e->hangup.cause);
 					switch (ast_channel_state(pri->pvts[chanpos]->owner)) {
@@ -6992,6 +7247,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				pri->pvts[chanpos]->call = NULL;
 				if (pri->pvts[chanpos]->owner) {
 					ast_verb(3, "Span %d: Channel %d/%d got hangup ACK\n", pri->span,
@@ -7095,6 +7353,9 @@ static void *pri_dchannel(void *vpri)
 					break;
 				}
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->setup_ack.subcmds,
 					e->setup_ack.call);
 				if (pri->pvts[chanpos]->call_level < SIG_PRI_CALL_LEVEL_OVERLAP) {
@@ -7155,6 +7416,9 @@ static void *pri_dchannel(void *vpri)
 				}
 #endif	/* !defined(HAVE_PRI_CALL_HOLD) */
 				sig_pri_lock_private(pri->pvts[chanpos]);
+
+				callid = func_pri_dchannel_chanpos_callid(pri, chanpos);
+
 #if defined(HAVE_PRI_CALL_HOLD)
 				sig_pri_handle_subcmds(pri, chanpos, e->e, e->notify.subcmds,
 					e->notify.call);
@@ -7220,6 +7484,12 @@ static void *pri_dchannel(void *vpri)
 				ast_debug(1, "Span: %d Unhandled event: %s(%d)\n",
 					pri->span, pri_event2str(e->e), e->e);
 				break;
+			}
+
+			/* If a callid was set, we need to deref it and remove it from thread storage. */
+			if (callid) {
+				callid = ast_callid_unref(callid);
+				ast_callid_threadassoc_remove();
 			}
 		}
 		ast_mutex_unlock(&pri->lock);
@@ -7491,10 +7761,11 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, const char *rd
 	);
 	struct ast_flags opts;
 	char *opt_args[OPT_ARG_ARRAY_SIZE];
+	struct ast_party_id connected_id = ast_channel_connected_effective_id(ast);
 
 	ast_debug(1, "CALLER NAME: %s NUM: %s\n",
-		S_COR(ast_channel_connected(ast)->id.name.valid, ast_channel_connected(ast)->id.name.str, ""),
-		S_COR(ast_channel_connected(ast)->id.number.valid, ast_channel_connected(ast)->id.number.str, ""));
+		S_COR(connected_id.name.valid, connected_id.name.str, ""),
+		S_COR(connected_id.number.valid, connected_id.number.str, ""));
 
 	if (!p->pri) {
 		ast_log(LOG_ERROR, "Could not find pri on channel %d\n", p->channel);
@@ -7550,14 +7821,14 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, const char *rd
 	l = NULL;
 	n = NULL;
 	if (!p->hidecallerid) {
-		if (ast_channel_connected(ast)->id.number.valid) {
+		if (connected_id.number.valid) {
 			/* If we get to the end of this loop without breaking, there's no
 			 * calleridnum.  This is done instead of testing for "unknown" or
 			 * the thousands of other ways that the calleridnum could be
 			 * invalid. */
-			for (l = ast_channel_connected(ast)->id.number.str; l && *l; l++) {
+			for (l = connected_id.number.str; l && *l; l++) {
 				if (strchr("0123456789", *l)) {
-					l = ast_channel_connected(ast)->id.number.str;
+					l = connected_id.number.str;
 					break;
 				}
 			}
@@ -7565,7 +7836,7 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, const char *rd
 			l = NULL;
 		}
 		if (!p->hidecalleridname) {
-			n = ast_channel_connected(ast)->id.name.valid ? ast_channel_connected(ast)->id.name.str : NULL;
+			n = connected_id.name.valid ? connected_id.name.str : NULL;
 		}
 	}
 
@@ -7781,7 +8052,7 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, const char *rd
 		}
 	} else if (prilocaldialplan == -1) {
 		/* Use the numbering plan passed in. */
-		prilocaldialplan = ast_channel_connected(ast)->id.number.plan;
+		prilocaldialplan = connected_id.number.plan;
 	}
 	if (l != NULL) {
 		while (*l > '9' && *l != '*' && *l != '#') {
@@ -7840,14 +8111,14 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, const char *rd
 		}
 	}
 	pri_sr_set_caller(sr, l ? (l + ldp_strip) : NULL, n, prilocaldialplan,
-		p->use_callingpres ? ast_channel_connected(ast)->id.number.presentation : (l ? PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN : PRES_NUMBER_NOT_AVAILABLE));
+		p->use_callingpres ? connected_id.number.presentation : (l ? PRES_ALLOWED_USER_NUMBER_PASSED_SCREEN : PRES_NUMBER_NOT_AVAILABLE));
 
 #if defined(HAVE_PRI_SUBADDR)
-	if (ast_channel_connected(ast)->id.subaddress.valid) {
+	if (connected_id.subaddress.valid) {
 		struct pri_party_subaddress subaddress;
 
 		memset(&subaddress, 0, sizeof(subaddress));
-		sig_pri_party_subaddress_from_ast(&subaddress, &ast_channel_connected(ast)->id.subaddress);
+		sig_pri_party_subaddress_from_ast(&subaddress, &connected_id.subaddress);
 		pri_sr_set_caller_subaddress(sr, &subaddress);
 	}
 #endif	/* defined(HAVE_PRI_SUBADDR) */
@@ -8078,6 +8349,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			int dialplan;
 			int prefix_strip;
 			int colp_allowed = 0;
+			struct ast_party_id connected_id = ast_channel_connected_effective_id(chan);
 
 			pri_grab(p, p->pri);
 
@@ -8106,7 +8378,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			}
 
 			memset(&connected, 0, sizeof(connected));
-			sig_pri_party_id_from_ast(&connected.id, &ast_channel_connected(chan)->id);
+			sig_pri_party_id_from_ast(&connected.id, &connected_id);
 
 			/* Determine the connected line numbering plan to actually use. */
 			switch (p->pri->cpndialplan) {
@@ -8418,8 +8690,8 @@ void sig_pri_dial_complete(struct sig_pri_chan *pvt, struct ast_channel *ast)
 		{
 			struct ast_frame f = {AST_FRAME_CONTROL, };
 
-			if (pvt->calls->queue_control) {
-				pvt->calls->queue_control(pvt->chan_pvt, AST_CONTROL_ANSWER);
+			if (sig_pri_callbacks.queue_control) {
+				sig_pri_callbacks.queue_control(pvt->chan_pvt, AST_CONTROL_ANSWER);
 			}
 
 			f.subclass.integer = AST_CONTROL_ANSWER;
@@ -8489,23 +8761,30 @@ static void sig_pri_send_mwi_indication(struct sig_pri_span *pri, const char *vm
  *
  * \return Nothing
  */
-static void sig_pri_mwi_event_cb(const struct ast_event *event, void *userdata)
+static void sig_pri_mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
 	struct sig_pri_span *pri = userdata;
 	const char *mbox_context;
 	const char *mbox_number;
 	int num_messages;
 	int idx;
+	struct stasis_mwi_state *mwi_state;
 
-	mbox_number = ast_event_get_ie_str(event, AST_EVENT_IE_MAILBOX);
+	if (stasis_mwi_state_type() != stasis_message_type(msg)) {
+		return;
+	}
+
+	mwi_state = stasis_message_data(msg);
+
+	mbox_number = mwi_state->mailbox;
 	if (ast_strlen_zero(mbox_number)) {
 		return;
 	}
-	mbox_context = ast_event_get_ie_str(event, AST_EVENT_IE_CONTEXT);
+	mbox_context = mwi_state->context;
 	if (ast_strlen_zero(mbox_context)) {
 		return;
 	}
-	num_messages = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
+	num_messages = mwi_state->new_msgs;
 
 	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
 		if (!pri->mbox[idx].sub) {
@@ -8536,27 +8815,28 @@ static void sig_pri_mwi_event_cb(const struct ast_event *event, void *userdata)
 static void sig_pri_mwi_cache_update(struct sig_pri_span *pri)
 {
 	int idx;
-	int num_messages;
-	struct ast_event *event;
+	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
+	struct stasis_mwi_state *mwi_state;
 
 	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
+		RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 		if (!pri->mbox[idx].sub) {
 			/* Mailbox slot is empty */
 			continue;
 		}
 
-		event = ast_event_get_cached(AST_EVENT_MWI,
-			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, pri->mbox[idx].number,
-			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, pri->mbox[idx].context,
-			AST_EVENT_IE_END);
-		if (!event) {
+		ast_str_reset(uniqueid);
+		ast_str_set(&uniqueid, 0, "%s@%s", pri->mbox[idx].number, pri->mbox[idx].context);
+
+		msg = stasis_cache_get(stasis_mwi_topic_cached(), stasis_mwi_state_type(), ast_str_buffer(uniqueid));
+		if (!msg) {
 			/* No cached event for this mailbox. */
 			continue;
 		}
-		num_messages = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
+
+		mwi_state = stasis_message_data(msg);
 		sig_pri_send_mwi_indication(pri, pri->mbox[idx].vm_number, pri->mbox[idx].number,
-			pri->mbox[idx].context, num_messages);
-		ast_event_destroy(event);
+			pri->mbox[idx].context, mwi_state->new_msgs);
 	}
 }
 #endif	/* defined(HAVE_PRI_MWI) */
@@ -8578,7 +8858,7 @@ void sig_pri_stop_pri(struct sig_pri_span *pri)
 #if defined(HAVE_PRI_MWI)
 	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
 		if (pri->mbox[idx].sub) {
-			pri->mbox[idx].sub = ast_event_unsubscribe(pri->mbox[idx].sub);
+			pri->mbox[idx].sub = stasis_unsubscribe(pri->mbox[idx].sub);
 		}
 	}
 #endif	/* defined(HAVE_PRI_MWI) */
@@ -8642,13 +8922,14 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
 	char *saveptr;
 	char *prev_vm_number;
 	struct ast_str *mwi_description = ast_str_alloca(64);
+	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 #endif	/* defined(HAVE_PRI_MWI) */
 
 #if defined(HAVE_PRI_MWI)
 	/* Prepare the mbox[] for use. */
 	for (i = 0; i < ARRAY_LEN(pri->mbox); ++i) {
 		if (pri->mbox[i].sub) {
-			pri->mbox[i].sub = ast_event_unsubscribe(pri->mbox[i].sub);
+			pri->mbox[i].sub = stasis_unsubscribe(pri->mbox[i].sub);
 		}
 	}
 #endif	/* defined(HAVE_PRI_MWI) */
@@ -8688,6 +8969,7 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
 	for (i = 0; i < ARRAY_LEN(pri->mbox); ++i) {
 		char *mbox_number;
 		char *mbox_context;
+		struct stasis_topic *mailbox_specific_topic;
 
 		mbox_number = strsep(&saveptr, ",");
 		if (!mbox_number) {
@@ -8713,13 +8995,17 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
 		/* Fill the mbox[] element. */
 		pri->mbox[i].number = mbox_number;
 		pri->mbox[i].context = mbox_context;
+
+		ast_str_reset(uniqueid);
+		ast_str_set(&uniqueid, 0, "%s@%s", mbox_number, mbox_context);
+
 		ast_str_set(&mwi_description, -1, "%s span %d[%d] MWI mailbox %s@%s",
 			sig_pri_cc_type_name, pri->span, i, mbox_number, mbox_context);
-		pri->mbox[i].sub = ast_event_subscribe(AST_EVENT_MWI, sig_pri_mwi_event_cb,
-			ast_str_buffer(mwi_description), pri,
-			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox_number,
-			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, mbox_context,
-			AST_EVENT_IE_END);
+
+		mailbox_specific_topic = stasis_mwi_topic(ast_str_buffer(uniqueid));
+		if (mailbox_specific_topic) {
+			pri->mbox[i].sub = stasis_subscribe(mailbox_specific_topic, sig_pri_mwi_event_cb, pri);
+		}
 		if (!pri->mbox[i].sub) {
 			ast_log(LOG_ERROR, "%s span %d could not subscribe to MWI events for %s@%s.",
 				sig_pri_cc_type_name, pri->span, mbox_number, mbox_context);
@@ -8892,7 +9178,7 @@ int sig_pri_is_alarm_ignored(struct sig_pri_span *pri)
 	return pri->layer1_ignored;
 }
 
-struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_callback *callback, struct sig_pri_span *pri, int logicalspan, int channo, int trunkgroup)
+struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_span *pri, int logicalspan, int channo, int trunkgroup)
 {
 	struct sig_pri_chan *p;
 
@@ -8904,7 +9190,6 @@ struct sig_pri_chan *sig_pri_chan_new(void *pvt_data, struct sig_pri_callback *c
 	p->prioffset = channo;
 	p->mastertrunkgroup = trunkgroup;
 
-	p->calls = callback;
 	p->chan_pvt = pvt_data;
 
 	p->pri = pri;

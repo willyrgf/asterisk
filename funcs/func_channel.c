@@ -77,6 +77,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="item" required="true">
 				<para>Standard items (provided by all channel technologies) are:</para>
 				<enumlist>
+					<enum name="amaflags">
+						<para>R/W the Automatic Message Accounting (AMA) flags on the channel.
+						When read from a channel, the integer value will always be returned.
+						When written to a channel, both the string format or integer value
+						is accepted.</para>
+						<enumlist>
+							<enum name="1"><para><literal>OMIT</literal></para></enum>
+							<enum name="2"><para><literal>BILLING</literal></para></enum>
+							<enum name="3"><para><literal>DOCUMENTATION</literal></para></enum>
+						</enumlist>
+					</enum>
+					<enum name="accountcode">
+						<para>R/W the channel's account code.</para>
+					</enum>
 					<enum name="audioreadformat">
 						<para>R/O format currently being read.</para>
 					</enum>
@@ -87,16 +101,45 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>R/O format currently being written.</para>
 					</enum>
 					<enum name="callgroup">
-						<para>R/W call groups for call pickup.</para>
+						<para>R/W numeric call pickup groups that this channel is a member.</para>
 					</enum>
 					<enum name="pickupgroup">
-						<para>R/W call groups for call pickup.</para>
+						<para>R/W numeric call pickup groups this channel can pickup.</para>
+					</enum>
+					<enum name="namedcallgroup">
+						<para>R/W named call pickup groups that this channel is a member.</para>
+					</enum>
+					<enum name="namedpickupgroup">
+						<para>R/W named call pickup groups this channel can pickup.</para>
 					</enum>
 					<enum name="channeltype">
 						<para>R/O technology used for channel.</para>
 					</enum>
 					<enum name="checkhangup">
 						<para>R/O Whether the channel is hanging up (1/0)</para>
+					</enum>
+					<enum name="hangup_handler_pop">
+						<para>W/O Replace the most recently added hangup handler
+						with a new hangup handler on the channel if supplied.  The
+						assigned string is passed to the Gosub application when
+						the channel is hung up.  Any optionally omitted context
+						and exten are supplied by the channel pushing the handler
+						before it is pushed.</para>
+					</enum>
+					<enum name="hangup_handler_push">
+						<para>W/O Push a hangup handler onto the channel hangup
+						handler stack.  The assigned string is passed to the
+						Gosub application when the channel is hung up.  Any
+						optionally omitted context and exten are supplied by the
+						channel pushing the handler before it is pushed.</para>
+					</enum>
+					<enum name="hangup_handler_wipe">
+						<para>W/O Wipe the entire hangup handler stack and replace
+						with a new hangup handler on the channel if supplied.  The
+						assigned string is passed to the Gosub application when
+						the channel is hung up.  Any optionally omitted context
+						and exten are supplied by the channel pushing the handler
+						before it is pushed.</para>
 					</enum>
 					<enum name="language">
 						<para>R/W language for sounds played.</para>
@@ -253,6 +296,26 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>R/O PRI Nonzero if the channel has no B channel.
 						The channel is either on hold or a call waiting call.</para>
 					</enum>
+					<enum name="buffers">
+						<para>W/O Change the channel's buffer policy (for the current call only)</para>
+						<para>This option takes two arguments:</para>
+						<para>	Number of buffers,</para>
+						<para>	Buffer policy being one of:</para>
+						<para>	    <literal>full</literal></para>
+						<para>	    <literal>immediate</literal></para>
+						<para>	    <literal>half</literal></para>
+					</enum>
+					<enum name="echocan_mode">
+						<para>W/O Change the configuration of the active echo
+						canceller on the channel (if any), for the current call
+						only.</para>
+						<para>Possible values are:</para>
+						<para>	<literal>on</literal>	Normal mode (the echo canceller is actually reinitalized)</para>
+						<para>	<literal>off</literal>	Disabled</para>
+						<para>	<literal>fax</literal>	FAX/data mode (NLP disabled if possible, otherwise
+							completely disabled)</para>
+						<para>	<literal>voice</literal>	Voice mode (returns from FAX mode, reverting the changes that were made)</para>
+					</enum>
 				</enumlist>
 				<para><emphasis>chan_ooh323</emphasis> provides the following additional options:</para>
 				<enumlist>
@@ -303,15 +366,18 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 			     char *data, char *buf, size_t len)
 {
 	int ret = 0;
-	char tmp[512];
 	struct ast_format_cap *tmpcap;
 
 	if (!strcasecmp(data, "audionativeformat")) {
+		char tmp[512];
+
 		if ((tmpcap = ast_format_cap_get_type(ast_channel_nativeformats(chan), AST_FORMAT_TYPE_AUDIO))) {
 			ast_copy_string(buf, ast_getformatname_multiple(tmp, sizeof(tmp), tmpcap), len);
 			tmpcap = ast_format_cap_destroy(tmpcap);
 		}
 	} else if (!strcasecmp(data, "videonativeformat")) {
+		char tmp[512];
+
 		if ((tmpcap = ast_format_cap_get_type(ast_channel_nativeformats(chan), AST_FORMAT_TYPE_VIDEO))) {
 			ast_copy_string(buf, ast_getformatname_multiple(tmp, sizeof(tmp), tmpcap), len);
 			tmpcap = ast_format_cap_destroy(tmpcap);
@@ -374,6 +440,7 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "peer")) {
 		struct ast_channel *p;
+
 		ast_channel_lock(chan);
 		p = ast_bridged_channel(chan);
 		if (p || ast_channel_tech(chan) || ast_channel_cdr(chan)) /* dummy channel? if so, we hid the peer name in the language */
@@ -394,16 +461,27 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		locked_copy_string(chan, buf, transfercapability_table[ast_channel_transfercapability(chan) & 0x1f], len);
 	} else if (!strcasecmp(data, "callgroup")) {
 		char groupbuf[256];
+
 		locked_copy_string(chan, buf,  ast_print_group(groupbuf, sizeof(groupbuf), ast_channel_callgroup(chan)), len);
 	} else if (!strcasecmp(data, "pickupgroup")) {
 		char groupbuf[256];
+
 		locked_copy_string(chan, buf,  ast_print_group(groupbuf, sizeof(groupbuf), ast_channel_pickupgroup(chan)), len);
+	} else if (!strcasecmp(data, "namedcallgroup")) {
+		struct ast_str *tmp_str = ast_str_alloca(1024);
+
+		locked_copy_string(chan, buf,  ast_print_namedgroups(&tmp_str, ast_channel_named_callgroups(chan)), len);
+	} else if (!strcasecmp(data, "namedpickupgroup")) {
+		struct ast_str *tmp_str = ast_str_alloca(1024);
+
+		locked_copy_string(chan, buf,  ast_print_namedgroups(&tmp_str, ast_channel_named_pickupgroups(chan)), len);
 	} else if (!strcasecmp(data, "amaflags")) {
-		char amabuf[256];
-		snprintf(amabuf,sizeof(amabuf), "%d", ast_channel_amaflags(chan));
-		locked_copy_string(chan, buf, amabuf, len);
+		ast_channel_lock(chan);
+		snprintf(buf, len, "%d", ast_channel_amaflags(chan));
+		ast_channel_unlock(chan);
 	} else if (!strncasecmp(data, "secure_bridge_", 14)) {
 		struct ast_datastore *ds;
+
 		ast_channel_lock(chan);
 		if ((ds = ast_channel_datastore_find(chan, &secure_call_info, NULL))) {
 			struct ast_secure_call_store *encrypt = ds->data;
@@ -486,9 +564,27 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 			new_zone = ast_tone_zone_unref(new_zone);
 		}
 	} else if (!strcasecmp(data, "callgroup")) {
+		ast_channel_lock(chan);
 		ast_channel_callgroup_set(chan, ast_get_group(value));
+		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "pickupgroup")) {
+		ast_channel_lock(chan);
 		ast_channel_pickupgroup_set(chan, ast_get_group(value));
+		ast_channel_unlock(chan);
+	} else if (!strcasecmp(data, "namedcallgroup")) {
+		struct ast_namedgroups *groups = ast_get_namedgroups(value);
+
+		ast_channel_lock(chan);
+		ast_channel_named_callgroups_set(chan, groups);
+		ast_channel_unlock(chan);
+		ast_unref_namedgroups(groups);
+	} else if (!strcasecmp(data, "namedpickupgroup")) {
+		struct ast_namedgroups *groups = ast_get_namedgroups(value);
+
+		ast_channel_lock(chan);
+		ast_channel_named_pickupgroups_set(chan, groups);
+		ast_channel_unlock(chan);
+		ast_unref_namedgroups(groups);
 	} else if (!strcasecmp(data, "txgain")) {
 		sscanf(value, "%4hhd", &gainset);
 		ast_channel_setoption(chan, AST_OPTION_TXGAIN, &gainset, sizeof(gainset), 0);
@@ -497,12 +593,26 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		ast_channel_setoption(chan, AST_OPTION_RXGAIN, &gainset, sizeof(gainset), 0);
 	} else if (!strcasecmp(data, "transfercapability")) {
 		unsigned short i;
+
+		ast_channel_lock(chan);
 		for (i = 0; i < 0x20; i++) {
 			if (!strcasecmp(transfercapability_table[i], value) && strcmp(value, "UNK")) {
 				ast_channel_transfercapability_set(chan, i);
 				break;
 			}
 		}
+		ast_channel_unlock(chan);
+	} else if (!strcasecmp(data, "hangup_handler_pop")) {
+		/* Pop one hangup handler before pushing the new handler. */
+		ast_pbx_hangup_handler_pop(chan);
+		ast_pbx_hangup_handler_push(chan, value);
+	} else if (!strcasecmp(data, "hangup_handler_push")) {
+		ast_pbx_hangup_handler_push(chan, value);
+	} else if (!strcasecmp(data, "hangup_handler_wipe")) {
+		/* Pop all hangup handlers before pushing the new handler. */
+		while (ast_pbx_hangup_handler_pop(chan)) {
+		}
+		ast_pbx_hangup_handler_push(chan, value);
 	} else if (!strncasecmp(data, "secure_bridge_", 14)) {
 		struct ast_datastore *ds;
 		struct ast_secure_call_store *store;
@@ -527,13 +637,13 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		} else {
 			store = ds->data;
 		}
-		ast_channel_unlock(chan);
 
 		if (!strcasecmp(data, "secure_bridge_signaling")) {
 			store->signaling = ast_true(value) ? 1 : 0;
 		} else if (!strcasecmp(data, "secure_bridge_media")) {
 			store->media = ast_true(value) ? 1 : 0;
 		}
+		ast_channel_unlock(chan);
 	} else if (!ast_channel_tech(chan)->func_channel_write
 		 || ast_channel_tech(chan)->func_channel_write(chan, function, data, value)) {
 		ast_log(LOG_WARNING, "Unknown or unavailable item requested: '%s'\n",
@@ -630,7 +740,7 @@ static int func_mchan_read(struct ast_channel *chan, const char *function,
 			     char *data, struct ast_str **buf, ssize_t len)
 {
 	struct ast_channel *mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
-	char *template = alloca(4 + strlen(data));
+	char *template = ast_alloca(4 + strlen(data));
 	sprintf(template, "${%s}", data); /* SAFE */
 	ast_str_substitute_variables(buf, len, mchan ? mchan : chan, template);
 	if (mchan) {

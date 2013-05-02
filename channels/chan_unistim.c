@@ -99,8 +99,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RETRANSMIT_TIMER	2000
 /*! How often the mailbox is checked for new messages */
 #define TIMER_MWI	       5000
-/*! How often the mailbox is checked for new messages */
-#define TIMER_DIAL	       4000
+/*! Timeout value for entered number being dialed */
+#define DEFAULT_INTERDIGIT_TIMER	4000
+
 /*! Not used */
 #define DEFAULT_CODEC	   0x00
 #define SIZE_PAGE	       4096
@@ -354,8 +355,6 @@ struct unistim_line {
 	char exten[AST_MAX_EXTENSION]; /*! Extension where to start */
 	char cid_num[AST_MAX_EXTENSION]; /*! CallerID Number */
 	char mailbox[AST_MAX_EXTENSION]; /*! Mailbox for MWI */
-	int lastmsgssent; /*! Used by MWI */
-	time_t nextmsgcheck; /*! Used by MWI */
 	char musicclass[MAX_MUSICCLASS]; /*! MusicOnHold class */
 	ast_group_t callgroup; /*! Call group */
 	ast_group_t pickupgroup; /*! Pickup group */
@@ -401,6 +400,7 @@ static struct unistim_device {
 	char ringstyle;			 /*!< Ring melody */
 	char cwvolume;			/*!< Ring volume on call waiting */
 	char cwstyle;			 /*!< Ring melody on call waiting */
+	int interdigit_timer;		/*!< Interdigit timer for dialing number by timeout */
 	time_t nextdial;		/*!< Timer used for dial by timeout */
 	int rtp_port;			   /*!< RTP port used by the phone */
 	int rtp_method;			 /*!< Select the unistim data used to establish a RTP session */
@@ -415,8 +415,10 @@ static struct unistim_device {
 	int output;				     /*!< Handset, headphone or speaker */
 	int previous_output;	    /*!< Previous output */
 	int volume;				     /*!< Default volume */
-        int selected;                           /*!< softkey selected */
+	int selected;                           /*!< softkey selected */
 	int mute;				       /*!< Mute mode */
+	int lastmsgssent;                                                   /*! Used by MWI */
+	time_t nextmsgcheck;                                            /*! Used by MWI */
 	int nat;					/*!< Used by the obscure ast_rtp_setnat */
 	enum autoprov_extn extension;   /*!< See ifdef EXTENSION for valid values */
 	char extension_number[11];      /*!< Extension number entered by the user */
@@ -444,6 +446,7 @@ static struct unistimsession {
 	int size_buff_entry;	    /*!< size of the buffer used to enter datas */
 	char buff_entry[16];	    /*!< Buffer for temporary datas */
 	char macaddr[18];		       /*!< mac adress of the phone (not always available) */
+	char firmware[8];		       /*!< firmware of the phone (not always available) */
 	struct wsabuf wsabufsend[MAX_BUF_NUMBER];      /*!< Size of each paquet stored in the buffer array & pointer to this buffer */
 	unsigned char buf[MAX_BUF_NUMBER][MAX_BUF_SIZE];	/*!< Buffer array used to keep the lastest non-acked paquets */
 	struct unistim_device *device;
@@ -729,6 +732,7 @@ static struct unistim_menu_item options_menu[] =
 static struct unistim_languages options_languages[] =
 {
 	{"English", "en", ISO_8859_1, NULL},
+	{"French", "fr", ISO_8859_1, NULL},
 	{"Russian", "ru", ISO_8859_5, NULL},
 	{NULL, NULL, 0, NULL}
 };
@@ -780,7 +784,7 @@ static const char *ustmtext(const char *str, struct unistimsession *pte)
 			 USTM_LANG_DIR, lang->lang_short);
 		f = fopen(tmp, "r");
 		if (!f) {
-			ast_log(LOG_ERROR, "There is no translation file for '%s'\n", pte->device->language);
+			ast_log(LOG_WARNING, "There is no translation file for '%s'\n", lang->lang_short);
 			return str;
 		}
 		while (fgets(tmp, sizeof(tmp), f)) {
@@ -2348,20 +2352,6 @@ static int attempt_transfer(struct unistim_subchannel *p1, struct unistim_subcha
 			unistim_quiet_chan(peerd);
 		}
 
-		if (ast_channel_cdr(peera) && ast_channel_cdr(peerb)) {
-			ast_channel_cdr_set(peerb, ast_cdr_append(ast_channel_cdr(peerb), ast_channel_cdr(peera)));
-		} else if (ast_channel_cdr(peera)) {
-			ast_channel_cdr_set(peerb, ast_channel_cdr(peera));
-		}
-		ast_channel_cdr_set(peera, NULL);
-
-		if (ast_channel_cdr(peerb) && ast_channel_cdr(peerc)) {
-			ast_channel_cdr_set(peerb, ast_cdr_append(ast_channel_cdr(peerb), ast_channel_cdr(peerc)));
-		} else if (ast_channel_cdr(peerc)) {
-			ast_channel_cdr_set(peerb, ast_channel_cdr(peerc));
-		}
-		ast_channel_cdr_set(peerc, NULL);
-
 		ast_log(LOG_NOTICE, "UNISTIM transfer: trying to masquerade %s into %s\n", ast_channel_name(peerc), ast_channel_name(peerb));
 		if (ast_channel_masquerade(peerb, peerc)) {
 			ast_log(LOG_WARNING, "Failed to masquerade %s into %s\n", ast_channel_name(peerb),
@@ -2677,9 +2667,9 @@ static void send_start_rtp(struct unistim_subchannel *sub)
 			buffsend[16] = (htons(sin.sin_port) & 0x00ff);
 			buffsend[20] = (us.sin_port & 0xff00) >> 8;
 			buffsend[19] = (us.sin_port & 0x00ff);
-			buffsend[11] = codec;
 		}
-		buffsend[12] = codec;
+		buffsend[11] = codec; /* rx */
+		buffsend[12] = codec; /* tx */
 		send_client(SIZE_HEADER + sizeof(packet_send_open_audio_stream_tx), buffsend, pte);
 
 		if (unistimdebug) {
@@ -2708,9 +2698,9 @@ static void send_start_rtp(struct unistim_subchannel *sub)
 			buffsend[16] = (htons(sin.sin_port) & 0x00ff);
 			buffsend[20] = (us.sin_port & 0xff00) >> 8;
 			buffsend[19] = (us.sin_port & 0x00ff);
-			buffsend[12] = codec;
 		}
-		buffsend[11] = codec;
+		buffsend[11] = codec; /* rx */
+		buffsend[12] = codec; /* tx */
 		send_client(SIZE_HEADER + sizeof(packet_send_open_audio_stream_rx), buffsend, pte);
 	} else {
 		uint16_t rtcpsin_port = htons(us.sin_port) + 1; /* RTCP port is RTP + 1 */
@@ -2924,6 +2914,7 @@ static void handle_dial_page(struct unistimsession *pte)
 	send_icon(TEXT_LINE0, FAV_ICON_NONE, pte);
 	pte->device->missed_call = 0;
 	send_led_update(pte, 0);
+	pte->device->lastmsgssent = -1;
 	return;
 }
 
@@ -2971,15 +2962,10 @@ static void transfer_call_step1(struct unistimsession *pte)
 	if (sub->moh) {
 		ast_log(LOG_WARNING, "Transfer with peer already listening music on hold\n");
 	} else {
-		if (ast_bridged_channel(sub->owner)) {
-			ast_moh_start(ast_bridged_channel(sub->owner),
-						  sub->parent->musicclass, NULL);
-			sub->moh = 1;
-			sub->subtype = SUB_THREEWAY;
-		} else {
-			ast_log(LOG_WARNING, "Unable to find peer subchannel for music on hold\n");
-			return;
-		}
+		ast_queue_control_data(sub->owner, AST_CONTROL_HOLD,
+			sub->parent->musicclass, strlen(sub->parent->musicclass) + 1);
+		sub->moh = 1;
+		sub->subtype = SUB_THREEWAY;
 	}
 	sub_start_silence(pte, sub);
 	handle_dial_page(pte);
@@ -3003,7 +2989,7 @@ static void transfer_cancel_step2(struct unistimsession *pte)
 		}
 		if (sub->owner) {
 			swap_subs(sub, sub_trans);
-			ast_moh_stop(ast_bridged_channel(sub_trans->owner));
+			ast_queue_control(sub_trans->owner, AST_CONTROL_UNHOLD);
 			sub_trans->moh = 0;
 			sub_trans->subtype = SUB_REAL;
 			sub->subtype = SUB_THREEWAY;
@@ -3198,11 +3184,6 @@ static void handle_call_incoming(struct unistimsession *s)
 		ast_verb(0, "Handle Call Incoming for %s@%s\n", sub->parent->name,
 					s->device->name);
 	}
-	start_rtp(sub);
-	if (!sub->rtp) {
-		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", sub->parent->name,
-				s->device->name);
-	}
 	if (sub->owner) {
 		ast_queue_control(sub->owner, AST_CONTROL_ANSWER);
 	}
@@ -3312,7 +3293,7 @@ static void handle_key_fav(struct unistimsession *pte, char keycode)
 
 static void key_call(struct unistimsession *pte, char keycode)
 {
-	struct unistim_subchannel *sub = NULL;
+	struct unistim_subchannel *sub = get_sub(pte->device, SUB_REAL);
 	if ((keycode >= KEY_0) && (keycode <= KEY_SHARP)) {
 		if (keycode == KEY_SHARP) {
 			keycode = '#';
@@ -3326,15 +3307,19 @@ static void key_call(struct unistimsession *pte, char keycode)
 	}
 	switch (keycode) {
 	case KEY_FUNC1:
-		if (get_sub(pte->device, SUB_THREEWAY)) {
-			close_call(pte);
+		if (ast_channel_state(sub->owner) == AST_STATE_UP) {
+			if (get_sub(pte->device, SUB_THREEWAY)) {
+				close_call(pte);
+			}
 		}
 		break;
 	case KEY_FUNC2:
-		if (get_sub(pte->device, SUB_THREEWAY)) {
-			transfer_cancel_step2(pte);
-		} else {
-			transfer_call_step1(pte);
+		if (ast_channel_state(sub->owner) == AST_STATE_UP) {
+			if (get_sub(pte->device, SUB_THREEWAY)) {
+				transfer_cancel_step2(pte);
+			} else {
+				transfer_call_step1(pte);
+			}
 		}
 		break;
 	case KEY_HANGUP:
@@ -3366,7 +3351,6 @@ static void key_call(struct unistimsession *pte, char keycode)
 							 MUTE_OFF);
 		break;
 	case KEY_MUTE:
-		sub = get_sub(pte->device, SUB_REAL);
 		if (!sub || !sub->owner) {
 			ast_log(LOG_WARNING, "Unable to find subchannel for music on hold\n");
 			return;
@@ -3381,7 +3365,6 @@ static void key_call(struct unistimsession *pte, char keycode)
 		}
 		break;
 	case KEY_ONHOLD:
-		sub = get_sub(pte->device, SUB_REAL);
 		if (!sub) {
 			if(pte->device->ssub[pte->device->selected]) {
 				sub_hold(pte, pte->device->ssub[pte->device->selected]);
@@ -3478,7 +3461,9 @@ static void key_dial_page(struct unistimsession *pte, char keycode)
 			!ast_matchmore_extension(NULL, pte->device->context, pte->device->phone_number, 1, NULL)) {
 		    keycode = KEY_FUNC1;
 		} else {
-		    pte->device->nextdial = get_tick_count() + TIMER_DIAL;
+			if (pte->device->interdigit_timer) {
+				pte->device->nextdial = get_tick_count() + pte->device->interdigit_timer;
+			}
 		}
 	}
 	if (keycode == KEY_FUNC4) {
@@ -3512,13 +3497,9 @@ static void key_dial_page(struct unistimsession *pte, char keycode)
 		break;
 	case KEY_HANGUP:
 		if (sub && sub->owner) {
-			struct ast_channel *bridgepeer = NULL;
-
 			sub_stop_silence(pte, sub);
 			send_tone(pte, 0, 0);
-			if ((bridgepeer = ast_bridged_channel(sub->owner))) {
-				ast_moh_stop(bridgepeer);
-			}
+			ast_queue_control(sub->owner, AST_CONTROL_UNHOLD);
 			sub->moh = 0;
 			sub->subtype = SUB_REAL;
 			pte->state = STATE_CALL;
@@ -3529,7 +3510,7 @@ static void key_dial_page(struct unistimsession *pte, char keycode)
 			send_led_update(pte, 0x08);
 			send_led_update(pte, 0x10);
 			show_main_page(pte);
-                }
+		}
 		break;
 	case KEY_FAV0:
 	case KEY_FAV1:
@@ -3870,6 +3851,7 @@ static void show_entry_history(struct unistimsession *pte, FILE ** f)
 	char line[TEXT_LENGTH_MAX + 1], status[STATUS_LENGTH_MAX + 1], func1[10], func2[10],
 		func3[10];
 
+	/* Display date/time and call status */
 	if (fread(line, TEXT_LENGTH_MAX, 1, *f) != 1) {
 		display_last_error("Can't read history date entry");
 		fclose(*f);
@@ -3883,6 +3865,7 @@ static void show_entry_history(struct unistimsession *pte, FILE ** f)
 	} else {
 		send_text(TEXT_LINE0, TEXT_NORMAL, pte, line);
 	}
+	/* Display number */
 	if (fread(line, TEXT_LENGTH_MAX, 1, *f) != 1) {
 		display_last_error("Can't read callerid entry");
 		fclose(*f);
@@ -3890,6 +3873,7 @@ static void show_entry_history(struct unistimsession *pte, FILE ** f)
 	}
 	line[sizeof(line) - 1] = '\0';
 	ast_copy_string(pte->device->lst_cid, line, sizeof(pte->device->lst_cid));
+	ast_trim_blanks(pte->device->lst_cid);
 	if (pte->device->height == 1) {
 		if (pte->buff_entry[3] == 2) {
 			send_text(TEXT_LINE0, TEXT_NORMAL, pte, line);
@@ -3897,6 +3881,7 @@ static void show_entry_history(struct unistimsession *pte, FILE ** f)
 	} else {
 		send_text(TEXT_LINE1, TEXT_NORMAL, pte, line);
 	}
+	/* Display name */
 	if (fread(line, TEXT_LENGTH_MAX, 1, *f) != 1) {
 		display_last_error("Can't read callername entry");
 		fclose(*f);
@@ -3998,6 +3983,8 @@ static void show_main_page(struct unistimsession *pte)
 	}
 
 	pte->state = STATE_MAINPAGE;
+	send_led_update(pte, 0);
+	pte->device->lastmsgssent = -1;
 
 	send_tone(pte, 0, 0);
 	send_stop_timer(pte); /* case of holding call */
@@ -4325,6 +4312,7 @@ static void process_request(int size, unsigned char *buf, struct unistimsession 
 		if (unistimdebug) {
 			ast_verb(0, "Got the firmware version : '%s'\n", buf + 13);
 		}
+		ast_copy_string(pte->firmware, (char *) (buf + 13), sizeof(pte->firmware));
 		init_phone_step2(pte);
 		return;
 	}
@@ -4450,6 +4438,7 @@ static void process_request(int size, unsigned char *buf, struct unistimsession 
 		} else if (pte->state == STATE_EXTENSION) {
 			return;
 		} else {
+			pte->device->nextdial = 0;
 			show_main_page(pte);
 		}
 		return;
@@ -4649,6 +4638,7 @@ static struct unistimsession *channel_to_session(struct ast_channel *ast)
 	ast_mutex_lock(&sub->parent->parent->lock);
 	if (!sub->parent->parent->session) {
 		ast_log(LOG_WARNING, "Unistim callback function called without a session\n");
+		ast_mutex_unlock(&sub->parent->parent->lock);
 		return NULL;
 	}
 	ast_mutex_unlock(&sub->parent->parent->lock);
@@ -4800,9 +4790,7 @@ static int unistim_hangup(struct ast_channel *ast)
 		if (unistimdebug) {
 			ast_verb(0, "Threeway call disconnected, switching to real call\n");
 		}
-		if (ast_bridged_channel(sub_trans->owner)) {
-			ast_moh_stop(ast_bridged_channel(sub_trans->owner));
-		}
+		ast_queue_control(sub_trans->owner, AST_CONTROL_UNHOLD);
 		sub_trans->moh = 0;
 		sub_trans->subtype = SUB_REAL;
 		swap_subs(sub_trans, sub);
@@ -4856,7 +4844,7 @@ static int unistim_hangup(struct ast_channel *ast)
 	refresh_all_favorite(s); /* Update favicons in case of DND keys */
 	if (s->state == STATE_RINGING && sub->subtype == SUB_RING) {
 		send_no_ring(s);
-		if (!ast_test_flag(ast_channel_flags(ast), AST_FLAG_ANSWERED_ELSEWHERE) && ast_channel_hangupcause(ast) != AST_CAUSE_ANSWERED_ELSEWHERE) {
+		if (ast_channel_hangupcause(ast) != AST_CAUSE_ANSWERED_ELSEWHERE) {
 			d->missed_call++;
 			write_history(s, 'i', 1);
 		}
@@ -5082,6 +5070,7 @@ static int unistim_fixup(struct ast_channel *oldchan, struct ast_channel *newcha
 	if (p->owner != oldchan) {
 		ast_log(LOG_WARNING, "old channel wasn't %s (%p) but was %s (%p)\n",
 				ast_channel_name(oldchan), oldchan, ast_channel_name(p->owner), p->owner);
+		ast_mutex_unlock(&p->lock);
 		return -1;
 	}
 
@@ -5224,6 +5213,8 @@ static int unistim_indicate(struct ast_channel *ast, int ind, const void *data,
 		break;
 	default:
 		ast_log(LOG_WARNING, "Don't know how to indicate condition %d\n", ind);
+		/* fallthrough */
+	case AST_CONTROL_PVT_CAUSE_CODE:
 		return -1;
 	}
 
@@ -5498,35 +5489,36 @@ static int unistim_sendtext(struct ast_channel *ast, const char *text)
 /*--- unistim_send_mwi_to_peer: Send message waiting indication ---*/
 static int unistim_send_mwi_to_peer(struct unistim_line *peer, unsigned int tick)
 {
-	struct ast_event *event;
 	int new;
 	char *mailbox, *context;
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
 	context = mailbox = ast_strdupa(peer->mailbox);
 	strsep(&context, "@");
 	if (ast_strlen_zero(context)) {
 		context = "default";
 	}
-	event = ast_event_get_cached(AST_EVENT_MWI,
-		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
-		AST_EVENT_IE_END);
 
-	if (event) {
-		new = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
-		ast_event_destroy(event);
+	ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
+
+	msg = stasis_cache_get(stasis_mwi_topic_cached(), stasis_mwi_state_type(), ast_str_buffer(uniqueid));
+
+	if (msg) {
+		struct stasis_mwi_state *mwi_state = stasis_message_data(msg);
+		new = mwi_state->new_msgs;
 	} else { /* Fall back on checking the mailbox directly */
 		new = ast_app_has_voicemail(peer->mailbox, "INBOX");
 	}
-
-	peer->nextmsgcheck = tick + TIMER_MWI;
+	ast_debug(3, "MWI Status for mailbox %s is %d, lastmsgsent:%d\n",mailbox,new,peer->parent->lastmsgssent);
+	peer->parent->nextmsgcheck = tick + TIMER_MWI;
 
 	/* Return now if it's the same thing we told them last time */
-	if (new == peer->lastmsgssent) {
+	if ((peer->parent->session->state != STATE_MAINPAGE) || (new == peer->parent->lastmsgssent)) {
 		return 0;
 	}
 
-	peer->lastmsgssent = new;
+	peer->parent->lastmsgssent = new;
 	send_led_update(peer->parent->session, (new > 0));
 
 	return 0;
@@ -5680,7 +5672,7 @@ static void *do_monitor(void *data)
 				struct unistim_line *l;
 				AST_LIST_LOCK(&cur->device->lines);
 				AST_LIST_TRAVERSE(&cur->device->lines, l, list) {
-					if ((!ast_strlen_zero(l->mailbox)) && (tick >= l->nextmsgcheck)) {
+					if ((!ast_strlen_zero(l->mailbox)) && (tick >= l->parent->nextmsgcheck)) {
 						DEBUG_TIMER("Checking mailbox for MWI\n");
 						unistim_send_mwi_to_peer(l, tick);
 						break;
@@ -5816,6 +5808,12 @@ static struct ast_channel *unistim_request(const char *type, struct ast_format_c
 	if (unistimdebug) {
 		ast_verb(0, "unistim_request owner = %p\n", sub->owner);
 	}
+	start_rtp(sub);
+	if (!sub->rtp) {
+		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", sub->parent->name, d->name);
+                                    return NULL;
+	}
+
 	restart_monitor();
 
 	/* and finish */
@@ -5900,9 +5898,9 @@ static char *unistim_show_info(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	s = sessions;
 	while (s) {
 		ast_cli(a->fd,
-				"sin=%s timeout=%u state=%s macaddr=%s device=%s session=%p\n",
+				"sin=%s timeout=%u state=%s macaddr=%s device=%p session=%p\n",
 				ast_inet_ntoa(s->sin.sin_addr), s->timeout, ptestate_tostr(s->state), s->macaddr,
-				s->device->name, s);
+				s->device, s);
 		s = s->next;
 	}
 	ast_mutex_unlock(&sessionlock);
@@ -5928,12 +5926,13 @@ static char *unistim_show_devices(struct ast_cli_entry *e, int cmd, struct ast_c
 	if (a->argc != e->args)
 		return CLI_SHOWUSAGE;
 
-	ast_cli(a->fd, "%-20.20s %-20.20s %-15.15s %s\n", "Name/username", "MAC", "Host", "Status");
+	ast_cli(a->fd, "%-20.20s %-20.20s %-15.15s %-15.15s %s\n", "Name/username", "MAC", "Host", "Firmware", "Status");
 	ast_mutex_lock(&devicelock);
 	while (device) {
-		ast_cli(a->fd, "%-20.20s %-20.20s %-15.15s %s\n",
+		ast_cli(a->fd, "%-20.20s %-20.20s %-15.15s %-15.15s %s\n",
 			device->name, device->id,
 			(!device->session) ? "(Unspecified)" : ast_inet_ntoa(device->session->sin.sin_addr),
+			(!device->session) ? "(Unspecified)" : device->session->firmware,
 			(!device->session) ? "UNKNOWN" : "OK");
 		device = device->next;
 	}
@@ -6280,6 +6279,7 @@ static struct unistim_device *build_device(const char *cat, const struct ast_var
 	d->mute = MUTE_OFF;
 	d->height = DEFAULTHEIGHT;
 	d->selected = -1;
+	d->interdigit_timer = DEFAULT_INTERDIGIT_TIMER;
 	linelabel[0] = '\0';
 	dateformat = 1;
 	timeformat = 1;
@@ -6338,6 +6338,8 @@ static struct unistim_device *build_device(const char *cat, const struct ast_var
 			callhistory = atoi(v->value);
 		} else if (!strcasecmp(v->name, "sharpdial")) {
 			sharpdial = ast_true(v->value) ? 1 : 0;
+		} else if (!strcasecmp(v->name, "interdigit_timer")) {
+			d->interdigit_timer = atoi(v->value);
 		} else if (!strcasecmp(v->name, "callerid")) {
 			if (!strcasecmp(v->value, "asreceived")) {
 				lt->cid_num[0] = '\0';

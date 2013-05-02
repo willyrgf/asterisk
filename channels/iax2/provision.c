@@ -23,6 +23,10 @@
  * \author Mark Spencer <markster@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
@@ -41,9 +45,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astdb.h"
 #include "asterisk/utils.h"
 #include "asterisk/acl.h"
-#include "iax2.h"
-#include "iax2-provision.h"
-#include "iax2-parser.h"
+
+#include "include/iax2.h"
+#include "include/provision.h"
+#include "include/parser.h"
 
 static int provinit = 0;
 
@@ -258,7 +263,9 @@ int iax_provision_version(unsigned int *version, const char *template, int force
 	memset(&ied, 0, sizeof(ied));
 
 	ast_mutex_lock(&provlock);
-	ast_db_get("iax/provisioning/cache", template, tmp, sizeof(tmp));
+	if (ast_db_get("iax/provisioning/cache", template, tmp, sizeof(tmp))) {
+		ast_log(LOG_ERROR, "ast_db_get failed to retrieve iax/provisioning/cache/%s\n", template);
+	}
 	if (sscanf(tmp, "v%30x", version) != 1) {
 		if (strcmp(tmp, "u")) {
 			ret = iax_provision_build(&ied, version, template, force);

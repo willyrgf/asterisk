@@ -1,5 +1,5 @@
 #
-# Asterisk -- A telephony toolkit for Linux.
+# Asterisk -- An open source telephony toolkit.
 # 
 # Makefile for PBX applications
 #
@@ -37,4 +37,3 @@ ifneq ($(findstring $(OSARCH), mingw32 cygwin ),)
   LIBS+= -lres_features.so -lres_ael_share.so -lres_monitor.so -lres_speech.so
   LIBS+= -lres_smdi.so
 endif
-

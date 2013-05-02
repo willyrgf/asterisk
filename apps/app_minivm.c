@@ -26,7 +26,6 @@
  * based on the Comedian Mail voicemail system (app_voicemail.c).
  * 
  * \par See also
- * \arg \ref Config_minivm
  * \arg \ref Config_minivm_examples
  * \arg \ref App_minivm
  *
@@ -1159,7 +1158,6 @@ static const char *ast_str_encode_mime(struct ast_str **end, ssize_t maxlen, con
 {
 	struct ast_str *tmp = ast_str_alloca(80);
 	int first_section = 1;
-	*end = '\0';
 
 	ast_str_reset(*end);
 	ast_str_set(&tmp, -1, "=?%s?Q?", charset);
@@ -1229,6 +1227,7 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	char dur[PATH_MAX];
 	char tmp[80] = "/tmp/astmail-XXXXXX";
 	char tmp2[PATH_MAX];
+	char newtmp[PATH_MAX]; /* Only used with volgain */
 	struct timeval now;
 	struct ast_tm tm;
 	struct minivm_zone *the_zone = NULL;
@@ -1255,6 +1254,8 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 
 	if (ast_strlen_zero(email)) {
 		ast_log(LOG_WARNING, "No address to send message to.\n");
+		ast_free(str1);
+		ast_free(str2);
 		return -1;	
 	}
 
@@ -1266,26 +1267,23 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 
 	/* If we have a gain option, process it now with sox */
 	if (type == MVM_MESSAGE_EMAIL && (vmu->volgain < -.001 || vmu->volgain > .001) ) {
-		char newtmp[PATH_MAX];
 		char tmpcmd[PATH_MAX];
 		int tmpfd;
-
-		/**
-		 * XXX
-		 * /bug tmpfd is a leaked fd.  The file is also never unlinked.
-		 *      See app_voicemail.c for how the code works there that
-		 *      doesn't have this bug.
-		 */
 
 		ast_copy_string(newtmp, "/tmp/XXXXXX", sizeof(newtmp));
 		ast_debug(3, "newtmp: %s\n", newtmp);
 		tmpfd = mkstemp(newtmp);
-		if (tmpfd > -1) {
-			snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, filename, format, newtmp, format);
-			ast_safe_system(tmpcmd);
-			finalfilename = newtmp;
-			ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", filename, format, vmu->volgain, vmu->username);
+		if (tmpfd < 0) {
+			ast_log(LOG_WARNING, "Failed to create temporary file for volgain: %d\n", errno);
+			ast_free(str1);
+			ast_free(str2);
+			return -1;
 		}
+		snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, filename, format, newtmp, format);
+		ast_safe_system(tmpcmd);
+		close(tmpfd);
+		finalfilename = newtmp;
+		ast_debug(3, "VOLGAIN: Stored at: %s.%s - Level: %.4f - Mailbox: %s\n", filename, format, vmu->volgain, vmu->username);
 	} else {
 		finalfilename = ast_strdupa(filename);
 	}
@@ -1309,11 +1307,15 @@ static int sendmail(struct minivm_template *template, struct minivm_account *vmu
 	}
 	if (!p) {
 		ast_log(LOG_WARNING, "Unable to open temporary file '%s'\n", tmp);
+		ast_free(str1);
+		ast_free(str2);
 		return -1;
 	}
 	/* Allocate channel used for chanvar substitution */
 	ast = ast_dummy_channel_alloc();
 	if (!ast) {
+		ast_free(str1);
+		ast_free(str2);
 		return -1;
 	}
 
@@ -2011,7 +2013,6 @@ static int leave_voicemail(struct ast_channel *chan, char *username, struct leav
  * \brief Queue a message waiting event */
 static void queue_mwi_event(const char *mbx, const char *ctx, int urgent, int new, int old)
 {
-	struct ast_event *event;
 	char *mailbox, *context;
 
 	mailbox = ast_strdupa(mbx);
@@ -2020,16 +2021,7 @@ static void queue_mwi_event(const char *mbx, const char *ctx, int urgent, int ne
 		context = "default";
 	}
 
-	if (!(event = ast_event_new(AST_EVENT_MWI,
-			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
-			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, context,
-			AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_UINT, (new+urgent),
-			AST_EVENT_IE_OLDMSGS, AST_EVENT_IE_PLTYPE_UINT, old,
-			AST_EVENT_IE_END))) {
-		return;
-	}
-
-	ast_event_queue_and_cache(event);
+	stasis_publish_mwi_state(mailbox, context, new + urgent, old);
 }
 
 /*!\internal
@@ -2048,10 +2040,6 @@ static int minivm_mwi_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmpptr = ast_strdupa((char *)data);
-	if (!tmpptr) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 	if (argc < 4) {
 		ast_log(LOG_ERROR, "%d arguments passed to MiniVM_MWI, need 4.\n", argc);
@@ -2096,10 +2084,6 @@ static int minivm_notify_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmpptr = ast_strdupa((char *)data);
-	if (!tmpptr) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 
 	if (argc == 2 && !ast_strlen_zero(argv[1]))
@@ -2180,10 +2164,6 @@ static int minivm_record_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmp = ast_strdupa((char *)data);
-	if (!tmp) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmp, ',', argv, ARRAY_LEN(argv));
 	if (argc == 2) {
 		if (ast_app_parse_options(minivm_app_options, &flags, opts, argv[1])) {
@@ -2243,10 +2223,6 @@ static int minivm_greet_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 	tmpptr = ast_strdupa((char *)data);
-	if (!tmpptr) {
-		ast_log(LOG_ERROR, "Out of memory\n");
-		return -1;
-	}
 	argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 
 	if (argc == 2) {
@@ -2468,14 +2444,9 @@ static int minivm_accmess_exec(struct ast_channel *chan, const char *data)
 	if (ast_strlen_zero(data))  {
 		ast_log(LOG_ERROR, "MinivmAccmess needs at least two arguments: account and option\n");
 		error = TRUE;
-	} else 
+	} else {
 		tmpptr = ast_strdupa((char *)data);
-	if (!error) {
-		if (!tmpptr) {
-			ast_log(LOG_ERROR, "Out of memory\n");
-			error = TRUE;
-		} else
-			argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
+		argc = ast_app_separate_args(tmpptr, ',', argv, ARRAY_LEN(argv));
 	}
 
 	if (argc <=1) {
@@ -2615,7 +2586,7 @@ static int create_vmaccount(char *name, struct ast_variable *var, int realtime)
 			char *varname = ast_strdupa(var->value);
 			struct ast_variable *tmpvar;
 
-			if (varname && (varval = strchr(varname, '='))) {
+			if ((varval = strchr(varname, '='))) {
 				*varval = '\0';
 				varval++;
 				if ((tmpvar = ast_variable_new(varname, varval, ""))) {
@@ -2673,11 +2644,6 @@ static int timezone_add(const char *zonename, const char *config)
 		return 0;
 
 	msg_format = ast_strdupa(config);
-	if (msg_format == NULL) {
-		ast_log(LOG_WARNING, "Out of memory.\n");
-		ast_free(newzone);
-		return 0;
-	}
 
 	timezone_str = strsep(&msg_format, "|");
 	if (!msg_format) {
@@ -3193,10 +3159,7 @@ static int minivm_account_func_read(struct ast_channel *chan, const char *cmd, c
 	struct minivm_account *vmu;
 	char *username, *domain, *colname;
 
-	if (!(username = ast_strdupa(data))) {
-		ast_log(LOG_ERROR, "Memory Error!\n");
-		return -1;
-	}
+	username = ast_strdupa(data);
 
 	if ((colname = strchr(username, ':'))) {
 		*colname = '\0';
@@ -3346,10 +3309,8 @@ static int minivm_counter_func_read(struct ast_channel *chan, const char *cmd, c
 
 	*buf = '\0';
 
-	if (!(username = ast_strdupa(data))) {	/* Copy indata to local buffer */
-		ast_log(LOG_WARNING, "Memory error!\n");
-		return -1;
-	}
+	username = ast_strdupa(data);
+
 	if ((countername = strchr(username, ':'))) {
 		*countername = '\0';
 		countername++;
@@ -3404,10 +3365,7 @@ static int minivm_counter_func_write(struct ast_channel *chan, const char *cmd, 
 		return -1;
 	change = atoi(value);
 
-	if (!(username = ast_strdupa(data))) {	/* Copy indata to local buffer */
-		ast_log(LOG_WARNING, "Memory error!\n");
-		return -1;
-	}
+	username = ast_strdupa(data);
 
 	if ((countername = strchr(username, ':'))) {
 		*countername = '\0';

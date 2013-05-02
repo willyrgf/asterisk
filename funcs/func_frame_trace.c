@@ -209,7 +209,8 @@ static void print_frame(struct ast_frame *frame)
 	switch (frame->frametype) {
 	case AST_FRAME_DTMF_END:
 		ast_verbose("FrameType: DTMF END\n");
-		ast_verbose("Digit: %d\n", frame->subclass.integer);
+		ast_verbose("Digit: 0x%02X '%c'\n", frame->subclass.integer,
+			frame->subclass.integer < ' ' ? ' ' : frame->subclass.integer);
 		break;
 	case AST_FRAME_VOICE:
 		ast_verbose("FrameType: VOICE\n");
@@ -324,8 +325,26 @@ static void print_frame(struct ast_frame *frame)
 		case AST_CONTROL_UPDATE_RTP_PEER:
 			ast_verbose("SubClass: UPDATE_RTP_PEER\n");
 			break;
+		case AST_CONTROL_PVT_CAUSE_CODE:
+			ast_verbose("SubClass: PVT_CAUSE_CODE\n");
+			break;
+		case AST_CONTROL_STREAM_STOP:
+			ast_verbose("SubClass: STREAM_STOP\n");
+			break;
+		case AST_CONTROL_STREAM_SUSPEND:
+			ast_verbose("SubClass: STREAM_SUSPEND\n");
+			break;
+		case AST_CONTROL_STREAM_RESTART:
+			ast_verbose("SubClass: STREAM_RESTART\n");
+			break;
+		case AST_CONTROL_STREAM_REVERSE:
+			ast_verbose("SubClass: STREAM_REVERSE\n");
+			break;
+		case AST_CONTROL_STREAM_FORWARD:
+			ast_verbose("SubClass: STREAM_FORWARD\n");
+			break;
 		}
-		
+
 		if (frame->subclass.integer == -1) {
 			ast_verbose("SubClass: %d\n", frame->subclass.integer);
 		}
@@ -354,7 +373,8 @@ static void print_frame(struct ast_frame *frame)
 		break;
 	case AST_FRAME_DTMF_BEGIN:
 		ast_verbose("FrameType: DTMF BEGIN\n");
-		ast_verbose("Digit: %d\n", frame->subclass.integer);
+		ast_verbose("Digit: 0x%02X '%c'\n", frame->subclass.integer,
+			frame->subclass.integer < ' ' ? ' ' : frame->subclass.integer);
 		break;
 	}
 

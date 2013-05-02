@@ -29,9 +29,17 @@
  *
  * \par See also
  * \arg Config_h323
- * \extref OpenH323 http://www.voxgratia.org/
+ * OpenH323 http://www.voxgratia.org/
  *
  * \ingroup channel_drivers
+ */
+
+/*! \li \ref chan_h323.c uses the configuration file \ref h323.conf
+ * \addtogroup configuration_file
+ */
+
+/*! \page h323.conf h323.conf
+ * \verbinclude h323.conf.sample
  */
 
 /*** MODULEINFO
@@ -941,6 +949,7 @@ static int oh323_indicate(struct ast_channel *c, int condition, const void *data
 		res = 0;
 		break;
 	case AST_CONTROL_PROCEEDING:
+	case AST_CONTROL_PVT_CAUSE_CODE:
 	case -1:
 		break;
 	default:

@@ -23,11 +23,16 @@
  * \author David Vossel <dvossel@digium.com>
  */
 
+/*** MODULEINFO
+	<support_level>core</support_level>
+ ***/
+
 #include "asterisk.h"
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/logger.h"
 #include "asterisk/config.h"
+#include "asterisk/config_options.h"
 #include "include/confbridge.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/cli.h"
@@ -35,59 +40,703 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/pbx.h"
 
-#define CONFBRIDGE_CONFIG "confbridge.conf"
 
-static struct ao2_container *user_profiles;
-static struct ao2_container *bridge_profiles;
-static struct ao2_container *menus;
+/*** DOCUMENTATION
+	<configInfo name="app_confbridge" language="en_US">
+		<synopsis>Conference Bridge Application</synopsis>
+		<configFile name="confbridge.conf">
+			<configObject name="global">
+				<synopsis>Unused, but reserved.</synopsis>
+			</configObject>
+			<configObject name="user_profile">
+				<synopsis>A named profile to apply to specific callers.</synopsis>
+				<description><para>Callers in a ConfBridge have a profile associated with them
+				that determine their options. A configuration section is determined to be a
+				user_profile when the <literal>type</literal> parameter has a value
+				of <literal>user</literal>.
+				</para></description>
+				<configOption name="type">
+					<synopsis>Define this configuration category as a user profile.</synopsis>
+					<description><para>The type parameter determines how a context in the
+					configuration file is interpreted.</para>
+					<enumlist>
+						<enum name="user"><para>Configure the context as a <replaceable>user_profile</replaceable></para></enum>
+						<enum name="bridge"><para>Configure the context as a <replaceable>bridge_profile</replaceable></para></enum>
+						<enum name="menu"><para>Configure the context as a <replaceable>menu</replaceable></para></enum>
+					</enumlist>
+					</description>
+				</configOption>
+				<configOption name="admin">
+					<synopsis>Sets if the user is an admin or not</synopsis>
+				</configOption>
+				<configOption name="marked">
+					<synopsis>Sets if this is a marked user or not</synopsis>
+				</configOption>
+				<configOption name="startmuted">
+					<synopsis>Sets if all users should start out muted</synopsis>
+				</configOption>
+				<configOption name="music_on_hold_when_empty">
+					<synopsis>Play MOH when user is alone or waiting on a marked user</synopsis>
+				</configOption>
+				<configOption name="quiet">
+					<synopsis>Silence enter/leave prompts and user intros for this user</synopsis>
+				</configOption>
+				<configOption name="announce_user_count">
+					<synopsis>Sets if the number of users should be announced to the user</synopsis>
+				</configOption>
+				<configOption name="announce_user_count_all">
+					<synopsis>Announce user count to all the other users when this user joins</synopsis>
+					<description><para>Sets if the number of users should be announced to all the other users
+					in the conference when this user joins. This option can be either set to 'yes' or
+					a number. When set to a number, the announcement will only occur once the user
+					count is above the specified number.
+					</para></description>
+				</configOption>
+				<configOption name="announce_only_user">
+					<synopsis>Announce to a user when they join an empty conference</synopsis>
+				</configOption>
+				<configOption name="wait_marked">
+					<synopsis>Sets if the user must wait for a marked user to enter before joining a conference</synopsis>
+				</configOption>
+				<configOption name="end_marked">
+					<synopsis>Kick the user from the conference when the last marked user leaves</synopsis>
+				</configOption>
+				<configOption name="talk_detection_events">
+					<synopsis>Set whether or not notifications of when a user begins and ends talking should be sent out as events over AMI</synopsis>
+				</configOption>
+				<configOption name="dtmf_passthrough">
+					<synopsis>Sets whether or not DTMF should pass through the conference</synopsis>
+				</configOption>
+				<configOption name="announce_join_leave">
+					<synopsis>Prompt user for their name when joining a conference and play it to the conference when they enter</synopsis>
+				</configOption>
+				<configOption name="pin">
+					<synopsis>Sets a PIN the user must enter before joining the conference</synopsis>
+				</configOption>
+				<configOption name="music_on_hold_class">
+					<synopsis>The MOH class to use for this user</synopsis>
+				</configOption>
+				<configOption name="announcement">
+					<synopsis>Sound file to play to the user when they join a conference</synopsis>
+				</configOption>
+				<configOption name="denoise">
+					<synopsis>Apply a denoise filter to the audio before mixing</synopsis>
+					<description><para>Sets whether or not a denoise filter should be applied
+					to the audio before mixing or not.  Off by default. Requires
+					codec_speex to be built and installed.  Do not confuse this option
+					with drop_silence.  Denoise is useful if there is a lot of background
+					noise for a user as it attempts to remove the noise while preserving
+					the speech.  This option does NOT remove silence from being mixed into
+					the conference and does come at the cost of a slight performance hit.
+					</para></description>
+				</configOption>
+				<configOption name="dsp_drop_silence">
+					<synopsis>Drop what Asterisk detects as silence from audio sent to the bridge</synopsis>
+					<description><para>
+					This option drops what Asterisk detects as silence from
+					entering into the bridge.  Enabling this option will drastically
+					improve performance and help remove the buildup of background
+					noise from the conference. Highly recommended for large conferences
+					due to its performance enhancements.
+					</para></description>
+				</configOption>
+				<configOption name="dsp_silence_threshold">
+					<synopsis>The number of milliseconds of detected silence necessary to trigger silence detection</synopsis>
+					<description><para>
+					The time in milliseconds of sound falling within the what
+					the dsp has established as baseline silence before a user
+					is considered be silent.  This value affects several
+					operations and should not be changed unless the impact
+					on call quality is fully understood.</para>
+					<para>What this value affects internally:</para>
+					<para>
+						1. When talk detection AMI events are enabled, this value
+						determines when the user has stopped talking after a
+						period of talking.  If this value is set too low
+						AMI events indicating the user has stopped talking
+						may get falsely sent out when the user briefly pauses
+						during mid sentence.
+					</para>
+					<para>
+						2. The drop_silence option depends on this value to
+						determine when the user's audio should begin to be
+						dropped from the conference bridge after the user
+						stops talking.  If this value is set too low the user's
+						audio stream may sound choppy to the other participants.
+						This is caused by the user transitioning constantly from
+						silence to talking during mid sentence.
+					</para>
+					<para>
+						The best way to approach this option is to set it slightly above
+						the maximum amount of ms of silence a user may generate during
+						natural speech.
+					</para>
+					<para>By default this value is 2500ms. Valid values are 1 through 2^31.</para>
+					</description>
+				</configOption>
+				<configOption name="dsp_talking_threshold">
+					<synopsis>The number of milliseconds of detected non-silence necessary to triger talk detection</synopsis>
+					<description><para>
+						The time in milliseconds of sound above what the dsp has
+						established as base line silence for a user before a user
+						is considered to be talking.  This value affects several
+						operations and should not be changed unless the impact on
+						call quality is fully understood.</para>
+						<para>
+						What this value affects internally:
+						</para>
+						<para>
+						1. Audio is only mixed out of a user's incoming audio stream
+						if talking is detected.  If this value is set too
+						loose the user will hear themselves briefly each
+						time they begin talking until the dsp has time to
+						establish that they are in fact talking.
+						</para>
+						<para>
+						2. When talk detection AMI events are enabled, this value
+						determines when talking has begun which results in
+						an AMI event to fire.  If this value is set too tight
+						AMI events may be falsely triggered by variants in
+						room noise.
+						</para>
+						<para>
+						3. The drop_silence option depends on this value to determine
+						when the user's audio should be mixed into the bridge
+						after periods of silence.  If this value is too loose
+						the beginning of a user's speech will get cut off as they
+						transition from silence to talking.
+						</para>
+						<para>By default this value is 160 ms. Valid values are 1 through 2^31</para>
+					</description>
+				</configOption>
+				<configOption name="jitterbuffer">
+					<synopsis>Place a jitter buffer on the user's audio stream before audio mixing is performed</synopsis>
+					<description><para>
+						Enabling this option places a jitterbuffer on the user's audio stream
+						before audio mixing is performed.  This is highly recommended but will
+						add a slight delay to the audio.  This option is using the <literal>JITTERBUFFER</literal>
+						dialplan function's default adaptive jitterbuffer.  For a more fine tuned
+						jitterbuffer, disable this option and use the <literal>JITTERBUFFER</literal> dialplan function
+						on the user before entering the ConfBridge application.
+					</para></description>
+				</configOption>
+				<configOption name="template">
+					<synopsis>When using the CONFBRIDGE dialplan function, use a user profile as a template for creating a new temporary profile</synopsis>
+				</configOption>
+			</configObject>
+			<configObject name="bridge_profile">
+				<synopsis>A named profile to apply to specific bridges.</synopsis>
+				<description><para>ConfBridge bridges have a profile associated with them
+				that determine their options. A configuration section is determined to be a
+				<literal>bridge_profile</literal> when the <literal>type</literal> parameter has a value
+				of <literal>bridge</literal>.
+				</para></description>
+				<configOption name="type">
+					<synopsis>Define this configuration category as a bridge profile</synopsis>
+					<description><para>The type parameter determines how a context in the
+					configuration file is interpreted.</para>
+					<enumlist>
+						<enum name="user"><para>Configure the context as a <replaceable>user_profile</replaceable></para></enum>
+						<enum name="bridge"><para>Configure the context as a <replaceable>bridge_profile</replaceable></para></enum>
+						<enum name="menu"><para>Configure the context as a <replaceable>menu</replaceable></para></enum>
+					</enumlist>
+					</description>
+				</configOption>
+				<configOption name="jitterbuffer">
+					<synopsis>Place a jitter buffer on the conference's audio stream</synopsis>
+				</configOption>
+				<configOption name="internal_sample_rate">
+					<synopsis>Set the internal native sample rate for mixing the conference</synopsis>
+					<description><para>
+						Sets the internal native sample rate the
+						conference is mixed at.  This is set to automatically
+						adjust the sample rate to the best quality by default.
+						Other values can be anything from 8000-192000.  If a
+						sample rate is set that Asterisk does not support, the
+						closest sample rate Asterisk does support to the one requested
+						will be used.
+					</para></description>
+				</configOption>
+				<configOption name="mixing_interval">
+					<synopsis>Sets the internal mixing interval in milliseconds for the bridge</synopsis>
+					<description><para>
+						Sets the internal mixing interval in milliseconds for the bridge.  This
+						number reflects how tight or loose the mixing will be for the conference.
+						In order to improve performance a larger mixing interval such as 40ms may
+						be chosen.  Using a larger mixing interval comes at the cost of introducing
+						larger amounts of delay into the bridge.  Valid values here are 10, 20, 40,
+						or 80.
+					</para></description>
+				</configOption>
+				<configOption name="record_conference">
+					<synopsis>Record the conference starting with the first active user's entrance and ending with the last active user's exit</synopsis>
+					<description><para>
+						Records the conference call starting when the first user
+						enters the room, and ending when the last user exits the room.
+						The default recorded filename is
+						<filename>'confbridge-${name of conference bridge}-${start time}.wav</filename>
+						and the default format is 8khz slinear.  This file will be
+						located in the configured monitoring directory in asterisk.conf.
+					</para></description>
+				</configOption>
+				<configOption name="record_file" default="confbridge-${name of conference bridge}-${start time}.wav">
+					<synopsis>The filename of the conference recording</synopsis>
+					<description><para>
+						When record_conference is set to yes, the specific name of the
+						record file can be set using this option.  Note that since multiple
+						conferences may use the same bridge profile, this may cause issues
+						depending on the configuration.  It is recommended to only use this
+						option dynamically with the <literal>CONFBRIDGE()</literal> dialplan function. This
+						allows the record name to be specified and a unique name to be chosen.
+						By default, the record_file is stored in Asterisk's spool/monitor directory
+						with a unique filename starting with the 'confbridge' prefix.
+					</para></description>
+				</configOption>
+				<configOption name="video_mode">
+					<synopsis>Sets how confbridge handles video distribution to the conference participants</synopsis>
+					<description><para>
+						Sets how confbridge handles video distribution to the conference participants.
+						Note that participants wanting to view and be the source of a video feed
+						_MUST_ be sharing the same video codec.  Also, using video in conjunction with
+						with the jitterbuffer currently results in the audio being slightly out of sync
+						with the video.  This is a result of the jitterbuffer only working on the audio
+						stream.  It is recommended to disable the jitterbuffer when video is used.</para>
+						<enumlist>
+							<enum name="none">
+								<para>No video sources are set by default in the conference. It is still
+								possible for a user to be set as a video source via AMI or DTMF action
+								at any time.</para>
+							</enum>
+							<enum name="follow_talker">
+								<para>The video feed will follow whoever is talking and providing video.</para>
+							</enum>
+							<enum name="last_marked">
+								<para>The last marked user to join the conference with video capabilities
+								will be the single source of video distributed to all participants.
+								If multiple marked users are capable of video, the last one to join
+								is always the source, when that user leaves it goes to the one who
+								joined before them.</para>
+							</enum>
+							<enum name="first_marked">
+								<para>The first marked user to join the conference with video capabilities
+								is the single source of video distribution among all participants. If
+								that user leaves, the marked user to join after them becomes the source.</para>
+							</enum>
+						</enumlist>
+					</description>
+				</configOption>
+				<configOption name="max_members">
+					<synopsis>Limit the maximum number of participants for a single conference</synopsis>
+					<description><para>
+						This option limits the number of participants for a single
+						conference to a specific number.  By default conferences
+						have no participant limit. After the limit is reached, the
+						conference will be locked until someone leaves.  Note however
+						that an Admin user will always be alowed to join the conference
+						regardless if this limit is reached or not.
+					</para></description>
+				</configOption>
+				<configOption name="^sound_">
+					<synopsis>Override the various conference bridge sound files</synopsis>
+					<description><para>
+						All sounds in the conference are customizable using the bridge profile options below.
+						Simply state the option followed by the filename or full path of the filename after
+						the option.  Example: <literal>sound_had_joined=conf-hasjoin</literal>  This will play the <literal>conf-hasjoin</literal>
+						sound file found in the sounds directory when announcing someone's name is joining the
+						conference.</para>
+						<enumlist>
+							<enum name="sound_join"><para>The sound played to everyone when someone enters the conference.</para></enum>
+							<enum name="sound_leave"><para>The sound played to everyone when someone leaves the conference.</para></enum>
+							<enum name="sound_has_joined"><para>The sound played before announcing someone's name has
+										joined the conference. This is used for user intros.
+										Example <literal>"_____ has joined the conference"</literal></para></enum>
+							<enum name="sound_has_left"><para>The sound played when announcing someone's name has
+										left the conference. This is used for user intros.
+										Example <literal>"_____ has left the conference"</literal></para></enum>
+							<enum name="sound_kicked"><para>The sound played to a user who has been kicked from the conference.</para></enum>
+							<enum name="sound_muted"><para>The sound played when the mute option it toggled on.</para></enum>
+							<enum name="sound_unmuted"><para>The sound played when the mute option it toggled off.</para></enum>
+							<enum name="sound_only_person"><para>The sound played when the user is the only person in the conference.</para></enum>
+							<enum name="sound_only_one"><para>The sound played to a user when there is only one other
+										person is in the conference.</para></enum>
+							<enum name="sound_there_are"><para>The sound played when announcing how many users there
+										are in a conference.</para></enum>
+							<enum name="sound_other_in_party"><para>This file is used in conjunction with <literal>sound_there_are</literal>
+										when announcing how many users there are in the conference.
+										The sounds are stringed together like this.
+										<literal>"sound_there_are" ${number of participants} "sound_other_in_party"</literal></para></enum>
+							<enum name="sound_place_into_conference"><para>The sound played when someone is placed into the conference
+										after waiting for a marked user.</para></enum>
+							<enum name="sound_wait_for_leader"><para>The sound played when a user is placed into a conference that
+										can not start until a marked user enters.</para></enum>
+							<enum name="sound_leader_has_left"><para>The sound played when the last marked user leaves the conference.</para></enum>
+							<enum name="sound_get_pin"><para>The sound played when prompting for a conference pin number.</para></enum>
+							<enum name="sound_invalid_pin"><para>The sound played when an invalid pin is entered too many times.</para></enum>
+							<enum name="sound_locked"><para>The sound played to a user trying to join a locked conference.</para></enum>
+							<enum name="sound_locked_now"><para>The sound played to an admin after toggling the conference to locked mode.</para></enum>
+							<enum name="sound_unlocked_now"><para>The sound played to an admin after toggling the conference to unlocked mode.</para></enum>
+							<enum name="sound_error_menu"><para>The sound played when an invalid menu option is entered.</para></enum>
+						</enumlist>
+					</description>
+				</configOption>
+				<configOption name="template">
+					<synopsis>When using the CONFBRIDGE dialplan function, use a bridge profile as a template for creating a new temporary profile</synopsis>
+				</configOption>
+			</configObject>
+			<configObject name="menu">
+				<synopsis>A conference user menu</synopsis>
+				<description>
+					<para>Conference users, as defined by a <literal>conf_user</literal>,
+					can have a DTMF menu assigned to their profile when they enter the
+					<literal>ConfBridge</literal> application.</para>
+				</description>
+				<configOption name="type">
+					<synopsis>Define this configuration category as a menu</synopsis>
+					<description><para>The type parameter determines how a context in the
+					configuration file is interpreted.</para>
+					<enumlist>
+						<enum name="user"><para>Configure the context as a <replaceable>user_profile</replaceable></para></enum>
+						<enum name="bridge"><para>Configure the context as a <replaceable>bridge_profile</replaceable></para></enum>
+						<enum name="menu"><para>Configure the context as a <replaceable>menu</replaceable></para></enum>
+					</enumlist>
+					</description>
+				</configOption>
+				<configOption name="^[0-9A-D*#]+$">
+					<synopsis>DTMF sequences to assign various confbridge actions to</synopsis>
+					<description><para>--- ConfBridge Menu Options ---</para>
+					<para>The ConfBridge application also has the ability to apply custom DTMF menus to
+					each channel using the application.  Like the User and Bridge profiles a menu
+					is passed in to ConfBridge as an argument in the dialplan.</para>
+					<para>Below is a list of menu actions that can be assigned to a DTMF sequence.</para>
+					<note><para>
+					A single DTMF sequence can have multiple actions associated with it. This is
+					accomplished by stringing the actions together and using a <literal>,</literal> as the
+					delimiter.  Example:  Both listening and talking volume is reset when <literal>5</literal> is
+					pressed.  <literal>5=reset_talking_volume, reset_listening_volume</literal></para></note>
+					<enumlist>
+						<enum name="playback(filename&amp;filename2&amp;...)"><para>
+							<literal>playback</literal> will play back an audio file to a channel
+							and then immediately return to the conference.
+							This file can not be interupted by DTMF.
+							Multiple files can be chained together using the
+							<literal>&amp;</literal> character.</para></enum>
+						<enum name="playback_and_continue(filename&amp;filename2&amp;...)"><para>
+							<literal>playback_and_continue</literal> will
+							play back a prompt while continuing to
+							collect the dtmf sequence.  This is useful
+							when using a menu prompt that describes all
+							the menu options.  Note however that any DTMF
+							during this action will terminate the prompts
+							playback.  Prompt files can be chained together
+							using the <literal>&amp;</literal> character as a delimiter.</para></enum>
+						<enum name="toggle_mute"><para>
+							Toggle turning on and off mute.  Mute will make the user silent
+							to everyone else, but the user will still be able to listen in.
+							continue to collect the dtmf sequence.</para></enum>
+						<enum name="no_op"><para>
+							This action does nothing (No Operation). Its only real purpose exists for
+							being able to reserve a sequence in the config as a menu exit sequence.</para></enum>
+						<enum name="decrease_listening_volume"><para>
+							Decreases the channel's listening volume.</para></enum>
+						<enum name="increase_listening_volume"><para>
+							Increases the channel's listening volume.</para></enum>
+						<enum name="reset_listening_volume"><para>
+							Reset channel's listening volume to default level.</para></enum>
+						<enum name="decrease_talking_volume"><para>
+							Decreases the channel's talking volume.</para></enum>
+						<enum name="increase_talking_volume"><para>
+							Increases the channel's talking volume.</para></enum>
+						<enum name="reset_talking_volume"><para>
+							Reset channel's talking volume to default level.</para></enum>
+						<enum name="dialplan_exec(context,exten,priority)"><para>
+							The <literal>dialplan_exec</literal> action allows a user
+							to escape from the conference and execute
+							commands in the dialplan.  Once the dialplan
+							exits the user will be put back into the
+							conference.  The possibilities are endless!</para></enum>
+						<enum name="leave_conference"><para>
+							This action allows a user to exit the conference and continue
+							execution in the dialplan.</para></enum>
+						<enum name="admin_kick_last"><para>
+							This action allows an Admin to kick the last participant from the
+							conference. This action will only work for admins which allows
+							a single menu to be used for both users and admins.</para></enum>
+						<enum name="admin_toggle_conference_lock"><para>
+							This action allows an Admin to toggle locking and
+							unlocking the conference.  Non admins can not use
+							this action even if it is in their menu.</para></enum>
+						<enum name="set_as_single_video_src"><para>
+							This action allows any user to set themselves as the
+							single video source distributed to all participants.
+							This will make the video feed stick to them regardless
+							of what the <literal>video_mode</literal> is set to.</para></enum>
+						<enum name="release_as_single_video_src"><para>
+							This action allows a user to release themselves as
+							the video source.  If <literal>video_mode</literal> is not set to <literal>none</literal>
+							this action will result in the conference returning to
+							whatever video mode the bridge profile is using.</para>
+							<para>Note that this action will have no effect if the user
+							is not currently the video source.  Also, the user is
+							not guaranteed by using this action that they will not
+							become the video source again.  The bridge will return
+							to whatever operation the <literal>video_mode</literal> option is set to
+							upon release of the video src.</para></enum>
+						<enum name="admin_toggle_mute_participants"><para>
+							This action allows an administrator to toggle the mute
+							state for all non-admins within a conference.  All
+							admin users are unaffected by this option.  Note that all
+							users, regardless of their admin status, are notified
+							that the conference is muted.</para></enum>
+						<enum name="participant_count"><para>
+							This action plays back the number of participants currently
+							in a conference</para></enum>
+						</enumlist>
+					</description>
+				</configOption>
+			</configObject>
+		</configFile>
+	</configInfo>
+***/
+
+struct confbridge_cfg {
+	struct ao2_container *bridge_profiles;
+	struct ao2_container *user_profiles;
+	struct ao2_container *menus;
+};
+
+static int verify_default_profiles(void);
+static void *bridge_profile_alloc(const char *category);
+static void *bridge_profile_find(struct ao2_container *container, const char *category);
+static struct bridge_profile_sounds *bridge_profile_sounds_alloc(void);
+
+static void bridge_profile_destructor(void *obj)
+{
+	struct bridge_profile *b_profile = obj;
+	ao2_cleanup(b_profile->sounds);
+}
+
+static void *bridge_profile_alloc(const char *category)
+{
+	struct bridge_profile *b_profile;
+
+	if (!(b_profile = ao2_alloc(sizeof(*b_profile), bridge_profile_destructor))) {
+		return NULL;
+	}
+
+	if (!(b_profile->sounds = bridge_profile_sounds_alloc())) {
+		ao2_ref(b_profile, -1);
+		return NULL;
+	}
+
+	ast_copy_string(b_profile->name, category, sizeof(b_profile->name));
+
+	return b_profile;
+}
+
+static void *bridge_profile_find(struct ao2_container *container, const char *category)
+{
+	return ao2_find(container, category, OBJ_KEY);
+}
+
+static struct aco_type bridge_type = {
+	.type = ACO_ITEM,
+	.name = "bridge_profile",
+	.category_match = ACO_BLACKLIST,
+	.category = "^general$",
+	.matchfield = "type",
+	.matchvalue = "bridge",
+	.item_alloc = bridge_profile_alloc,
+	.item_find = bridge_profile_find,
+	.item_offset = offsetof(struct confbridge_cfg, bridge_profiles),
+};
+
+static void *user_profile_alloc(const char *category);
+static void *user_profile_find(struct ao2_container *container, const char *category);
+static void user_profile_destructor(void *obj)
+{
+	return;
+}
+
+static void *user_profile_alloc(const char *category)
+{
+	struct user_profile *u_profile;
+
+	if (!(u_profile = ao2_alloc(sizeof(*u_profile), user_profile_destructor))) {
+		return NULL;
+	}
+
+	ast_copy_string(u_profile->name, category, sizeof(u_profile->name));
+
+	return u_profile;
+}
+
+static void *user_profile_find(struct ao2_container *container, const char *category)
+{
+	return ao2_find(container, category, OBJ_KEY);
+}
+
+static struct aco_type user_type = {
+	.type = ACO_ITEM,
+	.name  = "user_profile",
+	.category_match = ACO_BLACKLIST,
+	.category = "^general$",
+	.matchfield = "type",
+	.matchvalue = "user",
+	.item_alloc = user_profile_alloc,
+	.item_find = user_profile_find,
+	.item_offset = offsetof(struct confbridge_cfg, user_profiles),
+};
+
+static void *menu_alloc(const char *category);
+static void *menu_find(struct ao2_container *container, const char *category);
+static void menu_destructor(void *obj);
+
+static void *menu_alloc(const char *category)
+{
+	struct conf_menu *menu;
+	if (!(menu = ao2_alloc(sizeof(*menu), menu_destructor))) {
+		return NULL;
+	}
+	ast_copy_string(menu->name, category, sizeof(menu->name));
+	return menu;
+}
+
+static void *menu_find(struct ao2_container *container, const char *category)
+{
+	return ao2_find(container, category, OBJ_KEY);
+}
+
+static struct aco_type menu_type = {
+	.type = ACO_ITEM,
+	.name = "menu",
+	.category_match = ACO_BLACKLIST,
+	.category = "^general$",
+	.matchfield = "type",
+	.matchvalue = "menu",
+	.item_alloc = menu_alloc,
+	.item_find = menu_find,
+	.item_offset = offsetof(struct confbridge_cfg, menus),
+};
+
+/* Used to pass to aco_option_register */
+static struct aco_type *bridge_types[] = ACO_TYPES(&bridge_type);
+static struct aco_type *menu_types[] = ACO_TYPES(&menu_type);
+static struct aco_type *user_types[] = ACO_TYPES(&user_type);
+
+/* The general category is reserved, but unused */
+static struct aco_type general_type = {
+	.type = ACO_GLOBAL,
+	.name = "global",
+	.category_match = ACO_WHITELIST,
+	.category = "^general$",
+};
+
+static struct aco_file confbridge_conf = {
+	.filename = "confbridge.conf",
+	.types = ACO_TYPES(&bridge_type, &user_type, &menu_type, &general_type),
+};
+
+static AO2_GLOBAL_OBJ_STATIC(cfg_handle);
+
+static void *confbridge_cfg_alloc(void);
+
+CONFIG_INFO_STANDARD(cfg_info, cfg_handle, confbridge_cfg_alloc,
+	.files = ACO_FILES(&confbridge_conf),
+	.pre_apply_config = verify_default_profiles,
+);
 
 /*! bridge profile container functions */
 static int bridge_cmp_cb(void *obj, void *arg, int flags)
 {
-	const struct bridge_profile *entry1 = obj;
-	const struct bridge_profile *entry2 = arg;
-	return (!strcasecmp(entry1->name, entry2->name)) ? CMP_MATCH | CMP_STOP : 0;
+	const struct bridge_profile *left = obj;
+	const struct bridge_profile *right = arg;
+	const char *right_name = arg;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_name = right->name;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcasecmp(left->name, right_name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncasecmp(left->name, right_name, strlen(right_name));
+		break;
+	}
+	return cmp ? 0 : CMP_MATCH;
 }
+
 static int bridge_hash_cb(const void *obj, const int flags)
 {
 	const struct bridge_profile *b_profile = obj;
-	return ast_str_case_hash(b_profile->name);
-}
-static int bridge_mark_delme_cb(void *obj, void *arg, int flag)
-{
-	struct bridge_profile *entry = obj;
-	entry->delme = 1;
-	return 0;
-}
-static int match_bridge_delme_cb(void *obj, void *arg, int flag)
-{
-	const struct bridge_profile *entry = obj;
-	return entry->delme ? CMP_MATCH : 0;
+	const char *name = obj;
+	int hash;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		name = b_profile->name;
+		/* Fall through */
+	case OBJ_KEY:
+		hash = ast_str_case_hash(name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		/* Should never happen in hash callback. */
+		ast_assert(0);
+		hash = 0;
+		break;
+	}
+	return hash;
 }
 
 /*! menu container functions */
 static int menu_cmp_cb(void *obj, void *arg, int flags)
 {
-	const struct conf_menu *entry1 = obj;
-	const struct conf_menu *entry2 = arg;
-	return (!strcasecmp(entry1->name, entry2->name)) ? CMP_MATCH | CMP_STOP : 0;
+	const struct conf_menu *left = obj;
+	const struct conf_menu *right = arg;
+	const char *right_name = arg;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_name = right->name;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcasecmp(left->name, right_name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncasecmp(left->name, right_name, strlen(right_name));
+		break;
+	}
+	return cmp ? 0 : CMP_MATCH;
 }
+
 static int menu_hash_cb(const void *obj, const int flags)
 {
 	const struct conf_menu *menu = obj;
-	return ast_str_case_hash(menu->name);
+	const char *name = obj;
+	int hash;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		name = menu->name;
+		/* Fall through */
+	case OBJ_KEY:
+		hash = ast_str_case_hash(name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		/* Should never happen in hash callback. */
+		ast_assert(0);
+		hash = 0;
+		break;
+	}
+	return hash;
 }
-static int menu_mark_delme_cb(void *obj, void *arg, int flag)
-{
-	struct conf_menu *entry = obj;
-	entry->delme = 1;
-	return 0;
-}
-static int match_menu_delme_cb(void *obj, void *arg, int flag)
-{
-	const struct conf_menu *entry = obj;
-	return entry->delme ? CMP_MATCH : 0;
-}
+
 static void menu_destructor(void *obj)
 {
 	struct conf_menu *menu = obj;
@@ -102,25 +751,47 @@ static void menu_destructor(void *obj)
 /*! User profile container functions */
 static int user_cmp_cb(void *obj, void *arg, int flags)
 {
-	const struct user_profile *entry1 = obj;
-	const struct user_profile *entry2 = arg;
-	return (!strcasecmp(entry1->name, entry2->name)) ? CMP_MATCH | CMP_STOP : 0;
+	const struct user_profile *left = obj;
+	const struct user_profile *right = arg;
+	const char *right_name = arg;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_name = right->name;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcasecmp(left->name, right_name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncasecmp(left->name, right_name, strlen(right_name));
+		break;
+	}
+	return cmp ? 0 : CMP_MATCH;
 }
+
 static int user_hash_cb(const void *obj, const int flags)
 {
 	const struct user_profile *u_profile = obj;
-	return ast_str_case_hash(u_profile->name);
-}
-static int user_mark_delme_cb(void *obj, void *arg, int flag)
-{
-	struct user_profile *entry = obj;
-	entry->delme = 1;
-	return 0;
-}
-static int match_user_delme_cb(void *obj, void *arg, int flag)
-{
-	const struct user_profile *entry = obj;
-	return entry->delme ? CMP_MATCH : 0;
+	const char *name = obj;
+	int hash;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		name = u_profile->name;
+		/* Fall through */
+	case OBJ_KEY:
+		hash = ast_str_case_hash(name);
+		break;
+	case OBJ_PARTIAL_KEY:
+		/* Should never happen in hash callback. */
+		ast_assert(0);
+		hash = 0;
+		break;
+	}
+	return hash;
 }
 
 /*! Bridge Profile Sounds functions */
@@ -145,76 +816,9 @@ static struct bridge_profile_sounds *bridge_profile_sounds_alloc(void)
 	return sounds;
 }
 
-static int set_user_option(const char *name, const char *value, struct user_profile *u_profile)
+static int set_sound(const char *sound_name, const char *sound_file, struct bridge_profile *b_profile)
 {
-	if (!strcasecmp(name, "admin")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_ADMIN);
-	} else if (!strcasecmp(name, "marked")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_MARKEDUSER);
-	} else if (!strcasecmp(name, "startmuted")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_STARTMUTED);
-	} else if (!strcasecmp(name, "music_on_hold_when_empty")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_MUSICONHOLD);
-	} else if (!strcasecmp(name, "quiet")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_QUIET);
-	} else if (!strcasecmp(name, "announce_user_count_all")) {
-		if (ast_true(value)) {
-			u_profile->flags = u_profile->flags | USER_OPT_ANNOUNCEUSERCOUNTALL;
-		} else if (ast_false(value)) {
-			u_profile->flags = u_profile->flags & ~USER_OPT_ANNOUNCEUSERCOUNTALL;
-		} else if (sscanf(value, "%30u", &u_profile->announce_user_count_all_after) == 1) {
-			u_profile->flags = u_profile->flags | USER_OPT_ANNOUNCEUSERCOUNTALL;
-		} else {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "announce_user_count")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_ANNOUNCEUSERCOUNT);
-	} else if (!strcasecmp(name, "announce_only_user")) {
-		u_profile->flags = ast_true(value) ?
-			u_profile->flags & ~USER_OPT_NOONLYPERSON :
-			u_profile->flags | USER_OPT_NOONLYPERSON;
-	} else if (!strcasecmp(name, "wait_marked")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_WAITMARKED);
-	} else if (!strcasecmp(name, "end_marked")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_ENDMARKED);
-	} else if (!strcasecmp(name, "talk_detection_events")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_TALKER_DETECT);
-	} else if (!strcasecmp(name, "dtmf_passthrough")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_DTMF_PASS);
-	} else if (!strcasecmp(name, "announce_join_leave")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_ANNOUNCE_JOIN_LEAVE);
-	} else if (!strcasecmp(name, "pin")) {
-		ast_copy_string(u_profile->pin, value, sizeof(u_profile->pin));
-	} else if (!strcasecmp(name, "music_on_hold_class")) {
-		ast_copy_string(u_profile->moh_class, value, sizeof(u_profile->moh_class));
-	} else if (!strcasecmp(name, "announcement")) {
-		ast_copy_string(u_profile->announcement, value, sizeof(u_profile->announcement));
-	} else if (!strcasecmp(name, "denoise")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_DENOISE);
-	} else if (!strcasecmp(name, "dsp_talking_threshold")) {
-		if (sscanf(value, "%30u", &u_profile->talking_threshold) != 1) {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "dsp_silence_threshold")) {
-		if (sscanf(value, "%30u", &u_profile->silence_threshold) != 1) {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "dsp_drop_silence")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_DROP_SILENCE);
-	} else if (!strcasecmp(name, "template")) {
-		if (!(conf_find_user_profile(NULL, value, u_profile))) {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "jitterbuffer")) {
-		ast_set2_flag(u_profile, ast_true(value), USER_OPT_JITTERBUFFER);
-	} else {
-		return -1;
-	}
-	return 0;
-}
-
-static int set_sound(const char *sound_name, const char *sound_file, struct bridge_profile_sounds *sounds)
-{
+	struct bridge_profile_sounds *sounds = b_profile->sounds;
 	if (ast_strlen_zero(sound_file)) {
 		return -1;
 	}
@@ -269,92 +873,6 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 
 	return 0;
 }
-static int set_bridge_option(const char *name, const char *value, struct bridge_profile *b_profile)
-{
-	if (!strcasecmp(name, "internal_sample_rate")) {
-		if (!strcasecmp(value, "auto")) {
-			b_profile->internal_sample_rate = 0;
-		} else if (sscanf(value, "%30u", &b_profile->internal_sample_rate) != 1) {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "mixing_interval")) {
-		if (sscanf(value, "%30u", &b_profile->mix_interval) != 1) {
-			return -1;
-		}
-		switch (b_profile->mix_interval) {
-		case 10:
-		case 20:
-		case 40:
-		case 80:
-			break;
-		default:
-			ast_log(LOG_WARNING, "invalid mixing interval %u\n", b_profile->mix_interval);
-			b_profile->mix_interval = 0;
-			return -1;
-		}
-	} else if (!strcasecmp(name, "record_conference")) {
-		ast_set2_flag(b_profile, ast_true(value), BRIDGE_OPT_RECORD_CONFERENCE);
-	} else if (!strcasecmp(name, "video_mode")) {
-		if (!strcasecmp(value, "first_marked")) {
-			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED);
-		} else if (!strcasecmp(value, "last_marked")) {
-			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_LAST_MARKED);
-		} else if (!strcasecmp(value, "follow_talker")) {
-			ast_set_flag(b_profile, BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER);
-		}
-	} else if (!strcasecmp(name, "max_members")) {
-		if (sscanf(value, "%30u", &b_profile->max_members) != 1) {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "record_file")) {
-		ast_copy_string(b_profile->rec_file, value, sizeof(b_profile->rec_file));
-	} else if (strlen(name) >= 5 && !strncasecmp(name, "sound", 5)) {
-		if (set_sound(name, value, b_profile->sounds)) {
-			return -1;
-		}
-	} else if (!strcasecmp(name, "template")) { /* Only documented for use in CONFBRIDGE dialplan function */
-		struct bridge_profile *tmp = b_profile;
-		struct bridge_profile_sounds *sounds = bridge_profile_sounds_alloc();
-		struct bridge_profile_sounds *oldsounds = b_profile->sounds;
-		if (!sounds) {
-			return -1;
-		}
-		if (!(conf_find_bridge_profile(NULL, value, tmp))) {
-			ao2_ref(sounds, -1);
-			return -1;
-		}
-		/* Using a bridge profile as a template is a little complicated due to the sounds. Since the sounds
-		 * structure of a dynamic profile will need to be altered, a completely new sounds structure must be
-		 * created instead of simply holding a reference to the one built by the config file. */
-		ast_string_field_set(sounds, onlyperson, tmp->sounds->onlyperson);
-		ast_string_field_set(sounds, hasjoin, tmp->sounds->hasjoin);
-		ast_string_field_set(sounds, hasleft, tmp->sounds->hasleft);
-		ast_string_field_set(sounds, kicked, tmp->sounds->kicked);
-		ast_string_field_set(sounds, muted, tmp->sounds->muted);
-		ast_string_field_set(sounds, unmuted, tmp->sounds->unmuted);
-		ast_string_field_set(sounds, thereare, tmp->sounds->thereare);
-		ast_string_field_set(sounds, otherinparty, tmp->sounds->otherinparty);
-		ast_string_field_set(sounds, placeintoconf, tmp->sounds->placeintoconf);
-		ast_string_field_set(sounds, waitforleader, tmp->sounds->waitforleader);
-		ast_string_field_set(sounds, leaderhasleft, tmp->sounds->leaderhasleft);
-		ast_string_field_set(sounds, getpin, tmp->sounds->getpin);
-		ast_string_field_set(sounds, invalidpin, tmp->sounds->invalidpin);
-		ast_string_field_set(sounds, locked, tmp->sounds->locked);
-		ast_string_field_set(sounds, unlockednow, tmp->sounds->unlockednow);
-		ast_string_field_set(sounds, lockednow, tmp->sounds->lockednow);
-		ast_string_field_set(sounds, errormenu, tmp->sounds->errormenu);
-		ast_string_field_set(sounds, participantsmuted, tmp->sounds->participantsmuted);
-		ast_string_field_set(sounds, participantsunmuted, tmp->sounds->participantsunmuted);
-
-		ao2_ref(tmp->sounds, -1); /* sounds struct copied over to it from the template by reference only. */
-		ao2_ref(oldsounds,-1);    /* original sounds struct we don't need anymore */
-		tmp->sounds = sounds;     /* the new sounds struct that is a deep copy of the one from the template. */
-	} else {
-		return -1;
-	}
-
-	return 0;
-}
 
 /*! CONFBRIDGE dialplan function functions and channel datastore. */
 struct func_confbridge_data {
@@ -375,17 +893,17 @@ static const struct ast_datastore_info confbridge_datastore = {
 };
 int func_confbridge_helper(struct ast_channel *chan, const char *cmd, char *data, const char *value)
 {
-	struct ast_datastore *datastore = NULL;
-	struct func_confbridge_data *b_data = NULL;
-	char *parse = NULL;
-	int new = 0;
+	struct ast_datastore *datastore;
+	struct func_confbridge_data *b_data;
+	char *parse;
+	struct ast_variable tmpvar = { 0, };
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(type);
 		AST_APP_ARG(option);
 	);
 
 	/* parse all the required arguments and make sure they exist. */
-	if (ast_strlen_zero(data) || ast_strlen_zero(value)) {
+	if (ast_strlen_zero(data)) {
 		return -1;
 	}
 	parse = ast_strdupa(data);
@@ -395,144 +913,55 @@ int func_confbridge_helper(struct ast_channel *chan, const char *cmd, char *data
 	}
 
 	ast_channel_lock(chan);
-	if (!(datastore = ast_channel_datastore_find(chan, &confbridge_datastore, NULL))) {
-		ast_channel_unlock(chan);
-
-		if (!(datastore = ast_datastore_alloc(&confbridge_datastore, NULL))) {
+	datastore = ast_channel_datastore_find(chan, &confbridge_datastore, NULL);
+	if (!datastore) {
+		datastore = ast_datastore_alloc(&confbridge_datastore, NULL);
+		if (!datastore) {
+			ast_channel_unlock(chan);
 			return 0;
 		}
-		if (!(b_data = ast_calloc(1, sizeof(*b_data)))) {
+		b_data = ast_calloc(1, sizeof(*b_data));
+		if (!b_data) {
+			ast_channel_unlock(chan);
 			ast_datastore_free(datastore);
 			return 0;
 		}
-		if (!(b_data->b_profile.sounds = bridge_profile_sounds_alloc())) {
+		b_data->b_profile.sounds = bridge_profile_sounds_alloc();
+		if (!b_data->b_profile.sounds) {
+			ast_channel_unlock(chan);
 			ast_datastore_free(datastore);
 			ast_free(b_data);
 			return 0;
 		}
 		datastore->data = b_data;
-		new = 1;
+		ast_channel_datastore_add(chan, datastore);
 	} else {
-		ast_channel_unlock(chan);
 		b_data = datastore->data;
 	}
+	ast_channel_unlock(chan);
 
 	/* SET(CONFBRIDGE(type,option)=value) */
-	if (!strcasecmp(args.type, "bridge") && !set_bridge_option(args.option, value, &b_data->b_profile)) {
-		b_data->b_usable = 1;
-	} else if (!strcasecmp(args.type, "user") && !set_user_option(args.option, value, &b_data->u_profile)) {
-		b_data->u_usable = 1;
-	} else {
-		ast_log(LOG_WARNING, "Profile type \"%s\" can not be set in CONFBRIDGE function with option \"%s\" and value \"%s\"\n",
-			args.type, args.option, value);
-		goto cleanup_error;
+	if (!value) {
+		value = "";
 	}
-	if (new) {
-		ast_channel_lock(chan);
-		ast_channel_datastore_add(chan, datastore);
-		ast_channel_unlock(chan);
+	tmpvar.name = args.option;
+	tmpvar.value = value;
+	tmpvar.file = "CONFBRIDGE";
+	if (!strcasecmp(args.type, "bridge")) {
+		if (!aco_process_var(&bridge_type, "dialplan", &tmpvar, &b_data->b_profile)) {
+			b_data->b_usable = 1;
+			return 0;
+		}
+	} else if (!strcasecmp(args.type, "user")) {
+		if (!aco_process_var(&user_type, "dialplan", &tmpvar, &b_data->u_profile)) {
+			b_data->u_usable = 1;
+			return 0;
+		}
 	}
-	return 0;
 
-cleanup_error:
-	ast_log(LOG_ERROR, "Invalid argument provided to the %s function\n", cmd);
-	if (new) {
-		ast_datastore_free(datastore);
-	}
+	ast_log(LOG_WARNING, "%s(%s,%s) cannot be set to '%s'. Invalid type, option, or value.\n",
+		cmd, args.type, args.option, value);
 	return -1;
-}
-
-/*!
- * \brief Parse the bridge profile options
- */
-static int parse_bridge(const char *cat, struct ast_config *cfg)
-{
-	struct ast_variable *var;
-	struct bridge_profile tmp;
-	struct bridge_profile *b_profile;
-
-	ast_copy_string(tmp.name, cat, sizeof(tmp.name));
-	if ((b_profile = ao2_find(bridge_profiles, &tmp, OBJ_POINTER))) {
-		b_profile->delme = 0;
-	} else if ((b_profile = ao2_alloc(sizeof(*b_profile), NULL))) {
-		ast_copy_string(b_profile->name, cat, sizeof(b_profile->name));
-		ao2_link(bridge_profiles, b_profile);
-	} else {
-		return -1;
-	}
-
-	ao2_lock(b_profile);
-	/* set defaults */
-	b_profile->internal_sample_rate = 0;
-	b_profile->flags = 0;
-	b_profile->max_members = 0;
-	b_profile->mix_interval = 0;
-	memset(b_profile->rec_file, 0, sizeof(b_profile->rec_file));
-	if (b_profile->sounds) {
-		ao2_ref(b_profile->sounds, -1); /* sounds is read only.  Once it has been created
-		                                 * it can never be altered. This prevents having to
-		                                 * do any locking after it is built from the config. */
-		b_profile->sounds = NULL;
-	}
-
-	if (!(b_profile->sounds = bridge_profile_sounds_alloc())) {
-		ao2_unlock(b_profile);
-		ao2_ref(b_profile, -1);
-		ao2_unlink(bridge_profiles, b_profile);
-		return -1;
-	}
-
-	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
-		if (!strcasecmp(var->name, "type")) {
-			continue;
-		} else if (set_bridge_option(var->name, var->value, b_profile)) {
-			ast_log(LOG_WARNING, "Invalid: '%s' at line %d of %s is not supported.\n",
-				var->name, var->lineno, CONFBRIDGE_CONFIG);
-		}
-	}
-	ao2_unlock(b_profile);
-
-	ao2_ref(b_profile, -1);
-	return 0;
-}
-
-static int parse_user(const char *cat, struct ast_config *cfg)
-{
-	struct ast_variable *var;
-	struct user_profile tmp;
-	struct user_profile *u_profile;
-
-	ast_copy_string(tmp.name, cat, sizeof(tmp.name));
-	if ((u_profile = ao2_find(user_profiles, &tmp, OBJ_POINTER))) {
-		u_profile->delme = 0;
-	} else if ((u_profile = ao2_alloc(sizeof(*u_profile), NULL))) {
-		ast_copy_string(u_profile->name, cat, sizeof(u_profile->name));
-		ao2_link(user_profiles, u_profile);
-	} else {
-		return -1;
-	}
-
-	ao2_lock(u_profile);
-	/* set defaults */
-	u_profile->flags = 0;
-	u_profile->announce_user_count_all_after = 0;
-	u_profile->silence_threshold = DEFAULT_SILENCE_THRESHOLD;
-	u_profile->talking_threshold = DEFAULT_TALKING_THRESHOLD;
-	memset(u_profile->pin, 0, sizeof(u_profile->pin));
-	memset(u_profile->moh_class, 0, sizeof(u_profile->moh_class));
-	memset(u_profile->announcement, 0, sizeof(u_profile->announcement));
-	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
-		if (!strcasecmp(var->name, "type")) {
-			continue;
-		} else if (set_user_option(var->name, var->value, u_profile)) {
-			ast_log(LOG_WARNING, "Invalid option '%s' at line %d of %s is not supported.\n",
-				var->name, var->lineno, CONFBRIDGE_CONFIG);
-		}
-	}
-	ao2_unlock(u_profile);
-
-	ao2_ref(u_profile, -1);
-	return 0;
 }
 
 static int add_action_to_menu_entry(struct conf_menu_entry *menu_entry, enum conf_menu_action_id id, char *databuf)
@@ -739,38 +1168,6 @@ static int add_menu_entry(struct conf_menu *menu, const char *dtmf, const char *
 
 	return 0;
 }
-static int parse_menu(const char *cat, struct ast_config *cfg)
-{
-	struct ast_variable *var;
-	struct conf_menu tmp;
-	struct conf_menu *menu;
-
-	ast_copy_string(tmp.name, cat, sizeof(tmp.name));
-	if ((menu = ao2_find(menus, &tmp, OBJ_POINTER))) {
-		menu->delme = 0;
-	} else if ((menu = ao2_alloc(sizeof(*menu), menu_destructor))) {
-		ast_copy_string(menu->name, cat, sizeof(menu->name));
-		ao2_link(menus, menu);
-	} else {
-		return -1;
-	}
-
-	ao2_lock(menu);
-	/* this isn't freeing the menu, just destroying the menu list so it can be rebuilt.*/
-	menu_destructor(menu);
-	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
-		if (!strcasecmp(var->name, "type")) {
-			continue;
-		} else if (add_menu_entry(menu, var->name, var->value)) {
-			ast_log(LOG_WARNING, "Unknown option '%s' at line %d of %s is not supported.\n",
-				var->name, var->lineno, CONFBRIDGE_CONFIG);
-		}
-	}
-	ao2_unlock(menu);
-
-	ao2_ref(menu, -1);
-	return 0;
-}
 
 static char *complete_user_profile_name(const char *line, const char *word, int pos, int state)
 {
@@ -779,8 +1176,13 @@ static char *complete_user_profile_name(const char *line, const char *word, int 
 	int wordlen = strlen(word);
 	struct ao2_iterator i;
 	struct user_profile *u_profile = NULL;
+	RAII_VAR(struct confbridge_cfg *, cfg, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
 
-	i = ao2_iterator_init(user_profiles, 0);
+	if (!cfg) {
+		return NULL;
+	}
+
+	i = ao2_iterator_init(cfg->user_profiles, 0);
 	while ((u_profile = ao2_iterator_next(&i))) {
 		if (!strncasecmp(u_profile->name, word, wordlen) && ++which > state) {
 			res = ast_strdup(u_profile->name);
@@ -798,6 +1200,7 @@ static char *handle_cli_confbridge_show_user_profiles(struct ast_cli_entry *e, i
 {
 	struct ao2_iterator it;
 	struct user_profile *u_profile;
+	RAII_VAR(struct confbridge_cfg *, cfg, NULL, ao2_cleanup);
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -809,15 +1212,19 @@ static char *handle_cli_confbridge_show_user_profiles(struct ast_cli_entry *e, i
 		return NULL;
 	}
 
+	if (!(cfg = ao2_global_obj_ref(cfg_handle))) {
+		return NULL;
+	}
+
 	ast_cli(a->fd,"--------- User Profiles -----------\n");
-	ao2_lock(user_profiles);
-	it = ao2_iterator_init(user_profiles, 0);
+	ao2_lock(cfg->user_profiles);
+	it = ao2_iterator_init(cfg->user_profiles, 0);
 	while ((u_profile = ao2_iterator_next(&it))) {
 		ast_cli(a->fd,"%s\n", u_profile->name);
 		ao2_ref(u_profile, -1);
 	}
 	ao2_iterator_destroy(&it);
-	ao2_unlock(user_profiles);
+	ao2_unlock(cfg->user_profiles);
 
 	return CLI_SUCCESS;
 }
@@ -919,8 +1326,13 @@ static char *complete_bridge_profile_name(const char *line, const char *word, in
 	int wordlen = strlen(word);
 	struct ao2_iterator i;
 	struct bridge_profile *b_profile = NULL;
+	RAII_VAR(struct confbridge_cfg *, cfg, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
 
-	i = ao2_iterator_init(bridge_profiles, 0);
+	if (!cfg) {
+		return NULL;
+	}
+
+	i = ao2_iterator_init(cfg->bridge_profiles, 0);
 	while ((b_profile = ao2_iterator_next(&i))) {
 		if (!strncasecmp(b_profile->name, word, wordlen) && ++which > state) {
 			res = ast_strdup(b_profile->name);
@@ -938,6 +1350,7 @@ static char *handle_cli_confbridge_show_bridge_profiles(struct ast_cli_entry *e,
 {
 	struct ao2_iterator it;
 	struct bridge_profile *b_profile;
+	RAII_VAR(struct confbridge_cfg *, cfg, NULL, ao2_cleanup);
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -949,15 +1362,19 @@ static char *handle_cli_confbridge_show_bridge_profiles(struct ast_cli_entry *e,
 		return NULL;
 	}
 
+	if (!(cfg = ao2_global_obj_ref(cfg_handle))) {
+		return NULL;
+	}
+
 	ast_cli(a->fd,"--------- Bridge Profiles -----------\n");
-	ao2_lock(bridge_profiles);
-	it = ao2_iterator_init(bridge_profiles, 0);
+	ao2_lock(cfg->bridge_profiles);
+	it = ao2_iterator_init(cfg->bridge_profiles, 0);
 	while ((b_profile = ao2_iterator_next(&it))) {
 		ast_cli(a->fd,"%s\n", b_profile->name);
 		ao2_ref(b_profile, -1);
 	}
 	ao2_iterator_destroy(&it);
-	ao2_unlock(bridge_profiles);
+	ao2_unlock(cfg->bridge_profiles);
 
 	return CLI_SUCCESS;
 }
@@ -1009,6 +1426,10 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 		b_profile.flags & BRIDGE_OPT_RECORD_CONFERENCE ?
 		"yes" : "no");
 
+	ast_cli(a->fd,"Record File Append:    %s\n",
+		b_profile.flags & BRIDGE_OPT_RECORD_FILE_APPEND ?
+		"yes" : "no");
+
 	ast_cli(a->fd,"Record File:          %s\n",
 		ast_strlen_zero(b_profile.rec_file) ? "Auto Generated" :
 		b_profile.rec_file);
@@ -1019,19 +1440,29 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 		ast_cli(a->fd,"Max Members:          No Limit\n");
 	}
 
-	if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_LAST_MARKED) {
+	switch (b_profile.flags
+		& (BRIDGE_OPT_VIDEO_SRC_LAST_MARKED | BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED
+			| BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER)) {
+	case BRIDGE_OPT_VIDEO_SRC_LAST_MARKED:
 		ast_cli(a->fd, "Video Mode:           last_marked\n");
-	} else if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED) {
+		break;
+	case BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED:
 		ast_cli(a->fd, "Video Mode:           first_marked\n");
-	} else if (b_profile.flags & BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER) {
+		break;
+	case BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER:
 		ast_cli(a->fd, "Video Mode:           follow_talker\n");
-	} else {
+		break;
+	case 0:
 		ast_cli(a->fd, "Video Mode:           no video\n");
+		break;
+	default:
+		/* Opps.  We have more than one video mode flag set. */
+		ast_assert(0);
+		break;
 	}
 
-	ast_cli(a->fd,"sound_join:           %s\n", conf_get_sound(CONF_SOUND_JOIN, b_profile.sounds));
-	ast_cli(a->fd,"sound_leave:          %s\n", conf_get_sound(CONF_SOUND_LEAVE, b_profile.sounds));
 	ast_cli(a->fd,"sound_only_person:    %s\n", conf_get_sound(CONF_SOUND_ONLY_PERSON, b_profile.sounds));
+	ast_cli(a->fd,"sound_only_one:       %s\n", conf_get_sound(CONF_SOUND_ONLY_ONE, b_profile.sounds));
 	ast_cli(a->fd,"sound_has_joined:     %s\n", conf_get_sound(CONF_SOUND_HAS_JOINED, b_profile.sounds));
 	ast_cli(a->fd,"sound_has_left:       %s\n", conf_get_sound(CONF_SOUND_HAS_LEFT, b_profile.sounds));
 	ast_cli(a->fd,"sound_kicked:         %s\n", conf_get_sound(CONF_SOUND_KICKED, b_profile.sounds));
@@ -1048,6 +1479,8 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 	ast_cli(a->fd,"sound_unlocked_now:   %s\n", conf_get_sound(CONF_SOUND_UNLOCKED_NOW, b_profile.sounds));
 	ast_cli(a->fd,"sound_lockednow:      %s\n", conf_get_sound(CONF_SOUND_LOCKED_NOW, b_profile.sounds));
 	ast_cli(a->fd,"sound_error_menu:     %s\n", conf_get_sound(CONF_SOUND_ERROR_MENU, b_profile.sounds));
+	ast_cli(a->fd,"sound_join:           %s\n", conf_get_sound(CONF_SOUND_JOIN, b_profile.sounds));
+	ast_cli(a->fd,"sound_leave:          %s\n", conf_get_sound(CONF_SOUND_LEAVE, b_profile.sounds));
 	ast_cli(a->fd,"sound_participants_muted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_MUTED, b_profile.sounds));
 	ast_cli(a->fd,"sound_participants_unmuted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_UNMUTED, b_profile.sounds));
 	ast_cli(a->fd,"\n");
@@ -1063,8 +1496,13 @@ static char *complete_menu_name(const char *line, const char *word, int pos, int
 	int wordlen = strlen(word);
 	struct ao2_iterator i;
 	struct conf_menu *menu = NULL;
+	RAII_VAR(struct confbridge_cfg *, cfg, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
 
-	i = ao2_iterator_init(menus, 0);
+	if (!cfg) {
+		return NULL;
+	}
+
+	i = ao2_iterator_init(cfg->menus, 0);
 	while ((menu = ao2_iterator_next(&i))) {
 		if (!strncasecmp(menu->name, word, wordlen) && ++which > state) {
 			res = ast_strdup(menu->name);
@@ -1082,6 +1520,7 @@ static char *handle_cli_confbridge_show_menus(struct ast_cli_entry *e, int cmd, 
 {
 	struct ao2_iterator it;
 	struct conf_menu *menu;
+	RAII_VAR(struct confbridge_cfg *, cfg, NULL, ao2_cleanup);
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -1093,23 +1532,27 @@ static char *handle_cli_confbridge_show_menus(struct ast_cli_entry *e, int cmd, 
 		return NULL;
 	}
 
+	if (!(cfg = ao2_global_obj_ref(cfg_handle))) {
+		return NULL;
+	}
+
 	ast_cli(a->fd,"--------- Menus -----------\n");
-	ao2_lock(menus);
-	it = ao2_iterator_init(menus, 0);
+	ao2_lock(cfg->menus);
+	it = ao2_iterator_init(cfg->menus, 0);
 	while ((menu = ao2_iterator_next(&it))) {
 		ast_cli(a->fd,"%s\n", menu->name);
 		ao2_ref(menu, -1);
 	}
 	ao2_iterator_destroy(&it);
-	ao2_unlock(menus);
+	ao2_unlock(cfg->menus);
 
 	return CLI_SUCCESS;
 }
 
 static char *handle_cli_confbridge_show_menu(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct conf_menu tmp;
-	struct conf_menu *menu;
+	RAII_VAR(struct conf_menu *, menu, NULL, ao2_cleanup);
+	RAII_VAR(struct confbridge_cfg *, cfg, NULL, ao2_cleanup);
 	struct conf_menu_entry *menu_entry = NULL;
 	struct conf_menu_action *menu_action = NULL;
 
@@ -1130,8 +1573,11 @@ static char *handle_cli_confbridge_show_menu(struct ast_cli_entry *e, int cmd, s
 		return CLI_SHOWUSAGE;
 	}
 
-	ast_copy_string(tmp.name, a->argv[3], sizeof(tmp.name));
-	if (!(menu = ao2_find(menus, &tmp, OBJ_POINTER))) {
+	if (!(cfg = ao2_global_obj_ref(cfg_handle))) {
+		return NULL;
+	}
+
+	if (!(menu = menu_find(cfg->menus, a->argv[3]))) {
 		ast_cli(a->fd, "No conference menu named '%s' found!\n", a->argv[3]);
 		return CLI_SUCCESS;
 	}
@@ -1211,7 +1657,6 @@ static char *handle_cli_confbridge_show_menu(struct ast_cli_entry *e, int cmd, s
 
 
 	ao2_unlock(menu);
-	ao2_ref(menu, -1);
 	return CLI_SUCCESS;
 }
 
@@ -1225,132 +1670,320 @@ static struct ast_cli_entry cli_confbridge_parser[] = {
 
 };
 
-static int conf_parse_init(void)
+static void confbridge_cfg_destructor(void *obj)
 {
-	if (!(user_profiles = ao2_container_alloc(283, user_hash_cb, user_cmp_cb))) {
-		conf_destroy_config();
-		return -1;
+	struct confbridge_cfg *cfg = obj;
+	ao2_cleanup(cfg->user_profiles);
+	ao2_cleanup(cfg->bridge_profiles);
+	ao2_cleanup(cfg->menus);
+}
+
+void *confbridge_cfg_alloc(void)
+{
+	struct confbridge_cfg *cfg;
+
+	if (!(cfg = ao2_alloc(sizeof(*cfg), confbridge_cfg_destructor))) {
+		return NULL;
 	}
 
-	if (!(bridge_profiles = ao2_container_alloc(283, bridge_hash_cb, bridge_cmp_cb))) {
-		conf_destroy_config();
-		return -1;
+	if (!(cfg->user_profiles = ao2_container_alloc(283, user_hash_cb, user_cmp_cb))) {
+		goto error;
 	}
 
-	if (!(menus = ao2_container_alloc(283, menu_hash_cb, menu_cmp_cb))) {
-		conf_destroy_config();
-		return -1;
+	if (!(cfg->bridge_profiles = ao2_container_alloc(283, bridge_hash_cb, bridge_cmp_cb))) {
+		goto error;
 	}
 
-	ast_cli_register_multiple(cli_confbridge_parser, ARRAY_LEN(cli_confbridge_parser));
+	if (!(cfg->menus = ao2_container_alloc(283, menu_hash_cb, menu_cmp_cb))) {
+		goto error;
+	}
+
+	return cfg;
+error:
+	ao2_ref(cfg, -1);
+	return NULL;
+}
+
+static int announce_user_count_all_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct user_profile *u_profile = obj;
+
+	if (strcasecmp(var->name, "announce_user_count_all")) {
+		return -1;
+	}
+	if (ast_true(var->value)) {
+		u_profile->flags = u_profile->flags | USER_OPT_ANNOUNCEUSERCOUNTALL;
+	} else if (ast_false(var->value)) {
+		u_profile->flags = u_profile->flags & ~USER_OPT_ANNOUNCEUSERCOUNTALL;
+	} else if (sscanf(var->value, "%30u", &u_profile->announce_user_count_all_after) == 1) {
+		u_profile->flags = u_profile->flags | USER_OPT_ANNOUNCEUSERCOUNTALL;
+	} else {
+		return -1;
+	}
+	return 0;
+}
+
+static int mix_interval_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct bridge_profile *b_profile = obj;
+
+	if (strcasecmp(var->name, "mixing_interval")) {
+		return -1;
+	}
+	if (sscanf(var->value, "%30u", &b_profile->mix_interval) != 1) {
+		return -1;
+	}
+	switch (b_profile->mix_interval) {
+	case 10:
+	case 20:
+	case 40:
+	case 80:
+		return 0;
+	default:
+		return -1;
+	}
+}
+
+static int video_mode_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct bridge_profile *b_profile = obj;
+
+	if (strcasecmp(var->name, "video_mode")) {
+		return -1;
+	}
+	if (!strcasecmp(var->value, "first_marked")) {
+		ast_set_flags_to(b_profile,
+			BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_LAST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER,
+			BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED);
+	} else if (!strcasecmp(var->value, "last_marked")) {
+		ast_set_flags_to(b_profile,
+			BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_LAST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER,
+			BRIDGE_OPT_VIDEO_SRC_LAST_MARKED);
+	} else if (!strcasecmp(var->value, "follow_talker")) {
+		ast_set_flags_to(b_profile,
+			BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_LAST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER,
+			BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER);
+	} else if (!strcasecmp(var->value, "none")) {
+		ast_clear_flag(b_profile,
+			BRIDGE_OPT_VIDEO_SRC_FIRST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_LAST_MARKED
+				| BRIDGE_OPT_VIDEO_SRC_FOLLOW_TALKER);
+	} else {
+		return -1;
+	}
+	return 0;
+}
+
+static int user_template_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct user_profile *u_profile = obj;
+
+	return conf_find_user_profile(NULL, var->value, u_profile) ? 0 : -1;
+}
+
+static int bridge_template_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct bridge_profile *b_profile = obj;
+	struct bridge_profile_sounds *sounds = bridge_profile_sounds_alloc();
+	struct bridge_profile_sounds *oldsounds = b_profile->sounds;
+
+	if (!sounds) {
+		return -1;
+	}
+	if (!(conf_find_bridge_profile(NULL, var->value, b_profile))) {
+		ao2_ref(sounds, -1);
+		return -1;
+	}
+	/* Using a bridge profile as a template is a little complicated due to the sounds. Since the sounds
+	 * structure of a dynamic profile will need to be altered, a completely new sounds structure must be
+	 * created instead of simply holding a reference to the one built by the config file. */
+	ast_string_field_set(sounds, onlyperson, b_profile->sounds->onlyperson);
+	ast_string_field_set(sounds, onlyone, b_profile->sounds->onlyone);
+	ast_string_field_set(sounds, hasjoin, b_profile->sounds->hasjoin);
+	ast_string_field_set(sounds, hasleft, b_profile->sounds->hasleft);
+	ast_string_field_set(sounds, kicked, b_profile->sounds->kicked);
+	ast_string_field_set(sounds, muted, b_profile->sounds->muted);
+	ast_string_field_set(sounds, unmuted, b_profile->sounds->unmuted);
+	ast_string_field_set(sounds, thereare, b_profile->sounds->thereare);
+	ast_string_field_set(sounds, otherinparty, b_profile->sounds->otherinparty);
+	ast_string_field_set(sounds, placeintoconf, b_profile->sounds->placeintoconf);
+	ast_string_field_set(sounds, waitforleader, b_profile->sounds->waitforleader);
+	ast_string_field_set(sounds, leaderhasleft, b_profile->sounds->leaderhasleft);
+	ast_string_field_set(sounds, getpin, b_profile->sounds->getpin);
+	ast_string_field_set(sounds, invalidpin, b_profile->sounds->invalidpin);
+	ast_string_field_set(sounds, locked, b_profile->sounds->locked);
+	ast_string_field_set(sounds, unlockednow, b_profile->sounds->unlockednow);
+	ast_string_field_set(sounds, lockednow, b_profile->sounds->lockednow);
+	ast_string_field_set(sounds, errormenu, b_profile->sounds->errormenu);
+	ast_string_field_set(sounds, join, b_profile->sounds->join);
+	ast_string_field_set(sounds, leave, b_profile->sounds->leave);
+	ast_string_field_set(sounds, participantsmuted, b_profile->sounds->participantsmuted);
+	ast_string_field_set(sounds, participantsunmuted, b_profile->sounds->participantsunmuted);
+
+	ao2_ref(b_profile->sounds, -1); /* sounds struct copied over to it from the template by reference only. */
+	ao2_ref(oldsounds, -1);    /* original sounds struct we don't need anymore */
+	b_profile->sounds = sounds;     /* the new sounds struct that is a deep copy of the one from the template. */
 
 	return 0;
 }
 
-void conf_destroy_config()
+static int sound_option_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
-	if (user_profiles) {
-		ao2_ref(user_profiles, -1);
-		user_profiles = NULL;
-	}
-	if (bridge_profiles) {
-		ao2_ref(bridge_profiles, -1);
-		bridge_profiles = NULL;
-	}
-
-	if (menus) {
-		ao2_ref(menus, -1);
-		menus = NULL;
-	}
-	ast_cli_unregister_multiple(cli_confbridge_parser, sizeof(cli_confbridge_parser) / sizeof(struct ast_cli_entry));
+	set_sound(var->name, var->value, obj);
+	return 0;
 }
 
-static void remove_all_delme(void)
+static int menu_option_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
-	ao2_callback(user_profiles, OBJ_NODATA | OBJ_MULTIPLE | OBJ_UNLINK, match_user_delme_cb, NULL);
-	ao2_callback(bridge_profiles, OBJ_NODATA | OBJ_MULTIPLE | OBJ_UNLINK, match_bridge_delme_cb, NULL);
-	ao2_callback(menus, OBJ_NODATA | OBJ_MULTIPLE | OBJ_UNLINK, match_menu_delme_cb, NULL);
+	add_menu_entry(obj, var->name, var->value);
+	return 0;
 }
 
-static void mark_all_delme(void)
+static int verify_default_profiles(void)
 {
-	ao2_callback(user_profiles, OBJ_NODATA | OBJ_MULTIPLE, user_mark_delme_cb, NULL);
-	ao2_callback(bridge_profiles, OBJ_NODATA | OBJ_MULTIPLE, bridge_mark_delme_cb, NULL);
-	ao2_callback(menus, OBJ_NODATA | OBJ_MULTIPLE, menu_mark_delme_cb, NULL);
+	RAII_VAR(struct user_profile *, user_profile, NULL, ao2_cleanup);
+	RAII_VAR(struct bridge_profile *, bridge_profile, NULL, ao2_cleanup);
+	struct confbridge_cfg *cfg = aco_pending_config(&cfg_info);
+
+	if (!cfg) {
+		return 0;
+	}
+
+	bridge_profile = ao2_find(cfg->bridge_profiles, DEFAULT_BRIDGE_PROFILE, OBJ_KEY);
+	if (!bridge_profile) {
+		bridge_profile = bridge_profile_alloc(DEFAULT_BRIDGE_PROFILE);
+		if (!bridge_profile) {
+			return -1;
+		}
+		ast_log(AST_LOG_NOTICE, "Adding %s profile to app_confbridge\n", DEFAULT_BRIDGE_PROFILE);
+		aco_set_defaults(&bridge_type, DEFAULT_BRIDGE_PROFILE, bridge_profile);
+		ao2_link(cfg->bridge_profiles, bridge_profile);
+	}
+
+	user_profile = ao2_find(cfg->bridge_profiles, DEFAULT_USER_PROFILE, OBJ_KEY);
+	if (!user_profile) {
+		user_profile = user_profile_alloc(DEFAULT_USER_PROFILE);
+		if (!user_profile) {
+			return -1;
+		}
+		ast_log(AST_LOG_NOTICE, "Adding %s profile to app_confbridge\n", DEFAULT_USER_PROFILE);
+		aco_set_defaults(&user_type, DEFAULT_USER_PROFILE, user_profile);
+		ao2_link(cfg->user_profiles, user_profile);
+	}
+
+	return 0;
 }
 
 int conf_load_config(int reload)
 {
-	struct ast_flags config_flags = { 0, };
-	struct ast_config *cfg = ast_config_load(CONFBRIDGE_CONFIG, config_flags);
-	const char *type = NULL;
-	char *cat = NULL;
-
 	if (!reload) {
-		conf_parse_init();
-	}
-
-	if (!cfg || cfg == CONFIG_STATUS_FILEMISSING || cfg == CONFIG_STATUS_FILEINVALID) {
-		return 0;
-	}
-
-	mark_all_delme();
-
-	while ((cat = ast_category_browse(cfg, cat))) {
-		if (!(type = (ast_variable_retrieve(cfg, cat, "type")))) {
-			if (strcasecmp(cat, "general")) {
-				ast_log(LOG_WARNING, "Section '%s' lacks type\n", cat);
-			}
-			continue;
-		}
-		if (!strcasecmp(type, "bridge")) {
-			parse_bridge(cat, cfg);
-		} else if (!strcasecmp(type, "user")) {
-			parse_user(cat, cfg);
-		} else if (!strcasecmp(type, "menu")) {
-			parse_menu(cat, cfg);
-		} else {
-			continue;
+		if (aco_info_init(&cfg_info)) {
+			return -1;
 		}
 	}
 
-	remove_all_delme();
-	ast_config_destroy(cfg);
+	/* User options */
+	aco_option_register(&cfg_info, "type", ACO_EXACT, user_types, NULL, OPT_NOOP_T, 0, 0);
+	aco_option_register(&cfg_info, "admin", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_ADMIN);
+	aco_option_register(&cfg_info, "marked", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_MARKEDUSER);
+	aco_option_register(&cfg_info, "startmuted", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_STARTMUTED);
+	aco_option_register(&cfg_info, "music_on_hold_when_empty", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_MUSICONHOLD);
+	aco_option_register(&cfg_info, "quiet", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_QUIET);
+	aco_option_register_custom(&cfg_info, "announce_user_count_all", ACO_EXACT, user_types, "no", announce_user_count_all_handler, 0);
+	aco_option_register(&cfg_info, "announce_user_count", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_ANNOUNCEUSERCOUNT);
+	/* Negative logic. Defaults to "yes" and evaluates with ast_false(). If !ast_false(), USER_OPT_NOONLYPERSON is cleared */
+	aco_option_register(&cfg_info, "announce_only_user", ACO_EXACT, user_types, "yes", OPT_BOOLFLAG_T, 0, FLDSET(struct user_profile, flags), USER_OPT_NOONLYPERSON);
+	aco_option_register(&cfg_info, "wait_marked", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_WAITMARKED);
+	aco_option_register(&cfg_info, "end_marked", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_ENDMARKED);
+	aco_option_register(&cfg_info, "talk_detection_events", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_TALKER_DETECT);
+	aco_option_register(&cfg_info, "dtmf_passthrough", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_DTMF_PASS);
+	aco_option_register(&cfg_info, "announce_join_leave", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_ANNOUNCE_JOIN_LEAVE);
+	aco_option_register(&cfg_info, "pin", ACO_EXACT, user_types, NULL, OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct user_profile, pin));
+	aco_option_register(&cfg_info, "music_on_hold_class", ACO_EXACT, user_types, NULL, OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct user_profile, moh_class));
+	aco_option_register(&cfg_info, "announcement", ACO_EXACT, user_types, NULL, OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct user_profile, announcement));
+	aco_option_register(&cfg_info, "denoise", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_DENOISE);
+	aco_option_register(&cfg_info, "dsp_drop_silence", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_DROP_SILENCE);
+	aco_option_register(&cfg_info, "dsp_silence_threshold", ACO_EXACT, user_types, __stringify(DEFAULT_SILENCE_THRESHOLD), OPT_UINT_T, 0, FLDSET(struct user_profile, silence_threshold));
+	aco_option_register(&cfg_info, "dsp_talking_threshold", ACO_EXACT, user_types, __stringify(DEFAULT_TALKING_THRESHOLD), OPT_UINT_T, 0, FLDSET(struct user_profile, silence_threshold));
+	aco_option_register(&cfg_info, "jitterbuffer", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_JITTERBUFFER);
+	/* This option should only be used with the CONFBRIDGE dialplan function */
+	aco_option_register_custom(&cfg_info, "template", ACO_EXACT, user_types, NULL, user_template_handler, 0);
+
+	/* Bridge options */
+	aco_option_register(&cfg_info, "type", ACO_EXACT, bridge_types, NULL, OPT_NOOP_T, 0, 0);
+	aco_option_register(&cfg_info, "jitterbuffer", ACO_EXACT, bridge_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct bridge_profile, flags), USER_OPT_JITTERBUFFER);
+	/* "auto" will fail to parse as a uint, but we use PARSE_DEFAULT to set the value to 0 in that case, which is the value that auto resolves to */
+	aco_option_register(&cfg_info, "internal_sample_rate", ACO_EXACT, bridge_types, "0", OPT_UINT_T, PARSE_DEFAULT, FLDSET(struct bridge_profile, internal_sample_rate), 0);
+	aco_option_register_custom(&cfg_info, "mixing_interval", ACO_EXACT, bridge_types, "20", mix_interval_handler, 0);
+	aco_option_register(&cfg_info, "record_conference", ACO_EXACT, bridge_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct bridge_profile, flags), BRIDGE_OPT_RECORD_CONFERENCE);
+	aco_option_register_custom(&cfg_info, "video_mode", ACO_EXACT, bridge_types, NULL, video_mode_handler, 0);
+	aco_option_register(&cfg_info, "record_file_append", ACO_EXACT, bridge_types, "yes", OPT_BOOLFLAG_T, 1, FLDSET(struct bridge_profile, flags), BRIDGE_OPT_RECORD_FILE_APPEND);
+	aco_option_register(&cfg_info, "max_members", ACO_EXACT, bridge_types, "0", OPT_UINT_T, 0, FLDSET(struct bridge_profile, max_members));
+	aco_option_register(&cfg_info, "record_file", ACO_EXACT, bridge_types, NULL, OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct bridge_profile, rec_file));
+	aco_option_register_custom(&cfg_info, "^sound_", ACO_REGEX, bridge_types, NULL, sound_option_handler, 0);
+	/* This option should only be used with the CONFBRIDGE dialplan function */
+	aco_option_register_custom(&cfg_info, "template", ACO_EXACT, bridge_types, NULL, bridge_template_handler, 0);
+
+	/* Menu options */
+	aco_option_register(&cfg_info, "type", ACO_EXACT, menu_types, NULL, OPT_NOOP_T, 0, 0);
+	aco_option_register_custom(&cfg_info, "^[0-9A-D*#]+$", ACO_REGEX, menu_types, NULL, menu_option_handler, 0);
+
+	if (aco_process_config(&cfg_info, reload) == ACO_PROCESS_ERROR) {
+		goto error;
+	}
+
+	if (!reload && ast_cli_register_multiple(cli_confbridge_parser, ARRAY_LEN(cli_confbridge_parser))) {
+		goto error;
+	}
 
 	return 0;
+error:
+	/* On a reload, just keep the config we already have in place. */
+	if (!reload) {
+		conf_destroy_config();
+	}
+	return -1;
 }
 
 static void conf_user_profile_copy(struct user_profile *dst, struct user_profile *src)
 {
-	memcpy(dst, src, sizeof(*dst));
+	*dst = *src;
 }
 
 const struct user_profile *conf_find_user_profile(struct ast_channel *chan, const char *user_profile_name, struct user_profile *result)
 {
-	struct user_profile tmp;
 	struct user_profile *tmp2;
 	struct ast_datastore *datastore = NULL;
 	struct func_confbridge_data *b_data = NULL;
-	ast_copy_string(tmp.name, user_profile_name, sizeof(tmp.name));
+	RAII_VAR(struct confbridge_cfg *, cfg, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
+
+	if (!cfg) {
+		return NULL;
+	}
 
 	if (chan) {
 		ast_channel_lock(chan);
-		if ((datastore = ast_channel_datastore_find(chan, &confbridge_datastore, NULL))) {
-			ast_channel_unlock(chan);
+		datastore = ast_channel_datastore_find(chan, &confbridge_datastore, NULL);
+		ast_channel_unlock(chan);
+		if (datastore) {
 			b_data = datastore->data;
 			if (b_data->u_usable) {
 				conf_user_profile_copy(result, &b_data->u_profile);
 				return result;
 			}
-		} else {
-			ast_channel_unlock(chan);
 		}
 	}
 
 	if (ast_strlen_zero(user_profile_name)) {
 		user_profile_name = DEFAULT_USER_PROFILE;
 	}
-	if (!(tmp2 = ao2_find(user_profiles, &tmp, OBJ_POINTER))) {
+	if (!(tmp2 = ao2_find(cfg->user_profiles, user_profile_name, OBJ_KEY))) {
 		return NULL;
 	}
 	ao2_lock(tmp2);
@@ -1363,7 +1996,7 @@ const struct user_profile *conf_find_user_profile(struct ast_channel *chan, cons
 
 void conf_bridge_profile_copy(struct bridge_profile *dst, struct bridge_profile *src)
 {
-	memcpy(dst, src, sizeof(*dst));
+	*dst = *src;
 	if (src->sounds) {
 		ao2_ref(src->sounds, +1);
 	}
@@ -1379,29 +2012,31 @@ void conf_bridge_profile_destroy(struct bridge_profile *b_profile)
 
 const struct bridge_profile *conf_find_bridge_profile(struct ast_channel *chan, const char *bridge_profile_name, struct bridge_profile *result)
 {
-	struct bridge_profile tmp;
 	struct bridge_profile *tmp2;
 	struct ast_datastore *datastore = NULL;
 	struct func_confbridge_data *b_data = NULL;
+	RAII_VAR(struct confbridge_cfg *, cfg, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
+
+	if (!cfg) {
+		return NULL;
+	}
 
 	if (chan) {
 		ast_channel_lock(chan);
-		if ((datastore = ast_channel_datastore_find(chan, &confbridge_datastore, NULL))) {
-			ast_channel_unlock(chan);
+		datastore = ast_channel_datastore_find(chan, &confbridge_datastore, NULL);
+		ast_channel_unlock(chan);
+		if (datastore) {
 			b_data = datastore->data;
 			if (b_data->b_usable) {
 				conf_bridge_profile_copy(result, &b_data->b_profile);
 				return result;
 			}
-		} else {
-			ast_channel_unlock(chan);
 		}
 	}
 	if (ast_strlen_zero(bridge_profile_name)) {
 		bridge_profile_name = DEFAULT_BRIDGE_PROFILE;
 	}
-	ast_copy_string(tmp.name, bridge_profile_name, sizeof(tmp.name));
-	if (!(tmp2 = ao2_find(bridge_profiles, &tmp, OBJ_POINTER))) {
+	if (!(tmp2 = ao2_find(cfg->bridge_profiles, bridge_profile_name, OBJ_KEY))) {
 		return NULL;
 	}
 	ao2_lock(tmp2);
@@ -1413,7 +2048,7 @@ const struct bridge_profile *conf_find_bridge_profile(struct ast_channel *chan, 
 }
 
 struct dtmf_menu_hook_pvt {
-	struct conference_bridge_user *conference_bridge_user;
+	struct confbridge_user *user;
 	struct conf_menu_entry menu_entry;
 	struct conf_menu *menu;
 };
@@ -1434,7 +2069,7 @@ static void menu_hook_destroy(void *hook_pvt)
 static int menu_hook_callback(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
 	struct dtmf_menu_hook_pvt *pvt = hook_pvt;
-	return conf_handle_dtmf(bridge_channel, pvt->conference_bridge_user, &pvt->menu_entry, pvt->menu);
+	return conf_handle_dtmf(bridge_channel, pvt->user, &pvt->menu_entry, pvt->menu);
 }
 
 static int copy_menu_entry(struct conf_menu_entry *dst, struct conf_menu_entry *src)
@@ -1480,19 +2115,23 @@ int conf_find_menu_entry_by_sequence(const char *dtmf_sequence, struct conf_menu
 	return 0;
 }
 
-int conf_set_menu_to_user(const char *menu_name, struct conference_bridge_user *conference_bridge_user)
+int conf_set_menu_to_user(const char *menu_name, struct confbridge_user *user)
 {
-	struct conf_menu tmp;
 	struct conf_menu *menu;
 	struct conf_menu_entry *menu_entry = NULL;
-	ast_copy_string(tmp.name, menu_name, sizeof(tmp.name));
+	RAII_VAR(struct confbridge_cfg *, cfg, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
 
-	if (!(menu = ao2_find(menus, &tmp, OBJ_POINTER))) {
+	if (!cfg) {
+		return -1;
+	}
+
+	if (!(menu = menu_find(cfg->menus, menu_name))) {
 		return -1;
 	}
 	ao2_lock(menu);
 	AST_LIST_TRAVERSE(&menu->entries, menu_entry, entry) {
 		struct dtmf_menu_hook_pvt *pvt;
+
 		if (!(pvt = ast_calloc(1, sizeof(*pvt)))) {
 			ao2_unlock(menu);
 			ao2_ref(menu, -1);
@@ -1504,15 +2143,22 @@ int conf_set_menu_to_user(const char *menu_name, struct conference_bridge_user *
 			ao2_ref(menu, -1);
 			return -1;
 		}
-		pvt->conference_bridge_user = conference_bridge_user;
+		pvt->user = user;
 		ao2_ref(menu, +1);
 		pvt->menu = menu;
 
-		ast_bridge_features_hook(&conference_bridge_user->features, pvt->menu_entry.dtmf, menu_hook_callback, pvt, menu_hook_destroy);
+		ast_bridge_features_hook(&user->features, pvt->menu_entry.dtmf, menu_hook_callback, pvt, menu_hook_destroy);
 	}
 
 	ao2_unlock(menu);
 	ao2_ref(menu, -1);
 
 	return 0;
+}
+
+void conf_destroy_config(void)
+{
+	ast_cli_unregister_multiple(cli_confbridge_parser, ARRAY_LEN(cli_confbridge_parser));
+	aco_info_destroy(&cfg_info);
+	ao2_global_obj_release(cfg_handle);
 }

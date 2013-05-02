@@ -89,6 +89,8 @@ static enum ast_rtp_glue_result ooh323_get_rtp_peer(struct ast_channel *chan, st
 static enum ast_rtp_glue_result ooh323_get_vrtp_peer(struct ast_channel *chan, struct ast_rtp_instance **rtp);
 static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *rtp, 
           struct ast_rtp_instance *vrtp, struct ast_rtp_instance *trtp, const struct ast_format_cap *codecs, int nat_active);
+static void ooh323_get_codec(struct ast_channel *chan, struct ast_format_cap *result);
+void setup_rtp_remote(ooCallData *call, const char *remoteIp, int remotePort);
 
 static struct ast_udptl *ooh323_get_udptl_peer(struct ast_channel *chan);
 static int ooh323_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
@@ -126,6 +128,7 @@ static struct ast_rtp_glue ooh323_rtp = {
 	.get_rtp_info = ooh323_get_rtp_peer,
 	.get_vrtp_info = ooh323_get_vrtp_peer,
 	.update_peer = ooh323_set_rtp_peer,
+	.get_codec = ooh323_get_codec,
 };
 
 static struct ast_udptl_protocol ooh323_udptl = {
@@ -141,7 +144,9 @@ struct ooh323_user;
 /* H.323 channel private structure */
 static struct ooh323_pvt {
 	ast_mutex_t lock;		/* Channel private lock */
+	ast_cond_t rtpcond;		/* RTP condition */
 	struct ast_rtp_instance *rtp;
+	struct ast_sockaddr redirip;	/* redir ip */
 	struct ast_rtp_instance *vrtp; /* Placeholder for now */
 
 	int t38support;			/* T.38 mode - disable, transparent, faxgw */
@@ -193,6 +198,8 @@ static struct ooh323_pvt {
 	int amaflags;
 	int progsent;			/* progress is sent */
 	int alertsent;			/* alerting is sent */
+	int directrtp;			/* direct rtp */
+	int earlydirect;		/* early direct rtp */
 	int g729onlyA;			/* G.729 only A */
 	struct ast_dsp *vad;
 	struct OOH323Regex *rtpmask;	/* rtp ip regexp */
@@ -228,6 +235,8 @@ struct ooh323_user{
 	int		rtdrcount, rtdrinterval;
 	int		nat;
 	int		faststart, h245tunneling;
+	int		directrtp;
+	int		earlydirect;
 	int		g729onlyA;
 	struct ooh323_user *next;
 };
@@ -259,6 +268,8 @@ struct ooh323_peer{
 	int	    rtdrcount,rtdrinterval;
 	int	    nat;
 	int	    faststart, h245tunneling;
+	int	    directrtp;
+	int	    earlydirect;
 	int	    g729onlyA;
 	struct ooh323_peer *next;
 };
@@ -318,6 +329,8 @@ static int  gFastStart = 1;
 static int  gTunneling = 1;
 static int  gBeMaster = 0;
 static int  gMediaWaitForConnect = 0;
+static int  gDirectRTP = 0;
+static int  gEarlyDirect = 0;
 static int  gTOS = 0;
 static int  gRTPTimeout = 60;
 static int  g729onlyA = 0;
@@ -655,6 +668,8 @@ static struct ast_channel *ooh323_request(const char *type, struct ast_format_ca
 		p->nat = peer->nat;
 		p->faststart = peer->faststart;
 		p->h245tunneling = peer->h245tunneling;
+		p->directrtp = peer->directrtp;
+		p->earlydirect = peer->earlydirect;
 		if (peer->rtpmask && peer->rtpmaskstr[0]) {
 			p->rtpmask = peer->rtpmask;
 			ast_copy_string(p->rtpmaskstr, peer->rtpmaskstr, sizeof(p->rtpmaskstr));
@@ -689,6 +704,8 @@ static struct ast_channel *ooh323_request(const char *type, struct ast_format_ca
 		p->rtdrcount = gRTDRCount;
 		p->faststart = gFastStart;
 		p->h245tunneling = gTunneling;
+		p->directrtp = gDirectRTP;
+		p->earlydirect = gEarlyDirect;
 
 		memcpy(&p->prefs, &gPrefs, sizeof(struct ast_codec_pref));
 		p->username = strdup(dest);
@@ -726,7 +743,14 @@ static struct ast_channel *ooh323_request(const char *type, struct ast_format_ca
 
       		ast_mutex_unlock(&p->lock);
       		ast_mutex_lock(&ooh323c_cmd_lock);
+		ast_cond_init(&p->rtpcond, NULL);
       		ooMakeCall(data, p->callToken, AST_MAX_EXTENSION, NULL);
+		ast_mutex_lock(&p->lock);
+		if (!p->rtp) {
+			ast_cond_wait(&p->rtpcond, &p->lock);
+		}
+		ast_mutex_unlock(&p->lock);
+		ast_cond_destroy(&p->rtpcond);
       		ast_mutex_unlock(&ooh323c_cmd_lock);
 	}
 
@@ -886,7 +910,7 @@ static int ooh323_digit_begin(struct ast_channel *chan, char digit)
 	ast_mutex_unlock(&p->lock);
 
 	if (gH323Debug) {
-		ast_verb(0, "+++   ooh323_digit_begin %d\n", res);
+		ast_verb(0, "+++   ooh323_digit_begin, res = %d\n", res);
 	}
 	return res;
 }
@@ -915,7 +939,6 @@ static int ooh323_digit_end(struct ast_channel *chan, char digit, unsigned int d
 	if (gH323Debug) {
 		ast_verb(0, "+++   ooh323_digit_end, res = %d\n", res);
 	}
-
 	return res;
 }
 
@@ -1152,6 +1175,8 @@ static int ooh323_write(struct ast_channel *ast, struct ast_frame *f)
 	if (p) {
 		ast_mutex_lock(&p->lock);
 
+		p->lastrtptx = time(NULL);
+
 		if (f->frametype == AST_FRAME_MODEM) {
 			ast_debug(1, "Send UDPTL %d/%d len %d for %s\n",
 				f->frametype, f->subclass.integer, f->datalen, ast_channel_name(ast));
@@ -1228,8 +1253,13 @@ static int ooh323_indicate(struct ast_channel *ast, int condition, const void *d
 		return -1;
 	}
 
-	if (gH323Debug)
+	if (!ast_sockaddr_isnull(&p->redirip)) {
+		res = 0;
+	}
+
+	if (gH323Debug) {
 		ast_verb(0, "----- ooh323_indicate %d on call %s\n", condition, callToken);
+	}
 	 
    	ast_mutex_lock(&p->lock);
 	switch (condition) {
@@ -1240,13 +1270,11 @@ static int ooh323_indicate(struct ast_channel *ast, int condition, const void *d
 	case AST_CONTROL_CONGESTION:
 		if (!ast_test_flag(p, H323_ALREADYGONE)) {
 			ooHangCall(callToken, OO_REASON_LOCAL_CONGESTED, AST_CAUSE_SWITCH_CONGESTION);
-			ast_set_flag(p, H323_ALREADYGONE);
 		}
 		break;
 	case AST_CONTROL_BUSY:
 		if (!ast_test_flag(p, H323_ALREADYGONE)) {
 			ooHangCall(callToken, OO_REASON_LOCAL_BUSY, AST_CAUSE_USER_BUSY);
-			ast_set_flag(p, H323_ALREADYGONE);
 		}
 		break;
 	case AST_CONTROL_HOLD:
@@ -1381,8 +1409,9 @@ static int ooh323_indicate(struct ast_channel *ast, int condition, const void *d
 
    	ast_mutex_unlock(&p->lock);
 
-	if (gH323Debug)
-		ast_verb(0, "++++  ooh323_indicate %d on %s\n", condition, callToken);
+	if (gH323Debug) {
+		ast_verb(0, "++++  ooh323_indicate %d on %s is %d\n", condition, callToken, res);
+	}
 
    	free(callToken);
 	return res;
@@ -1602,7 +1631,7 @@ int onAlerting(ooCallData *call)
 	ast_mutex_lock(&p->lock);
 	if (!p->owner) {
 		ast_mutex_unlock(&p->lock);
-		ast_log(LOG_ERROR, "Channel has no owner\n");
+		ast_debug(1, "Channel has no owner\n");
 		return 0;
 	}
 	while (p->owner && ast_channel_trylock(p->owner)) {
@@ -1841,6 +1870,8 @@ int ooh323_onReceivedSetup(ooCallData *call, Q931Message *pmsg)
 		p->nat = user->nat;
 		p->h245tunneling = user->h245tunneling;
 		p->faststart = user->faststart;
+		p->directrtp = user->directrtp;
+		p->earlydirect = user->earlydirect;
 
 		if (p->faststart)
          		OO_SETFLAG(call->flags, OO_M_FASTSTART);
@@ -1867,6 +1898,8 @@ int ooh323_onReceivedSetup(ooCallData *call, Q931Message *pmsg)
 	} else {
 	 if (!OO_TESTFLAG(p->flags,H323_DISABLEGK)) {
 		p->username = strdup(call->remoteIP);
+		p->directrtp = gDirectRTP;
+		p->earlydirect = gEarlyDirect;
 	} else {
 	  ast_mutex_unlock(&p->lock);
 	  ast_log(LOG_ERROR, "Unacceptable ip %s\n", call->remoteIP);
@@ -1968,7 +2001,7 @@ int onOutgoingCall(ooCallData *call)
 			ast_copy_string(call->rtpMaskStr, p->rtpmaskstr, sizeof(call->rtpMaskStr));
 		}
 
-		if (!configure_local_rtp(p, call)) {
+		if (!p->rtp && !configure_local_rtp(p, call)) {
 			ast_mutex_unlock(&p->lock);
 			return OO_FAILED;
 		}
@@ -2062,7 +2095,8 @@ int onNewCallCreated(ooCallData *call)
       		ooh323c_set_capability_for_call(call, &p->prefs, p->cap,
                                      p->dtmfmode, p->dtmfcodec, p->t38support, p->g729onlyA);
 
-		/* configure_local_rtp(p, call); */
+		configure_local_rtp(p, call);
+		ast_cond_signal(&p->rtpcond);
 		ast_mutex_unlock(&p->lock);
 	}
 
@@ -2282,6 +2316,8 @@ static struct ooh323_user *build_user(const char *name, struct ast_variable *v)
 		user->t38support = gT38Support;
 		user->faststart = gFastStart;
 		user->h245tunneling = gTunneling;
+		user->directrtp = gDirectRTP;
+		user->earlydirect = gEarlyDirect;
 		user->g729onlyA = g729onlyA;
 		/* set default context */
 		ast_copy_string(user->context, gContext, sizeof(user->context));
@@ -2303,6 +2339,11 @@ static struct ooh323_user *build_user(const char *name, struct ast_variable *v)
 				user->faststart = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "h245tunneling")) {
 				user->h245tunneling = ast_true(v->value);
+			} else if (!strcasecmp(v->name, "directrtp") || !strcasecmp(v->name, "directmedia")) {
+				user->directrtp = ast_true(v->value);
+				user->earlydirect = ast_true(v->value);
+			} else if (!strcasecmp(v->name, "earlydirect") || !strcasecmp(v->name, "directrtpsetup")) {
+				user->earlydirect = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "g729onlyA")) {
 				user->g729onlyA = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "nat")) {
@@ -2425,6 +2466,8 @@ static struct ooh323_peer *build_peer(const char *name, struct ast_variable *v, 
 		peer->t38support = gT38Support;
 		peer->faststart = gFastStart;
 		peer->h245tunneling = gTunneling;
+		peer->directrtp = gDirectRTP;
+		peer->earlydirect = gEarlyDirect;
 		peer->g729onlyA = g729onlyA;
 		peer->port = 1720;
 		if (0 == friend_type) {
@@ -2480,6 +2523,11 @@ static struct ooh323_peer *build_peer(const char *name, struct ast_variable *v, 
 				peer->faststart = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "h245tunneling")) {
 				peer->h245tunneling = ast_true(v->value);
+			} else if (!strcasecmp(v->name, "directrtp") || !strcasecmp(v->name, "directmedia")) {
+				peer->directrtp = ast_true(v->value);
+				peer->earlydirect = ast_true(v->value);
+			} else if (!strcasecmp(v->name, "earlydirect") || !strcasecmp(v->name, "directrtpsetup")) {
+				peer->earlydirect = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "g729onlyA")) {
 				peer->g729onlyA = ast_true(v->value);
 			} else if (!strcasecmp(v->name, "nat")) {
@@ -2759,6 +2807,11 @@ int reload_config(int reload)
 				ooH323EpEnableH245Tunneling();
 			else
 				ooH323EpDisableH245Tunneling();
+		} else if (!strcasecmp(v->name, "directrtp") || !strcasecmp(v->name, "directmedia")) {
+			gDirectRTP = ast_true(v->value);
+			gEarlyDirect = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "earlydirect") || !strcasecmp(v->name, "directrtpsetup")) {
+			gEarlyDirect = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "g729onlyA")) {
 			g729onlyA = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "roundtrip")) {
@@ -3020,6 +3073,8 @@ static char *handle_cli_ooh323_show_peer(struct ast_cli_entry *e, int cmd, struc
 		ast_cli(a->fd, "%-15.15s%s\n", "Name: ", peer->name);
 		ast_cli(a->fd, "%s:%s,%s\n", "FastStart/H.245 Tunneling", peer->faststart?"yes":"no",
 					peer->h245tunneling?"yes":"no");
+		ast_cli(a->fd, "%-15s%s\n", "DirectRTP", peer->directrtp ? "yes" : "no");
+		ast_cli(a->fd, "%-15s%s\n", "EarlyDirectRTP", peer->earlydirect ? "yes" : "no");
 		ast_cli(a->fd, "%-15.15s%s", "Format Prefs: ", "(");
 		print_codec_to_cli(a->fd, &peer->prefs);
 		ast_cli(a->fd, ")\n");
@@ -3177,6 +3232,8 @@ static char *handle_cli_ooh323_show_user(struct ast_cli_entry *e, int cmd, struc
 		ast_cli(a->fd, "%-15.15s%s\n", "Name: ", user->name);
 		ast_cli(a->fd, "%s:%s,%s\n", "FastStart/H.245 Tunneling", user->faststart?"yes":"no",
 					user->h245tunneling?"yes":"no");
+		ast_cli(a->fd, "%-15s%s\n", "DirectRTP", user->directrtp ? "yes" : "no");
+		ast_cli(a->fd, "%-15s%s\n", "EarlyDirectRTP", user->earlydirect ? "yes" : "no");
 		ast_cli(a->fd, "%-15.15s%s", "Format Prefs: ", "(");
 		print_codec_to_cli(a->fd, &user->prefs);
 		ast_cli(a->fd, ")\n");
@@ -3312,6 +3369,65 @@ static int ooh323_show_channels(int fd, int argc, char *argv[])
 }
 #endif
 
+static char *handle_cli_ooh323_show_gk(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	char value[FORMAT_STRING_SIZE];
+	extern OOH323EndPoint gH323ep;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "ooh323 show gk";
+		e->usage =
+			"Usage: ooh323 show gk\n"
+			"		 Shows Gatekeeper connection state\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 3)
+		return CLI_SHOWUSAGE;
+
+	ast_cli(a->fd, "\nGateKeeper connection state:\n");
+	if (!gH323ep.gkClient) {
+		ast_cli(a->fd, "No Gatekeeper is configured\n");
+		return CLI_SUCCESS;
+	}
+
+	if (gRasGkMode == RasNoGatekeeper) {
+		snprintf(value, sizeof(value), "%s", "No Gatekeeper");
+	} else if (gRasGkMode == RasDiscoverGatekeeper) {
+		snprintf(value, sizeof(value), "%s", "Discover");
+	} else {
+		snprintf(value, sizeof(value), "%s", gGatekeeper);
+	}
+	ast_cli(a->fd,  "%-20s%s\n", "Gatekeeper:", value);
+	switch(gH323ep.gkClient->state) {
+	case GkClientIdle:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Idle");
+		break;
+	case GkClientDiscovered:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Discovered");
+		break;
+	case GkClientRegistered:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Registered");
+		break;
+	case GkClientUnregistered:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Unregistered");
+		break;
+	case GkClientGkErr:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Error");
+		break;
+	case GkClientFailed:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Failed");
+		break;
+	default:
+		break;
+	}
+
+	return CLI_SUCCESS;
+}
+
 static char *handle_cli_ooh323_show_config(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	char value[FORMAT_STRING_SIZE];
@@ -3339,6 +3455,8 @@ static char *handle_cli_ooh323_show_config(struct ast_cli_entry *e, int cmd, str
 	ast_cli(a->fd, "%-20s%s\n", "Tunneling", gTunneling?"yes":"no");
 	ast_cli(a->fd, "%-20s%s\n", "CallerId", gCallerID);
 	ast_cli(a->fd, "%-20s%s\n", "MediaWaitForConnect", gMediaWaitForConnect?"yes":"no");
+	ast_cli(a->fd, "%-20s%s\n", "DirectRTP", gDirectRTP ? "yes" : "no");
+	ast_cli(a->fd, "%-20s%s\n", "EarlyDirectRTP", gEarlyDirect ? "yes" : "no");
 
 #if (0)
 		extern OOH323EndPoint gH323ep;
@@ -3427,6 +3545,7 @@ static char *handle_cli_ooh323_show_config(struct ast_cli_entry *e, int cmd, str
 static struct ast_cli_entry cli_ooh323[] = {
 	AST_CLI_DEFINE(handle_cli_ooh323_set_debug,	"Enable/Disable OOH323 debugging"),
 	AST_CLI_DEFINE(handle_cli_ooh323_show_config, "Show details on global configuration of H.323 channel driver"),
+	AST_CLI_DEFINE(handle_cli_ooh323_show_gk, "Show OOH323 Gatekeeper connection status"),
 	AST_CLI_DEFINE(handle_cli_ooh323_show_peer,	"Show details on specific OOH323 peer"),
 	AST_CLI_DEFINE(handle_cli_ooh323_show_peers,  "Show defined OOH323 peers"),
 	AST_CLI_DEFINE(handle_cli_ooh323_show_user,	"Show details on specific OOH323 user"),
@@ -3554,7 +3673,8 @@ static int load_module(void)
 		.onCallCleared = onCallCleared,
 		.openLogicalChannels = NULL,
 		.onReceivedDTMF = ooh323_onReceivedDigit,
-		.onModeChanged = onModeChanged
+		.onModeChanged = onModeChanged,
+		.onMediaChanged = (cb_OnMediaChanged) setup_rtp_remote,
 	};
 	if (!(gCap = ast_format_cap_alloc())) {
 		return 1; 
@@ -3734,7 +3854,23 @@ static void *do_monitor(void *data)
 		while (h323) {
 			h323_next = h323->next;
 
-			/* TODO: Need to add rtptimeout keepalive support */
+			if (h323->rtp && h323->rtptimeout && h323->lastrtptx &&
+				h323->lastrtptx + h323->rtptimeout < t) {
+				ast_rtp_instance_sendcng(h323->rtp, 0);
+				h323->lastrtptx = time(NULL);
+			}
+
+			if (h323->rtp && h323->owner && h323->rtptimeout &&
+				h323->lastrtprx && ast_sockaddr_isnull(&h323->redirip) &&
+				h323->lastrtprx + h323->rtptimeout < t) {
+				if (!ast_channel_trylock(h323->owner)) {
+					ast_softhangup_nolock(h323->owner, AST_SOFTHANGUP_DEV);
+					ast_log(LOG_NOTICE, "Disconnecting call '%s' for lack of RTP activity in %ld seconds\n", ast_channel_name(h323->owner), (long) (t - h323->lastrtprx));
+					ast_channel_unlock(h323->owner);
+				}
+				
+			}
+
 			if (ast_test_flag(h323, H323_NEEDDESTROY)) {
 				ooh323_destroy (h323);
          } /* else if (ast_test_flag(h323, H323_NEEDSTART) && h323->owner) {
@@ -4103,12 +4239,34 @@ static int unload_module(void)
 	return 0;
 }
 
+static void ooh323_get_codec(struct ast_channel *chan, struct ast_format_cap *result)
+{
+	struct ooh323_pvt *p = (struct ooh323_pvt *) ast_channel_tech_pvt(chan);
+	if (gH323Debug) {
+		ast_verb(0, "+++ ooh323  get_codec, %s\n", ast_channel_name(chan));
+	}
+
+	if (p) {
+		ast_format_cap_append(result,  ast_format_cap_is_empty(ast_channel_nativeformats(chan)) ?
+				(ast_format_cap_is_empty(p->cap) ? NULL : p->cap) : ast_channel_nativeformats(chan));
+	}
+
+	if (gH323Debug) {
+		ast_verb(0, "--- ooh323  get_codec, %s\n", ast_channel_name(chan));
+	}
+}
+
 
 
 static enum ast_rtp_glue_result ooh323_get_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance **rtp)
 {
 	struct ooh323_pvt *p = NULL;
 	enum ast_rtp_glue_result res = AST_RTP_GLUE_RESULT_LOCAL;
+	struct ast_sockaddr tmp;
+
+	if (gH323Debug) {
+		ast_verb(0, "+++ ooh323  get_rtp_peer \n");
+	}
 
 	if (!(p = (struct ooh323_pvt *) ast_channel_tech_pvt(chan)))
 		return AST_RTP_GLUE_RESULT_FORBID;
@@ -4119,10 +4277,25 @@ static enum ast_rtp_glue_result ooh323_get_rtp_peer(struct ast_channel *chan, st
 
 	*rtp = p->rtp ? ao2_ref(p->rtp, +1), p->rtp : NULL;
 
-	res = AST_RTP_GLUE_RESULT_LOCAL;
+	/* there must be checking of directmedia setting */
+
+	if ((ast_channel_state(chan) != AST_STATE_UP && !p->earlydirect) || !p->directrtp) {
+		res = AST_RTP_GLUE_RESULT_LOCAL;
+	} else {
+		res = AST_RTP_GLUE_RESULT_REMOTE;
+	}
 
 	if (ast_test_flag(&global_jbconf, AST_JB_FORCED)) {
 		res = AST_RTP_GLUE_RESULT_FORBID;
+	}
+
+	ast_rtp_instance_get_remote_address(*rtp, &tmp);
+	if (gH323Debug) {
+		ast_verb(0, "ooh323_get_rtp_peer  %s -> %s:%d, %d\n", ast_channel_name(chan), ast_sockaddr_stringify_addr(&tmp),
+						ast_sockaddr_port(&tmp), res);
+	}
+	if (gH323Debug) {
+		ast_verb(0, "--- ooh323  get_rtp_peer, res = %d\n", (int) res);
 	}
 
 	return res;
@@ -4141,7 +4314,10 @@ static enum ast_rtp_glue_result ooh323_get_vrtp_peer(struct ast_channel *chan, s
 	}
 
 	*rtp = p->vrtp ? ao2_ref(p->vrtp, +1), p->vrtp : NULL;
-	res = AST_RTP_GLUE_RESULT_LOCAL;
+
+	/* there must check of supporting video per call */
+
+	res = AST_RTP_GLUE_RESULT_FORBID;
 
 	return res;
 }
@@ -4205,13 +4381,11 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 {
 	/* XXX Deal with Video */
 	struct ooh323_pvt *p;
-	struct ast_sockaddr tmp;
+	int changed = 0;
+	char *callToken = NULL;
 
-	if (gH323Debug)
+	if (gH323Debug) {
 		ast_verb(0, "---   ooh323_set_peer - %s\n", ast_channel_name(chan));
-
-	if (!rtp) {
-		return 0;
 	}
 
 	if (ooh323_convertAsteriskCapToH323Cap(ast_channel_writeformat(chan)) < 0) {
@@ -4223,13 +4397,46 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");
 		return -1;
 	}
-	ast_rtp_instance_get_remote_address(rtp, &tmp);
-	ast_rtp_instance_get_local_address(rtp, &tmp);
+
+	ast_mutex_lock(&p->lock);
+
+	if (rtp) {
+		changed |= ast_rtp_instance_get_and_cmp_remote_address(rtp, &p->redirip);
+	} else if (!ast_sockaddr_isnull(&p->redirip)) {
+		changed = 1;
+		memset(&p->redirip, 0, sizeof(p->redirip));
+	}
+
+	callToken = (p->callToken ? strdup(p->callToken) : NULL);
+
+	if (!callToken) {
+		if (gH323Debug) {
+			ast_verb(0, "	set_rtp_peer - No callToken\n");
+		}
+		ast_mutex_unlock(&p->lock);
+		return -1;
+	}
+
+
+	if (changed) {
+		if (!ast_sockaddr_isnull(&p->redirip)) {
+			if (gH323Debug) {
+				ast_verb(0, "ooh323_set_rtp_peer  %s -> %s:%d\n", ast_channel_name(chan), ast_sockaddr_stringify_addr(&p->redirip),
+							ast_sockaddr_port(&p->redirip));
+			}
+			ooUpdateLogChannels(callToken, ast_sockaddr_stringify_addr(&p->redirip),
+							ast_sockaddr_port(&p->redirip));
+		} else {
+			if (gH323Debug) {
+				ast_verb(0, "ooh323_set_rtp_peer  return back to local\n");
+			}
+			ooUpdateLogChannels(callToken, "0.0.0.0" , 0);
+		}
+	}
+
+	ast_mutex_unlock(&p->lock);
+	free(callToken);
 	return 0;
-
-/* 	May 20101003 */
-/*	What we should to do here? */
-
 
 }
 
@@ -4238,7 +4445,8 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 
 int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 {
-	char lhost[INET6_ADDRSTRLEN], *lport=NULL;
+	char lhost[INET6_ADDRSTRLEN];
+	unsigned lport = 0;
 	struct ast_sockaddr tmp;
 	ooMediaInfo mediaInfo;
 	int x;
@@ -4249,7 +4457,7 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 	if (gH323Debug)
 		ast_verb(0, "---   configure_local_rtp\n");
 
-
+	memset(&mediaInfo, 0, sizeof(mediaInfo));
 	if (ast_parse_arg(call->localIP, PARSE_ADDR, &tmp)) {
 		ast_sockaddr_copy(&tmp, &bindaddr);
 	}
@@ -4307,7 +4515,7 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 		/* figure out our local RTP port and tell the H.323 stack about it*/
 		ast_rtp_instance_get_local_address(p->rtp, &tmp);
 		ast_copy_string(lhost, ast_sockaddr_stringify_addr(&tmp), sizeof(lhost));
-		lport = ast_sockaddr_stringify_port(&tmp);
+		lport = ast_sockaddr_port(&tmp);
 
 		if (p->rtptimeout) {
 			ast_rtp_instance_set_timeout(p->rtp, p->rtptimeout);
@@ -4325,8 +4533,8 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 
 
 	ast_copy_string(mediaInfo.lMediaIP, lhost, sizeof(mediaInfo.lMediaIP));
-	mediaInfo.lMediaPort = atoi(lport);
-	mediaInfo.lMediaCntrlPort = mediaInfo.lMediaPort +1;
+	mediaInfo.lMediaPort = lport;
+	mediaInfo.lMediaCntrlPort = mediaInfo.lMediaPort + 1;
 	for (x = 0; ast_codec_pref_index(&p->prefs, x, &tmpfmt); x++) {
 		strcpy(mediaInfo.dir, "transmit");
 		mediaInfo.cap = ooh323_convertAsteriskCapToH323Cap(&tmpfmt);
@@ -4351,9 +4559,9 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 	if (p->udptl) {
 		ast_udptl_get_us(p->udptl, &tmp);
 		ast_copy_string(lhost, ast_sockaddr_stringify_addr(&tmp), sizeof(lhost));
-		lport = ast_sockaddr_stringify_port(&tmp);
+		lport = ast_sockaddr_port(&tmp);
 		ast_copy_string(mediaInfo.lMediaIP, lhost, sizeof(mediaInfo.lMediaIP));
-		mediaInfo.lMediaPort = atoi(lport);
+		mediaInfo.lMediaPort = lport;
 		mediaInfo.lMediaCntrlPort = mediaInfo.lMediaPort +1;
 		mediaInfo.cap = OO_T38;
 		strcpy(mediaInfo.dir, "transmit");
@@ -4368,8 +4576,46 @@ int configure_local_rtp(struct ooh323_pvt *p, ooCallData *call)
 	return 1;
 }
 
-void setup_rtp_connection(ooCallData *call, const char *remoteIp, 
-								  int remotePort)
+void setup_rtp_remote(ooCallData *call, const char *remoteIp, int remotePort)
+{
+	struct ooh323_pvt *p = NULL;
+	struct ast_sockaddr tmp;
+
+	if (gH323Debug) {
+		ast_verb(0, "---   setup_rtp_remote %s:%d\n", remoteIp, remotePort);
+	}
+	if (!remoteIp || !remoteIp[0] || !remotePort) {
+		if (gH323Debug) {
+			ast_verb(0, "+++ setup_rtp_remote no data\n");
+		}
+		return;
+	}
+
+	/* Find the call or allocate a private structure if call not found */
+	p = find_call(call);
+
+	if (!p || !p->rtp) {
+		ast_log(LOG_ERROR, "Something is wrong: rtp\n");
+		return;
+	}
+
+	ast_mutex_lock(&p->lock);
+
+	ast_parse_arg(remoteIp, PARSE_ADDR, &tmp);
+	ast_sockaddr_set_port(&tmp, remotePort);
+	ast_rtp_instance_set_remote_address(p->rtp, &tmp);
+
+	ast_mutex_unlock(&p->lock);
+
+	if (gH323Debug) {
+		ast_verb(0, "+++   setup_rtp_remote\n");
+	}
+
+	return;
+}
+
+
+void setup_rtp_connection(ooCallData *call, const char *remoteIp, int remotePort)
 {
 	struct ooh323_pvt *p = NULL;
 	struct ast_sockaddr tmp;
@@ -4378,20 +4624,25 @@ void setup_rtp_connection(ooCallData *call, const char *remoteIp,
 		ast_verb(0, "---   setup_rtp_connection %s:%d\n", remoteIp, remotePort);
 
 	/* Find the call or allocate a private structure if call not found */
-	p = find_call(call); 
+	p = find_call(call);
 
-	if (!p) {
+	if (!p || !p->rtp) {
 		ast_log(LOG_ERROR, "Something is wrong: rtp\n");
 		return;
 	}
+
+	ast_mutex_lock(&p->lock);
 
 	ast_parse_arg(remoteIp, PARSE_ADDR, &tmp);
 	ast_sockaddr_set_port(&tmp, remotePort);
 	ast_rtp_instance_set_remote_address(p->rtp, &tmp);
 
-	if (p->writeformat.id == AST_FORMAT_G726_AAL2) 
+	if (p->writeformat.id == AST_FORMAT_G726_AAL2) {
                 ast_rtp_codecs_payloads_set_rtpmap_type(ast_rtp_instance_get_codecs(p->rtp), p->rtp, 2,
 							"audio", "G726-32", AST_RTP_OPT_G726_NONSTANDARD);
+	}
+
+	ast_mutex_unlock(&p->lock);
 
 	if(gH323Debug)
 		ast_verb(0, "+++   setup_rtp_connection\n");
@@ -4511,9 +4762,10 @@ void setup_udptl_connection(ooCallData *call, const char *remoteIp,
 		parameters.rate = AST_T38_RATE_14400;
 		ast_queue_control_data(p->owner, AST_CONTROL_T38_PARAMETERS, &parameters, sizeof(parameters));
 	}
-	if (gH323Debug)
-		ast_debug(1, "Receiving UDPTL  %s:%s\n", ast_sockaddr_stringify_host(&them),
-							ast_sockaddr_stringify_port(&them));
+	if (gH323Debug) {
+		ast_debug(1, "Receiving UDPTL  %s:%d\n", ast_sockaddr_stringify_host(&them),
+							ast_sockaddr_port(&them));
+	}
 
 	ast_channel_unlock(p->owner);
 	ast_mutex_unlock(&p->lock);
@@ -4610,12 +4862,14 @@ struct ast_frame *ooh323_rtp_read(struct ast_channel *ast, struct ooh323_pvt *p)
 	switch (ast_channel_fdno(ast)) {
 	case 0:
 		f = ast_rtp_instance_read(p->rtp, 0);	/* RTP Audio */
+		p->lastrtprx = time(NULL);
 		break;
 	case 1:
 		f = ast_rtp_instance_read(p->rtp, 1);	/* RTCP Control Channel */
 		break;
 	case 2:
 		f = ast_rtp_instance_read(p->vrtp, 0);	/* RTP Video */
+		p->lastrtprx = time(NULL);
 		break;
 	case 3:
 		f = ast_rtp_instance_read(p->vrtp, 1);	/* RTCP Control Channel for video */
@@ -4626,6 +4880,7 @@ struct ast_frame *ooh323_rtp_read(struct ast_channel *ast, struct ooh323_pvt *p)
 			 ast_debug(1, "Got UDPTL %d/%d len %d for %s\n",
 				f->frametype, f->subclass.integer, f->datalen, ast_channel_name(ast));
 		}
+		p->lastrtprx = time(NULL);
 		break;
 
 	default:

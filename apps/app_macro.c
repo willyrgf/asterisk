@@ -164,7 +164,7 @@ static char *exit_app = "MacroExit";
 
 static void macro_fixup(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan);
 
-static struct ast_datastore_info macro_ds_info = {
+static const struct ast_datastore_info macro_ds_info = {
 	.type = "MACRO",
 	.chan_fixup = macro_fixup,
 };
@@ -595,8 +595,7 @@ static int macroif_exec(struct ast_channel *chan, const char *data)
 	char *expr = NULL, *label_a = NULL, *label_b = NULL;
 	int res = 0;
 
-	if (!(expr = ast_strdupa(data)))
-		return -1;
+	expr = ast_strdupa(data);
 
 	if ((label_a = strchr(expr, '?'))) {
 		*label_a = '\0';

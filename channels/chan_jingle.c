@@ -22,9 +22,17 @@
  *
  * \brief Jingle Channel Driver
  *
- * \extref Iksemel http://iksemel.jabberstudio.org/
+ * Iksemel http://iksemel.jabberstudio.org/
  * 
  * \ingroup channel_drivers
+ */
+
+/*! \li \ref chan_jingle.c uses the configuration file \ref jingle.conf
+ * \addtogroup configuration_file
+ */
+
+/*! \page jingle.conf jingle.conf
+ * \verbinclude jingle.conf.sample
  */
 
 /*** MODULEINFO
@@ -32,7 +40,8 @@
 	<depend>res_jabber</depend>
 	<use type="external">openssl</use>
 	<defaultenabled>no</defaultenabled>
-	<support_level>extended</support_level>
+	<support_level>deprecated</support_level>
+	<replacement>chan_motif</replacement>
  ***/
 
 #include "asterisk.h"
@@ -1332,6 +1341,8 @@ static int jingle_indicate(struct ast_channel *ast, int condition, const void *d
 		break;
 	default:
 		ast_log(LOG_NOTICE, "Don't know how to indicate condition '%d'\n", condition);
+		/* fallthrough */
+	case AST_CONTROL_PVT_CAUSE_CODE:
 		res = -1;
 	}
 
@@ -1551,14 +1562,16 @@ static struct ast_channel *jingle_request(const char *type, struct ast_format_ca
 
 	if (data) {
 		s = ast_strdupa(data);
-		if (s) {
-			sender = strsep(&s, "/");
-			if (sender && (sender[0] != '\0'))
-				to = strsep(&s, "/");
-			if (!to) {
-				ast_log(LOG_ERROR, "Bad arguments in Jingle Dialstring: %s\n", data);
-				return NULL;
-			}
+		sender = strsep(&s, "/");
+		if (sender && (sender[0] != '\0'))
+			to = strsep(&s, "/");
+		if (!to) {
+			ast_log(LOG_ERROR, "Bad arguments in Jingle Dialstring: %s\n", data);
+			return NULL;
+		}
+		if (!to) {
+			ast_log(LOG_ERROR, "Bad arguments in Jingle Dialstring: %s\n", (char*) data);
+			return NULL;
 		}
 	}
 
@@ -1931,7 +1944,16 @@ static int jingle_load_config(void)
 	return 1;
 }
 
-/*! \brief Load module into PBX, register channel */
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct ast_sockaddr ourip_tmp;
@@ -1980,6 +2002,7 @@ static int load_module(void)
 		ast_log(LOG_WARNING, "Unable to create I/O context\n");
 	}
 
+	bindaddr.sin_family = AF_INET;
 	ast_sockaddr_from_sin(&bindaddr_tmp, &bindaddr);
 	if (ast_find_ourip(&ourip_tmp, &bindaddr_tmp, AF_INET)) {
 		ast_log(LOG_WARNING, "Unable to get own IP address, Jingle disabled\n");

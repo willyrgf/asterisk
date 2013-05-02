@@ -1,5 +1,5 @@
 #
-# Asterisk -- A telephony toolkit for Linux.
+# Asterisk -- An open source telephony toolkit.
 # 
 # Makefile for sound files
 #
@@ -19,8 +19,8 @@ CMD_PREFIX?=@
 SOUNDS_DIR:=$(DESTDIR)$(ASTDATADIR)/sounds
 SOUNDS_CACHE_DIR?=
 MOH_DIR:=$(DESTDIR)$(ASTDATADIR)/moh
-CORE_SOUNDS_VERSION:=1.4.22
-EXTRA_SOUNDS_VERSION:=1.4.11
+CORE_SOUNDS_VERSION:=1.4.24
+EXTRA_SOUNDS_VERSION:=1.4.13
 MOH_VERSION:=2.03
 SOUNDS_URL:=http://downloads.asterisk.org/pub/telephony/sounds/releases
 MCS:=$(subst -EN-,-en-,$(MENUSELECT_CORE_SOUNDS))
@@ -28,6 +28,7 @@ MCS:=$(subst -EN_AU-,-en_AU-,$(MCS))
 MCS:=$(subst -FR-,-fr-,$(MCS))
 MCS:=$(subst -ES-,-es-,$(MCS))
 MCS:=$(subst -RU-,-ru-,$(MCS))
+MCS:=$(subst -IT-,-it-,$(MCS))
 MCS:=$(subst -WAV,-wav,$(MCS))
 MCS:=$(subst -ULAW,-ulaw,$(MCS))
 MCS:=$(subst -ALAW,-alaw,$(MCS))
@@ -141,6 +142,8 @@ $(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,en_AU,$(CORE_SOUN
 $(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,es,$(CORE_SOUNDS_VERSION)))
 
 $(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,fr,$(CORE_SOUNDS_VERSION)))
+
+$(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,it,$(CORE_SOUNDS_VERSION)))
 
 $(eval $(call sound_format_lang_rule,$(SOUNDS_DIR),core-sounds,ru,$(CORE_SOUNDS_VERSION)))
 

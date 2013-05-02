@@ -1,5 +1,5 @@
 #
-# Asterisk -- A telephony toolkit for Linux.
+# Asterisk -- An open source telephony toolkit.
 #
 # Top level Makefile
 #
@@ -81,6 +81,8 @@ export STATIC_BUILD       # Additional cflags, set to -static
                           # should go directly to ASTLDFLAGS
 
 #--- paths to various commands
+# The makeopts include below tries to set these if they're found during
+# configure.
 export CC
 export CXX
 export AR
@@ -96,13 +98,9 @@ export MD5
 export WGET_EXTRA_ARGS
 export LDCONFIG
 export LDCONFIG_FLAGS
+export PYTHON
 
-# even though we could use '-include makeopts' here, use a wildcard
-# lookup anyway, so that make won't try to build makeopts if it doesn't
-# exist (other rules will force it to be built if needed)
-ifneq ($(wildcard makeopts),)
-  include makeopts
-endif
+-include makeopts
 
 # start the primary CFLAGS and LDFLAGS with any that were provided
 # to the configure script
@@ -183,7 +181,7 @@ ifeq ($(findstring -Wall,$(_ASTCFLAGS) $(ASTCFLAGS)),)
   _ASTCFLAGS+=-Wall
 endif
 
-_ASTCFLAGS+=-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(DEBUG)
+_ASTCFLAGS+=-Wstrict-prototypes -Wmissing-prototypes -Wmissing-declarations $(AST_NESTED_FUNCTIONS) $(DEBUG)
 ADDL_TARGETS=
 
 ifeq ($(AST_DEVMODE),yes)
@@ -191,6 +189,7 @@ ifeq ($(AST_DEVMODE),yes)
   _ASTCFLAGS+=-Wunused
   _ASTCFLAGS+=$(AST_DECLARATION_AFTER_STATEMENT)
   _ASTCFLAGS+=$(AST_FORTIFY_SOURCE)
+  _ASTCFLAGS+=$(AST_TRAMPOLINES)
   _ASTCFLAGS+=-Wundef
   _ASTCFLAGS+=-Wmissing-format-attribute
   _ASTCFLAGS+=-Wformat=2
@@ -224,10 +223,13 @@ ifeq ($(OSARCH),SunOS)
   _ASTCFLAGS+=-Wcast-align -DSOLARIS -I../include/solaris-compat -I/opt/ssl/include -I/usr/local/ssl/include -D_XPG4_2 -D__EXTENSIONS__
 endif
 
-ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) build_tools/make_version .)
-
-ifneq ($(wildcard .version),)
-  ASTERISKVERSIONNUM:=$(shell $(AWK) -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
+ifneq ($(GREP),)
+  ASTERISKVERSION:=$(shell GREP=$(GREP) AWK=$(AWK) GIT=$(GIT) build_tools/make_version .)
+endif
+ifneq ($(AWK),)
+  ifneq ($(wildcard .version),)
+    ASTERISKVERSIONNUM:=$(shell $(AWK) -F. '{printf "%01d%02d%02d", $$1, $$2, $$3}' .version)
+  endif
 endif
 
 ifneq ($(wildcard .svn),)
@@ -250,10 +252,8 @@ MOD_SUBDIRS_MENUSELECT_TREE:=$(MOD_SUBDIRS:%=%-menuselect-tree)
 
 ifneq ($(findstring darwin,$(OSARCH)),)
   _ASTCFLAGS+=-D__Darwin__
-  _SOLINK=-Xlinker -macosx_version_min -Xlinker 10.4 -Xlinker -undefined -Xlinker dynamic_lookup -force_flat_namespace
-  ifeq ($(shell if test `/usr/bin/sw_vers -productVersion | cut -c4` -gt 5; then echo 6; else echo 0; fi),6)
-    _SOLINK+=/usr/lib/bundle1.o
-  endif
+  _SOLINK=-Xlinker -macosx_version_min -Xlinker 10.6 -Xlinker -undefined -Xlinker dynamic_lookup
+  _SOLINK+=/usr/lib/bundle1.o
   SOLINK=-bundle $(_SOLINK)
   DYLINK=-Xlinker -dylib $(_SOLINK)
   _ASTLDFLAGS+=-L/usr/local/lib
@@ -265,6 +265,9 @@ else
     _ASTLDFLAGS+=-L/usr/local/lib
   endif
 endif
+
+# Include rpath settings
+_ASTLDFLAGS+=$(AST_RPATH)
 
 ifeq ($(OSARCH),SunOS)
   SOLINK=-shared -fpic -L/usr/local/ssl/lib -lrt
@@ -290,13 +293,6 @@ else
 SUBMAKE:=$(MAKE) --quiet --no-print-directory
 endif
 
-# This is used when generating the doxygen documentation
-ifneq ($(DOT),:)
-  HAVEDOT=yes
-else
-  HAVEDOT=no
-endif
-
 # $(MAKE) is printed in several places, and we want it to be a
 # fixed size string. Define a variable whose name has also the
 # same size, so we can easily align text.
@@ -306,7 +302,7 @@ else
 	mK=" make"
 endif
 
-all: _cleantest_all
+all: _all
 	@echo " +--------- Asterisk Build Complete ---------+"
 	@echo " + Asterisk has successfully been built, and +"
 	@echo " + can be installed by running:              +"
@@ -314,12 +310,18 @@ all: _cleantest_all
 	@echo " +               $(mK) install               +"
 	@echo " +-------------------------------------------+"
 
-# For parallel builds, we must call cleantest *before* running the
-# other dependencies on _all.
-_cleantest_all: cleantest
-	@$(MAKE) _all
+full: _full
+	@echo " +--------- Asterisk Build Complete ---------+"
+	@echo " + Asterisk has successfully been built, and +"
+	@echo " + can be installed by running:              +"
+	@echo " +                                           +"
+	@echo " +               $(mK) install               +"
+	@echo " +-------------------------------------------+"
+
 
 _all: makeopts $(SUBDIRS) doc/core-en_US.xml $(ADDL_TARGETS)
+
+_full: makeopts $(SUBDIRS) doc/full-en_US.xml $(ADDL_TARGETS)
 
 makeopts: configure
 	@echo "****"
@@ -354,7 +356,7 @@ makeopts.embed_rules: menuselect.makeopts
 	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDFLAGS)
 	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LIBS)
 
-$(SUBDIRS): main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
+$(SUBDIRS): makeopts .lastclean main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
 ifeq ($(findstring $(OSARCH), mingw32 cygwin ),)
     # Non-windows:
@@ -374,31 +376,31 @@ $(D1): res
 res:	main
 endif
 
-$(MOD_SUBDIRS):
+$(MOD_SUBDIRS): makeopts
 	+@_ASTCFLAGS="$(MOD_SUBDIR_CFLAGS) $(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS)" _ASTLDFLAGS="$(_ASTLDFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
-$(OTHER_SUBDIRS):
+$(OTHER_SUBDIRS): makeopts
 	+@_ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS)" _ASTLDFLAGS="$(_ASTLDFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
-defaults.h: makeopts build_tools/make_defaults_h
+defaults.h: makeopts .lastclean build_tools/make_defaults_h
 	@build_tools/make_defaults_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-main/version.c: FORCE
+main/version.c: FORCE .lastclean
 	@build_tools/make_version_c > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/buildopts.h: menuselect.makeopts
+include/asterisk/buildopts.h: menuselect.makeopts .lastclean
 	@build_tools/make_buildopts_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/build.h:
-	@build_tools/make_build_h > $@.tmp
-	@cmp -s $@.tmp $@ || mv $@.tmp $@
-	@rm -f $@.tmp
+# build.h must depend on .lastclean, or parallel make may wipe it out after it's
+# been created.
+include/asterisk/build.h: .lastclean
+	@build_tools/make_build_h > $@
 
 $(SUBDIRS_CLEAN):
 	+@$(SUBMAKE) -C $(@:-clean=) clean
@@ -412,6 +414,8 @@ _clean:
 	rm -f defaults.h
 	rm -f include/asterisk/build.h
 	rm -f main/version.c
+	rm -f doc/core-en_US.xml
+	rm -f doc/full-en_US.xml
 	@$(MAKE) -C menuselect clean
 	cp -f .cleancount .lastclean
 
@@ -429,7 +433,7 @@ distclean: $(SUBDIRS_DIST_CLEAN) _clean
 	rm -rf doc/api
 	rm -f build_tools/menuselect-deps
 
-datafiles: _cleantest_all doc/core-en_US.xml
+datafiles: _all doc/core-en_US.xml
 	CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" build_tools/mkpkgconfig "$(DESTDIR)$(libdir)/pkgconfig";
 # Should static HTTP be installed during make samples or even with its own target ala
 # webvoicemail?  There are portions here that *could* be customized but might also be
@@ -449,8 +453,38 @@ datafiles: _cleantest_all doc/core-en_US.xml
 		$(INSTALL) -m 644 $$x "$(DESTDIR)$(ASTDATADIR)/images" ; \
 	done
 	$(MAKE) -C sounds install
+	find rest-api -name "*.json" | while read x; do \
+		$(INSTALL) -m 644 $$x "$(DESTDIR)$(ASTDATADIR)/rest-api" ; \
+	done
 
-doc/core-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+ifneq ($(GREP),)
+  XML_core_en_US = $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+endif
+
+doc/core-en_US.xml: makeopts .lastclean $(XML_core_en_US)
+	@printf "Building Documentation For: "
+	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
+	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
+	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
+	@for x in $(MOD_SUBDIRS); do \
+		printf "$$x " ; \
+		for i in `find $$x -name *.c`; do \
+			$(AWK) -f build_tools/get_documentation $$i >> $@ ; \
+		done ; \
+	done
+	@echo
+	@echo "</docs>" >> $@
+
+ifneq ($(GREP),)
+  XMX_full_en_US = $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+endif
+
+doc/full-en_US.xml: makeopts .lastclean $(XML_full_en_US)
+ifeq ($(PYTHON),:)
+	@echo "--------------------------------------------------------------------------"
+	@echo "---        Please install python to build full documentation           ---"
+	@echo "--------------------------------------------------------------------------"
+else
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
@@ -458,11 +492,13 @@ doc/core-en_US.xml: $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"
 	@for x in $(MOD_SUBDIRS); do \
 		printf "$$x " ; \
 		for i in $$x/*.c; do \
-			$(AWK) -f build_tools/get_documentation $$i >> $@ ; \
+			$(PYTHON) build_tools/get_documentation.py < $$i >> $@ ; \
 		done ; \
 	done
 	@echo
 	@echo "</docs>" >> $@
+	@$(PYTHON) build_tools/post_process_documentation.py -i $@ -o "doc/core-en_US.xml"
+endif
 
 validate-docs: doc/core-en_US.xml
 ifeq ($(XMLSTARLET)$(XMLLINT),::)
@@ -496,45 +532,28 @@ update:
 
 NEWHEADERS=$(notdir $(wildcard include/asterisk/*.h))
 OLDHEADERS=$(filter-out $(NEWHEADERS) $(notdir $(DESTDIR)$(ASTHEADERDIR)),$(notdir $(wildcard $(DESTDIR)$(ASTHEADERDIR)/*.h)))
+INSTALLDIRS="$(ASTLIBDIR)" "$(ASTMODDIR)" "$(ASTSBINDIR)" "$(ASTETCDIR)" "$(ASTVARRUNDIR)" \
+	"$(ASTSPOOLDIR)" "$(ASTSPOOLDIR)/dictate" "$(ASTSPOOLDIR)/meetme" \
+	"$(ASTSPOOLDIR)/monitor" "$(ASTSPOOLDIR)/system" "$(ASTSPOOLDIR)/tmp" \
+	"$(ASTSPOOLDIR)/voicemail" "$(ASTHEADERDIR)" "$(ASTHEADERDIR)/doxygen" \
+	"$(ASTLOGDIR)" "$(ASTLOGDIR)/cdr-csv" "$(ASTLOGDIR)/cdr-custom" \
+	"$(ASTLOGDIR)/cel-custom" "$(ASTDATADIR)" "$(ASTDATADIR)/documentation" \
+	"$(ASTDATADIR)/documentation/thirdparty" "$(ASTDATADIR)/firmware" \
+	"$(ASTDATADIR)/firmware/iax" "$(ASTDATADIR)/images" "$(ASTDATADIR)/keys" \
+	"$(ASTDATADIR)/phoneprov" "$(ASTDATADIR)/rest-api" "$(ASTDATADIR)/static-http" \
+	"$(ASTDATADIR)/sounds" "$(ASTDATADIR)/moh" "$(ASTMANDIR)/man8" "$(AGI_DIR)" "$(ASTDBDIR)"
 
 installdirs:
-	$(INSTALL) -d "$(DESTDIR)$(ASTLIBDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTMODDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSBINDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTETCDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTVARRUNDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/dictate"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/meetme"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/monitor"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/system"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/tmp"
-	$(INSTALL) -d "$(DESTDIR)$(ASTSPOOLDIR)/voicemail"
-	$(INSTALL) -d "$(DESTDIR)$(ASTHEADERDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTHEADERDIR)/doxygen"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cdr-csv"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cdr-custom"
-	$(INSTALL) -d "$(DESTDIR)$(ASTLOGDIR)/cel-custom"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/documentation"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/documentation/thirdparty"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/firmware"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/firmware/iax"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/images"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/keys"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/phoneprov"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/static-http"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/sounds"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/moh"
-	$(INSTALL) -d "$(DESTDIR)$(ASTMANDIR)/man8"
-	$(INSTALL) -d "$(DESTDIR)$(AGI_DIR)"
-	$(INSTALL) -d "$(DESTDIR)$(ASTDBDIR)"
+	@for i in $(INSTALLDIRS); do \
+		if [ ! -z "$${i}" -a ! -d "$(DESTDIR)$${i}" ]; then \
+			$(INSTALL) -d "$(DESTDIR)$${i}"; \
+		fi; \
+	done
 
 main-bininstall:
 	+@DESTDIR="$(DESTDIR)" ASTSBINDIR="$(ASTSBINDIR)" ASTLIBDIR="$(ASTLIBDIR)" $(SUBMAKE) -C main bininstall
 
-bininstall: _cleantest_all installdirs $(SUBDIRS_INSTALL) main-bininstall
+bininstall: _all installdirs $(SUBDIRS_INSTALL) main-bininstall
 	$(INSTALL) -m 755 contrib/scripts/astgenkey "$(DESTDIR)$(ASTSBINDIR)/"
 	$(INSTALL) -m 755 contrib/scripts/autosupport "$(DESTDIR)$(ASTSBINDIR)/"
 	if [ ! -f "$(DESTDIR)$(ASTSBINDIR)/safe_asterisk" -a ! -f /sbin/launchd ]; then \
@@ -666,6 +685,7 @@ samples: adsi
 			-e 's|^astspooldir.*$$|astspooldir => $(ASTSPOOLDIR)|' \
 			-e 's|^astrundir.*$$|astrundir => $(ASTVARRUNDIR)|' \
 			-e 's|^astlogdir.*$$|astlogdir => $(ASTLOGDIR)|' \
+			-e 's|^astsbindir.*$$|astsbindir => $(ASTSBINDIR)|' \
 			"$(DESTDIR)$(ASTCONFPATH)" > "$(DESTDIR)$(ASTCONFPATH).tmp" ; \
 		$(INSTALL) -m 644 "$(DESTDIR)$(ASTCONFPATH).tmp" "$(DESTDIR)$(ASTCONFPATH)" ; \
 		rm -f "$(DESTDIR)$(ASTCONFPATH).tmp" ; \
@@ -718,8 +738,29 @@ webvmail:
 	@echo " +-------------------------------------------+"
 
 progdocs:
-	(cat contrib/asterisk-ng-doxygen; echo "HAVE_DOT=$(HAVEDOT)"; \
-	echo "PROJECT_NUMBER=$(ASTERISKVERSION)") | doxygen -
+	# Note, Makefile conditionals must not be tabbed out. Wasted hours with that.
+ifeq ($(DOXYGEN),:)
+	@echo "Doxygen is not installed.  Please install and re-run the configuration script."
+else
+ifeq ($(DOT),:)
+	@echo "DOT is not installed. Doxygen will not produce any diagrams. Please install and re-run the configuration script."
+else
+	# Enable DOT
+	@echo "HAVE_DOT = YES" >> contrib/asterisk-ng-doxygen
+endif
+	# Set Doxygen PROJECT_NUMBER variable
+ifneq ($(ASTERISKVERSION),UNKNOWN__and_probably_unsupported)
+	@echo "PROJECT_NUMBER = $(ASTERISKVERSION)" >> contrib/asterisk-ng-doxygen
+else
+	echo "Asterisk Version is unknown, not configuring Doxygen PROJECT_NUMBER."
+endif
+	# Validate Doxygen Configuration
+	@doxygen -u contrib/asterisk-ng-doxygen
+	# Run Doxygen
+	@doxygen contrib/asterisk-ng-doxygen
+	# Remove configuration backup file
+	@rm -f contrib/asterisk-ng-doxygen.bak
+endif
 
 install-logrotate:
 	if [ ! -d "$(DESTDIR)$(ASTETCDIR)/../logrotate.d" ]; then \
@@ -809,8 +850,8 @@ sounds:
 # .cleancount is the global clean count, and .lastclean is the
 # last clean count we had
 
-cleantest:
-	@cmp -s .cleancount .lastclean || $(MAKE) clean
+.lastclean: .cleancount
+	@$(MAKE) clean
 	@[ -f "$(DESTDIR)$(ASTDBDIR)/astdb.sqlite3" ] || [ ! -f "$(DESTDIR)$(ASTDBDIR)/astdb" ] || [ ! -f menuselect.makeopts ] || grep -q MENUSELECT_UTILS=.*astdb2sqlite3 menuselect.makeopts || (sed -i.orig -e's/MENUSELECT_UTILS=\(.*\)/MENUSELECT_UTILS=\1 astdb2sqlite3/' menuselect.makeopts && echo "Updating menuselect.makeopts to include astdb2sqlite3" && echo "Original version backed up to menuselect.makeopts.orig")
 
 $(SUBDIRS_UNINSTALL):
@@ -888,19 +929,19 @@ MAKE_MENUSELECT=CC="$(BUILD_CC)" CXX="" LD="" AR="" RANLIB="" \
 		CFLAGS="$(BUILD_CFLAGS)" LDFLAGS="$(BUILD_LDFLAGS)" \
 		$(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
-menuselect/menuselect: menuselect/makeopts
+menuselect/menuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) menuselect
 
-menuselect/cmenuselect: menuselect/makeopts
+menuselect/cmenuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) cmenuselect
 
-menuselect/gmenuselect: menuselect/makeopts
+menuselect/gmenuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) gmenuselect
 
-menuselect/nmenuselect: menuselect/makeopts
+menuselect/nmenuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) nmenuselect
 
-menuselect/makeopts: makeopts
+menuselect/makeopts: makeopts .lastclean
 	+$(MAKE_MENUSELECT) makeopts
 
 menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml build_tools/cflags-devmode.xml sounds/sounds.xml build_tools/embed_modules.xml utils/utils.xml agi/agi.xml configure makeopts
@@ -920,6 +961,19 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 	@cat sounds/sounds.xml >> $@
 	@echo "</menu>" >> $@
 
+# We don't want to require Python or Pystache for every build, so this is its
+# own target.
+stasis-stubs:
+ifeq ($(PYTHON),:)
+	@echo "--------------------------------------------------------------------------"
+	@echo "---        Please install python to build Stasis HTTP stubs            ---"
+	@echo "--------------------------------------------------------------------------"
+	@false
+else
+	$(PYTHON) rest-api-templates/make_stasis_http_stubs.py \
+		rest-api/resources.json res/
+endif
+
 .PHONY: menuselect
 .PHONY: main
 .PHONY: sounds
@@ -928,9 +982,9 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 .PHONY: distclean
 .PHONY: all
 .PHONY: _all
-.PHONY: _cleantest_all
+.PHONY: full
+.PHONY: _full
 .PHONY: prereqs
-.PHONY: cleantest
 .PHONY: uninstall
 .PHONY: _uninstall
 .PHONY: uninstall-all
@@ -939,6 +993,7 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 .PHONY: installdirs
 .PHONY: validate-docs
 .PHONY: _clean
+.PHONY: stasis-stubs
 .PHONY: $(SUBDIRS_INSTALL)
 .PHONY: $(SUBDIRS_DIST_CLEAN)
 .PHONY: $(SUBDIRS_CLEAN)

@@ -284,7 +284,8 @@ static void softmix_process_write_audio(struct softmix_translate_helper *trans_h
 
 static void softmix_translate_helper_cleanup(struct softmix_translate_helper *trans_helper)
 {
-	struct softmix_translate_helper_entry *entry = NULL;
+	struct softmix_translate_helper_entry *entry;
+
 	AST_LIST_TRAVERSE(&trans_helper->entries, entry, entry) {
 		if (entry->out_frame) {
 			ast_frfree(entry->out_frame);
@@ -297,7 +298,11 @@ static void softmix_translate_helper_cleanup(struct softmix_translate_helper *tr
 static void softmix_bridge_data_destroy(void *obj)
 {
 	struct softmix_bridge_data *softmix_data = obj;
-	ast_timer_close(softmix_data->timer);
+
+	if (softmix_data->timer) {
+		ast_timer_close(softmix_data->timer);
+		softmix_data->timer = NULL;
+	}
 }
 
 /*! \brief Function called when a bridge is created */
@@ -324,8 +329,10 @@ static int softmix_bridge_create(struct ast_bridge *bridge)
 /*! \brief Function called when a bridge is destroyed */
 static int softmix_bridge_destroy(struct ast_bridge *bridge)
 {
-	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
-	if (!bridge->bridge_pvt) {
+	struct softmix_bridge_data *softmix_data;
+
+	softmix_data = bridge->bridge_pvt;
+	if (!softmix_data) {
 		return -1;
 	}
 	ao2_ref(softmix_data, -1);
@@ -378,7 +385,7 @@ static void set_softmix_bridge_data(int rate, int interval, struct ast_bridge_ch
 /*! \brief Function called when a channel is joined into the bridge */
 static int softmix_bridge_join(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
 {
-	struct softmix_channel *sc = NULL;
+	struct softmix_channel *sc;
 	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
 
 	/* Create a new softmix_channel structure and allocate various things on it */
@@ -714,7 +721,7 @@ static int softmix_mixing_array_init(struct softmix_mixing_array *mixing_array, 
 	memset(mixing_array, 0, sizeof(*mixing_array));
 	mixing_array->max_num_entries = starting_num_entries;
 	if (!(mixing_array->buffers = ast_calloc(mixing_array->max_num_entries, sizeof(int16_t *)))) {
-		ast_log(LOG_NOTICE, "Failed to allocate softmix mixing structure. \n");
+		ast_log(LOG_NOTICE, "Failed to allocate softmix mixing structure.\n");
 		return -1;
 	}
 	return 0;
@@ -731,7 +738,7 @@ static int softmix_mixing_array_grow(struct softmix_mixing_array *mixing_array, 
 	/* give it some room to grow since memory is cheap but allocations can be expensive */
 	mixing_array->max_num_entries = num_entries;
 	if (!(tmp = ast_realloc(mixing_array->buffers, (mixing_array->max_num_entries * sizeof(int16_t *))))) {
-		ast_log(LOG_NOTICE, "Failed to re-allocate softmix mixing structure. \n");
+		ast_log(LOG_NOTICE, "Failed to re-allocate softmix mixing structure.\n");
 		return -1;
 	}
 	mixing_array->buffers = tmp;
@@ -743,17 +750,18 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 {
 	struct softmix_stats stats = { { 0 }, };
 	struct softmix_mixing_array mixing_array;
-	struct softmix_bridge_data *softmix_data = bridge->bridge_pvt;
+	struct softmix_bridge_data *softmix_data;
 	struct ast_timer *timer;
 	struct softmix_translate_helper trans_helper;
-	int16_t buf[MAX_DATALEN] = { 0, };
+	int16_t buf[MAX_DATALEN];
 	unsigned int stat_iteration_counter = 0; /* counts down, gather stats at zero and reset. */
 	int timingfd;
 	int update_all_rates = 0; /* set this when the internal sample rate has changed */
 	int i, x;
 	int res = -1;
 
-	if (!(softmix_data = bridge->bridge_pvt)) {
+	softmix_data = bridge->bridge_pvt;
+	if (!softmix_data) {
 		goto softmix_cleanup;
 	}
 
@@ -765,12 +773,11 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 
 	/* Give the mixing array room to grow, memory is cheap but allocations are expensive. */
 	if (softmix_mixing_array_init(&mixing_array, bridge->num + 10)) {
-		ast_log(LOG_NOTICE, "Failed to allocate softmix mixing structure. \n");
 		goto softmix_cleanup;
 	}
 
 	while (!bridge->stop && !bridge->refresh && bridge->array_num) {
-		struct ast_bridge_channel *bridge_channel = NULL;
+		struct ast_bridge_channel *bridge_channel;
 		int timeout = -1;
 		enum ast_format_id cur_slin_id = ast_format_slin_by_rate(softmix_data->internal_rate);
 		unsigned int softmix_samples = SOFTMIX_SAMPLES(softmix_data->internal_rate, softmix_data->internal_mixing_interval);
@@ -786,7 +793,8 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 		}
 
 		/* Grow the mixing array buffer as participants are added. */
-		if (mixing_array.max_num_entries < bridge->num && softmix_mixing_array_grow(&mixing_array, bridge->num + 5)) {
+		if (mixing_array.max_num_entries < bridge->num
+			&& softmix_mixing_array_grow(&mixing_array, bridge->num + 5)) {
 			goto softmix_cleanup;
 		}
 
@@ -882,7 +890,11 @@ static int softmix_bridge_thread(struct ast_bridge *bridge)
 		softmix_translate_helper_cleanup(&trans_helper);
 		/* Wait for the timing source to tell us to wake up and get things done */
 		ast_waitfor_n_fd(&timingfd, 1, &timeout, NULL);
-		ast_timer_ack(timer, 1);
+		if (ast_timer_ack(timer, 1) < 0) {
+			ast_log(LOG_ERROR, "Failed to acknowledge timer in softmix bridge.\n");
+			ao2_lock(bridge);
+			goto softmix_cleanup;
+		}
 		ao2_lock(bridge);
 
 		/* make sure to detect mixing interval changes if they occur. */

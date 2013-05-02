@@ -22,11 +22,15 @@
  *
  * \author Mark Spencer <markster@digium.com>
  *
- * \par See also
- * \arg \ref Config_mgcp
- * \arg \ref res_pktccops
- *
  * \ingroup channel_drivers
+ */
+
+/*! \li \ref chan_mgcp.c uses the configuration file \ref mgcp.conf
+ * \addtogroup configuration_file
+ */
+
+/*! \page mgcp.conf mgcp.conf
+ * \verbinclude mgcp.conf.sample
  */
 
 /*** MODULEINFO
@@ -78,6 +82,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/event.h"
 #include "asterisk/chanvars.h"
 #include "asterisk/pktccops.h"
+#include "asterisk/stasis.h"
 
 /*
  * Define to work around buggy dlink MGCP phone firmware which
@@ -338,7 +343,7 @@ struct mgcp_endpoint {
 	char curtone[80];			/*!< Current tone */
 	char mailbox[AST_MAX_EXTENSION];
 	char parkinglot[AST_MAX_CONTEXT];   /*!< Parkinglot */
-	struct ast_event_sub *mwi_event_sub;
+	struct stasis_subscription *mwi_event_sub;
 	ast_group_t callgroup;
 	ast_group_t pickupgroup;
 	int callwaiting;
@@ -479,7 +484,7 @@ static struct ast_channel_tech mgcp_tech = {
 	.func_channel_read = acf_channel_read,
 };
 
-static void mwi_event_cb(const struct ast_event *event, void *userdata)
+static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
 {
 	/* This module does not handle MWI in an event-based manner.  However, it
 	 * subscribes to MWI for each mailbox that is configured so that the core
@@ -490,24 +495,26 @@ static void mwi_event_cb(const struct ast_event *event, void *userdata)
 static int has_voicemail(struct mgcp_endpoint *p)
 {
 	int new_msgs;
-	struct ast_event *event;
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 	char *mbox, *cntx;
 
 	cntx = mbox = ast_strdupa(p->mailbox);
 	strsep(&cntx, "@");
-	if (ast_strlen_zero(cntx))
+	if (ast_strlen_zero(cntx)) {
 		cntx = "default";
+	}
 
-	event = ast_event_get_cached(AST_EVENT_MWI,
-		AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox,
-		AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, cntx,
-		AST_EVENT_IE_END);
+	ast_str_set(&uniqueid, 0, "%s@%s", mbox, cntx);
 
-	if (event) {
-		new_msgs = ast_event_get_ie_uint(event, AST_EVENT_IE_NEWMSGS);
-		ast_event_destroy(event);
-	} else
+	msg = stasis_cache_get(stasis_mwi_topic_cached(), stasis_mwi_state_type(), ast_str_buffer(uniqueid));
+
+	if (msg) {
+		struct stasis_mwi_state *mwi_state = stasis_message_data(msg);
+		new_msgs = mwi_state->new_msgs;
+	} else {
 		new_msgs = ast_app_has_voicemail(p->mailbox, NULL);
+	}
 
 	return new_msgs;
 }
@@ -838,20 +845,11 @@ static int mgcp_call(struct ast_channel *ast, const char *dest, int timeout)
 	struct mgcp_endpoint *p;
 	struct mgcp_subchannel *sub;
 	char tone[50] = "";
-	const char *distinctive_ring = NULL;
-	struct varshead *headp;
-	struct ast_var_t *current;
+	const char *distinctive_ring = pbx_builtin_getvar_helper(ast, "ALERT_INFO");
 
 	ast_debug(3, "MGCP mgcp_call(%s)\n", ast_channel_name(ast));
 	sub = ast_channel_tech_pvt(ast);
 	p = sub->parent;
-	headp = ast_channel_varshead(ast);
-	AST_LIST_TRAVERSE(headp,current,entries) {
-		/* Check whether there is an ALERT_INFO variable */
-		if (strcasecmp(ast_var_name(current),"ALERT_INFO") == 0) {
-			distinctive_ring = ast_var_value(current);
-		}
-	}
 
 	ast_mutex_lock(&sub->lock);
 	switch (p->hookstate) {
@@ -1483,6 +1481,8 @@ static int mgcp_indicate(struct ast_channel *ast, int ind, const void *data, siz
 		break;
 	default:
 		ast_log(LOG_WARNING, "Don't know how to indicate condition %d\n", ind);
+		/* fallthrough */
+	case AST_CONTROL_PVT_CAUSE_CODE:
 		res = -1;
 	}
 	ast_mutex_unlock(&sub->lock);
@@ -3226,11 +3226,10 @@ static int attempt_transfer(struct mgcp_endpoint *p)
 	   together (but then, why would we want to?) */
 	if (ast_bridged_channel(p->sub->owner)) {
 		/* The three-way person we're about to transfer to could still be in MOH, so
-		   stop if now if appropriate */
-		if (ast_bridged_channel(p->sub->next->owner))
-			ast_queue_control(p->sub->next->owner, AST_CONTROL_UNHOLD);
+		   stop it now */
+		ast_queue_control(p->sub->next->owner, AST_CONTROL_UNHOLD);
 		if (ast_channel_state(p->sub->owner) == AST_STATE_RINGING) {
-			ast_indicate(ast_bridged_channel(p->sub->next->owner), AST_CONTROL_RINGING);
+			ast_queue_control(p->sub->next->owner, AST_CONTROL_RINGING);
 		}
 		if (ast_channel_masquerade(p->sub->next->owner, ast_bridged_channel(p->sub->owner))) {
 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
@@ -3241,7 +3240,7 @@ static int attempt_transfer(struct mgcp_endpoint *p)
 		unalloc_sub(p->sub->next);
 	} else if (ast_bridged_channel(p->sub->next->owner)) {
 		if (ast_channel_state(p->sub->owner) == AST_STATE_RINGING) {
-			ast_indicate(ast_bridged_channel(p->sub->next->owner), AST_CONTROL_RINGING);
+			ast_queue_control(p->sub->next->owner, AST_CONTROL_RINGING);
 		}
 		ast_queue_control(p->sub->next->owner, AST_CONTROL_UNHOLD);
 		if (ast_channel_masquerade(p->sub->owner, ast_bridged_channel(p->sub->next->owner))) {
@@ -3277,8 +3276,7 @@ static void handle_hd_hf(struct mgcp_subchannel *sub, char *ev)
 	if (sub->outgoing) {
 		/* Answered */
 		if (sub->owner) {
-			if (ast_bridged_channel(sub->owner))
-				ast_queue_control(sub->owner, AST_CONTROL_UNHOLD);
+			ast_queue_control(sub->owner, AST_CONTROL_UNHOLD);
 			sub->cxmode = MGCP_CX_SENDRECV;
 			if (!sub->rtp) {
 				start_rtp(sub);
@@ -3334,8 +3332,7 @@ static void handle_hd_hf(struct mgcp_subchannel *sub, char *ev)
 				ast_log(LOG_WARNING, "On hook, but already have owner on %s@%s\n", p->name, p->parent->name);
 				ast_log(LOG_WARNING, "If we're onhook why are we here trying to handle a hd or hf?\n");
 			}
-			if (ast_bridged_channel(sub->owner))
-				ast_queue_control(sub->owner, AST_CONTROL_UNHOLD);
+			ast_queue_control(sub->owner, AST_CONTROL_UNHOLD);
 			sub->cxmode = MGCP_CX_SENDRECV;
 			if (!sub->rtp) {
 				start_rtp(sub);
@@ -3452,20 +3449,19 @@ static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req,
 					sub->cxmode = MGCP_CX_MUTE;
 					ast_verb(3, "MGCP Muting %d on %s@%s\n", sub->id, p->name, p->parent->name);
 					transmit_modify_request(sub);
-					if (sub->owner && ast_bridged_channel(sub->owner))
+					if (sub->owner)
 						ast_queue_control(sub->owner, AST_CONTROL_HOLD);
 					sub->next->cxmode = MGCP_CX_RECVONLY;
 					handle_hd_hf(sub->next, ev);
 				} else if (sub->owner && sub->next->owner) {
 					/* We've got two active calls lets decide whether or not to conference or just flip flop */
 					if ((!sub->outgoing) && (!sub->next->outgoing)) {
-						/* We made both calls lets conferenct */
+						/* We made both calls lets conference */
 						ast_verb(3, "MGCP Conferencing %d and %d on %s@%s\n",
 								sub->id, sub->next->id, p->name, p->parent->name);
 						sub->cxmode = MGCP_CX_CONF;
 						sub->next->cxmode = MGCP_CX_CONF;
-						if (ast_bridged_channel(sub->next->owner))
-							ast_queue_control(sub->next->owner, AST_CONTROL_UNHOLD);
+						ast_queue_control(sub->next->owner, AST_CONTROL_UNHOLD);
 						transmit_modify_request(sub);
 						transmit_modify_request(sub->next);
 					} else {
@@ -3477,11 +3473,9 @@ static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req,
 						sub->cxmode = MGCP_CX_MUTE;
 						ast_verb(3, "MGCP Muting %d on %s@%s\n", sub->id, p->name, p->parent->name);
 						transmit_modify_request(sub);
-						if (ast_bridged_channel(sub->owner))
-							ast_queue_control(sub->owner, AST_CONTROL_HOLD);
 
-						if (ast_bridged_channel(sub->next->owner))
-							ast_queue_control(sub->next->owner, AST_CONTROL_HOLD);
+						ast_queue_control(sub->owner, AST_CONTROL_HOLD);
+						ast_queue_control(sub->next->owner, AST_CONTROL_HOLD);
 
 						handle_hd_hf(sub->next, ev);
 					}
@@ -3496,8 +3490,7 @@ static int handle_request(struct mgcp_subchannel *sub, struct mgcp_request *req,
 						/* XXX - What do we do now? */
 						return -1;
 					}
-					if (ast_bridged_channel(p->sub->owner))
-						ast_queue_control(p->sub->owner, AST_CONTROL_UNHOLD);
+					ast_queue_control(p->sub->owner, AST_CONTROL_UNHOLD);
 					p->sub->cxmode = MGCP_CX_SENDRECV;
 					transmit_modify_request(p->sub);
 				}
@@ -3975,6 +3968,7 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 	struct mgcp_endpoint *e;
 	struct mgcp_subchannel *sub;
 	struct ast_variable *chanvars = NULL;
+	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
 	/*char txident[80];*/
 	int i=0, y=0;
@@ -4171,16 +4165,20 @@ static struct mgcp_gateway *build_gateway(char *cat, struct ast_variable *v)
 				ast_copy_string(e->parkinglot, parkinglot, sizeof(e->parkinglot));
 				if (!ast_strlen_zero(e->mailbox)) {
 					char *mbox, *cntx;
+					struct stasis_topic *mailbox_specific_topic;
+
 					cntx = mbox = ast_strdupa(e->mailbox);
 					strsep(&cntx, "@");
 					if (ast_strlen_zero(cntx)) {
 						cntx = "default";
 					}
-					e->mwi_event_sub = ast_event_subscribe(AST_EVENT_MWI, mwi_event_cb, "MGCP MWI subscription", NULL,
-						AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mbox,
-						AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, cntx,
-						AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_EXISTS,
-						AST_EVENT_IE_END);
+					ast_str_reset(uniqueid);
+					ast_str_set(&uniqueid, 0, "%s@%s", mbox, cntx);
+
+					mailbox_specific_topic = stasis_mwi_topic(ast_str_buffer(uniqueid));
+					if (mailbox_specific_topic) {
+						e->mwi_event_sub = stasis_subscribe(mailbox_specific_topic, mwi_event_cb, NULL);
+					}
 				}
 				snprintf(e->rqnt_ident, sizeof(e->rqnt_ident), "%08lx", ast_random());
 				e->msgstate = -1;
@@ -4519,8 +4517,9 @@ static void destroy_endpoint(struct mgcp_endpoint *e)
 		ast_free(s);
 	}
 
-	if (e->mwi_event_sub)
-		ast_event_unsubscribe(e->mwi_event_sub);
+	if (e->mwi_event_sub) {
+		e->mwi_event_sub = stasis_unsubscribe(e->mwi_event_sub);
+	}
 
 	if (e->chanvars) {
 		ast_variables_destroy(e->chanvars);
@@ -4793,7 +4792,16 @@ static int reload_config(int reload)
 	return 0;
 }
 
-/*! \brief  load_module: PBX load module - initialization ---*/
+/*!
+ * \brief Load the module
+ *
+ * Module loading including tests for configuration or dependencies.
+ * This function can return AST_MODULE_LOAD_FAILURE, AST_MODULE_LOAD_DECLINE,
+ * or AST_MODULE_LOAD_SUCCESS. If a dependency or environment variable fails
+ * tests return AST_MODULE_LOAD_FAILURE. If the module can not load the 
+ * configuration file or other non-critical problem return 
+ * AST_MODULE_LOAD_DECLINE. On success return AST_MODULE_LOAD_SUCCESS.
+ */
 static int load_module(void)
 {
 	struct ast_format tmpfmt;
