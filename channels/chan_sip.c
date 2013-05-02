@@ -21016,7 +21016,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 
 		/* Check for Session-Timers related headers */
-		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
+		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE) {
 			/* XXX Code should check in response if there's a "Require: timer"
 				header. If there is, sessions timer is enabled for this dialog
 				If not, only this side (UAC) do session timers.
