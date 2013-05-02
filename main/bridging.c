@@ -2310,6 +2310,14 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		bridge_channel->bridge->uniqueid,
 		bridge_channel, ast_channel_name(bridge_channel->chan));
 
+	/*
+	 * Get "in the bridge" before pushing the channel for any
+	 * masquerades on the channel to happen before bridging.
+	 */
+	ast_channel_lock(bridge_channel->chan);
+	ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
+	ast_channel_unlock(bridge_channel->chan);
+
 	/* Add the jitterbuffer if the channel requires it */
 	ast_jb_enable_for_channel(bridge_channel->chan);
 
@@ -2342,9 +2350,6 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 		ast_bridge_unlock(bridge_channel->bridge);
 		bridge_channel_handle_join(bridge_channel);
 		while (bridge_channel->state == AST_BRIDGE_CHANNEL_STATE_WAIT) {
-			/* Update bridge pointer on channel */
-			ast_channel_internal_bridge_set(bridge_channel->chan, bridge_channel->bridge);
-
 			/* Wait for something to do. */
 			bridge_channel_wait(bridge_channel);
 		}
@@ -2378,7 +2383,9 @@ static void bridge_channel_join(struct ast_bridge_channel *bridge_channel)
 	while (ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_BRIDGE_DUAL_REDIRECT_WAIT)) {
 		sched_yield();
 	}
+	ast_channel_lock(bridge_channel->chan);
 	ast_channel_internal_bridge_set(bridge_channel->chan, NULL);
+	ast_channel_unlock(bridge_channel->chan);
 
 	ast_bridge_channel_restore_formats(bridge_channel);
 }
@@ -3122,7 +3129,10 @@ static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *sr
 		/* Point to new bridge.*/
 		ao2_ref(dst_bridge, +1);
 		ast_bridge_channel_lock(bridge_channel);
+		ast_channel_lock(bridge_channel->chan);
 		bridge_channel->bridge = dst_bridge;
+		ast_channel_internal_bridge_set(bridge_channel->chan, dst_bridge);
+		ast_channel_unlock(bridge_channel->chan);
 		ast_bridge_channel_unlock(bridge_channel);
 		ao2_ref(src_bridge, -1);
 
@@ -3380,7 +3390,10 @@ static int bridge_move_do(struct ast_bridge *dst_bridge, struct ast_bridge_chann
 	/* Point to new bridge.*/
 	ao2_ref(dst_bridge, +1);
 	ast_bridge_channel_lock(bridge_channel);
+	ast_channel_lock(bridge_channel->chan);
 	bridge_channel->bridge = dst_bridge;
+	ast_channel_internal_bridge_set(bridge_channel->chan, dst_bridge);
+	ast_channel_unlock(bridge_channel->chan);
 	ast_bridge_channel_unlock(bridge_channel);
 
 	if (bridge_channel_push(bridge_channel)) {
@@ -3389,7 +3402,10 @@ static int bridge_move_do(struct ast_bridge *dst_bridge, struct ast_bridge_chann
 			/* Point back to original bridge. */
 			ao2_ref(orig_bridge, +1);
 			ast_bridge_channel_lock(bridge_channel);
+			ast_channel_lock(bridge_channel->chan);
 			bridge_channel->bridge = orig_bridge;
+			ast_channel_internal_bridge_set(bridge_channel->chan, orig_bridge);
+			ast_channel_unlock(bridge_channel->chan);
 			ast_bridge_channel_unlock(bridge_channel);
 			ao2_ref(dst_bridge, -1);
 
@@ -3502,9 +3518,10 @@ struct ast_bridge_channel *ast_bridge_channel_peer(struct ast_bridge_channel *br
 	struct ast_bridge_channel *other = NULL;
 
 	if (bridge_channel->in_bridge && bridge->num_channels == 2) {
-		other = AST_LIST_FIRST(&bridge->channels);
-		if (other == bridge_channel) {
-			other = AST_LIST_LAST(&bridge->channels);
+		AST_LIST_TRAVERSE(&bridge->channels, other, entry) {
+			if (other != bridge_channel) {
+				break;
+			}
 		}
 	}
 
@@ -4691,6 +4708,45 @@ struct ao2_container *ast_bridge_peers(struct ast_bridge *bridge)
 	ast_bridge_unlock(bridge);
 
 	return channels;
+}
+
+struct ast_channel *ast_bridge_peer_nolock(struct ast_bridge *bridge, struct ast_channel *chan)
+{
+	struct ast_channel *peer = NULL;
+	struct ast_bridge_channel *iter;
+
+	/* Asking for the peer channel only makes sense on a two-party bridge. */
+	if (bridge->num_channels == 2
+		&& bridge->technology->capabilities
+			& (AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX)) {
+		int in_bridge = 0;
+
+		AST_LIST_TRAVERSE(&bridge->channels, iter, entry) {
+			if (iter->chan != chan) {
+				peer = iter->chan;
+			} else {
+				in_bridge = 1;
+			}
+		}
+		if (in_bridge && peer) {
+			ast_channel_ref(peer);
+		} else {
+			peer = NULL;
+		}
+	}
+
+	return peer;
+}
+
+struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channel *chan)
+{
+	struct ast_channel *peer;
+
+	ast_bridge_lock(bridge);
+	peer = ast_bridge_peer_nolock(bridge, chan);
+	ast_bridge_unlock(bridge);
+
+	return peer;
 }
 
 /*!

@@ -1379,6 +1379,36 @@ struct ao2_container *ast_bridge_peers_nolock(struct ast_bridge *bridge);
  */
 struct ao2_container *ast_bridge_peers(struct ast_bridge *bridge);
 
+/*!
+ * \brief Get the channel's bridge peer only if the bridge is two-party.
+ * \since 12.0.0
+ *
+ * \param bridge The bridge which is already locked.
+ * \param chan Channel desiring the bridge peer channel.
+ *
+ * \note The returned peer channel is the current peer in the
+ * bridge when called.
+ *
+ * \retval NULL Channel not in a bridge or the bridge is not two-party.
+ * \retval non-NULL Reffed peer channel at time of calling.
+ */
+struct ast_channel *ast_bridge_peer_nolock(struct ast_bridge *bridge, struct ast_channel *chan);
+
+/*!
+ * \brief Get the channel's bridge peer only if the bridge is two-party.
+ * \since 12.0.0
+ *
+ * \param bridge The bridge
+ * \param chan Channel desiring the bridge peer channel.
+ *
+ * \note The returned peer channel is the current peer in the
+ * bridge when called.
+ *
+ * \retval NULL Channel not in a bridge or the bridge is not two-party.
+ * \retval non-NULL Reffed peer channel at time of calling.
+ */
+struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channel *chan);
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif

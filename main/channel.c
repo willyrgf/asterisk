@@ -11259,41 +11259,41 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
 	return 0;
 }
 
-/* DO NOT PUT ADDITIONAL FUNCTIONS BELOW THIS BOUNDARY
- *
- * ONLY FUNCTIONS FOR PROVIDING BACKWARDS ABI COMPATIBILITY BELONG HERE
- *
- */
-
-/* Provide binary compatibility for modules that call ast_channel_alloc() directly;
- * newly compiled modules will call __ast_channel_alloc() via the macros in channel.h
- */
-#undef ast_channel_alloc
-struct ast_channel __attribute__((format(printf, 10, 11)))
-	*ast_channel_alloc(int needqueue, int state, const char *cid_num,
-			   const char *cid_name, const char *acctcode,
-			   const char *exten, const char *context,
-			   const char *linkedid, const int amaflag,
-			   const char *name_fmt, ...);
-struct ast_channel *ast_channel_alloc(int needqueue, int state, const char *cid_num,
-				      const char *cid_name, const char *acctcode,
-				      const char *exten, const char *context,
-				      const char *linkedid, const int amaflag,
-				      const char *name_fmt, ...)
-{
-	va_list ap;
-	struct ast_channel *result;
-
-
-	va_start(ap, name_fmt);
-	result = __ast_channel_alloc_ap(needqueue, state, cid_num, cid_name, acctcode, exten, context,
-					linkedid, amaflag, __FILE__, __LINE__, __FUNCTION__, name_fmt, ap);
-	va_end(ap);
-
-	return result;
-}
-
 void ast_channel_unlink(struct ast_channel *chan)
 {
 	ao2_unlink(channels, chan);
+}
+
+struct ast_bridge *ast_channel_get_bridge(const struct ast_channel *chan)
+{
+	struct ast_bridge *bridge;
+
+	bridge = ast_channel_internal_bridge(chan);
+	if (bridge) {
+		ao2_ref(bridge, +1);
+	}
+	return bridge;
+}
+
+int ast_channel_is_bridged(const struct ast_channel *chan)
+{
+	return ast_channel_internal_bridge(chan) != NULL;
+}
+
+struct ast_channel *ast_channel_bridge_peer(struct ast_channel *chan)
+{
+	struct ast_channel *peer;
+	struct ast_bridge *bridge;
+
+	/* Get the bridge the channel is in. */
+	ast_channel_lock(chan);
+	bridge = ast_channel_get_bridge(chan);
+	ast_channel_unlock(chan);
+	if (!bridge) {
+		return NULL;
+	}
+
+	peer = ast_bridge_peer(bridge, chan);
+	ao2_ref(bridge, -1);
+	return peer;
 }
