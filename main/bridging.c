@@ -3530,10 +3530,10 @@ struct ast_bridge_channel *ast_bridge_channel_peer(struct ast_bridge_channel *br
 
 /*!
  * \internal
- * \brief Lock the local channel stack for chan and prequalify it.
+ * \brief Lock the unreal channel stack for chan and prequalify it.
  * \since 12.0.0
  *
- * \param chan Local channel writing a frame into the channel driver.
+ * \param chan Unreal channel writing a frame into the channel driver.
  *
  * \note It is assumed that chan is already locked.
  *
@@ -3573,10 +3573,10 @@ static struct ast_bridge *optimize_lock_chan_stack(struct ast_channel *chan)
 
 /*!
  * \internal
- * \brief Lock the local channel stack for peer and prequalify it.
+ * \brief Lock the unreal channel stack for peer and prequalify it.
  * \since 12.0.0
  *
- * \param peer Other local channel in the pair.
+ * \param peer Other unreal channel in the pair.
  *
  * \retval bridge on success with bridge, bridge_channel, and peer locked.
  * \retval NULL if cannot do optimization now.
@@ -3621,7 +3621,7 @@ static struct ast_bridge *optimize_lock_peer_stack(struct ast_channel *peer)
 
 /*!
  * \internal
- * \brief Check and attempt to swap optimize out the local channels.
+ * \brief Check and attempt to swap optimize out the unreal channels.
  * \since 12.0.0
  *
  * \param chan_bridge
@@ -3629,9 +3629,9 @@ static struct ast_bridge *optimize_lock_peer_stack(struct ast_channel *peer)
  * \param peer_bridge
  * \param peer_bridge_channel
  *
- * \retval 1 if local channels failed to optimize out.
- * \retval 0 if local channels were not optimized out.
- * \retval -1 if local channels were optimized out.
+ * \retval 1 if unreal channels failed to optimize out.
+ * \retval 0 if unreal channels were not optimized out.
+ * \retval -1 if unreal channels were optimized out.
  */
 static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 	struct ast_bridge_channel *chan_bridge_channel, struct ast_bridge *peer_bridge,
@@ -3702,7 +3702,7 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
 
 /*!
  * \internal
- * \brief Check and attempt to merge optimize out the local channels.
+ * \brief Check and attempt to merge optimize out the unreal channels.
  * \since 12.0.0
  *
  * \param chan_bridge
@@ -3710,8 +3710,8 @@ static int check_swap_optimize_out(struct ast_bridge *chan_bridge,
  * \param peer_bridge
  * \param peer_bridge_channel
  *
- * \retval 0 if local channels were not optimized out.
- * \retval -1 if local channels were optimized out.
+ * \retval 0 if unreal channels were not optimized out.
+ * \retval -1 if unreal channels were optimized out.
  */
 static int check_merge_optimize_out(struct ast_bridge *chan_bridge,
 	struct ast_bridge_channel *chan_bridge_channel, struct ast_bridge *peer_bridge,
@@ -3752,7 +3752,7 @@ static int check_merge_optimize_out(struct ast_bridge *chan_bridge,
 	return res;
 }
 
-int ast_bridge_local_optimized_out(struct ast_channel *chan, struct ast_channel *peer)
+int ast_bridge_unreal_optimized_out(struct ast_channel *chan, struct ast_channel *peer)
 {
 	struct ast_bridge *chan_bridge;
 	struct ast_bridge *peer_bridge;

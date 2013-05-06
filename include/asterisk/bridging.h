@@ -864,18 +864,18 @@ int ast_bridge_suspend(struct ast_bridge *bridge, struct ast_channel *chan);
 int ast_bridge_unsuspend(struct ast_bridge *bridge, struct ast_channel *chan);
 
 /*!
- * \brief Check and optimize out the local channels between bridges.
+ * \brief Check and optimize out the unreal channels between bridges.
  * \since 12.0.0
  *
- * \param chan Local channel writing a frame into the channel driver.
- * \param peer Other local channel in the pair.
+ * \param chan Unreal channel writing a frame into the channel driver.
+ * \param peer Other unreal channel in the pair.
  *
  * \note It is assumed that chan is already locked.
  *
- * \retval 0 if local channels were not optimized out.
- * \retval non-zero if local channels were optimized out.
+ * \retval 0 if unreal channels were not optimized out.
+ * \retval non-zero if unreal channels were optimized out.
  */
-int ast_bridge_local_optimized_out(struct ast_channel *chan, struct ast_channel *peer);
+int ast_bridge_unreal_optimized_out(struct ast_channel *chan, struct ast_channel *peer);
 
 /*!
  * \brief Try locking the bridge_channel.

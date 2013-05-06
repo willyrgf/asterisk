@@ -452,11 +452,10 @@ static int got_optimized_out(struct ast_channel *ast, struct ast_unreal_pvt *p)
 		return 0;
 	}
 	if (ast == p->owner) {
-/* BUGBUG need to rename ast_bridge_local_optimized_out() to ast_bridge_unreal_optimized_out(). */
-		return ast_bridge_local_optimized_out(p->owner, p->chan);
+		return ast_bridge_unreal_optimized_out(p->owner, p->chan);
 	}
 	if (ast == p->chan) {
-		return ast_bridge_local_optimized_out(p->chan, p->owner);
+		return ast_bridge_unreal_optimized_out(p->chan, p->owner);
 	}
 	/* ast is not valid to optimize. */
 	return 0;
