@@ -96,6 +96,63 @@ int ast_unreal_queryoption(struct ast_channel *ast, int option, void *data, int 
 int ast_unreal_setoption(struct ast_channel *chan, int option, void *data, int datalen);
 
 /*!
+ * \brief struct ast_unreal_pvt destructor.
+ * \since 12.0.0
+ *
+ * \param vdoomed Void ast_unreal_pvt to destroy.
+ *
+ * \return Nothing
+ */
+void ast_unreal_destructor(void *vdoomed);
+
+/*!
+ * \brief Allocate the base unreal struct for a derivative.
+ * \since 12.0.0
+ *
+ * \param size Size of the unreal struct to allocate.
+ * \param destructor Destructor callback.
+ * \param cap Format capabilities to give the unreal private struct.
+ *
+ * \retval pvt on success.
+ * \retval NULL on error.
+ */
+struct ast_unreal_pvt *ast_unreal_alloc(size_t size, ao2_destructor_fn destructor, struct ast_format_cap *cap);
+
+/*!
+ * \brief Create the semi1 and semi2 unreal channels.
+ * \since 12.0.0
+ *
+ * \param p Unreal channel private struct.
+ * \param tech Channel technology to use.
+ * \param semi1_state State to start the semi1(owner) channel in.
+ * \param semi2_state State to start the semi2(outgoing chan) channel in.
+ * \param exten Exten to start the chennels in. (NULL if s)
+ * \param context Context to start the channels in. (NULL if default)
+ * \param requestor Channel requesting creation. (NULL if none)
+ * \param callid Thread callid to use.
+ *
+ * \retval semi1_channel on success.
+ * \retval NULL on error.
+ */
+struct ast_channel *ast_unreal_new_channels(struct ast_unreal_pvt *p,
+	const struct ast_channel_tech *tech, int semi1_state, int semi2_state,
+	const char *exten, const char *context, struct ast_channel *requestor,
+	struct ast_callid *callid);
+
+/*!
+ * \brief Setup unreal owner and chan channels before initiating call.
+ * \since 12.0.0
+ *
+ * \param semi1 Owner channel of unreal channel pair.
+ * \param semi2 Outgoing channel of unreal channel pair.
+ *
+ * \note On entry, the semi1 and semi2 channels are already locked.
+ *
+ * \return Nothing
+ */
+void ast_unreal_call_setup(struct ast_channel *semi1, struct ast_channel *semi2);
+
+/*!
  * \brief Get the other local channel in the pair.
  * \since 12.0.0
  *

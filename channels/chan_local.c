@@ -721,119 +721,65 @@ int ast_unreal_sendhtml(struct ast_channel *ast, int subclass, const char *data,
 	return res;
 }
 
-/* BUGBUG need to create ast_local_setup_bridge(). */
-/* BUGBUG need to create ast_local_setup_masquerade(). */
-/* BUGBUG need to create ast_local_setup_dialplan(). */
-/* BUGBUG need to separate local_call() from unreal channel start. */
-/*! \brief Initiate new call, part of PBX interface
- *         dest is the dial string */
-static int local_call(struct ast_channel *ast, const char *dest, int timeout)
+void ast_unreal_call_setup(struct ast_channel *semi1, struct ast_channel *semi2)
 {
-	struct ast_local_pvt *p = ast_channel_tech_pvt(ast);
-	int pvt_locked = 0;
-
-	struct ast_channel *owner = NULL;
-	struct ast_channel *chan = NULL;
-	int res;
 	struct ast_var_t *varptr;
 	struct ast_var_t *clone_var;
-	char *reduced_dest = ast_strdupa(dest);
-	char *slash;
-	const char *exten;
-	const char *context;
-	const char *owner_cid;
 
-	if (!p) {
-		return -1;
-	}
+	/*
+	 * Note that cid_num and cid_name aren't passed in the
+	 * ast_channel_alloc calls in ast_unreal_new_channels().  It's
+	 * done here instead.
+	 */
+	ast_party_redirecting_copy(ast_channel_redirecting(semi2), ast_channel_redirecting(semi1));
 
-	/* since we are letting go of channel locks that were locked coming into
-	 * this function, then we need to give the tech pvt a ref */
-	ao2_ref(p, 1);
-	ast_channel_unlock(ast);
+	ast_party_dialed_copy(ast_channel_dialed(semi2), ast_channel_dialed(semi1));
 
-	ast_unreal_lock_all(&p->base, &chan, &owner);
-	pvt_locked = 1;
+	ast_connected_line_copy_to_caller(ast_channel_caller(semi2), ast_channel_connected(semi1));
+	ast_connected_line_copy_from_caller(ast_channel_connected(semi2), ast_channel_caller(semi1));
 
-	if (owner != ast) {
-		res = -1;
-		goto return_cleanup;
-	}
+	ast_channel_language_set(semi2, ast_channel_language(semi1));
+	ast_channel_accountcode_set(semi2, ast_channel_accountcode(semi1));
+	ast_channel_musicclass_set(semi2, ast_channel_musicclass(semi1));
 
-	if (!owner || !chan) {
-		res = -1;
-		goto return_cleanup;
+	ast_channel_cc_params_init(semi2, ast_channel_get_cc_config_params(semi1));
+
+	/*
+	 * Make sure we inherit the AST_CAUSE_ANSWERED_ELSEWHERE if it's
+	 * set on the queue/dial call request in the dialplan.
+	 */
+	if (ast_channel_hangupcause(semi1) == AST_CAUSE_ANSWERED_ELSEWHERE) {
+		ast_channel_hangupcause_set(semi2, AST_CAUSE_ANSWERED_ELSEWHERE);
 	}
 
 	/*
-	 * Note that cid_num and cid_name aren't passed in the ast_channel_alloc
-	 * call, so it's done here instead.
+	 * Copy the channel variables from the semi1 channel to the
+	 * outgoing channel.
 	 *
-	 * All these failure points just return -1. The individual strings will
-	 * be cleared when we destroy the channel.
+	 * Note that due to certain assumptions, they MUST be in the
+	 * same order.
 	 */
-	ast_party_redirecting_copy(ast_channel_redirecting(chan), ast_channel_redirecting(owner));
-
-	ast_party_dialed_copy(ast_channel_dialed(chan), ast_channel_dialed(owner));
-
-	ast_connected_line_copy_to_caller(ast_channel_caller(chan), ast_channel_connected(owner));
-	ast_connected_line_copy_from_caller(ast_channel_connected(chan), ast_channel_caller(owner));
-
-	ast_channel_language_set(chan, ast_channel_language(owner));
-	ast_channel_accountcode_set(chan, ast_channel_accountcode(owner));
-	ast_channel_musicclass_set(chan, ast_channel_musicclass(owner));
-	ast_cdr_update(chan);
-
-	ast_channel_cc_params_init(chan, ast_channel_get_cc_config_params(owner));
-
-	/* Make sure we inherit the AST_CAUSE_ANSWERED_ELSEWHERE if it's set on the queue/dial call request in the dialplan */
-	if (ast_channel_hangupcause(ast) == AST_CAUSE_ANSWERED_ELSEWHERE) {
-		ast_channel_hangupcause_set(chan, AST_CAUSE_ANSWERED_ELSEWHERE);
-	}
-
-	/* copy the channel variables from the incoming channel to the outgoing channel */
-	/* Note that due to certain assumptions, they MUST be in the same order */
-	AST_LIST_TRAVERSE(ast_channel_varshead(owner), varptr, entries) {
+	AST_LIST_TRAVERSE(ast_channel_varshead(semi1), varptr, entries) {
 		clone_var = ast_var_assign(varptr->name, varptr->value);
 		if (clone_var) {
-			AST_LIST_INSERT_TAIL(ast_channel_varshead(chan), clone_var, entries);
+			AST_LIST_INSERT_TAIL(ast_channel_varshead(semi2), clone_var, entries);
 		}
 	}
-	ast_channel_datastore_inherit(owner, chan);
+	ast_channel_datastore_inherit(semi1, semi2);
+}
 
-	/*
-	 * If the local channel has /n on the end of it, we need to lop
-	 * that off for our argument to setting up the CC_INTERFACES
-	 * variable.
-	 */
-	if ((slash = strrchr(reduced_dest, '/'))) {
-		*slash = '\0';
-	}
-	ast_set_cc_interfaces_chanvar(chan, reduced_dest);
-
-	exten = ast_strdupa(ast_channel_exten(chan));
-	context = ast_strdupa(ast_channel_context(chan));
-
-	ao2_unlock(p);
-	pvt_locked = 0;
-
-	ast_channel_unlock(chan);
-
-	owner_cid = S_COR(ast_channel_caller(owner)->id.number.valid,
-		ast_channel_caller(owner)->id.number.str, NULL);
-	if (owner_cid) {
-		owner_cid = ast_strdupa(owner_cid);
-	}
-	ast_channel_unlock(owner);
-	owner = ast_channel_unref(owner);
-
-	if (!ast_exists_extension(chan, context, exten, 1, owner_cid)) {
-		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n", exten, context);
-		res = -1;
-		chan = ast_channel_unref(chan); /* we already unlocked it, clear it here so the cleanup label won't touch it. */
-		goto return_cleanup;
-	}
-
+/*!
+ * \internal
+ * \brief Post the LocalBridge AMI event.
+ * \since 12.0.0
+ *
+ * \param p ast_local_pvt to rais the bridge event.
+ *
+ * \return Nothing
+ */
+static void local_bridge_event(struct ast_local_pvt *p)
+{
+	ao2_lock(p);
 	/*** DOCUMENTATION
 		<managerEventInstance>
 			<synopsis>Raised when two halves of a Local Channel form a bridge.</synopsis>
@@ -871,16 +817,91 @@ static int local_call(struct ast_channel *ast, const char *dest, int timeout)
 		ast_channel_uniqueid(p->base.owner), ast_channel_uniqueid(p->base.chan),
 		p->context, p->exten,
 		ast_test_flag(&p->base, AST_UNREAL_NO_OPTIMIZATION) ? "Yes" : "No");
+	ao2_unlock(p);
+}
 
+/* BUGBUG need to create ast_local_setup_bridge(). */
+/* BUGBUG need to create ast_local_setup_masquerade(). */
+/* BUGBUG need to create ast_local_setup_dialplan(). */
+/*! \brief Initiate new call, part of PBX interface
+ *         dest is the dial string */
+static int local_call(struct ast_channel *ast, const char *dest, int timeout)
+{
+	struct ast_local_pvt *p = ast_channel_tech_pvt(ast);
+	int pvt_locked = 0;
 
-	/* Start switch on sub channel */
-	res = ast_pbx_start(chan);
-	if (!res) {
-		ao2_lock(p);
-		ast_set_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
-		ao2_unlock(p);
+	struct ast_channel *owner = NULL;
+	struct ast_channel *chan = NULL;
+	int res;
+	char *reduced_dest = ast_strdupa(dest);
+	char *slash;
+	const char *chan_cid;
+
+	if (!p) {
+		return -1;
 	}
-	chan = ast_channel_unref(chan); /* we already unlocked it, clear it here so the cleanup label won't touch it. */
+
+	/* since we are letting go of channel locks that were locked coming into
+	 * this function, then we need to give the tech pvt a ref */
+	ao2_ref(p, 1);
+	ast_channel_unlock(ast);
+
+	ast_unreal_lock_all(&p->base, &chan, &owner);
+	pvt_locked = 1;
+
+	if (owner != ast) {
+		res = -1;
+		goto return_cleanup;
+	}
+
+	if (!owner || !chan) {
+		res = -1;
+		goto return_cleanup;
+	}
+
+	ast_unreal_call_setup(owner, chan);
+
+	/*
+	 * If the local channel has /n on the end of it, we need to lop
+	 * that off for our argument to setting up the CC_INTERFACES
+	 * variable.
+	 */
+	if ((slash = strrchr(reduced_dest, '/'))) {
+		*slash = '\0';
+	}
+	ast_set_cc_interfaces_chanvar(chan, reduced_dest);
+
+	ao2_unlock(p);
+	pvt_locked = 0;
+
+	ast_channel_unlock(owner);
+
+	chan_cid = S_COR(ast_channel_caller(chan)->id.number.valid,
+		ast_channel_caller(chan)->id.number.str, NULL);
+	if (chan_cid) {
+		chan_cid = ast_strdupa(chan_cid);
+	}
+	ast_channel_unlock(chan);
+
+	if (!ast_exists_extension(NULL, p->context, p->exten, 1, chan_cid)) {
+		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n",
+			p->exten, p->context);
+		res = -1;
+	} else {
+		local_bridge_event(p);
+	
+		/* Start switch on sub channel */
+		res = ast_pbx_start(chan);
+		if (!res) {
+			ao2_lock(p);
+			ast_set_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
+			ao2_unlock(p);
+		}
+	}
+
+	/* we already unlocked them, clear them here so the cleanup label won't touch them. */
+	owner = ast_channel_unref(owner);
+	chan = ast_channel_unref(chan);
 
 return_cleanup:
 	if (p) {
@@ -967,6 +988,7 @@ int ast_unreal_hangup(struct ast_unreal_pvt *p, struct ast_channel *ast)
 
 	/* this is one of our locked channels, doesn't matter which */
 	ast_channel_tech_pvt_set(ast, NULL);
+	ao2_ref(p, -1);
 
 unreal_hangup_cleanup:
 	ao2_unlock(p);
@@ -1016,31 +1038,16 @@ static int local_hangup(struct ast_channel *ast)
 	return res;
 }
 
-/*!
- * \internal
- * \brief struct ast_unreal_pvt destructor.
- *
- * \param vdoomed Void ast_local_pvt to destroy.
- *
- * \return Nothing
- */
-static void local_pvt_destructor(void *vdoomed)
+void ast_unreal_destructor(void *vdoomed)
 {
-	struct ast_local_pvt *doomed = vdoomed;
+	struct ast_unreal_pvt *doomed = vdoomed;
 
-	doomed->base.reqcap = ast_format_cap_destroy(doomed->base.reqcap);
-
-	ast_module_unref(ast_module_info->self);
+	doomed->reqcap = ast_format_cap_destroy(doomed->reqcap);
 }
 
-/* BUGBUG need to separate local_alloc() from unreal private setup. */
-/*! \brief Create a call structure */
-static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap *cap)
+struct ast_unreal_pvt *ast_unreal_alloc(size_t size, ao2_destructor_fn destructor, struct ast_format_cap *cap)
 {
-	struct ast_local_pvt *pvt;
-	char *parse;
-	char *context;
-	char *opts;
+	struct ast_unreal_pvt *unreal;
 
 	static const struct ast_jb_conf jb_conf = {
 		.flags = 0,
@@ -1050,29 +1057,61 @@ static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap
 		.target_extra = -1,
 	};
 
-	if (!(pvt = ao2_alloc(sizeof(*pvt), local_pvt_destructor))) {
+	unreal = ao2_alloc(size, destructor);
+	if (!unreal) {
 		return NULL;
 	}
-	if (!(pvt->base.reqcap = ast_format_cap_dup(cap))) {
-		ao2_ref(pvt, -1);
+	unreal->reqcap = ast_format_cap_dup(cap);
+	if (!unreal->reqcap) {
+		ao2_ref(unreal, -1);
 		return NULL;
 	}
 
-	memcpy(&pvt->base.jb_conf, &jb_conf, sizeof(pvt->base.jb_conf));
+	memcpy(&unreal->jb_conf, &jb_conf, sizeof(unreal->jb_conf));
 
-	ast_module_ref(ast_module_info->self);
+	return unreal;
+}
+
+/*!
+ * \internal
+ * \brief struct ast_local_pvt destructor.
+ *
+ * \param vdoomed Object to destroy.
+ *
+ * \return Nothing
+ */
+static void local_pvt_destructor(void *vdoomed)
+{
+	struct ast_local_pvt *doomed = vdoomed;
+
+	ast_unreal_destructor(&doomed->base);
+}
+
+/*! \brief Create a call structure */
+static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap *cap)
+{
+	struct ast_local_pvt *pvt;
+	char *parse;
+	char *context;
+	char *opts;
+
+	pvt = (struct ast_local_pvt *) ast_unreal_alloc(sizeof(*pvt), local_pvt_destructor, cap);
+	if (!pvt) {
+		return NULL;
+	}
 
 	parse = ast_strdupa(data);
 
 	/* Look for options */
 	if ((opts = strchr(parse, '/'))) {
 		*opts++ = '\0';
-		if (strchr(opts, 'n'))
+		if (strchr(opts, 'n')) {
 			ast_set_flag(&pvt->base, AST_UNREAL_NO_OPTIMIZATION);
+		}
 		if (strchr(opts, 'j')) {
-			if (ast_test_flag(&pvt->base, AST_UNREAL_NO_OPTIMIZATION))
+			if (ast_test_flag(&pvt->base, AST_UNREAL_NO_OPTIMIZATION)) {
 				ast_set_flag(&pvt->base.jb_conf, AST_JB_ENABLED);
-			else {
+			} else {
 				ast_log(LOG_ERROR, "You must use the 'n' option with the 'j' option to enable the jitter buffer\n");
 			}
 		}
@@ -1090,20 +1129,19 @@ static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap
 	ast_copy_string(pvt->exten, parse, sizeof(pvt->exten));
 	snprintf(pvt->base.name, sizeof(pvt->base.name), "%s@%s", pvt->exten, pvt->context);
 
-	ao2_link(locals, pvt);
-
 	return pvt; /* this is returned with a ref */
 }
 
-/* BUGBUG need to separate local_new() from unreal channel setup. */
-/*! \brief Start new local channel */
-static struct ast_channel *local_new(struct ast_local_pvt *p, int state, const char *linkedid, struct ast_callid *callid)
+struct ast_channel *ast_unreal_new_channels(struct ast_unreal_pvt *p,
+	const struct ast_channel_tech *tech, int semi1_state, int semi2_state,
+	const char *exten, const char *context, struct ast_channel *requestor,
+	struct ast_callid *callid)
 {
 	struct ast_channel *owner;
 	struct ast_channel *chan;
+	const char *linkedid = requestor ? ast_channel_linkedid(requestor) : NULL;
 	struct ast_format fmt;
-	int generated_seqno = ast_atomic_fetchadd_int((int *)&name_sequence, +1);
-	const struct ast_channel_tech *tech = &local_tech;
+	int generated_seqno = ast_atomic_fetchadd_int((int *) &name_sequence, +1);
 
 	/*
 	 * Allocate two new Asterisk channels
@@ -1112,12 +1150,12 @@ static struct ast_channel *local_new(struct ast_local_pvt *p, int state, const c
 	 * You can't pass linkedid to both allocations since if linkedid
 	 * isn't set, then each channel will generate its own linkedid.
 	 */
-	if (!(owner = ast_channel_alloc(1, state, NULL, NULL, NULL,
-			p->exten, p->context, linkedid, 0,
-			"%s/%s-%08x;1", tech->type, p->base.name, generated_seqno))
-		|| !(chan = ast_channel_alloc(1, AST_STATE_RING, NULL, NULL, NULL,
-			p->exten, p->context, ast_channel_linkedid(owner), 0,
-			"%s/%s-%08x;2", tech->type, p->base.name, generated_seqno))) {
+	if (!(owner = ast_channel_alloc(1, semi1_state, NULL, NULL, NULL,
+			exten, context, linkedid, 0,
+			"%s/%s-%08x;1", tech->type, p->name, generated_seqno))
+		|| !(chan = ast_channel_alloc(1, semi2_state, NULL, NULL, NULL,
+			exten, context, ast_channel_linkedid(owner), 0,
+			"%s/%s-%08x;2", tech->type, p->name, generated_seqno))) {
 		if (owner) {
 			owner = ast_channel_release(owner);
 		}
@@ -1135,11 +1173,11 @@ static struct ast_channel *local_new(struct ast_local_pvt *p, int state, const c
 	ast_channel_tech_pvt_set(owner, p);
 	ast_channel_tech_pvt_set(chan, p);
 
-	ast_format_cap_copy(ast_channel_nativeformats(owner), p->base.reqcap);
-	ast_format_cap_copy(ast_channel_nativeformats(chan), p->base.reqcap);
+	ast_format_cap_copy(ast_channel_nativeformats(owner), p->reqcap);
+	ast_format_cap_copy(ast_channel_nativeformats(chan), p->reqcap);
 
 	/* Determine our read/write format and set it on each channel */
-	ast_best_codec(p->base.reqcap, &fmt);
+	ast_best_codec(p->reqcap, &fmt);
 	ast_format_copy(ast_channel_writeformat(owner), &fmt);
 	ast_format_copy(ast_channel_writeformat(chan), &fmt);
 	ast_format_copy(ast_channel_rawwriteformat(owner), &fmt);
@@ -1152,45 +1190,44 @@ static struct ast_channel *local_new(struct ast_local_pvt *p, int state, const c
 	ast_set_flag(ast_channel_flags(owner), AST_FLAG_DISABLE_DEVSTATE_CACHE);
 	ast_set_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE);
 
-	p->base.owner = owner;
-	p->base.chan = chan;
+	ast_jb_configure(owner, &p->jb_conf);
 
-	ast_jb_configure(owner, &p->base.jb_conf);
+	if (ast_channel_cc_params_init(owner, requestor ? ast_channel_get_cc_config_params(requestor) : NULL)) {
+		ast_channel_release(owner);
+		ast_channel_release(chan);
+		return NULL;
+	}
+
+	/* Give the private a ref for each channel. */
+	ao2_ref(p, +2);
+	p->owner = owner;
+	p->chan = chan;
 
 	return owner;
 }
 
-/* BUGBUG need to create ast_unreal_new(). */
-/* BUGBUG need to separate local_request() from unreal channel setup. */
 /*! \brief Part of PBX interface */
 static struct ast_channel *local_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_local_pvt *p;
 	struct ast_channel *chan;
-	struct ast_callid *callid = ast_read_threadstorage_callid();
+	struct ast_callid *callid;
 
-	/* Allocate a new private structure and then Asterisk channel */
+	/* Allocate a new private structure and then Asterisk channels */
 	p = local_alloc(data, cap);
 	if (!p) {
-		chan = NULL;
-		goto local_request_end;
+		return NULL;
 	}
-	chan = local_new(p, AST_STATE_DOWN, requestor ? ast_channel_linkedid(requestor) : NULL, callid);
-	if (!chan) {
-		ao2_unlink(locals, p);
-	} else if (ast_channel_cc_params_init(chan, requestor ? ast_channel_get_cc_config_params((struct ast_channel *)requestor) : NULL)) {
-		ao2_unlink(locals, p);
-		p->base.owner = ast_channel_release(p->base.owner);
-		p->base.chan = ast_channel_release(p->base.chan);
-		chan = NULL;
+	callid = ast_read_threadstorage_callid();
+	chan = ast_unreal_new_channels(&p->base, &local_tech, AST_STATE_DOWN, AST_STATE_RING,
+		p->exten, p->context, (struct ast_channel *) requestor, callid);
+	if (chan) {
+		ao2_link(locals, p);
 	}
-	ao2_ref(p, -1); /* kill the ref from the alloc */
-
-local_request_end:
-
 	if (callid) {
 		ast_callid_unref(callid);
 	}
+	ao2_ref(p, -1); /* kill the ref from the alloc */
 
 	return chan;
 }
@@ -1329,6 +1366,7 @@ static int unload_module(void)
 	}
 	ao2_iterator_destroy(&it);
 	ao2_ref(locals, -1);
+	locals = NULL;
 
 	ast_format_cap_destroy(local_tech.capabilities);
 	return 0;
