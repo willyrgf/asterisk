@@ -168,6 +168,31 @@ void ast_unreal_call_setup(struct ast_channel *semi1, struct ast_channel *semi2)
  */
 struct ast_channel *ast_local_get_peer(struct ast_channel *ast);
 
+/*!
+ * \brief Setup the outgoing local channel to join a bridge on ast_call().
+ * \since 12.0.0
+ *
+ * \param ast Either channel of a local channel pair.
+ * \param bridge Bridge to join.
+ * \param swap Channel to swap with when joining.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap);
+
+/*!
+ * \brief Setup the outgoing local channel to masquerade into a channel on ast_call().
+ * \since 12.0.0
+ *
+ * \param ast Either channel of a local channel pair.
+ * \param masq Channel to masquerade into.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int ast_local_setup_masquerade(struct ast_channel *ast, struct ast_channel *masq);
+
 /* ------------------------------------------------------------------- */
 
 #if defined(__cplusplus) || defined(c_plusplus)

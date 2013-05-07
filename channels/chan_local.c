@@ -110,6 +110,24 @@ static struct ast_channel_tech local_tech = {
 	.setoption = ast_unreal_setoption,
 };
 
+/*! What to do with the ;2 channel when ast_call() happens. */
+enum local_call_action {
+	/* The ast_call() will run dialplan on the ;2 channel. */
+	LOCAL_CALL_ACTION_DIALPLAN,
+	/* The ast_call() will impart the ;2 channel into a bridge. */
+	LOCAL_CALL_ACTION_BRIDGE,
+	/* The ast_call() will masquerade the ;2 channel into a channel. */
+	LOCAL_CALL_ACTION_MASQUERADE,
+};
+
+/*! Join a bridge on ast_call() parameters. */
+struct local_bridge {
+	/*! Bridge to join. */
+	struct ast_bridge *join;
+	/*! Channel to swap with when joining bridge. */
+	struct ast_channel *swap;
+};
+
 /*!
  * \brief the local pvt structure for all channels
  *
@@ -120,8 +138,19 @@ static struct ast_channel_tech local_tech = {
 struct ast_local_pvt {
 	/*! Unreal channel driver base class values. */
 	struct ast_unreal_pvt base;
-	char context[AST_MAX_CONTEXT];  /*!< Context to call */
-	char exten[AST_MAX_EXTENSION];  /*!< Extension to call */
+	/*! Additional action arguments */
+	union {
+		/*! Make ;2 join a bridge on ast_call(). */
+		struct local_bridge bridge;
+		/*! Make ;2 masquerade into this channel on ast_call(). */
+		struct ast_channel *masq;
+	} action;
+	/*! What to do with the ;2 channel on ast_call(). */
+	enum local_call_action type;
+	/*! Context to call */
+	char context[AST_MAX_CONTEXT];
+	/*! Extension to call */
+	char exten[AST_MAX_EXTENSION];
 };
 
 void ast_unreal_lock_all(struct ast_unreal_pvt *p, struct ast_channel **outchan, struct ast_channel **outowner)
@@ -601,7 +630,7 @@ int ast_unreal_indicate(struct ast_channel *ast, int condition, const void *data
 		ao2_lock(p);
 		/*
 		 * Block -1 stop tones events if we are to be optimized out.  We
-		 * don't need a flurry of these events on a unreal channel chain
+		 * don't need a flurry of these events on an unreal channel chain
 		 * when initially connected to slow the optimization process.
 		 */
 		if (0 <= condition || ast_test_flag(p, AST_UNREAL_NO_OPTIMIZATION)) {
@@ -819,9 +848,78 @@ static void local_bridge_event(struct ast_local_pvt *p)
 	ao2_unlock(p);
 }
 
-/* BUGBUG need to create ast_local_setup_bridge(). */
-/* BUGBUG need to create ast_local_setup_masquerade(). */
-/* BUGBUG need to create ast_local_setup_dialplan(). */
+int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap)
+{
+	struct ast_local_pvt *p;
+	struct ast_local_pvt *found;
+	int res = -1;
+
+	/* Sanity checks. */
+	if (!ast || !bridge) {
+		return -1;
+	}
+
+	ast_channel_lock(ast);
+	p = ast_channel_tech_pvt(ast);
+	ast_channel_unlock(ast);
+
+	found = p ? ao2_find(locals, p, 0) : NULL;
+	if (found) {
+		ao2_lock(found);
+		if (found->type == LOCAL_CALL_ACTION_DIALPLAN
+			&& found->base.owner
+			&& found->base.chan
+			&& !ast_test_flag(&found->base, AST_UNREAL_CARETAKER_THREAD)) {
+			ao2_ref(bridge, +1);
+			if (swap) {
+				ast_channel_ref(swap);
+			}
+			found->type = LOCAL_CALL_ACTION_BRIDGE;
+			found->action.bridge.join = bridge;
+			found->action.bridge.swap = swap;
+			res = 0;
+		}
+		ao2_unlock(found);
+		ao2_ref(found, -1);
+	}
+
+	return res;
+}
+
+int ast_local_setup_masquerade(struct ast_channel *ast, struct ast_channel *masq)
+{
+	struct ast_local_pvt *p;
+	struct ast_local_pvt *found;
+	int res = -1;
+
+	/* Sanity checks. */
+	if (!ast || !masq) {
+		return -1;
+	}
+
+	ast_channel_lock(ast);
+	p = ast_channel_tech_pvt(ast);
+	ast_channel_unlock(ast);
+
+	found = p ? ao2_find(locals, p, 0) : NULL;
+	if (found) {
+		ao2_lock(found);
+		if (found->type == LOCAL_CALL_ACTION_DIALPLAN
+			&& found->base.owner
+			&& found->base.chan
+			&& !ast_test_flag(&found->base, AST_UNREAL_CARETAKER_THREAD)) {
+			ast_channel_ref(masq);
+			found->type = LOCAL_CALL_ACTION_MASQUERADE;
+			found->action.masq = masq;
+			res = 0;
+		}
+		ao2_unlock(found);
+		ao2_ref(found, -1);
+	}
+
+	return res;
+}
+
 /*! \brief Initiate new call, part of PBX interface
  *         dest is the dial string */
 static int local_call(struct ast_channel *ast, const char *dest, int timeout)
@@ -882,20 +980,45 @@ static int local_call(struct ast_channel *ast, const char *dest, int timeout)
 	}
 	ast_channel_unlock(chan);
 
-	if (!ast_exists_extension(NULL, p->context, p->exten, 1, chan_cid)) {
-		ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n",
-			p->exten, p->context);
-		res = -1;
-	} else {
-		local_bridge_event(p);
-	
-		/* Start switch on sub channel */
-		res = ast_pbx_start(chan);
-		if (!res) {
-			ao2_lock(p);
-			ast_set_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
-			ao2_unlock(p);
+	res = -1;
+	switch (p->type) {
+	case LOCAL_CALL_ACTION_DIALPLAN:
+		if (!ast_exists_extension(NULL, p->context, p->exten, 1, chan_cid)) {
+			ast_log(LOG_NOTICE, "No such extension/context %s@%s while calling Local channel\n",
+				p->exten, p->context);
+		} else {
+			local_bridge_event(p);
+
+			/* Start switch on sub channel */
+			res = ast_pbx_start(chan);
 		}
+		break;
+	case LOCAL_CALL_ACTION_BRIDGE:
+		local_bridge_event(p);
+		ast_answer(chan);
+		res = ast_bridge_impart(p->action.bridge.join, chan, p->action.bridge.swap,
+			NULL, 1);
+		ao2_ref(p->action.bridge.join, -1);
+		p->action.bridge.join = NULL;
+		ao2_cleanup(p->action.bridge.swap);
+		p->action.bridge.swap = NULL;
+		break;
+	case LOCAL_CALL_ACTION_MASQUERADE:
+		local_bridge_event(p);
+		ast_answer(chan);
+		res = ast_channel_masquerade(p->action.masq, chan);
+		if (!res) {
+			ast_do_masquerade(p->action.masq);
+			/* Chan is now an orphaned zombie.  Destroy it. */
+			ast_hangup(chan);
+		}
+		p->action.masq = ast_channel_unref(p->action.masq);
+		break;
+	}
+	if (!res) {
+		ao2_lock(p);
+		ast_set_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
+		ao2_unlock(p);
 	}
 
 	/* we already unlocked them, clear them here so the cleanup label won't touch them. */
@@ -914,8 +1037,10 @@ return_cleanup:
 		ast_channel_unref(chan);
 	}
 
-	/* owner is supposed to be == to ast,  if it
-	 * is, don't unlock it because ast must exit locked */
+	/*
+	 * owner is supposed to be == to ast, if it is, don't unlock it
+	 * because ast must exit locked
+	 */
 	if (owner) {
 		if (owner != ast) {
 			ast_channel_unlock(owner);
@@ -1083,6 +1208,17 @@ static void local_pvt_destructor(void *vdoomed)
 {
 	struct ast_local_pvt *doomed = vdoomed;
 
+	switch (doomed->type) {
+	case LOCAL_CALL_ACTION_DIALPLAN:
+		break;
+	case LOCAL_CALL_ACTION_BRIDGE:
+		ao2_cleanup(doomed->action.bridge.join);
+		ao2_cleanup(doomed->action.bridge.swap);
+		break;
+	case LOCAL_CALL_ACTION_MASQUERADE:
+		ao2_cleanup(doomed->action.masq);
+		break;
+	}
 	ast_unreal_destructor(&doomed->base);
 }
 
