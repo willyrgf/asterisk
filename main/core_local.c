@@ -1579,7 +1579,7 @@ int ast_unreal_init(void)
 		return -1;
 	}
 	ast_cli_register_multiple(cli_local, ARRAY_LEN(cli_local));
-	ast_manager_register_xml("LocalOptimizeAway", EVENT_FLAG_SYSTEM|EVENT_FLAG_CALL, manager_optimize_away);
+	ast_manager_register_xml_core("LocalOptimizeAway", EVENT_FLAG_SYSTEM|EVENT_FLAG_CALL, manager_optimize_away);
 
 	ast_register_atexit(unreal_shutdown);
 	return 0;
