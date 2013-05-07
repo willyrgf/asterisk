@@ -5275,7 +5275,7 @@ static int try_calling(struct queue_ent *qe, struct ast_flags opts, char **opt_a
 	}
 
 	/* if the calling channel has AST_CAUSE_ANSWERED_ELSEWHERE set, make sure this is inherited.
-		(this is mainly to support chan_local)
+		(this is mainly to support unreal/local channels)
 	*/
 	if (ast_channel_hangupcause(qe->chan) == AST_CAUSE_ANSWERED_ELSEWHERE) {
 		qe->cancel_answered_elsewhere = 1;

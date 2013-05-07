@@ -36,7 +36,6 @@
  */
 
 /*** MODULEINFO
-	<depend>chan_local</depend>
 	<support_level>core</support_level>
  ***/
 

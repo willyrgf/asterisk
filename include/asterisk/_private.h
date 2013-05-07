@@ -61,6 +61,15 @@ int aco_init(void);             /*!< Provided by config_options.c */
 int ast_bridging_init(void);
 
 /*!
+ * \brief Initialize the local proxy channel and unreal derivative framework system.
+ * \since 12.0.0
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int ast_unreal_init(void);
+
+/*!
  * \brief Reload asterisk modules.
  * \param name the name of the module to reload
  *

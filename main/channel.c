@@ -6857,7 +6857,7 @@ void ast_do_masquerade(struct ast_channel *original)
 	 * and new masquerade attempts, the channels container must be
 	 * locked for the entire masquerade.  The original and clonechan
 	 * need to be unlocked earlier to avoid potential deadlocks with
-	 * the chan_local deadlock avoidance method.
+	 * the unreal/local channel deadlock avoidance method.
 	 *
 	 * The container lock blocks competing masquerade attempts from
 	 * starting as well as being necessary for proper locking order

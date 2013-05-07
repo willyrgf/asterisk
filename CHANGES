@@ -71,6 +71,8 @@ chan_local
 ------------------
  * The /b option is removed.
 
+ * chan_local moved into the system core and is no longer a loadable module.
+
 chan_mobile
 ------------------
  * Added general support for busy detection.

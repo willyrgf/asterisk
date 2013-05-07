@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2005, 2013, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -19,10 +19,9 @@
 /*! \file
  *
  * \author Mark Spencer <markster@digium.com>
+ * \author Richard Mudgett <rmudgett@digium.com>
  *
- * \brief Local Proxy Channel
- *
- * \ingroup channel_drivers
+ * \brief Local proxy channel and other unreal channel derivatives framework.
  */
 
 /*** MODULEINFO
@@ -56,6 +55,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj2.h"
 #include "asterisk/bridging.h"
 #include "asterisk/core_local.h"
+#include "asterisk/_private.h"
 
 /*** DOCUMENTATION
 	<manager name="LocalOptimizeAway" language="en_US">
@@ -1527,36 +1527,14 @@ static int locals_cmp_cb(void *obj, void *arg, int flags)
 	return (obj == arg) ? CMP_MATCH : 0;
 }
 
-/* BUGBUG need to move this file to main/core_local.c and make it not dynamically loadable. */
-/*! \brief Load module into PBX, register channel */
-static int load_module(void)
-{
-	if (!(local_tech.capabilities = ast_format_cap_alloc())) {
-		return AST_MODULE_LOAD_FAILURE;
-	}
-	ast_format_cap_add_all(local_tech.capabilities);
-
-	locals = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL, locals_cmp_cb);
-	if (!locals) {
-		ast_format_cap_destroy(local_tech.capabilities);
-		return AST_MODULE_LOAD_FAILURE;
-	}
-
-	/* Make sure we can register our channel type */
-	if (ast_channel_register(&local_tech)) {
-		ast_log(LOG_ERROR, "Unable to register channel class 'Local'\n");
-		ao2_ref(locals, -1);
-		ast_format_cap_destroy(local_tech.capabilities);
-		return AST_MODULE_LOAD_FAILURE;
-	}
-	ast_cli_register_multiple(cli_local, ARRAY_LEN(cli_local));
-	ast_manager_register_xml("LocalOptimizeAway", EVENT_FLAG_SYSTEM|EVENT_FLAG_CALL, manager_optimize_away);
-
-	return AST_MODULE_LOAD_SUCCESS;
-}
-
-/*! \brief Unload the local proxy channel from Asterisk */
-static int unload_module(void)
+/*!
+ * \internal
+ * \brief Shutdown the local proxy channel and unreal derivative framework system.
+ * \since 12.0.0
+ *
+ * \return Nothing
+ */
+static void unreal_shutdown(void)
 {
 	struct ast_local_pvt *p;
 	struct ao2_iterator it;
@@ -1578,11 +1556,31 @@ static int unload_module(void)
 	locals = NULL;
 
 	ast_format_cap_destroy(local_tech.capabilities);
-	return 0;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Local Proxy Channel (Note: used internally by other modules)",
-		.load = load_module,
-		.unload = unload_module,
-		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
-	);
+int ast_unreal_init(void)
+{
+	if (!(local_tech.capabilities = ast_format_cap_alloc())) {
+		return -1;
+	}
+	ast_format_cap_add_all(local_tech.capabilities);
+
+	locals = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_MUTEX, 0, NULL, locals_cmp_cb);
+	if (!locals) {
+		ast_format_cap_destroy(local_tech.capabilities);
+		return -1;
+	}
+
+	/* Make sure we can register our channel type */
+	if (ast_channel_register(&local_tech)) {
+		ast_log(LOG_ERROR, "Unable to register channel class 'Local'\n");
+		ao2_ref(locals, -1);
+		ast_format_cap_destroy(local_tech.capabilities);
+		return -1;
+	}
+	ast_cli_register_multiple(cli_local, ARRAY_LEN(cli_local));
+	ast_manager_register_xml("LocalOptimizeAway", EVENT_FLAG_SYSTEM|EVENT_FLAG_CALL, manager_optimize_away);
+
+	ast_register_atexit(unreal_shutdown);
+	return 0;
+}

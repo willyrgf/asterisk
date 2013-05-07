@@ -9441,8 +9441,7 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 
 	/* Masquerade into tmp channel */
 	if (ast_channel_masquerade(tmpchan, chan)) {
-		/* Failed to set up the masquerade.  It's probably chan_local
-		 * in the middle of optimizing itself out.  Sad. :( */
+		/* Failed to set up the masquerade. */
 		ast_hangup(tmpchan);
 		tmpchan = NULL;
 		res = -1;

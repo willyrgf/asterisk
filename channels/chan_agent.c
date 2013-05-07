@@ -31,7 +31,6 @@
  * \ingroup channel_drivers
  */
 /*** MODULEINFO
-        <depend>chan_local</depend>
         <depend>res_monitor</depend>
 	<support_level>core</support_level>
  ***/
@@ -2589,5 +2588,5 @@ AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Agent Proxy Channel",
 		.unload = unload_module,
 		.reload = reload,
 		.load_pri = AST_MODPRI_CHANNEL_DRIVER,
-		.nonoptreq = "res_monitor,chan_local",
+		.nonoptreq = "res_monitor",
 	       );

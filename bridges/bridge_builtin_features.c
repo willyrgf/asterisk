@@ -109,7 +109,7 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
  */
 	snprintf(destination, sizeof(destination), "%s@%s", exten, context);
 
-	/* Now we request that chan_local prepare to call the destination */
+	/* Now we request a local channel to prepare to call the destination */
 	chan = ast_request("Local", ast_channel_nativeformats(caller), caller, destination,
 		&cause);
 	if (!chan) {
