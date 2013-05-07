@@ -58,7 +58,7 @@ struct ast_unreal_pvt {
 
 #define AST_UNREAL_CARETAKER_THREAD (1 << 0) /*!< The ;2 side launched a PBX, was pushed into a bridge, or was masqueraded into an application. */
 #define AST_UNREAL_NO_OPTIMIZATION  (1 << 1) /*!< Do not optimize out the unreal channels */
-#define AST_UNREAL_MOH_PASSTHRU     (1 << 2) /*!< Pass through hold start/stop frames */
+#define AST_UNREAL_MOH_INTERCEPT    (1 << 2) /*!< Intercept and act on hold/unhold control frames */
 
 /*!
  * \brief Send an unreal pvt in with no locks held and get all locks

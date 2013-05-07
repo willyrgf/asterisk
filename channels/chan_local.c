@@ -566,12 +566,127 @@ int ast_unreal_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 	return 0;
 }
 
+/*!
+ * \internal
+ * \brief Queue up a frame representing the indication as a control frame.
+ * \since 12.0.0
+ *
+ * \param p Unreal private structure.
+ * \param ast Channel indicating the condition.
+ * \param condition What is being indicated.
+ * \param data Extra data.
+ * \param datalen Length of extra data.
+ *
+ * \retval 0 on success.
+ * \retval AST_T38_REQUEST_PARMS if successful and condition is AST_CONTROL_T38_PARAMETERS.
+ * \retval -1 on error.
+ */
+static int unreal_queue_indicate(struct ast_unreal_pvt *p, struct ast_channel *ast, int condition, const void *data, size_t datalen)
+{
+	int res = 0;
+	int isoutbound;
+
+	ao2_lock(p);
+	/*
+	 * Block -1 stop tones events if we are to be optimized out.  We
+	 * don't need a flurry of these events on an unreal channel chain
+	 * when initially connected to slow the optimization process.
+	 */
+	if (0 <= condition || ast_test_flag(p, AST_UNREAL_NO_OPTIMIZATION)) {
+		struct ast_frame f = {
+			.frametype = AST_FRAME_CONTROL,
+			.subclass.integer = condition,
+			.data.ptr = (void *) data,
+			.datalen = datalen,
+		};
+
+		isoutbound = AST_UNREAL_IS_OUTBOUND(ast, p);
+		res = unreal_queue_frame(p, isoutbound, &f, ast, 1);
+		if (!res
+			&& condition == AST_CONTROL_T38_PARAMETERS
+			&& datalen == sizeof(struct ast_control_t38_parameters)) {
+			const struct ast_control_t38_parameters *parameters = data;
+
+			if (parameters->request_response == AST_T38_REQUEST_PARMS) {
+				res = AST_T38_REQUEST_PARMS;
+			}
+		}
+	} else {
+		ast_debug(4, "Blocked indication %d\n", condition);
+	}
+	ao2_unlock(p);
+
+	return res;
+}
+
+/*!
+ * \internal
+ * \brief Handle COLP and redirecting conditions.
+ * \since 12.0.0
+ *
+ * \param p Unreal private structure.
+ * \param ast Channel indicating the condition.
+ * \param condition What is being indicated.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int unreal_colp_redirect_indicate(struct ast_unreal_pvt *p, struct ast_channel *ast, int condition)
+{
+	struct ast_channel *this_channel;
+	struct ast_channel *the_other_channel;
+	int isoutbound;
+	int res = 0;
+
+	/*
+	 * A connected line update frame may only contain a partial
+	 * amount of data, such as just a source, or just a ton, and not
+	 * the full amount of information.  However, the collected
+	 * information is all stored in the outgoing channel's
+	 * connectedline structure, so when receiving a connected line
+	 * update on an outgoing unreal channel, we need to transmit the
+	 * collected connected line information instead of whatever
+	 * happens to be in this control frame.  The same applies for
+	 * redirecting information, which is why it is handled here as
+	 * well.
+	 */
+	ao2_lock(p);
+	isoutbound = AST_UNREAL_IS_OUTBOUND(ast, p);
+	if (isoutbound) {
+		this_channel = p->chan;
+		the_other_channel = p->owner;
+	} else {
+		this_channel = p->owner;
+		the_other_channel = p->chan;
+	}
+	if (the_other_channel) {
+		unsigned char frame_data[1024];
+		struct ast_frame f = {
+			.frametype = AST_FRAME_CONTROL,
+			.subclass.integer = condition,
+			.data.ptr = frame_data,
+		};
+
+		if (condition == AST_CONTROL_CONNECTED_LINE) {
+			ast_connected_line_copy_to_caller(ast_channel_caller(the_other_channel),
+				ast_channel_connected(this_channel));
+			f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data),
+				ast_channel_connected(this_channel), NULL);
+		} else {
+			f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data),
+				ast_channel_redirecting(this_channel), NULL);
+		}
+		res = unreal_queue_frame(p, isoutbound, &f, ast, 1);
+	}
+	ao2_unlock(p);
+
+	return res;
+}
+
 int ast_unreal_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen)
 {
 	struct ast_unreal_pvt *p = ast_channel_tech_pvt(ast);
 	int res = 0;
-	struct ast_frame f = { AST_FRAME_CONTROL, };
-	int isoutbound;
 
 	if (!p) {
 		return -1;
@@ -579,79 +694,28 @@ int ast_unreal_indicate(struct ast_channel *ast, int condition, const void *data
 
 	ao2_ref(p, 1); /* ref for unreal_queue_frame */
 
-	/* If this is an MOH hold or unhold, do it on the Local channel versus real channel */
-	if (!ast_test_flag(p, AST_UNREAL_MOH_PASSTHRU) && condition == AST_CONTROL_HOLD) {
-		ast_moh_start(ast, data, NULL);
-	} else if (!ast_test_flag(p, AST_UNREAL_MOH_PASSTHRU) && condition == AST_CONTROL_UNHOLD) {
-		ast_moh_stop(ast);
-	} else if (condition == AST_CONTROL_CONNECTED_LINE || condition == AST_CONTROL_REDIRECTING) {
-		struct ast_channel *this_channel;
-		struct ast_channel *the_other_channel;
-
-		/*
-		 * A connected line update frame may only contain a partial
-		 * amount of data, such as just a source, or just a ton, and not
-		 * the full amount of information.  However, the collected
-		 * information is all stored in the outgoing channel's
-		 * connectedline structure, so when receiving a connected line
-		 * update on an outgoing unreal channel, we need to transmit the
-		 * collected connected line information instead of whatever
-		 * happens to be in this control frame.  The same applies for
-		 * redirecting information, which is why it is handled here as
-		 * well.
-		 */
-		ao2_lock(p);
-		isoutbound = AST_UNREAL_IS_OUTBOUND(ast, p);
-		if (isoutbound) {
-			this_channel = p->chan;
-			the_other_channel = p->owner;
-		} else {
-			this_channel = p->owner;
-			the_other_channel = p->chan;
+	switch (condition) {
+	case AST_CONTROL_CONNECTED_LINE:
+	case AST_CONTROL_REDIRECTING:
+		res = unreal_colp_redirect_indicate(p, ast, condition);
+		break;
+	case AST_CONTROL_HOLD:
+		if (ast_test_flag(p, AST_UNREAL_MOH_INTERCEPT)) {
+			ast_moh_start(ast, data, NULL);
+			break;
 		}
-		if (the_other_channel) {
-			unsigned char frame_data[1024];
-
-			if (condition == AST_CONTROL_CONNECTED_LINE) {
-				if (isoutbound) {
-					ast_connected_line_copy_to_caller(ast_channel_caller(the_other_channel), ast_channel_connected(this_channel));
-				}
-				f.datalen = ast_connected_line_build_data(frame_data, sizeof(frame_data), ast_channel_connected(this_channel), NULL);
-			} else {
-				f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data), ast_channel_redirecting(this_channel), NULL);
-			}
-			f.subclass.integer = condition;
-			f.data.ptr = frame_data;
-			res = unreal_queue_frame(p, isoutbound, &f, ast, 1);
+		res = unreal_queue_indicate(p, ast, condition, data, datalen);
+		break;
+	case AST_CONTROL_UNHOLD:
+		if (ast_test_flag(p, AST_UNREAL_MOH_INTERCEPT)) {
+			ast_moh_stop(ast);
+			break;
 		}
-		ao2_unlock(p);
-	} else {
-		/* Queue up a frame representing the indication as a control frame */
-		ao2_lock(p);
-		/*
-		 * Block -1 stop tones events if we are to be optimized out.  We
-		 * don't need a flurry of these events on an unreal channel chain
-		 * when initially connected to slow the optimization process.
-		 */
-		if (0 <= condition || ast_test_flag(p, AST_UNREAL_NO_OPTIMIZATION)) {
-			isoutbound = AST_UNREAL_IS_OUTBOUND(ast, p);
-			f.subclass.integer = condition;
-			f.data.ptr = (void *) data;
-			f.datalen = datalen;
-			res = unreal_queue_frame(p, isoutbound, &f, ast, 1);
-
-			if (!res && condition == AST_CONTROL_T38_PARAMETERS
-				&& datalen == sizeof(struct ast_control_t38_parameters)) {
-				const struct ast_control_t38_parameters *parameters = data;
-
-				if (parameters->request_response == AST_T38_REQUEST_PARMS) {
-					res = AST_T38_REQUEST_PARMS;
-				}
-			}
-		} else {
-			ast_debug(4, "Blocked indication %d\n", condition);
-		}
-		ao2_unlock(p);
+		res = unreal_queue_indicate(p, ast, condition, data, datalen);
+		break;
+	default:
+		res = unreal_queue_indicate(p, ast, condition, data, datalen);
+		break;
 	}
 
 	ao2_ref(p, -1);
@@ -1237,6 +1301,16 @@ static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap
 
 	parse = ast_strdupa(data);
 
+	/*
+	 * Local channels intercept MOH by default.
+	 *
+	 * This is a silly default because it represents state held by
+	 * the local channels.  Unless local channel optimization is
+	 * disabled, the state will dissapear when the local channels
+	 * optimize out.
+	 */
+	ast_set_flag(&pvt->base, AST_UNREAL_MOH_INTERCEPT);
+
 	/* Look for options */
 	if ((opts = strchr(parse, '/'))) {
 		*opts++ = '\0';
@@ -1251,7 +1325,7 @@ static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap
 			}
 		}
 		if (strchr(opts, 'm')) {
-			ast_set_flag(&pvt->base, AST_UNREAL_MOH_PASSTHRU);
+			ast_clear_flag(&pvt->base, AST_UNREAL_MOH_INTERCEPT);
 		}
 	}
 
