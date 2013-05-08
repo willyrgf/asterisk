@@ -99,7 +99,7 @@ int ast_unreal_setoption(struct ast_channel *chan, int option, void *data, int d
  * \brief struct ast_unreal_pvt destructor.
  * \since 12.0.0
  *
- * \param vdoomed Void ast_unreal_pvt to destroy.
+ * \param vdoomed Object to destroy.
  *
  * \return Nothing
  */
@@ -175,11 +175,16 @@ struct ast_channel *ast_local_get_peer(struct ast_channel *ast);
  * \param ast Either channel of a local channel pair.
  * \param bridge Bridge to join.
  * \param swap Channel to swap with when joining.
+ * \param features Bridge features structure.
+ *
+ * \note The features parameter must be NULL or obtained by
+ * ast_bridge_features_new().  You must not dereference features
+ * after calling even if the call fails.
  *
  * \retval 0 on success.
  * \retval -1 on error.
  */
-int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap);
+int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap, struct ast_bridge_features *features);
 
 /*!
  * \brief Setup the outgoing local channel to masquerade into a channel on ast_call().

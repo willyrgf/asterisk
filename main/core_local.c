@@ -126,6 +126,8 @@ struct local_bridge {
 	struct ast_bridge *join;
 	/*! Channel to swap with when joining bridge. */
 	struct ast_channel *swap;
+	/*! Features that are specific to this channel when pushed into the bridge. */
+	struct ast_bridge_features *features;
 };
 
 /*!
@@ -133,9 +135,9 @@ struct local_bridge {
  *
  * The local channel pvt has two ast_chan objects - the "owner" and the "next channel", the outbound channel
  *
- * ast_chan owner -> ast_local_pvt -> ast_chan chan
+ * ast_chan owner -> local_pvt -> ast_chan chan
  */
-struct ast_local_pvt {
+struct local_pvt {
 	/*! Unreal channel driver base class values. */
 	struct ast_unreal_pvt base;
 	/*! Additional action arguments */
@@ -204,8 +206,8 @@ void ast_unreal_lock_all(struct ast_unreal_pvt *p, struct ast_channel **outchan,
 
 struct ast_channel *ast_local_get_peer(struct ast_channel *ast)
 {
-	struct ast_local_pvt *p = ast_channel_tech_pvt(ast);
-	struct ast_local_pvt *found;
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
+	struct local_pvt *found;
 	struct ast_channel *peer;
 
 	if (!p) {
@@ -300,7 +302,7 @@ static int local_devicestate(const char *data)
 	char *exten = ast_strdupa(data);
 	char *context;
 	char *opts;
-	struct ast_local_pvt *lp;
+	struct local_pvt *lp;
 	struct ao2_iterator it;
 
 	/* Strip options if they exist */
@@ -865,11 +867,11 @@ void ast_unreal_call_setup(struct ast_channel *semi1, struct ast_channel *semi2)
  * \brief Post the LocalBridge AMI event.
  * \since 12.0.0
  *
- * \param p ast_local_pvt to rais the bridge event.
+ * \param p local_pvt to raise the bridge event.
  *
  * \return Nothing
  */
-static void local_bridge_event(struct ast_local_pvt *p)
+static void local_bridge_event(struct local_pvt *p)
 {
 	ao2_lock(p);
 	/*** DOCUMENTATION
@@ -912,14 +914,15 @@ static void local_bridge_event(struct ast_local_pvt *p)
 	ao2_unlock(p);
 }
 
-int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap)
+int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap, struct ast_bridge_features *features)
 {
-	struct ast_local_pvt *p;
-	struct ast_local_pvt *found;
+	struct local_pvt *p;
+	struct local_pvt *found;
 	int res = -1;
 
 	/* Sanity checks. */
 	if (!ast || !bridge) {
+		ast_bridge_features_destroy(features);
 		return -1;
 	}
 
@@ -941,7 +944,10 @@ int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, s
 			found->type = LOCAL_CALL_ACTION_BRIDGE;
 			found->action.bridge.join = bridge;
 			found->action.bridge.swap = swap;
+			found->action.bridge.features = features;
 			res = 0;
+		} else {
+			ast_bridge_features_destroy(features);
 		}
 		ao2_unlock(found);
 		ao2_ref(found, -1);
@@ -952,8 +958,8 @@ int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, s
 
 int ast_local_setup_masquerade(struct ast_channel *ast, struct ast_channel *masq)
 {
-	struct ast_local_pvt *p;
-	struct ast_local_pvt *found;
+	struct local_pvt *p;
+	struct local_pvt *found;
 	int res = -1;
 
 	/* Sanity checks. */
@@ -988,7 +994,7 @@ int ast_local_setup_masquerade(struct ast_channel *ast, struct ast_channel *masq
  *         dest is the dial string */
 static int local_call(struct ast_channel *ast, const char *dest, int timeout)
 {
-	struct ast_local_pvt *p = ast_channel_tech_pvt(ast);
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int pvt_locked = 0;
 
 	struct ast_channel *owner = NULL;
@@ -1061,11 +1067,12 @@ static int local_call(struct ast_channel *ast, const char *dest, int timeout)
 		local_bridge_event(p);
 		ast_answer(chan);
 		res = ast_bridge_impart(p->action.bridge.join, chan, p->action.bridge.swap,
-			NULL, 1);
+			p->action.bridge.features, 1);
 		ao2_ref(p->action.bridge.join, -1);
 		p->action.bridge.join = NULL;
 		ao2_cleanup(p->action.bridge.swap);
 		p->action.bridge.swap = NULL;
+		p->action.bridge.features = NULL;
 		break;
 	case LOCAL_CALL_ACTION_MASQUERADE:
 		local_bridge_event(p);
@@ -1201,7 +1208,7 @@ unreal_hangup_cleanup:
 /*! \brief Hangup a call through the local proxy channel */
 static int local_hangup(struct ast_channel *ast)
 {
-	struct ast_local_pvt *p = ast_channel_tech_pvt(ast);
+	struct local_pvt *p = ast_channel_tech_pvt(ast);
 	int res;
 
 	if (!p) {
@@ -1262,7 +1269,7 @@ struct ast_unreal_pvt *ast_unreal_alloc(size_t size, ao2_destructor_fn destructo
 
 /*!
  * \internal
- * \brief struct ast_local_pvt destructor.
+ * \brief struct local_pvt destructor.
  *
  * \param vdoomed Object to destroy.
  *
@@ -1270,7 +1277,7 @@ struct ast_unreal_pvt *ast_unreal_alloc(size_t size, ao2_destructor_fn destructo
  */
 static void local_pvt_destructor(void *vdoomed)
 {
-	struct ast_local_pvt *doomed = vdoomed;
+	struct local_pvt *doomed = vdoomed;
 
 	switch (doomed->type) {
 	case LOCAL_CALL_ACTION_DIALPLAN:
@@ -1278,6 +1285,7 @@ static void local_pvt_destructor(void *vdoomed)
 	case LOCAL_CALL_ACTION_BRIDGE:
 		ao2_cleanup(doomed->action.bridge.join);
 		ao2_cleanup(doomed->action.bridge.swap);
+		ast_bridge_features_destroy(doomed->action.bridge.features);
 		break;
 	case LOCAL_CALL_ACTION_MASQUERADE:
 		ao2_cleanup(doomed->action.masq);
@@ -1287,14 +1295,14 @@ static void local_pvt_destructor(void *vdoomed)
 }
 
 /*! \brief Create a call structure */
-static struct ast_local_pvt *local_alloc(const char *data, struct ast_format_cap *cap)
+static struct local_pvt *local_alloc(const char *data, struct ast_format_cap *cap)
 {
-	struct ast_local_pvt *pvt;
+	struct local_pvt *pvt;
 	char *parse;
 	char *context;
 	char *opts;
 
-	pvt = (struct ast_local_pvt *) ast_unreal_alloc(sizeof(*pvt), local_pvt_destructor, cap);
+	pvt = (struct local_pvt *) ast_unreal_alloc(sizeof(*pvt), local_pvt_destructor, cap);
 	if (!pvt) {
 		return NULL;
 	}
@@ -1418,7 +1426,7 @@ struct ast_channel *ast_unreal_new_channels(struct ast_unreal_pvt *p,
 /*! \brief Part of PBX interface */
 static struct ast_channel *local_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
 {
-	struct ast_local_pvt *p;
+	struct local_pvt *p;
 	struct ast_channel *chan;
 	struct ast_callid *callid;
 
@@ -1444,7 +1452,7 @@ static struct ast_channel *local_request(const char *type, struct ast_format_cap
 /*! \brief CLI command "local show channels" */
 static char *locals_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	struct ast_local_pvt *p;
+	struct local_pvt *p;
 	struct ao2_iterator it;
 
 	switch (cmd) {
@@ -1488,8 +1496,8 @@ static struct ast_cli_entry cli_local[] = {
 static int manager_optimize_away(struct mansession *s, const struct message *m)
 {
 	const char *channel;
-	struct ast_local_pvt *p;
-	struct ast_local_pvt *found;
+	struct local_pvt *p;
+	struct local_pvt *found;
 	struct ast_channel *chan;
 
 	channel = astman_get_header(m, "Channel");
@@ -1536,7 +1544,7 @@ static int locals_cmp_cb(void *obj, void *arg, int flags)
  */
 static void unreal_shutdown(void)
 {
-	struct ast_local_pvt *p;
+	struct local_pvt *p;
 	struct ao2_iterator it;
 
 	/* First, take us out of the channel loop */
