@@ -5795,9 +5795,9 @@ static int str_cmp(void *lhs, void *rhs, int flags)
 	return strcmp(lhs, rhs) ? 0 : CMP_MATCH;
 }
 
-struct ao2_container *ast_str_container_alloc(int buckets)
+struct ao2_container *ast_str_container_alloc_options(enum ao2_container_opts opts, int buckets)
 {
-	return ao2_container_alloc(buckets, str_hash, str_cmp);
+	return ao2_container_alloc_options(opts, buckets, str_hash, str_cmp);
 }
 
 int ast_str_container_add(struct ao2_container *str_container, const char *add)
@@ -5812,4 +5812,9 @@ int ast_str_container_add(struct ao2_container *str_container, const char *add)
 	strcpy(ao2_add, add);
 	ao2_link(str_container, ao2_add);
 	return 0;
+}
+
+void ast_str_container_remove(struct ao2_container *str_container, const char *remove)
+{
+	ao2_find(str_container, remove, OBJ_KEY | OBJ_NODATA | OBJ_UNLINK);
 }
