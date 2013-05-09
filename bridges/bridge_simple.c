@@ -85,7 +85,7 @@ static int simple_bridge_write(struct ast_bridge *bridge, struct ast_bridge_chan
 static struct ast_bridge_technology simple_bridge = {
 	.name = "simple_bridge",
 	.capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX,
-	.preference = AST_BRIDGE_PREFERENCE_MEDIUM,
+	.preference = AST_BRIDGE_PREFERENCE_BASE_1TO1MIX,
 	.join = simple_bridge_join,
 	.write = simple_bridge_write,
 };

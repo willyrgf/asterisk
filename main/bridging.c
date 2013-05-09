@@ -1014,8 +1014,8 @@ static void bridge_complete_join(struct ast_bridge *bridge)
 	}
 }
 
-/*! \brief Helper function used to find the "best" bridge technology given a specified capabilities */
-static struct ast_bridge_technology *find_best_technology(uint32_t capabilities)
+/*! \brief Helper function used to find the "best" bridge technology given specified capabilities */
+static struct ast_bridge_technology *find_best_technology(uint32_t capabilities, struct ast_bridge *bridge)
 {
 	struct ast_bridge_technology *current;
 	struct ast_bridge_technology *best = NULL;
@@ -1028,13 +1028,18 @@ static struct ast_bridge_technology *find_best_technology(uint32_t capabilities)
 			continue;
 		}
 		if (!(current->capabilities & capabilities)) {
-			ast_debug(1, "Bridge technology %s does not have the capabilities we need.\n",
+			ast_debug(1, "Bridge technology %s does not have any capabilities we want.\n",
 				current->name);
 			continue;
 		}
-		if (best && best->preference < current->preference) {
-			ast_debug(1, "Bridge technology %s has preference %d while %s has preference %d. Skipping.\n",
-				current->name, current->preference, best->name, best->preference);
+		if (best && current->preference <= best->preference) {
+			ast_debug(1, "Bridge technology %s has less preference than %s (%d <= %d). Skipping.\n",
+				current->name, best->name, current->preference, best->preference);
+			continue;
+		}
+		if (current->compatible && !current->compatible(bridge)) {
+			ast_debug(1, "Bridge technology %s is not compatible with properties of existing bridge.\n",
+				current->name);
 			continue;
 		}
 		best = current;
@@ -1239,25 +1244,13 @@ struct ast_bridge *ast_bridge_base_init(struct ast_bridge *self, uint32_t capabi
 
 	ast_uuid_generate_str(self->uniqueid, sizeof(self->uniqueid));
 	ast_set_flag(&self->feature_flags, flags);
+	self->allowed_capabilities = capabilities;
 
-	/* If we need to be a smart bridge see if we can move between 1to1 and multimix bridges */
-	if (flags & AST_BRIDGE_FLAG_SMART) {
-		if (!ast_bridge_check((capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX)
-			? AST_BRIDGE_CAPABILITY_MULTIMIX : AST_BRIDGE_CAPABILITY_1TO1MIX)) {
-			ao2_ref(self, -1);
-			return NULL;
-		}
-	}
-
-	/*
-	 * If capabilities were provided use our helper function to find
-	 * the "best" bridge technology, otherwise we can just look for
-	 * the most basic capability needed, single 1to1 mixing.
-	 */
-	self->technology = capabilities
-		? find_best_technology(capabilities)
-		: find_best_technology(AST_BRIDGE_CAPABILITY_1TO1MIX);
+	/* Use our helper function to find the "best" bridge technology. */
+	self->technology = find_best_technology(capabilities, self);
 	if (!self->technology) {
+		ast_debug(1, "Bridge %s: Could not create.  No technology available to support it.\n",
+			self->uniqueid);
 		ao2_ref(self, -1);
 		return NULL;
 	}
@@ -1399,19 +1392,6 @@ struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, unsigned int flags
 	return bridge;
 }
 
-int ast_bridge_check(uint32_t capabilities)
-{
-	struct ast_bridge_technology *bridge_technology;
-
-	if (!(bridge_technology = find_best_technology(capabilities))) {
-		return 0;
-	}
-
-	ast_module_unref(bridge_technology->mod);
-
-	return 1;
-}
-
 int ast_bridge_destroy(struct ast_bridge *bridge)
 {
 	ast_debug(1, "Bridge %s: telling all channels to leave the party\n", bridge->uniqueid);
@@ -1504,7 +1484,7 @@ static int bridge_make_compatible(struct ast_bridge *bridge, struct ast_bridge_c
  */
 static int smart_bridge_operation(struct ast_bridge *bridge)
 {
-	uint32_t new_capabilities = 0;
+	uint32_t new_capabilities;
 	struct ast_bridge_technology *new_technology;
 	struct ast_bridge_technology *old_technology = bridge->technology;
 	struct ast_bridge_channel *bridge_channel;
@@ -1520,44 +1500,48 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 		return 0;
 	}
 
-/* BUGBUG the bridge tech compatible callback should be asking if the specified bridge is compatible with the tech. */
-	/*
-	 * Based on current capabilities determine whether we want to
-	 * change bridge technologies.
-	 */
-	if (bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX) {
-		if (bridge->num_channels <= 2) {
-			ast_debug(1, "Bridge %s channel count (%u) is within limits for %s technology, not performing smart bridge operation.\n",
-				bridge->uniqueid, bridge->num_channels, bridge->technology->name);
-			return 0;
-		}
+	/* Determine new bridge technology capabilities needed. */
+	if (2 < bridge->num_channels) {
 		new_capabilities = AST_BRIDGE_CAPABILITY_MULTIMIX;
-	} else if (bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
-		if (2 < bridge->num_channels) {
-			ast_debug(1, "Bridge %s channel count (%u) is within limits for %s technology, not performing smart bridge operation.\n",
-				bridge->uniqueid, bridge->num_channels, bridge->technology->name);
-			return 0;
+		new_capabilities &= bridge->allowed_capabilities;
+	} else {
+		new_capabilities = AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX;
+		new_capabilities &= bridge->allowed_capabilities;
+		if (!new_capabilities
+			&& (bridge->allowed_capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)) {
+			/* Allow switching between different multimix bridge technologies. */
+			new_capabilities = AST_BRIDGE_CAPABILITY_MULTIMIX;
 		}
-		new_capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX;
 	}
 
-	if (!new_capabilities) {
-		ast_debug(1, "Bridge %s has no new capabilities, not performing smart bridge operation.\n",
-			bridge->uniqueid);
-		return 0;
-	}
-
-	/* Attempt to find a new bridge technology to satisfy the capabilities */
-	new_technology = find_best_technology(new_capabilities);
+	/* Find a bridge technology to satisfy the new capabilities. */
+	new_technology = find_best_technology(new_capabilities, bridge);
 	if (!new_technology) {
-		if (bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
-			ast_debug(1, "Bridge %s could not get a new bridge technology, staying with old technology.\n",
+		int is_compatible = 0;
+
+		if (old_technology->compatible) {
+			is_compatible = old_technology->compatible(bridge);
+		} else if (old_technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX) {
+			is_compatible = 1;
+		} else if (bridge->num_channels <= 2
+			&& (old_technology->capabilities & AST_BRIDGE_CAPABILITY_1TO1MIX)) {
+			is_compatible = 1;
+		}
+
+		if (is_compatible) {
+			ast_debug(1, "Bridge %s could not get a new technology, staying with old technology.\n",
 				bridge->uniqueid);
 			return 0;
 		}
-		ast_log(LOG_WARNING, "Bridge %s has no bridge technology available to support it\n",
+		ast_log(LOG_WARNING, "Bridge %s has no technology available to support it.\n",
 			bridge->uniqueid);
 		return -1;
+	}
+	if (new_technology == old_technology) {
+		ast_debug(1, "Bridge %s is already using the new technology.\n",
+			bridge->uniqueid);
+		ast_module_unref(old_technology->mod);
+		return 0;
 	}
 
 	ast_copy_string(dummy_bridge.uniqueid, bridge->uniqueid, sizeof(dummy_bridge.uniqueid));
@@ -3298,7 +3282,8 @@ static int bridge_merge_locked(struct ast_bridge *dst_bridge, struct ast_bridge 
 	}
 	if (2 + num_kick < merge.dest->num_channels + merge.src->num_channels
 		&& !(merge.dest->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
-		&& !ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_SMART)) {
+		&& (!ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_SMART)
+			|| !(merge.dest->allowed_capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX))) {
 		ast_debug(1, "Can't merge bridge %s into bridge %s, multimix is needed and it cannot be acquired.\n",
 			merge.src->uniqueid, merge.dest->uniqueid);
 		return -1;
@@ -3731,7 +3716,8 @@ static int check_merge_optimize_out(struct ast_bridge *chan_bridge,
 			merge.src->uniqueid);
 	} else if ((2 + 2) < merge.dest->num_channels + merge.src->num_channels
 		&& !(merge.dest->technology->capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX)
-		&& !ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_SMART)) {
+		&& (!ast_test_flag(&merge.dest->feature_flags, AST_BRIDGE_FLAG_SMART)
+			|| !(merge.dest->allowed_capabilities & AST_BRIDGE_CAPABILITY_MULTIMIX))) {
 		ast_debug(4, "Can't optimize %s -- %s out, multimix is needed and it cannot be acquired.\n",
 			ast_channel_name(chan_bridge_channel->chan),
 			ast_channel_name(peer_bridge_channel->chan));
@@ -5167,29 +5153,10 @@ static const char *tech_capability2str(uint32_t capabilities)
 	return type;
 }
 
-/*! Bridge technology priority preference to string. */
-static const char *tech_preference2str(enum ast_bridge_preference preference)
-{
-	const char *priority;
-
-	priority = "<Unknown>";
-	switch (preference) {
-	case AST_BRIDGE_PREFERENCE_HIGH:
-		priority = "High";
-		break;
-	case AST_BRIDGE_PREFERENCE_MEDIUM:
-		priority = "Medium";
-		break;
-	case AST_BRIDGE_PREFERENCE_LOW:
-		priority = "Low";
-		break;
-	}
-	return priority;
-}
-
 static char *handle_bridge_technology_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-#define FORMAT "%-20s %-20s %-10s %s\n"
+#define FORMAT_HDR "%-20s %-20s %8s %s\n"
+#define FORMAT_ROW "%-20s %-20s %8d %s\n"
 
 	struct ast_bridge_technology *cur;
 
@@ -5204,19 +5171,16 @@ static char *handle_bridge_technology_show(struct ast_cli_entry *e, int cmd, str
 		return NULL;
 	}
 
-	ast_cli(a->fd, FORMAT, "Name", "Type", "Priority", "Suspended");
+	ast_cli(a->fd, FORMAT_HDR, "Name", "Type", "Priority", "Suspended");
 	AST_RWLIST_RDLOCK(&bridge_technologies);
 	AST_RWLIST_TRAVERSE(&bridge_technologies, cur, entry) {
 		const char *type;
-		const char *priority;
 
 		/* Decode type for display */
 		type = tech_capability2str(cur->capabilities);
 
-		/* Decode priority preference for display */
-		priority = tech_preference2str(cur->preference);
-
-		ast_cli(a->fd, FORMAT, cur->name, type, priority, AST_CLI_YESNO(cur->suspended));
+		ast_cli(a->fd, FORMAT_ROW, cur->name, type, cur->preference,
+			AST_CLI_YESNO(cur->suspended));
 	}
 	AST_RWLIST_UNLOCK(&bridge_technologies);
 	return CLI_SUCCESS;

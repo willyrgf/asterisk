@@ -141,8 +141,8 @@ struct ast_bridge *ast_bridge_basic_new(void)
 
 	bridge = ast_bridge_alloc(sizeof(struct ast_bridge), &ast_bridge_basic_v_table);
 	bridge = ast_bridge_base_init(bridge,
-		AST_BRIDGE_CAPABILITY_EARLY | AST_BRIDGE_CAPABILITY_NATIVE
-			| AST_BRIDGE_CAPABILITY_1TO1MIX | AST_BRIDGE_CAPABILITY_MULTIMIX,
+		AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX
+			| AST_BRIDGE_CAPABILITY_MULTIMIX,
 		AST_BRIDGE_FLAG_DISSOLVE_HANGUP | AST_BRIDGE_FLAG_DISSOLVE_EMPTY
 			| AST_BRIDGE_FLAG_SMART);
 	bridge = ast_bridge_register(bridge);

@@ -28,14 +28,17 @@
 extern "C" {
 #endif
 
-/*! \brief Preference for choosing the bridge technology */
+/*!
+ * \brief Base preference values for choosing a bridge technology.
+ *
+ * \note Higher is more preference.
+ */
 enum ast_bridge_preference {
-	/*! Bridge technology should have high precedence over other bridge technologies */
-	AST_BRIDGE_PREFERENCE_HIGH = 0,
-	/*! Bridge technology is decent, not the best but should still be considered over low */
-	AST_BRIDGE_PREFERENCE_MEDIUM,
-	/*! Bridge technology is low, it should not be considered unless it is absolutely needed */
-	AST_BRIDGE_PREFERENCE_LOW,
+	AST_BRIDGE_PREFERENCE_BASE_HOLDING  = 50,
+	AST_BRIDGE_PREFERENCE_BASE_EARLY    = 100,
+	AST_BRIDGE_PREFERENCE_BASE_NATIVE   = 90,
+	AST_BRIDGE_PREFERENCE_BASE_1TO1MIX  = 50,
+	AST_BRIDGE_PREFERENCE_BASE_MULTIMIX = 10,
 };
 
 /*!

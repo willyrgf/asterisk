@@ -1091,7 +1091,7 @@ static void softmix_bridge_destroy(struct ast_bridge *bridge)
 static struct ast_bridge_technology softmix_bridge = {
 	.name = "softmix",
 	.capabilities = AST_BRIDGE_CAPABILITY_MULTIMIX,
-	.preference = AST_BRIDGE_PREFERENCE_LOW,
+	.preference = AST_BRIDGE_PREFERENCE_BASE_MULTIMIX,
 	.create = softmix_bridge_create,
 	.destroy = softmix_bridge_destroy,
 	.join = softmix_bridge_join,

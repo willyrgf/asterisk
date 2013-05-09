@@ -76,15 +76,15 @@ extern "C" {
 
 /*! \brief Capabilities for a bridge technology */
 enum ast_bridge_capability {
-	/*! Bridge technology can service calls on hold */
+	/*! Bridge technology can service calls on hold. */
 	AST_BRIDGE_CAPABILITY_HOLDING = (1 << 0),
-	/*! Bridge waits for channel to answer.  Passes early media. */
+	/*! Bridge waits for channel to answer.  Passes early media. (XXX Not supported yet) */
 	AST_BRIDGE_CAPABILITY_EARLY = (1 << 1),
-	/*! Bridge should natively bridge two channels if possible */
+	/*! Bridge is capable of natively bridging two channels. (Smart bridge only) */
 	AST_BRIDGE_CAPABILITY_NATIVE = (1 << 2),
-	/*! Bridge is only capable of mixing 2 channels */
+	/*! Bridge is capable of mixing at most two channels. (Smart bridgeable) */
 	AST_BRIDGE_CAPABILITY_1TO1MIX = (1 << 3),
-	/*! Bridge is capable of mixing 2 or more channels */
+	/*! Bridge is capable of mixing an arbitrary number of channels. (Smart bridgeable) */
 	AST_BRIDGE_CAPABILITY_MULTIMIX = (1 << 4),
 };
 
@@ -404,6 +404,8 @@ struct ast_bridge {
 	struct ast_bridge_video_mode video_mode;
 	/*! Bridge flags to tweak behavior */
 	struct ast_flags feature_flags;
+	/*! Allowed bridge technology capabilities when AST_BRIDGE_FLAG_SMART enabled. */
+	uint32_t allowed_capabilities;
 	/*! Number of channels participating in the bridge */
 	unsigned int num_channels;
 	/*! Number of active channels in the bridge. */
@@ -570,25 +572,6 @@ static inline void _ast_bridge_unlock(struct ast_bridge *bridge, const char *fil
 			sched_yield();							\
 		}											\
 	} while (0)
-
-/*!
- * \brief See if it is possible to create a bridge
- *
- * \param capabilities The capabilities that the bridge will use
- *
- * \retval 1 if possible
- * \retval 0 if not possible
- *
- * Example usage:
- *
- * \code
- * int possible = ast_bridge_check(AST_BRIDGE_CAPABILITY_1TO1MIX);
- * \endcode
- *
- * This sees if it is possible to create a bridge capable of bridging two channels
- * together.
- */
-int ast_bridge_check(uint32_t capabilities);
 
 /*!
  * \brief Destroy a bridge

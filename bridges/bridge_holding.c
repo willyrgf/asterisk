@@ -283,7 +283,7 @@ static int holding_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 static struct ast_bridge_technology holding_bridge = {
 	.name = "holding_bridge",
 	.capabilities = AST_BRIDGE_CAPABILITY_HOLDING,
-	.preference = AST_BRIDGE_PREFERENCE_MEDIUM,
+	.preference = AST_BRIDGE_PREFERENCE_BASE_HOLDING,
 	.write = holding_bridge_write,
 	.join = holding_bridge_join,
 	.leave = holding_bridge_leave,

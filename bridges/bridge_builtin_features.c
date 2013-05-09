@@ -308,8 +308,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	}
 
 	/* Create a bridge to use to talk to the person we are calling */
-	attended_bridge = ast_bridge_base_new(
-		AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX,
+	attended_bridge = ast_bridge_base_new(AST_BRIDGE_CAPABILITY_1TO1MIX,
 		AST_BRIDGE_FLAG_DISSOLVE_HANGUP);
 	if (!attended_bridge) {
 		ast_bridge_features_cleanup(&caller_features);
