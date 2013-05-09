@@ -554,11 +554,12 @@ int ast_unreal_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 		return 0;
 	}
 
-	/* Do not let a masquerade cause a Local channel to be bridged to itself! */
+	/* Do not let a masquerade cause an unreal channel to be bridged to itself! */
 	bridge_owner = ast_channel_internal_bridge(p->owner);
 	bridge_chan = ast_channel_internal_bridge(p->chan);
 	if (bridge_owner && bridge_owner == bridge_chan) {
-		ast_log(LOG_WARNING, "You can not bridge a Local channel to itself!\n");
+		ast_log(LOG_WARNING, "You can not bridge an unreal channel (%s) to itself!\n",
+			ast_channel_name(newchan));
 		ao2_unlock(p);
 		ast_queue_hangup(newchan);
 		return -1;
