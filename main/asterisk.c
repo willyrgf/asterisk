@@ -4345,7 +4345,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (ast_unreal_init()) {
+	if (ast_local_init()) {
 		printf("%s", term_quit());
 		exit(1);
 	}
