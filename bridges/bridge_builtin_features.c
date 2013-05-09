@@ -102,11 +102,6 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
 	int cause;
 
 	/* Fill the variable with the extension and context we want to call */
-/* BUGBUG if local channel optimization is using masquerades then this needs /n so the destination keeps its DTMF features.
- * Or use /n to keep the peer channel stable until after the atxfer completes and remove the /n from the channel.
- *
- * Local channel optimization currently is disabled because I don't set the chan->bridge pointers.
- */
 	snprintf(destination, sizeof(destination), "%s@%s", exten, context);
 
 	/* Now we request a local channel to prepare to call the destination */
