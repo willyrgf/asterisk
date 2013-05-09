@@ -219,6 +219,8 @@ enum ast_bridge_action_type {
 	AST_BRIDGE_ACTION_TALKING_STOP,
 	/*! Bridge channel is to play the indicated sound file. */
 	AST_BRIDGE_ACTION_PLAY_FILE,
+	/*! Bridge channel is to get parked. */
+	AST_BRIDGE_ACTION_PARK,
 	/*! Bridge channel is to run the indicated application. */
 	AST_BRIDGE_ACTION_RUN_APP,
 
@@ -1127,6 +1129,22 @@ typedef void (*ast_bridge_custom_play_fn)(struct ast_bridge_channel *bridge_chan
  * \return Nothing
  */
 void ast_bridge_channel_playfile(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_play_fn custom_play, const char *playfile, const char *moh_class);
+
+/*!
+ * \brief Have a bridge channel park a channel in the bridge
+ * \since 12.0.0
+ *
+ * \param bridge_channel Bridge channel performing the parking
+ * \param parkee_uuid Unique id of the channel we want to park
+ * \param parker_uuid Unique id of the channel parking the call
+ * \param app_data string indicating data used for park application (NULL allowed)
+ *
+ * \note This is intended to be called by bridge hooks.
+ *
+ * \return Nothing
+ */
+void ast_bridge_channel_write_park(struct ast_bridge_channel *bridge_channel, const char *parkee_uuid,
+	const char *parker_uuid, const char *app_data);
 
 /*!
  * \brief Write a bridge action play file frame into the bridge.

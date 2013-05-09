@@ -48,6 +48,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/pbx.h"
+#include "asterisk/parking.h"
 
 /*!
  * \brief Helper function that presents dialtone and grabs extension
@@ -165,6 +166,7 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	struct ast_channel *chan = NULL;
 	struct ast_bridge_features_blind_transfer *blind_transfer = hook_pvt;
 	const char *context;
+	struct ast_exten *park_exten;
 
 /* BUGBUG the peer needs to be put on hold for the transfer. */
 	ast_channel_lock(bridge_channel->chan);
@@ -174,6 +176,16 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 
 	/* Grab the extension to transfer to */
 	if (grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
+		return 0;
+	}
+
+	/* Parking blind transfer override - phase this out for something more general purpose in the future. */
+	park_exten = ast_get_parking_exten(exten, bridge_channel->chan, context);
+	if (park_exten) {
+		/* We are transfering the transferee to a parking lot. */
+		if (ast_park_blind_xfer(bridge, bridge_channel, park_exten)) {
+			ast_log(LOG_ERROR, "%s attempted to transfer to park application and failed.\n", ast_channel_name(bridge_channel->chan));
+		};
 		return 0;
 	}
 

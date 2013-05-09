@@ -58,6 +58,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/features.h"
 #include "asterisk/cli.h"
+#include "asterisk/parking.h"
 
 /*! All bridges container. */
 static struct ao2_container *bridges;
@@ -523,6 +524,8 @@ static void bridge_channel_pull(struct ast_bridge_channel *bridge_channel)
 	AST_LIST_REMOVE(&bridge->channels, bridge_channel, entry);
 	bridge->v_table->pull(bridge, bridge_channel);
 
+	ast_bridge_channel_clear_roles(bridge_channel);
+
 	bridge_dissolve_check(bridge_channel);
 
 	bridge->reconfigured = 1;
@@ -564,7 +567,8 @@ static int bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 	if (bridge->dissolved
 		|| bridge_channel->state != AST_BRIDGE_CHANNEL_STATE_WAIT
 		|| (swap && swap->state != AST_BRIDGE_CHANNEL_STATE_WAIT)
-		|| bridge->v_table->push(bridge, bridge_channel, swap)) {
+		|| bridge->v_table->push(bridge, bridge_channel, swap)
+		|| ast_bridge_channel_establish_roles(bridge_channel)) {
 		ast_debug(1, "Bridge %s: pushing %p(%s) into bridge failed\n",
 			bridge->uniqueid, bridge_channel, ast_channel_name(bridge_channel->chan));
 		return -1;
@@ -901,6 +905,50 @@ void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel
 {
 	payload_helper_playfile(ast_bridge_channel_queue_action_data,
 		bridge_channel, custom_play, playfile, moh_class);
+}
+
+struct bridge_park {
+	int parker_uuid_offset;
+	int app_data_offset;
+	/* buffer used for holding those strings */
+	char parkee_uuid[0];
+};
+
+static void bridge_channel_park(struct ast_bridge_channel *bridge_channel, struct bridge_park *payload)
+{
+	ast_bridge_channel_park(bridge_channel, payload->parkee_uuid,
+		&payload->parkee_uuid[payload->parker_uuid_offset],
+		payload->app_data_offset ? &payload->parkee_uuid[payload->app_data_offset] : NULL);
+}
+
+static void payload_helper_park(ast_bridge_channel_post_action_data post_it,
+	struct ast_bridge_channel *bridge_channel,
+	const char *parkee_uuid,
+	const char *parker_uuid,
+	const char *app_data)
+{
+	struct bridge_park *payload;
+	size_t len_parkee_uuid = strlen(parkee_uuid) + 1;
+	size_t len_parker_uuid = strlen(parker_uuid) + 1;
+	size_t len_app_data = !app_data ? 0 : strlen(app_data) + 1;
+	size_t len_payload = sizeof(*payload) + len_parker_uuid + len_parkee_uuid + len_app_data;
+
+	payload = alloca(len_payload);
+	payload->app_data_offset = len_app_data ? len_parkee_uuid + len_parker_uuid : 0;
+	payload->parker_uuid_offset = len_parkee_uuid;
+	strcpy(payload->parkee_uuid, parkee_uuid);
+	strcpy(&payload->parkee_uuid[payload->parker_uuid_offset], parker_uuid);
+	if (app_data) {
+		strcpy(&payload->parkee_uuid[payload->app_data_offset], app_data);
+	}
+
+	post_it(bridge_channel, AST_BRIDGE_ACTION_PARK, payload, len_payload);
+}
+
+void ast_bridge_channel_write_park(struct ast_bridge_channel *bridge_channel, const char *parkee_uuid, const char *parker_uuid, const char *app_data)
+{
+	payload_helper_park(ast_bridge_channel_write_action_data,
+		bridge_channel, parkee_uuid, parker_uuid, app_data);
 }
 
 /*!
@@ -1989,6 +2037,13 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
 		break;
+	case AST_BRIDGE_ACTION_PARK:
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_park(bridge_channel, action->data.ptr);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
+		break;
 	case AST_BRIDGE_ACTION_RUN_APP:
 		bridge_channel_suspend(bridge_channel);
 		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
@@ -2436,8 +2491,6 @@ static void bridge_channel_destroy(void *obj)
 	struct ast_bridge_channel *bridge_channel = obj;
 	struct ast_frame *fr;
 
-	ast_bridge_channel_clear_roles(bridge_channel);
-
 	if (bridge_channel->callid) {
 		bridge_channel->callid = ast_callid_unref(bridge_channel->callid);
 	}
@@ -2834,16 +2887,6 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
 
-	if (ast_bridge_channel_establish_roles(bridge_channel)) {
-		/* A bridge channel should not be allowed to join if its roles couldn't be copied properly. */
-		state = AST_BRIDGE_CHANNEL_STATE_HANGUP;
-		ast_channel_lock(chan);
-		ast_channel_internal_bridge_channel_set(chan, NULL);
-		ast_channel_unlock(chan);
-		ao2_ref(bridge_channel, -1);
-		goto join_exit;
-	}
-
 	bridge_channel_join(bridge_channel);
 	state = bridge_channel->state;
 
@@ -2948,11 +2991,6 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 	bridge_channel->depart_wait = independent ? 0 : 1;
 	bridge_channel->callid = ast_read_threadstorage_callid();
 
-	if (ast_bridge_channel_establish_roles(bridge_channel)) {
-		res = -1;
-		goto bridge_impart_cleanup;
-	}
-
 	/* Actually create the thread that will handle the channel */
 	if (independent) {
 		/* Independently imparted channels cannot have a PBX. */
@@ -2968,7 +3006,6 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
 			bridge_channel_depart_thread, bridge_channel);
 	}
 
-bridge_impart_cleanup:
 	if (res) {
 		/* cleanup */
 		ast_channel_lock(chan);

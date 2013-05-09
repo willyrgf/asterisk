@@ -41,11 +41,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/bridging.h"
 #include "asterisk/bridging_roles.h"
+#include "asterisk/stringfields.h"
 
 struct bridge_role_option {
 	AST_LIST_ENTRY(bridge_role_option) list;
-	char option[AST_ROLE_LEN];
-	char value[1];
+	AST_DECLARE_STRING_FIELDS(
+		AST_STRING_FIELD(option);
+		AST_STRING_FIELD(value);
+	);
 };
 
 struct bridge_role {
@@ -71,6 +74,7 @@ static void bridge_role_destroy(struct bridge_role *role)
 {
 	struct bridge_role_option *role_option;
 	while ((role_option = AST_LIST_REMOVE_HEAD(&role->options, list))) {
+		ast_string_field_free_memory(role_option);
 		ast_free(role_option);
 	}
 	ast_free(role);
@@ -290,13 +294,18 @@ static int setup_bridge_role_option(struct bridge_role *role, const char *option
 		value = "";
 	}
 
-	role_option = ast_calloc(1, sizeof(*role_option) + strlen(value));
+	role_option = ast_calloc(1, sizeof(*role_option));
 	if (!role_option) {
 		return -1;
 	}
 
-	ast_copy_string(role_option->option, option, sizeof(role_option->option));
-	strcpy(role_option->value, value);
+	if (ast_string_field_init(role_option, 32)) {
+		ast_free(role_option);
+		return -1;
+	}
+
+	ast_string_field_set(role_option, option, option);
+	ast_string_field_set(role_option, value, value);
 
 	AST_LIST_INSERT_TAIL(&role->options, role_option, list);
 
@@ -358,8 +367,8 @@ int ast_channel_set_bridge_role_option(struct ast_channel *channel, const char *
 	role_option = get_role_option(role, option);
 
 	if (role_option) {
-		/* We need to clear the option out and recreate it. There is no way to do this yet. Implement it later. XXX */
-		return -1;
+		ast_string_field_set(role_option, value, value);
+		return 0;
 	}
 
 	setup_bridge_role_option(role, option, value);
