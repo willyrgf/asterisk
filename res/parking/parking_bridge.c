@@ -406,6 +406,7 @@ struct ast_bridge *bridge_parking_new(struct parking_lot *bridge_lot)
 	void *bridge;
 
 	bridge = ast_bridge_alloc(sizeof(struct ast_bridge_parking), &ast_bridge_parking_v_table);
+/* BUGBUG Need to fix swapped channels not inheriting parking timeout so can remove AST_BRIDGE_FLAG_SWAP_INHIBIT_TO flag. */
 	bridge = ast_bridge_base_init(bridge, AST_BRIDGE_CAPABILITY_HOLDING,
 		AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM
 		| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_SWAP_INHIBIT_TO);
