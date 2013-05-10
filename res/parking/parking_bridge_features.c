@@ -453,6 +453,12 @@ void parking_set_duration(struct ast_bridge_features *features, struct parked_us
 		return;
 	}
 
+	/* If the time limit has already been passed, set a really low time limit so we can kick them out immediately. */
+	time_limit = ast_remaining_ms(user->start, time_limit);
+	if (time_limit <= 0) {
+		time_limit = 1;
+	}
+
 	/* The interval hook is going to need a reference to the parked_user */
 	ao2_ref(user, +1);
 

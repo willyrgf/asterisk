@@ -708,7 +708,6 @@ static struct ast_channel_tech unistim_tech = {
 	.send_digit_begin = unistim_senddigit_begin,
 	.send_digit_end = unistim_senddigit_end,
 	.send_text = unistim_sendtext,
-	.bridge = ast_rtp_instance_bridge,
 };
 
 static void send_start_rtp(struct unistim_subchannel *);

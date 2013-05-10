@@ -1542,7 +1542,6 @@ struct ast_channel_tech sip_tech = {
 	.fixup = sip_fixup,			/* called with chan locked */
 	.send_digit_begin = sip_senddigit_begin,	/* called with chan unlocked */
 	.send_digit_end = sip_senddigit_end,
-	.bridge = ast_rtp_instance_bridge,			/* XXX chan unlocked ? */
 	.early_bridge = ast_rtp_instance_early_bridge,
 	.send_text = sip_sendtext,		/* called with chan locked */
 	.func_channel_read = sip_acf_channel_read,
@@ -32608,7 +32607,7 @@ static int sip_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *i
 
 	/* Disable early RTP bridge  */
 	if ((instance || vinstance || tinstance) &&
-		!ast_bridged_channel(chan) &&
+		!ast_channel_is_bridged(chan) &&
 		!sip_cfg.directrtpsetup) {
 		sip_pvt_unlock(p);
 		ast_channel_unlock(chan);

@@ -480,7 +480,6 @@ static struct ast_channel_tech mgcp_tech = {
 	.fixup = mgcp_fixup,
 	.send_digit_begin = mgcp_senddigit_begin,
 	.send_digit_end = mgcp_senddigit_end,
-	.bridge = ast_rtp_instance_bridge,
 	.func_channel_read = acf_channel_read,
 };
 

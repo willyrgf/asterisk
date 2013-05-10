@@ -2274,6 +2274,13 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 		chan = ast_waitfor_nandfds(&bridge_channel->chan, 1,
 			&bridge_channel->alert_pipe[0], 1, NULL, &outfd, &ms);
 		bridge_channel->waiting = 0;
+		if (ast_channel_softhangup_internal_flag(bridge_channel->chan) & AST_SOFTHANGUP_UNBRIDGE) {
+			ast_channel_clear_softhangup(bridge_channel->chan, AST_SOFTHANGUP_UNBRIDGE);
+			ast_bridge_channel_lock_bridge(bridge_channel);
+			bridge_channel->bridge->reconfigured = 1;
+			bridge_reconfigured(bridge_channel->bridge);
+			ast_bridge_unlock(bridge_channel->bridge);
+		}
 		ast_bridge_channel_lock(bridge_channel);
 		bridge_channel->activity = AST_BRIDGE_CHANNEL_THREAD_FRAME;
 		ast_bridge_channel_unlock(bridge_channel);

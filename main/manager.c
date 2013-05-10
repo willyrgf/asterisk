@@ -971,15 +971,17 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<synopsis>
 			Blind transfer channel(s) to the given destination
 		</synopsis>
+		<syntax>
+			<parameter name="Channel" required="true">
+			</parameter>
+			<parameter name="Context">
+			</parameter>
+			<parameter name="Exten">
+			</parameter>
+		</syntax>
 		<description>
 			<para>Redirect all channels currently bridged to the specified channel to the specified destination.</para>
 		</description>
-		<parameter name="Channel" required="true">
-		</parameter>
-		<parameter name="Context">
-		</parameter>
-		<parameter name="Exten">
-		</parameter>
 		<see-also>
 			<ref type="manager">Redirect</ref>
 		</see-also>

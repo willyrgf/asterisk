@@ -200,7 +200,6 @@ static int bridge_parking_push(struct ast_bridge_parking *self, struct ast_bridg
 
 	ast_bridge_base_v_table.push(&self->base, bridge_channel, swap);
 
-	/* Swaps for parking bridges should only occur as a result of local channel optimization */
 	if (swap) {
 		ao2_lock(swap);
 		pu = swap->bridge_pvt;
@@ -217,9 +216,11 @@ static int bridge_parking_push(struct ast_bridge_parking *self, struct ast_bridg
 		bridge_channel->bridge_pvt = pu;
 		swap->bridge_pvt = NULL;
 
-		/* XXX Add a parked call swap message type to relay information about parked channel swaps */
+		/* TODO Add a parked call swap message type to relay information about parked channel swaps */
 
 		ao2_unlock(swap);
+
+		parking_set_duration(bridge_channel->features, pu);
 
 		return 0;
 	}
@@ -406,10 +407,9 @@ struct ast_bridge *bridge_parking_new(struct parking_lot *bridge_lot)
 	void *bridge;
 
 	bridge = ast_bridge_alloc(sizeof(struct ast_bridge_parking), &ast_bridge_parking_v_table);
-/* BUGBUG Need to fix swapped channels not inheriting parking timeout so can remove AST_BRIDGE_FLAG_SWAP_INHIBIT_TO flag. */
 	bridge = ast_bridge_base_init(bridge, AST_BRIDGE_CAPABILITY_HOLDING,
 		AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM
-		| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_SWAP_INHIBIT_TO);
+		| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM);
 	bridge = ast_bridge_parking_init(bridge, bridge_lot);
 	bridge = ast_bridge_register(bridge);
 	return bridge;
