@@ -84,21 +84,45 @@ void ast_unreal_lock_all(struct ast_unreal_pvt *p, struct ast_channel **outchan,
  * \param p Private channel struct (reffed)
  * \param ast Channel being hung up.  (locked)
  *
+ * \note Common hangup code for unreal channels.  Derived
+ * channels will need to deal with any additional resources.
+ *
  * \retval 0 on success.
  * \retval -1 on error.
  */
 int ast_unreal_hangup(struct ast_unreal_pvt *p, struct ast_channel *ast);
 
+/*! Unreal channel framework struct ast_channel_tech.send_digit_begin callback */
 int ast_unreal_digit_begin(struct ast_channel *ast, char digit);
+
+/*! Unreal channel framework struct ast_channel_tech.send_digit_end callback */
 int ast_unreal_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
+
+/*! Unreal channel framework struct ast_channel_tech.answer callback */
 int ast_unreal_answer(struct ast_channel *ast);
+
+/*! Unreal channel framework struct ast_channel_tech.read and struct ast_channel_tech.exception callback */
 struct ast_frame *ast_unreal_read(struct ast_channel *ast);
+
+/*! Unreal channel framework struct ast_channel_tech.write callback */
 int ast_unreal_write(struct ast_channel *ast, struct ast_frame *f);
+
+/*! Unreal channel framework struct ast_channel_tech.indicate callback */
 int ast_unreal_indicate(struct ast_channel *ast, int condition, const void *data, size_t datalen);
+
+/*! Unreal channel framework struct ast_channel_tech.fixup callback */
 int ast_unreal_fixup(struct ast_channel *oldchan, struct ast_channel *newchan);
+
+/*! Unreal channel framework struct ast_channel_tech.send_html callback */
 int ast_unreal_sendhtml(struct ast_channel *ast, int subclass, const char *data, int datalen);
+
+/*! Unreal channel framework struct ast_channel_tech.send_text callback */
 int ast_unreal_sendtext(struct ast_channel *ast, const char *text);
+
+/*! Unreal channel framework struct ast_channel_tech.queryoption callback */
 int ast_unreal_queryoption(struct ast_channel *ast, int option, void *data, int *datalen);
+
+/*! Unreal channel framework struct ast_channel_tech.setoption callback */
 int ast_unreal_setoption(struct ast_channel *chan, int option, void *data, int datalen);
 
 /*!

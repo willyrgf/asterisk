@@ -48,9 +48,6 @@ struct ast_bridge_features;
  *
  * \note On entry, ast must be locked.
  *
- * \note Intended to be called after ast_request() and before
- * ast_call() on a local channel.
- *
  * \retval peer reffed on success.
  * \retval NULL if no peer or error.
  */
@@ -69,6 +66,9 @@ struct ast_channel *ast_local_get_peer(struct ast_channel *ast);
  * ast_bridge_features_new().  You must not dereference features
  * after calling even if the call fails.
  *
+ * \note Intended to be called after ast_request() and before
+ * ast_call() on a local channel.
+ *
  * \retval 0 on success.
  * \retval -1 on error.
  */
@@ -80,6 +80,9 @@ int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, s
  *
  * \param ast Either channel of a local channel pair.
  * \param masq Channel to masquerade into.
+ *
+ * \note Intended to be called after ast_request() and before
+ * ast_call() on a local channel.
  *
  * \retval 0 on success.
  * \retval -1 on error.
