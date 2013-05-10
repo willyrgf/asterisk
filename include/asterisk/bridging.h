@@ -223,6 +223,8 @@ enum ast_bridge_action_type {
 	AST_BRIDGE_ACTION_PARK,
 	/*! Bridge channel is to run the indicated application. */
 	AST_BRIDGE_ACTION_RUN_APP,
+	/*! Bridge channel is to execute a blind transfer. */
+	AST_BRIDGE_ACTION_BLIND_TRANSFER,
 
 	/*
 	 * Bridge actions put after this comment must never be put onto
@@ -1261,6 +1263,68 @@ int ast_bridge_is_video_src(struct ast_bridge *bridge, struct ast_channel *chan)
  */
 void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *chan);
 
+enum ast_transfer_result {
+    /*! The transfer completed successfully */
+    AST_BRIDGE_TRANSFER_SUCCESS,
+    /*! A bridge involved does not permit transferring */
+    AST_BRIDGE_TRANSFER_NOT_PERMITTED,
+    /*! The current bridge setup makes transferring an invalid operation */
+    AST_BRIDGE_TRANSFER_INVALID,
+    /*! The transfer operation failed for a miscellaneous reason */
+    AST_BRIDGE_TRANSFER_FAIL,
+};
+
+typedef void (*transfer_channel_cb)(struct ast_channel *chan, void *user_data);
+
+/*!
+ * \brief Blind transfer target to the extension and context provided
+ *
+ * The channel given is bridged to one or multiple channels. Depending on
+ * the bridge and the number of participants, the entire bridge could be
+ * transferred to the given destination, or a single channel may be redirected.
+ *
+ * Callers may also provide a callback to be called on the channel that will
+ * be running dialplan. The user data passed into ast_bridge_transfer_blind
+ * will be given as the argument to the callback to be interpreted as desired.
+ * This callback is guaranteed to be called in the same thread as
+ * ast_bridge_transfer_blind() and before ast_bridge_transfer_blind() returns.
+ *
+ * \note Do not call this function with the transferer or its tech_pvt locked.
+ *
+ * \param transferer The channel performing the blind transfer
+ * \param exten The dialplan extension to send the call to
+ * \param context The dialplan context to send the call to
+ * \param new_channel_cb A callback to be called on the channel that will
+ *        be executing dialplan
+ * \param user_data Argument for new_channel_cb
+ * \return The success or failure result of the blind transfer
+ */
+enum ast_transfer_result ast_bridge_transfer_blind(struct ast_channel *transferer,
+		const char *exten, const char *context,
+		transfer_channel_cb new_channel_cb, void *user_data);
+
+/*!
+ * \brief Attended transfer
+ *
+ * The two channels are both transferer channels. The first is the channel
+ * that is bridged to the transferee (or if unbridged, the 'first' call of
+ * the transfer). The second is the channel that is bridged to the transfer
+ * target (or if unbridged, the 'second' call of the transfer).
+ *
+ * Like with a blind transfer, a frame hook can be provided to monitor the
+ * resulting call after the transfer completes. If the transfer fails, the
+ * hook will not be attached to any call.
+ *
+ * \note Do not call this function with either of the channels or their
+ * tech_pvts locked.
+ *
+ * \param to_transferee Transferer channel on initial call (presumably bridged to transferee)
+ * \param to_transfer_target Transferer channel on consultation call (presumably bridged to transfer target)
+ * \param hook A frame hook to attach to the resultant call
+ * \return The success or failure of the attended transfer
+ */
+enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_transferee,
+		struct ast_channel *to_transfer_target, struct ast_framehook *hook);
 /*!
  * \brief Set channel to goto specific location after the bridge.
  * \since 12.0.0

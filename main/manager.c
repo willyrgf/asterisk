@@ -94,6 +94,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stasis.h"
 #include "asterisk/test.h"
 #include "asterisk/json.h"
+#include "asterisk/bridging.h"
 
 /*** DOCUMENTATION
 	<manager name="Ping" language="en_US">
@@ -965,6 +966,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>The filters displayed are for the current session.  Only those filters defined in
                         manager.conf will be present upon starting a new session.</para>
 		</description>
+	</manager>
+	<manager name="BlindTransfer" language="en_US">
+		<synopsis>
+			Blind transfer channel(s) to the given destination
+		</synopsis>
+		<description>
+			<para>Redirect all channels currently bridged to the specified channel to the specified destination.</para>
+		</description>
+		<parameter name="Channel" required="true">
+		</parameter>
+		<parameter name="Context">
+		</parameter>
+		<parameter name="Exten">
+		</parameter>
+		<see-also>
+			<ref type="manager">Redirect</ref>
+		</see-also>
 	</manager>
  ***/
 
@@ -3871,6 +3889,51 @@ static int action_redirect(struct mansession *s, const struct message *m)
 
 	chan2 = ast_channel_unref(chan2);
 	chan = ast_channel_unref(chan);
+	return 0;
+}
+
+static int action_blind_transfer(struct mansession *s, const struct message *m)
+{
+	const char *name = astman_get_header(m, "Channel");
+	const char *exten = astman_get_header(m, "Exten");
+	const char *context = astman_get_header(m, "Context");
+	RAII_VAR(struct ast_channel *, chan, NULL, ao2_cleanup);
+
+	if (ast_strlen_zero(name)) {
+		astman_send_error(s, m, "No channel specified");
+		return 0;
+	}
+
+	if (ast_strlen_zero(exten)) {
+		astman_send_error(s, m, "No extension specified");
+		return 0;
+	}
+
+	chan = ast_channel_get_by_name(name);
+	if (!chan) {
+		astman_send_error(s, m, "Channel specified does not exist");
+		return 0;
+	}
+
+	if (ast_strlen_zero(context)) {
+		context = ast_channel_context(chan);
+	}
+
+	switch (ast_bridge_transfer_blind(chan, exten, context, NULL, NULL)) {
+	case AST_BRIDGE_TRANSFER_NOT_PERMITTED:
+		astman_send_error(s, m, "Transfer not permitted");
+		break;
+	case AST_BRIDGE_TRANSFER_INVALID:
+		astman_send_error(s, m, "Transfer invalid");
+		break;
+	case AST_BRIDGE_TRANSFER_FAIL:
+		astman_send_error(s, m, "Transfer failed");
+		break;
+	case AST_BRIDGE_TRANSFER_SUCCESS:
+		astman_send_ack(s, m, "Transfer succeeded");
+		break;
+	}
+
 	return 0;
 }
 
@@ -7543,6 +7606,7 @@ static int __init_manager(int reload, int by_external_config)
 		ast_manager_register_xml_core("ModuleCheck", EVENT_FLAG_SYSTEM, manager_modulecheck);
 		ast_manager_register_xml_core("AOCMessage", EVENT_FLAG_AOC, action_aocmessage);
 		ast_manager_register_xml_core("Filter", EVENT_FLAG_SYSTEM, action_filter);
+		ast_manager_register_xml_core("BlindTransfer", EVENT_FLAG_CALL, action_blind_transfer);
 
 #ifdef TEST_FRAMEWORK
 		stasis_subscribe(ast_test_suite_topic(), test_suite_event_cb, NULL);

@@ -4183,4 +4183,22 @@ int ast_channel_is_bridged(const struct ast_channel *chan);
  */
 struct ast_channel *ast_channel_bridge_peer(struct ast_channel *chan);
 
+/*!
+ * \brief Get a reference to the channel's bridge pointer.
+ * \since 12.0.0
+ *
+ * \param chan The channel whose bridge channel is desired
+ *
+ * \note This increases the reference count of the bridge_channel.
+ * Use ao2_ref() or ao2_cleanup() to decrement the refcount when
+ * you are finished with it.
+ *
+ * \note It is expected that the channel is locked prior to
+ * placing this call.
+ *
+ * \retval NULL The channel has no bridge_channel
+ * \retval non-NULL A reference to the bridge_channel
+ */
+struct ast_bridge_channel *ast_channel_get_bridge_channel(struct ast_channel *chan);
+
 #endif /* _ASTERISK_CHANNEL_H */

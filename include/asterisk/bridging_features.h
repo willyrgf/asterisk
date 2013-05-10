@@ -46,6 +46,10 @@ enum ast_bridge_feature_flags {
 	AST_BRIDGE_FLAG_SWAP_INHIBIT_TO = (1 << 6),
 	/*! Bridge channels can be moved to another bridge only by masquerade (ConfBridge) */
 	AST_BRIDGE_FLAG_MASQUERADE_ONLY = (1 << 7),
+	/*! Bridge does not allow transfers of channels out */
+	AST_BRIDGE_FLAG_TRANSFER_PROHIBITED = (1 << 6),
+	/*! Bridge transfers require transfer of entire bridge rather than individual channels */
+	AST_BRIDGE_FLAG_TRANSFER_BRIDGE_ONLY = (1 << 7),
 };
 
 /*! \brief Flags used for per bridge channel features */

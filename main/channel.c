@@ -11292,3 +11292,14 @@ struct ast_channel *ast_channel_bridge_peer(struct ast_channel *chan)
 	ao2_ref(bridge, -1);
 	return peer;
 }
+
+struct ast_bridge_channel *ast_channel_get_bridge_channel(struct ast_channel *chan)
+{
+	struct ast_bridge_channel *bridge_channel;
+
+	bridge_channel = ast_channel_internal_bridge_channel(chan);
+	if (bridge_channel) {
+		ao2_ref(bridge_channel, +1);
+	}
+	return bridge_channel;
+}

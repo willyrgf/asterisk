@@ -9393,10 +9393,13 @@ int ast_async_goto(struct ast_channel *chan, const char *context, const char *ex
 		struct ast_format writeformat;
 	} tmpvars = { 0, };
 
-/* BUGBUG need to add bridge check code to also do an ast_explicit_goto() as a blind transfer. */
 	ast_channel_lock(chan);
-	if (ast_channel_pbx(chan)) { /* This channel is currently in the PBX */
-		ast_explicit_goto(chan, context, exten, priority + 1);
+	/* Channels in a bridge or running a PBX can be sent directly to the specified destination */
+	if (ast_channel_is_bridged(chan) || ast_channel_pbx(chan)) {
+		if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_IN_AUTOLOOP)) {
+			priority += 1;
+		}
+		ast_explicit_goto(chan, context, exten, priority);
 		ast_softhangup_nolock(chan, AST_SOFTHANGUP_ASYNCGOTO);
 		ast_channel_unlock(chan);
 		return res;

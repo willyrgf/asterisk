@@ -1991,6 +1991,18 @@ static void bridge_channel_dtmf_stream(struct ast_bridge_channel *bridge_channel
 	ast_dtmf_stream(bridge_channel->chan, NULL, dtmf, 0, 0);
 }
 
+struct blind_transfer_data {
+	char exten[AST_MAX_EXTENSION];
+	char context[AST_MAX_CONTEXT];
+};
+
+static void bridge_channel_blind_transfer(struct ast_bridge_channel *bridge_channel,
+		struct blind_transfer_data *blind_data)
+{
+	ast_async_goto(bridge_channel->chan, blind_data->context, blind_data->exten, 1);
+	bridge_handle_hangup(bridge_channel);
+}
+
 /*!
  * \internal
  * \brief Handle bridge channel bridge action frame.
@@ -2050,6 +2062,9 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 		bridge_channel_run_app(bridge_channel, action->data.ptr);
 		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
+		break;
+	case AST_BRIDGE_ACTION_BLIND_TRANSFER:
+		bridge_channel_blind_transfer(bridge_channel, action->data.ptr);
 		break;
 	default:
 		break;
@@ -4770,6 +4785,302 @@ struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channe
 	ast_bridge_unlock(bridge);
 
 	return peer;
+}
+
+/*!
+ * \internal
+ * \brief Transfer an entire bridge to a specific destination.
+ *
+ * This creates a local channel to dial out and swaps the called local channel
+ * with the transferer channel. By doing so, all participants in the bridge are
+ * connected to the specified destination.
+ *
+ * While this means of transferring would work for both two-party and multi-party
+ * bridges, this method is only used for multi-party bridges since this method would
+ * be less efficient for two-party bridges.
+ *
+ * \param transferer The channel performing a transfer
+ * \param bridge The bridge where the transfer is being performed
+ * \param exten The destination extension for the blind transfer
+ * \param context The destination context for the blind transfer
+ * \param hook Framehook to attach to local channel
+ * \return The success or failure of the operation
+ */
+static enum ast_transfer_result blind_transfer_bridge(struct ast_channel *transferer,
+		struct ast_bridge *bridge, const char *exten, const char *context,
+		transfer_channel_cb new_channel_cb, void *user_data)
+{
+	struct ast_channel *local;
+	char chan_name[AST_MAX_EXTENSION + AST_MAX_CONTEXT + 2];
+	int cause;
+
+	snprintf(chan_name, sizeof(chan_name), "%s@%s", exten, context);
+	local = ast_request("Local", ast_channel_nativeformats(transferer), transferer,
+			chan_name, &cause);
+	if (!local) {
+		return AST_BRIDGE_TRANSFER_FAIL;
+	}
+
+	if (new_channel_cb) {
+		new_channel_cb(local, user_data);
+	}
+
+	if (ast_call(local, chan_name, 0)) {
+		ast_hangup(local);
+		return AST_BRIDGE_TRANSFER_FAIL;
+	}
+	if (ast_bridge_impart(bridge, local, transferer, NULL, 1)) {
+		ast_hangup(local);
+		return AST_BRIDGE_TRANSFER_FAIL;
+	}
+	return AST_BRIDGE_TRANSFER_SUCCESS;
+}
+
+/*!
+ * \internal
+ * \brief Get the transferee channel
+ *
+ * This is only applicable to cases where a transfer is occurring on a
+ * two-party bridge. The channels container passed in is expected to only
+ * contain two channels, the transferer and the transferee. The transferer
+ * channel is passed in as a parameter to ensure we don't return it as
+ * the transferee channel.
+ *
+ * \param channels A two-channel container containing the transferer and transferee
+ * \param transferer The party that is transfering the call
+ * \return The party that is being transferred
+ */
+static struct ast_channel *get_transferee(struct ao2_container *channels, struct ast_channel *transferer)
+{
+	struct ao2_iterator channel_iter;
+	struct ast_channel *transferee;
+
+	for (channel_iter = ao2_iterator_init(channels, 0);
+			(transferee = ao2_iterator_next(&channel_iter));
+			ao2_cleanup(transferee)) {
+		if (transferee != transferer) {
+			break;
+		}
+	}
+
+	ao2_iterator_destroy(&channel_iter);
+	return transferee;
+}
+
+/*!
+ * \internal
+ * \brief Queue a blind transfer action on a transferee bridge channel
+ *
+ * This is only relevant for when a blind transfer is performed on a two-party
+ * bridge. The transferee's bridge channel will have a blind transfer bridge
+ * action queued onto it, resulting in the party being redirected to a new
+ * destination
+ *
+ * \param transferee The channel to have the action queued on
+ * \param exten The destination extension for the transferee
+ * \param context The destination context for the transferee
+ * \param hook Frame hook to attach to transferee
+ * \retval 0 Successfully queued the action
+ * \retval non-zero Failed to queue the action
+ */
+static int bridge_channel_queue_blind_transfer(struct ast_channel *transferee,
+		const char *exten, const char *context,
+		transfer_channel_cb new_channel_cb, void *user_data)
+{
+	RAII_VAR(struct ast_bridge_channel *, transferee_bridge_channel, NULL, ao2_cleanup);
+	struct blind_transfer_data blind_data;
+
+	ast_channel_lock(transferee);
+	transferee_bridge_channel = ast_channel_get_bridge_channel(transferee);
+	ast_channel_unlock(transferee);
+
+	if (!transferee_bridge_channel) {
+		return -1;
+	}
+
+	if (new_channel_cb) {
+		new_channel_cb(transferee, user_data);
+	}
+
+	ast_copy_string(blind_data.exten, exten, sizeof(blind_data.exten));
+	ast_copy_string(blind_data.context, context, sizeof(blind_data.context));
+
+/* BUGBUG Why doesn't this function return success/failure? */
+	ast_bridge_channel_queue_action_data(transferee_bridge_channel,
+			AST_BRIDGE_ACTION_BLIND_TRANSFER, &blind_data, sizeof(blind_data));
+
+	return 0;
+}
+
+enum try_parking_result {
+	PARKING_SUCCESS,
+	PARKING_FAILURE,
+	PARKING_NOT_APPLICABLE,
+};
+
+static enum try_parking_result try_parking(struct ast_bridge *bridge, struct ast_channel *transferer,
+		const char *exten, const char *context)
+{
+	/* BUGBUG The following is all commented out because the functionality is not
+	 * present yet. The functions referenced here are available at team/jrose/bridge_projects.
+	 * Once the code there has been merged into team/group/bridge_construction,
+	 * this can be uncommented and tested
+	 */
+
+#if 0
+	RAII_VAR(struct ast_bridge_channel *, transferer_bridge_channel, NULL, ao2_cleanup);
+	struct ast_exten *parking_exten;
+
+	ast_channel_lock(transferer);
+	transfer_bridge_channel = ast_channel_get_bridge_channel(transferer);
+	ast_channel_unlock(transferer);
+
+	if (!transfer_bridge_channel) {
+		return PARKING_FAILURE;
+	}
+
+	parking_exten = ast_get_parking_exten(exten, NULL, context);
+	if (parking_exten) {
+		return ast_park_blind_xfer(bridge, transferer, parking_exten) == 0 ?
+			PARKING_SUCCESS : PARKING_FAILURE;
+	}
+#endif
+
+	return PARKING_NOT_APPLICABLE;
+}
+
+/*!
+ * \internal
+ * \brief Set the BLINDTRANSFER variable as appropriate on channels involved in the transfer
+ *
+ * The transferer channel will have its BLINDTRANSFER variable set the same as its BRIDGEPEER
+ * variable. This will account for all channels that it is bridged to. The other channels
+ * involved in the transfer will have their BLINDTRANSFER variable set to the transferer
+ * channel's name.
+ *
+ * \param transferer The channel performing the blind transfer
+ * \param channels The channels belonging to the bridge
+ */
+static void set_blind_transfer_variables(struct ast_channel *transferer, struct ao2_container *channels)
+{
+	struct ao2_iterator iter;
+	struct ast_channel *chan;
+	const char *transferer_name;
+	const char *transferer_bridgepeer;
+
+	ast_channel_lock(transferer);
+	transferer_name = ast_strdupa(ast_channel_name(transferer));
+	transferer_bridgepeer = ast_strdupa(S_OR(pbx_builtin_getvar_helper(transferer, "BRIDGEPEER"), ""));
+	ast_channel_unlock(transferer);
+
+	for (iter = ao2_iterator_init(channels, 0);
+			(chan = ao2_iterator_next(&iter));
+			ao2_cleanup(chan)) {
+		if (chan == transferer) {
+			pbx_builtin_setvar_helper(chan, "BLINDTRANSFER", transferer_bridgepeer);
+		} else {
+			pbx_builtin_setvar_helper(chan, "BLINDTRANSFER", transferer_name);
+		}
+	}
+
+	ao2_iterator_destroy(&iter);
+}
+
+enum ast_transfer_result ast_bridge_transfer_blind(struct ast_channel *transferer,
+		const char *exten, const char *context,
+		transfer_channel_cb new_channel_cb, void *user_data)
+{
+	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ao2_container *, channels, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_channel *, transferee, NULL, ao2_cleanup);
+	int do_bridge_transfer;
+	int transfer_prohibited;
+	enum try_parking_result parking_result;
+
+	ast_channel_lock(transferer);
+	bridge = ast_channel_get_bridge(transferer);
+	ast_channel_unlock(transferer);
+
+	if (!bridge) {
+		return AST_BRIDGE_TRANSFER_INVALID;
+	}
+
+	parking_result = try_parking(bridge, transferer, exten, context);
+	switch (parking_result) {
+	case PARKING_SUCCESS:
+		return AST_BRIDGE_TRANSFER_SUCCESS;
+	case PARKING_FAILURE:
+		return AST_BRIDGE_TRANSFER_FAIL;
+	case PARKING_NOT_APPLICABLE:
+	default:
+		break;
+	}
+
+	{
+		SCOPED_LOCK(lock, bridge, ast_bridge_lock, ast_bridge_unlock);
+		channels = ast_bridge_peers_nolock(bridge);
+		if (!channels) {
+			return AST_BRIDGE_TRANSFER_FAIL;
+		}
+		if (ao2_container_count(channels) <= 1) {
+			return AST_BRIDGE_TRANSFER_INVALID;
+		}
+		transfer_prohibited = ast_test_flag(&bridge->feature_flags,
+				AST_BRIDGE_FLAG_TRANSFER_PROHIBITED);
+		do_bridge_transfer = ast_test_flag(&bridge->feature_flags,
+				AST_BRIDGE_FLAG_TRANSFER_BRIDGE_ONLY) ||
+				ao2_container_count(channels) > 2;
+	}
+
+	if (transfer_prohibited) {
+		return AST_BRIDGE_TRANSFER_NOT_PERMITTED;
+	}
+
+	set_blind_transfer_variables(transferer, channels);
+
+	if (do_bridge_transfer) {
+		return blind_transfer_bridge(transferer, bridge, exten, context,
+				new_channel_cb, user_data);
+	}
+
+	/* Reaching this portion means that we're dealing with a two-party bridge */
+
+	transferee = get_transferee(channels, transferer);
+	if (!transferee) {
+		return AST_BRIDGE_TRANSFER_FAIL;
+	}
+
+	if (bridge_channel_queue_blind_transfer(transferee, exten, context,
+				new_channel_cb, user_data)) {
+		return AST_BRIDGE_TRANSFER_FAIL;
+	}
+
+	ast_bridge_remove(bridge, transferer);
+	return AST_BRIDGE_TRANSFER_SUCCESS;
+}
+
+enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_transferee,
+		struct ast_channel *to_transfer_target, struct ast_framehook *hook)
+{
+	/* First, check the validity of scenario. If invalid, return AST_BRIDGE_TRANSFER_INVALID. The following are invalid:
+	 *     1) atxfer of an unbridged call to an unbridged call
+	 *     2) atxfer of an unbridged call to a multi-party (n > 2) bridge
+	 *     3) atxfer of a multi-party (n > 2) bridge to an unbridged call
+	 * Second, check that the bridge(s) involved allows transfers. If not, return AST_BRIDGE_TRANSFER_NOT_PERMITTED.
+	 * Third, break into different scenarios for different bridge situations:
+	 * If both channels are bridged, perform a bridge merge. Direction of the merge is TBD.
+	 * If channel A is bridged, and channel B is not (e.g. transferring to IVR or blond transfer)
+	 *     Some manner of masquerading is necessary. Presumably, you'd want to move channel A's bridge peer
+	 *     into where channel B is. However, it may be possible to do something a bit different, where a
+	 *     local channel is created and put into channel A's bridge. The local channel's ;2 channel
+	 *     is then masqueraded with channel B in some way.
+	 * If channel A is not bridged and channel B is, then:
+	 *     This is similar to what is done in the previous scenario. Create a local channel and place it
+	 *     into B's bridge. Then masquerade the ;2 leg of the local channel.
+	 */
+
+	/* XXX STUB */
+	return AST_BRIDGE_TRANSFER_SUCCESS;
 }
 
 /*!

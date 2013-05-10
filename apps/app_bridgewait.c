@@ -197,7 +197,7 @@ static int bridgewait_exec(struct ast_channel *chan, const char *data)
 	if (!holding_bridge) {
 		holding_bridge = ast_bridge_base_new(AST_BRIDGE_CAPABILITY_HOLDING,
 			AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM
-				| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM);
+				| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED);
 	}
 	ast_mutex_unlock(&bridgewait_lock);
 	if (!holding_bridge) {
