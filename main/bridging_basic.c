@@ -99,6 +99,7 @@ struct ast_flags *ast_bridge_features_ds_get(struct ast_channel *chan)
  */
 static int basic_hangup_hook(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
+/* BUGBUG Race condition.  If all parties but one hangup at the same time, the bridge may not be dissolved on the remaining party. */
 	ast_bridge_channel_lock_bridge(bridge_channel);
 	if (2 < bridge_channel->bridge->num_channels) {
 		/* Just allow this channel to leave the multi-party bridge. */

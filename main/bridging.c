@@ -2839,14 +2839,12 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan)
 
 	/* Safely get the bridge_channel pointer for the chan. */
 	ast_channel_lock(chan);
-	bridge_channel = ast_channel_internal_bridge_channel(chan);
+	bridge_channel = ast_channel_get_bridge_channel(chan);
+	ast_channel_unlock(chan);
 	if (!bridge_channel) {
 		/* Not in a bridge */
-		ast_channel_unlock(chan);
 		return;
 	}
-	ao2_ref(bridge_channel, +1);
-	ast_channel_unlock(chan);
 
 	ast_bridge_channel_lock_bridge(bridge_channel);
 	bridge = bridge_channel->bridge;

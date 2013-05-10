@@ -101,16 +101,11 @@ static void parker_parked_call_message_response(struct ast_parked_call_payload *
 	}
 
 	ast_channel_lock(parker);
-
-	bridge_channel = ast_channel_internal_bridge_channel(parker);
+	bridge_channel = ast_channel_get_bridge_channel(parker);
+	ast_channel_unlock(parker);
 	if (!bridge_channel) {
-		ast_channel_unlock(parker);
 		return;
 	}
-
-	/* this reference will be freed by RAII_VAR */
-	ao2_ref(bridge_channel, +1);
-	ast_channel_unlock(parker);
 
 	if (message->event_type == PARKED_CALL) {
 		/* queue the saynum on the bridge channel and hangup */
