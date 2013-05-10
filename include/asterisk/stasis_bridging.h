@@ -204,6 +204,13 @@ void ast_bridge_publish_enter(struct ast_bridge *bridge, struct ast_channel *cha
 void ast_bridge_publish_leave(struct ast_bridge *bridge, struct ast_channel *chan);
 
 /*!
+ * \brief Build a JSON object from a \ref ast_bridge_snapshot.
+ * \return JSON object representing bridge snapshot.
+ * \return \c NULL on error
+ */
+struct ast_json *ast_bridge_snapshot_to_json(const struct ast_bridge_snapshot *snapshot);
+
+/*!
  * \brief Dispose of the stasis bridging topics and message types
  */
 void ast_stasis_bridging_shutdown(void);

@@ -145,6 +145,20 @@ void ast_bridge_publish_state(struct ast_bridge *bridge)
 	stasis_publish(ast_bridge_topic(bridge), msg);
 }
 
+static void bridge_publish_state_from_blob(struct ast_bridge_blob *obj)
+{
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+
+	ast_assert(obj != NULL);
+
+	msg = stasis_message_create(ast_bridge_snapshot_type(), obj->bridge);
+	if (!msg) {
+		return;
+	}
+
+	stasis_publish(stasis_topic_pool_get_topic(bridge_topic_pool, obj->bridge->uniqueid), msg);
+}
+
 struct stasis_message_type *ast_bridge_merge_message_type(void)
 {
 	return bridge_merge_message_type;
@@ -282,8 +296,6 @@ void ast_bridge_publish_enter(struct ast_bridge *bridge, struct ast_channel *cha
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_json *, enter_json, NULL, ast_json_unref);
 
-	ast_bridge_publish_state(bridge);
-
 	enter_json = ast_json_pack("{s: s}",
 			"type", "enter");
 
@@ -292,15 +304,15 @@ void ast_bridge_publish_enter(struct ast_bridge *bridge, struct ast_channel *cha
 		return;
 	}
 
+	/* enter blob first, then state */
 	stasis_publish(ast_bridge_topic(bridge), msg);
+	bridge_publish_state_from_blob(stasis_message_data(msg));
 }
 
 void ast_bridge_publish_leave(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_json *, leave_json, NULL, ast_json_unref);
-
-	ast_bridge_publish_state(bridge);
 
 	leave_json = ast_json_pack("{s: s}",
 			"type", "leave");
@@ -310,7 +322,29 @@ void ast_bridge_publish_leave(struct ast_bridge *bridge, struct ast_channel *cha
 		return;
 	}
 
+	/* state first, then leave blob (opposite of enter, preserves nesting of events) */
+	bridge_publish_state_from_blob(stasis_message_data(msg));
 	stasis_publish(ast_bridge_topic(bridge), msg);
+}
+
+struct ast_json *ast_bridge_snapshot_to_json(const struct ast_bridge_snapshot *snapshot)
+{
+	RAII_VAR(struct ast_json *, json_chan, NULL, ast_json_unref);
+	int r = 0;
+
+	if (snapshot == NULL) {
+		return NULL;
+	}
+
+	json_chan = ast_json_object_create();
+	if (!json_chan) { ast_log(LOG_ERROR, "Error creating channel json object\n"); return NULL; }
+
+	r = ast_json_object_set(json_chan, "bridge-uniqueid", ast_json_string_create(snapshot->uniqueid));
+	if (r) { ast_log(LOG_ERROR, "Error adding attrib to channel json object\n"); return NULL; }
+	r = ast_json_object_set(json_chan, "bridge-technology", ast_json_string_create(snapshot->technology));
+	if (r) { ast_log(LOG_ERROR, "Error adding attrib to channel json object\n"); return NULL; }
+
+	return ast_json_ref(json_chan);
 }
 
 void ast_stasis_bridging_shutdown(void)
