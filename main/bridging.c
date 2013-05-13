@@ -2703,6 +2703,7 @@ int ast_after_bridge_callback_set(struct ast_channel *chan, ast_after_bridge_cb 
 	after_bridge->callback = callback;
 	after_bridge->failed = failed;
 	after_bridge->data = data;
+	datastore->data = after_bridge;
 
 	/* Put it on the channel replacing any existing one. */
 	ast_channel_lock(chan);
