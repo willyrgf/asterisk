@@ -23,6 +23,11 @@
  * \author Jonathan Rose <jrose@digium.com>
  */
 
+/*** MODULEINFO
+	<depend>bridge_holding</depend>
+	<support_level>core</support_level>
+ ***/
+
 /*** DOCUMENTATION
 	<configInfo name="res_parking" language="en_US">
 		<configFile name="res_parking.conf">

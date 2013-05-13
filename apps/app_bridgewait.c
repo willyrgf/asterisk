@@ -28,6 +28,7 @@
  */
 
 /*** MODULEINFO
+	<depend>bridge_holding</depend>
 	<support_level>core</support_level>
  ***/
 
