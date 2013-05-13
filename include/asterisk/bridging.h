@@ -1419,6 +1419,67 @@ void ast_after_bridge_goto_run(struct ast_channel *chan);
  */
 void ast_after_bridge_goto_discard(struct ast_channel *chan);
 
+/*! Reason the the after bridge callback will not be called. */
+enum ast_after_bridge_cb_reason {
+	/*! The datastore is being destroyed.  Likely due to hangup. */
+	AST_AFTER_BRIDGE_CB_REASON_DESTROY,
+	/*! Something else replaced the callback with another. */
+	AST_AFTER_BRIDGE_CB_REASON_REPLACED,
+	/*! The callback was removed because of a masquerade. (fixup) */
+	AST_AFTER_BRIDGE_CB_REASON_MASQUERADE,
+	/*! The channel departed bridge. */
+	AST_AFTER_BRIDGE_CB_REASON_DEPART,
+	/*! Was explicitly removed by external code. */
+	AST_AFTER_BRIDGE_CB_REASON_REMOVED,
+};
+
+/*!
+ * \brief After bridge callback failed.
+ * \since 12.0.0
+ *
+ * \param reason Reason callback is failing.
+ * \param data Extra data what setup the callback wanted to pass.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_after_bridge_cb_failed)(enum ast_after_bridge_cb_reason reason, void *data);
+
+/*!
+ * \brief After bridge callback function.
+ * \since 12.0.0
+ *
+ * \param chan Channel just leaving bridging system.
+ * \param data Extra data what setup the callback wanted to pass.
+ *
+ * \return Nothing
+ */
+typedef void (*ast_after_bridge_cb)(struct ast_channel *chan, void *data);
+
+/*!
+ * \brief Discard channel after bridge callback.
+ * \since 12.0.0
+ *
+ * \param chan Channel to discard after bridge callback.
+ * \param reason Why are we doing this.
+ *
+ * \return Nothing
+ */
+void ast_after_bridge_callback_discard(struct ast_channel *chan, enum ast_after_bridge_cb_reason reason);
+
+/*!
+ * \brief Setup an after bridge callback for when the channel leaves the bridging system.
+ * \since 12.0.0
+ *
+ * \param chan Channel to setup an after bridge callback on.
+ * \param callback Function to call when the channel leaves the bridging system.
+ * \param failed Function to call when will not be calling the callback.
+ * \param data Extra data to pass with the callback.
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+int ast_after_bridge_callback_set(struct ast_channel *chan, ast_after_bridge_cb callback, ast_after_bridge_cb_failed failed, void *data);
+
 /*!
  * \brief Get a container of all channels in the bridge
  * \since 12.0.0

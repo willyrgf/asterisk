@@ -2552,6 +2552,167 @@ static struct ast_bridge_channel *bridge_channel_alloc(struct ast_bridge *bridge
 	return bridge_channel;
 }
 
+struct after_bridge_cb_ds {
+	/*! Desired callback function. */
+	ast_after_bridge_cb callback;
+	/*! After bridge callback will not be called and destroy any resources data may contain. */
+	ast_after_bridge_cb_failed failed;
+	/*! Extra data to pass to the callback. */
+	void *data;
+};
+
+/*!
+ * \internal
+ * \brief Destroy the after bridge callback datastore.
+ * \since 12.0.0
+ *
+ * \param data After bridge callback data to destroy.
+ *
+ * \return Nothing
+ */
+static void after_bridge_cb_destroy(void *data)
+{
+	struct after_bridge_cb_ds *after_bridge = data;
+
+	if (after_bridge->failed) {
+		after_bridge->failed(AST_AFTER_BRIDGE_CB_REASON_DESTROY, after_bridge->data);
+		after_bridge->failed = NULL;
+	}
+}
+
+/*!
+ * \internal
+ * \brief Fixup the after bridge callback datastore.
+ * \since 12.0.0
+ *
+ * \param data After bridge callback data to fixup.
+ * \param old_chan The datastore is moving from this channel.
+ * \param new_chan The datastore is moving to this channel.
+ *
+ * \return Nothing
+ */
+static void after_bridge_cb_fixup(void *data, struct ast_channel *old_chan, struct ast_channel *new_chan)
+{
+	/* There can be only one.  Discard any already on the new channel. */
+	ast_after_bridge_callback_discard(new_chan, AST_AFTER_BRIDGE_CB_REASON_MASQUERADE);
+}
+
+static const struct ast_datastore_info after_bridge_cb_info = {
+	.type = "after-bridge-cb",
+	.destroy = after_bridge_cb_destroy,
+	.chan_fixup = after_bridge_cb_fixup,
+};
+
+/*!
+ * \internal
+ * \brief Remove channel after the bridge callback and return it.
+ * \since 12.0.0
+ *
+ * \param chan Channel to remove after bridge callback.
+ *
+ * \retval datastore on success.
+ * \retval NULL on error or not found.
+ */
+static struct ast_datastore *after_bridge_cb_remove(struct ast_channel *chan)
+{
+	struct ast_datastore *datastore;
+
+	ast_channel_lock(chan);
+	datastore = ast_channel_datastore_find(chan, &after_bridge_cb_info, NULL);
+	if (datastore && ast_channel_datastore_remove(chan, datastore)) {
+		datastore = NULL;
+	}
+	ast_channel_unlock(chan);
+
+	return datastore;
+}
+
+void ast_after_bridge_callback_discard(struct ast_channel *chan, enum ast_after_bridge_cb_reason reason)
+{
+	struct ast_datastore *datastore;
+
+	datastore = after_bridge_cb_remove(chan);
+	if (datastore) {
+		struct after_bridge_cb_ds *after_bridge = datastore->data;
+
+		if (after_bridge && after_bridge->failed) {
+			after_bridge->failed(reason, after_bridge->data);
+			after_bridge->failed = NULL;
+		}
+		ast_datastore_free(datastore);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Run any after bridge callback if possible.
+ * \since 12.0.0
+ *
+ * \param chan Channel to run after bridge callback.
+ *
+ * \return Nothing
+ */
+static void after_bridge_callback_run(struct ast_channel *chan)
+{
+	struct ast_datastore *datastore;
+	struct after_bridge_cb_ds *after_bridge;
+
+	if (ast_check_hangup(chan)) {
+		return;
+	}
+
+	/* Get after bridge goto datastore. */
+	datastore = after_bridge_cb_remove(chan);
+	if (!datastore) {
+		return;
+	}
+
+	after_bridge = datastore->data;
+	if (after_bridge) {
+		after_bridge->failed = NULL;
+		after_bridge->callback(chan, after_bridge->data);
+	}
+
+	/* Discard after bridge callback datastore. */
+	ast_datastore_free(datastore);
+}
+
+int ast_after_bridge_callback_set(struct ast_channel *chan, ast_after_bridge_cb callback, ast_after_bridge_cb_failed failed, void *data)
+{
+	struct ast_datastore *datastore;
+	struct after_bridge_cb_ds *after_bridge;
+
+	/* Sanity checks. */
+	ast_assert(chan != NULL);
+	if (!chan || !callback) {
+		return -1;
+	}
+
+	/* Create a new datastore. */
+	datastore = ast_datastore_alloc(&after_bridge_cb_info, NULL);
+	if (!datastore) {
+		return -1;
+	}
+	after_bridge = ast_calloc(1, sizeof(*after_bridge));
+	if (!after_bridge) {
+		ast_datastore_free(datastore);
+		return -1;
+	}
+
+	/* Initialize it. */
+	after_bridge->callback = callback;
+	after_bridge->failed = failed;
+	after_bridge->data = data;
+
+	/* Put it on the channel replacing any existing one. */
+	ast_channel_lock(chan);
+	ast_after_bridge_callback_discard(chan, AST_AFTER_BRIDGE_CB_REASON_REPLACED);
+	ast_channel_datastore_add(chan, datastore);
+	ast_channel_unlock(chan);
+
+	return 0;
+}
+
 struct after_bridge_goto_ds {
 	/*! Goto string that can be parsed by ast_parseable_goto(). */
 	const char *parseable_goto;
@@ -2922,6 +3083,7 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
 
 join_exit:;
 /* BUGBUG this is going to cause problems for DTMF atxfer attended bridge between B & C.  Maybe an ast_bridge_join_internal() that does not do the after bridge goto for this case. */
+	after_bridge_callback_run(chan);
 	if (!(ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO)
 		&& !ast_after_bridge_goto_setup(chan)) {
 		/* Claim the after bridge goto is an async goto destination. */
@@ -2948,6 +3110,7 @@ static void *bridge_channel_depart_thread(void *data)
 	ast_bridge_features_destroy(bridge_channel->features);
 	bridge_channel->features = NULL;
 
+	ast_after_bridge_callback_discard(bridge_channel->chan, AST_AFTER_BRIDGE_CB_REASON_DEPART);
 	ast_after_bridge_goto_discard(bridge_channel->chan);
 
 	return NULL;
@@ -2977,6 +3140,7 @@ static void *bridge_channel_ind_thread(void *data)
 
 	ao2_ref(bridge_channel, -1);
 
+	after_bridge_callback_run(chan);
 	ast_after_bridge_goto_run(chan);
 	return NULL;
 }
