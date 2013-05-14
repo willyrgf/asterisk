@@ -693,6 +693,7 @@ static void *record_thread(void *obj)
 		return NULL;
 	}
 	if (ast_bridge_features_init(&features)) {
+		ast_bridge_features_cleanup(&features);
 		conference->record_thread = AST_PTHREADT_NULL;
 		ast_mutex_unlock(&conference->record_lock);
 		ao2_ref(conference, -1);
