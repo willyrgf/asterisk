@@ -105,7 +105,7 @@ static void leave_marked(struct confbridge_user *user)
 				user_iter->conference->waitingusers++;
 				/* Handle muting/moh of user_iter if necessary */
 				if (ast_test_flag(&user_iter->u_profile, USER_OPT_MUSICONHOLD)) {
-					user_iter->features.mute = 1;
+					ast_bridge_mute_set(user_iter->conference->bridge, user_iter->chan, 1);
 					conf_moh_start(user_iter);
 				}
 			}
@@ -174,7 +174,7 @@ static void transition_to_marked(struct confbridge_user *user)
 		}
 		/* only unmute them if they are not supposed to start muted */
 		if (!ast_test_flag(&user_iter->u_profile, USER_OPT_STARTMUTED)) {
-			user_iter->features.mute = 0;
+			ast_bridge_mute_set(user_iter->conference->bridge, user_iter->chan, 0);
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END;

@@ -1252,7 +1252,7 @@ void conf_handle_second_active(struct confbridge_conference *conference)
 		conf_moh_stop(first_user);
 	}
 	if (!ast_test_flag(&first_user->u_profile, USER_OPT_STARTMUTED)) {
-		first_user->features.mute = 0;
+		ast_bridge_mute_set(conference->bridge, first_user->chan, 0);
 	}
 }
 
@@ -1906,17 +1906,25 @@ static int action_toggle_mute(struct confbridge_conference *conference,
 	struct confbridge_user *user,
 	struct ast_channel *chan)
 {
+	int mute;
+
+	mute = ast_bridge_mute_get(conference->bridge, user->chan);
+	if (mute < 0) {
+		return -1;
+	}
+
 	/* Mute or unmute yourself, note we only allow manipulation if they aren't waiting for a marked user or if marked users exist */
 	if (!ast_test_flag(&user->u_profile, USER_OPT_WAITMARKED) || conference->markedusers) {
-		user->features.mute = (!user->features.mute ? 1 : 0);
-		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(chan), user->features.mute ? "muted" : "unmuted", user->b_profile.name, ast_channel_name(chan));
-		if (user->features.mute) {
+		mute = !mute;
+		ast_bridge_mute_set(conference->bridge, user->chan, mute);
+		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(chan), mute ? "muted" : "unmuted", user->b_profile.name, ast_channel_name(chan));
+		if (mute) {
 			send_mute_event(chan, conference->name);
 		} else { 
 			send_unmute_event(chan, conference->name);
 		}
 	}
-	return ast_stream_and_wait(chan, (user->features.mute ?
+	return ast_stream_and_wait(chan, (mute ?
 		conf_get_sound(CONF_SOUND_MUTED, user->b_profile.sounds) :
 		conf_get_sound(CONF_SOUND_UNMUTED, user->b_profile.sounds)),
 		"");
@@ -1930,13 +1938,13 @@ static int action_toggle_mute_participants(struct confbridge_conference *confere
 	ao2_lock(conference);
 
 	/* If already muted, then unmute */
-	conference->muted = conference->muted ? 0 : 1;
+	conference->muted = !conference->muted;
 	sound_to_play = conf_get_sound((conference->muted ? CONF_SOUND_PARTICIPANTS_MUTED : CONF_SOUND_PARTICIPANTS_UNMUTED),
 		user->b_profile.sounds);
 
 	AST_LIST_TRAVERSE(&conference->active_list, cur_user, list) {
 		if (!ast_test_flag(&cur_user->u_profile, USER_OPT_ADMIN)) {
-			cur_user->features.mute = conference->muted;
+			ast_bridge_mute_set(conference->bridge, cur_user->chan, conference->muted);
 		}
 	}
 
@@ -2497,8 +2505,8 @@ static int generic_mute_unmute_helper(int mute, const char *conference_name, con
 		}
 	}
 	if (user) {
-		user->features.mute = mute;
-		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(user->chan), user->features.mute ? "muted" : "unmuted", conference->b_profile.name, ast_channel_name(user->chan));
+		ast_bridge_mute_set(conference->bridge, user->chan, mute);
+		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(user->chan), mute ? "muted" : "unmuted", conference->b_profile.name, ast_channel_name(user->chan));
 	} else {
 		res = -2;;
 	}
@@ -3202,7 +3210,7 @@ void conf_mute_only_active(struct confbridge_conference *conference)
 
 	/* Turn on MOH/mute if the single participant is set up for it */
 	if (ast_test_flag(&only_user->u_profile, USER_OPT_MUSICONHOLD)) {
-		only_user->features.mute = 1;
+		ast_bridge_mute_set(conference->bridge, only_user->chan, 1);
 		conf_moh_start(only_user);
 	}
 }
