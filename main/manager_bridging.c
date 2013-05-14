@@ -245,28 +245,36 @@ static void bridge_merge_cb(void *data, struct stasis_subscription *sub,
 		ast_str_buffer(from_text));
 }
 
-static void bridge_blob_cb(void *data, struct stasis_subscription *sub,
+static void channel_enter_cb(void *data, struct stasis_subscription *sub,
 				    struct stasis_topic *topic,
 				    struct stasis_message *message)
 {
 	struct ast_bridge_blob *blob = stasis_message_data(message);
-	const char *type = ast_bridge_blob_json_type(blob);
 	RAII_VAR(struct ast_str *, bridge_text, NULL, ast_free);
 	RAII_VAR(struct ast_str *, channel_text, NULL, ast_free);
-	char *event;
-
-	if (!strcmp("leave", type)) {
-		event = "BridgeLeave";
-	} else if (!strcmp("enter", type)) {
-		event = "BridgeEnter";
-	} else {
-		return;
-	}
 
 	bridge_text = ast_manager_build_bridge_state_string(blob->bridge, "");
 	channel_text = ast_manager_build_channel_state_string(blob->channel);
 
-	manager_event(EVENT_FLAG_CALL, event,
+	manager_event(EVENT_FLAG_CALL, "BridgeEnter",
+		"%s"
+		"%s",
+		ast_str_buffer(bridge_text),
+		ast_str_buffer(channel_text));
+}
+
+static void channel_leave_cb(void *data, struct stasis_subscription *sub,
+				    struct stasis_topic *topic,
+				    struct stasis_message *message)
+{
+	struct ast_bridge_blob *blob = stasis_message_data(message);
+	RAII_VAR(struct ast_str *, bridge_text, NULL, ast_free);
+	RAII_VAR(struct ast_str *, channel_text, NULL, ast_free);
+
+	bridge_text = ast_manager_build_bridge_state_string(blob->bridge, "");
+	channel_text = ast_manager_build_channel_state_string(blob->channel);
+
+	manager_event(EVENT_FLAG_CALL, "BridgeLeave",
 		"%s"
 		"%s",
 		ast_str_buffer(bridge_text),
@@ -438,8 +446,13 @@ int manager_bridging_init(void)
 					 NULL);
 
 	ret |= stasis_message_router_add(bridge_state_router,
-					 ast_bridge_blob_type(),
-					 bridge_blob_cb,
+					 ast_channel_entered_bridge_type(),
+					 channel_enter_cb,
+					 NULL);
+
+	ret |= stasis_message_router_add(bridge_state_router,
+					 ast_channel_left_bridge_type(),
+					 channel_leave_cb,
 					 NULL);
 
 	ret |= ast_manager_register_xml_core("BridgeList", 0, manager_bridges_list);

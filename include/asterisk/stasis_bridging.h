@@ -149,11 +149,19 @@ struct ast_bridge_blob {
 
 /*!
  * \since 12
- * \brief Message type for \ref ast_bridge_blob messages.
+ * \brief Message type for \ref channel enter bridge blob messages.
  *
- * \retval Message type for \ref ast_bridge_blob messages.
+ * \retval Message type for \ref channel enter bridge blob messages.
  */
-struct stasis_message_type *ast_bridge_blob_type(void);
+struct stasis_message_type *ast_channel_entered_bridge_type(void);
+
+/*!
+ * \since 12
+ * \brief Message type for \ref channel leave bridge blob messages.
+ *
+ * \retval Message type for \ref channel leave bridge blob messages.
+ */
+struct stasis_message_type *ast_channel_left_bridge_type(void);
 
 /*!
  * \since 12
@@ -168,9 +176,10 @@ struct stasis_message_type *ast_bridge_blob_type(void);
  * \return \ref ast_bridge_blob message.
  * \return \c NULL on error
  */
-struct stasis_message *ast_bridge_blob_create(struct ast_bridge *bridge,
-					struct ast_channel *chan,
-					struct ast_json *blob);
+struct stasis_message *ast_bridge_blob_create(struct stasis_message_type *type,
+	struct ast_bridge *bridge,
+	struct ast_channel *chan,
+	struct ast_json *blob);
 
 /*!
  * \since 12

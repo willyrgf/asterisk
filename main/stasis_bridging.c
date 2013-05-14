@@ -41,14 +41,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define SNAPSHOT_CHANNELS_BUCKETS 13
 
-/*! \brief Message type for bridge snapshot messages */
-static struct stasis_message_type *bridge_snapshot_type;
-
-/*! \brief Message type for bridge blob messages */
-static struct stasis_message_type *bridge_blob_type;
-
-/*! \brief Message type for bridge merge messages */
-static struct stasis_message_type *bridge_merge_message_type;
+/*!
+ * @{ \brief Define bridge message types.
+ */
+STASIS_MESSAGE_TYPE_DEFN(ast_bridge_snapshot_type);
+STASIS_MESSAGE_TYPE_DEFN(ast_bridge_merge_message_type);
+STASIS_MESSAGE_TYPE_DEFN(ast_channel_entered_bridge_type);
+STASIS_MESSAGE_TYPE_DEFN(ast_channel_left_bridge_type);
+/*! @} */
 
 /*! \brief Aggregate topic for bridge messages */
 static struct stasis_topic *bridge_topic_all;
@@ -99,11 +99,6 @@ struct ast_bridge_snapshot *ast_bridge_snapshot_create(struct ast_bridge *bridge
 
 	ao2_ref(snapshot, +1);
 	return snapshot;
-}
-
-struct stasis_message_type *ast_bridge_snapshot_type(void)
-{
-	return bridge_snapshot_type;
 }
 
 struct stasis_topic *ast_bridge_topic(struct ast_bridge *bridge)
@@ -157,11 +152,6 @@ static void bridge_publish_state_from_blob(struct ast_bridge_blob *obj)
 	}
 
 	stasis_publish(stasis_topic_pool_get_topic(bridge_topic_pool, obj->bridge->uniqueid), msg);
-}
-
-struct stasis_message_type *ast_bridge_merge_message_type(void)
-{
-	return bridge_merge_message_type;
 }
 
 /*! \brief Destructor for bridge merge messages */
@@ -220,11 +210,6 @@ void ast_bridge_publish_merge(struct ast_bridge *to, struct ast_bridge *from)
 	stasis_publish(ast_bridge_topic_all(), msg);
 }
 
-struct stasis_message_type *ast_bridge_blob_type(void)
-{
-	return bridge_blob_type;
-}
-
 static void bridge_blob_dtor(void *obj)
 {
 	struct ast_bridge_blob *event = obj;
@@ -236,21 +221,14 @@ static void bridge_blob_dtor(void *obj)
 	event->blob = NULL;
 }
 
-struct stasis_message *ast_bridge_blob_create(struct ast_bridge *bridge,
-					struct ast_channel *chan,
-					struct ast_json *blob)
+struct stasis_message *ast_bridge_blob_create(
+	struct stasis_message_type *message_type,
+	struct ast_bridge *bridge,
+	struct ast_channel *chan,
+	struct ast_json *blob)
 {
 	RAII_VAR(struct ast_bridge_blob *, obj, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
-	struct ast_json *type;
-
-	ast_assert(blob != NULL);
-
-	type = ast_json_object_get(blob, "type");
-	if (type == NULL) {
-		ast_log(LOG_ERROR, "Invalid ast_bridge_blob; missing type field\n");
-		return NULL;
-	}
 
 	obj = ao2_alloc(sizeof(*obj), bridge_blob_dtor);
 	if (!obj) {
@@ -271,9 +249,11 @@ struct stasis_message *ast_bridge_blob_create(struct ast_bridge *bridge,
 		}
 	}
 
-	obj->blob = ast_json_ref(blob);
+	if (blob) {
+		obj->blob = ast_json_ref(blob);
+	}
 
-	msg = stasis_message_create(ast_bridge_blob_type(), obj);
+	msg = stasis_message_create(message_type, obj);
 	if (!msg) {
 		return NULL;
 	}
@@ -294,12 +274,8 @@ const char *ast_bridge_blob_json_type(struct ast_bridge_blob *obj)
 void ast_bridge_publish_enter(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_json *, enter_json, NULL, ast_json_unref);
 
-	enter_json = ast_json_pack("{s: s}",
-			"type", "enter");
-
-	msg = ast_bridge_blob_create(bridge, chan, enter_json);
+	msg = ast_bridge_blob_create(ast_channel_entered_bridge_type(), bridge, chan, NULL);
 	if (!msg) {
 		return;
 	}
@@ -312,12 +288,8 @@ void ast_bridge_publish_enter(struct ast_bridge *bridge, struct ast_channel *cha
 void ast_bridge_publish_leave(struct ast_bridge *bridge, struct ast_channel *chan)
 {
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_json *, leave_json, NULL, ast_json_unref);
 
-	leave_json = ast_json_pack("{s: s}",
-			"type", "leave");
-
-	msg = ast_bridge_blob_create(bridge, chan, leave_json);
+	msg = ast_bridge_blob_create(ast_channel_left_bridge_type(), bridge, chan, NULL);
 	if (!msg) {
 		return;
 	}
@@ -349,12 +321,10 @@ struct ast_json *ast_bridge_snapshot_to_json(const struct ast_bridge_snapshot *s
 
 void ast_stasis_bridging_shutdown(void)
 {
-	ao2_cleanup(bridge_snapshot_type);
-	bridge_snapshot_type = NULL;
-	ao2_cleanup(bridge_blob_type);
-	bridge_blob_type = NULL;
-	ao2_cleanup(bridge_merge_message_type);
-	bridge_merge_message_type = NULL;
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_bridge_snapshot_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_bridge_merge_message_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_channel_entered_bridge_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_channel_left_bridge_type);
 	ao2_cleanup(bridge_topic_all);
 	bridge_topic_all = NULL;
 	bridge_topic_all_cached = stasis_caching_unsubscribe(bridge_topic_all_cached);
@@ -375,16 +345,14 @@ static const char *bridge_snapshot_get_id(struct stasis_message *msg)
 
 int ast_stasis_bridging_init(void)
 {
-	bridge_snapshot_type = stasis_message_type_create("ast_bridge_snapshot");
-	bridge_blob_type = stasis_message_type_create("ast_bridge_blob");
-	bridge_merge_message_type = stasis_message_type_create("ast_bridge_merge_message");
+	STASIS_MESSAGE_TYPE_INIT(ast_bridge_snapshot_type);
+	STASIS_MESSAGE_TYPE_INIT(ast_bridge_merge_message_type);
+	STASIS_MESSAGE_TYPE_INIT(ast_channel_entered_bridge_type);
+	STASIS_MESSAGE_TYPE_INIT(ast_channel_left_bridge_type);
 	bridge_topic_all = stasis_topic_create("ast_bridge_topic_all");
 	bridge_topic_all_cached = stasis_caching_topic_create(bridge_topic_all, bridge_snapshot_get_id);
 	bridge_topic_pool = stasis_topic_pool_create(bridge_topic_all);
-	return !bridge_snapshot_type
-		|| !bridge_blob_type
-		|| !bridge_merge_message_type
-		|| !bridge_topic_all
+	return !bridge_topic_all
 		|| !bridge_topic_all_cached
 		|| !bridge_topic_pool ? -1 : 0;
 }
