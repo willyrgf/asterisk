@@ -615,6 +615,9 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan);
  * \param tech_args Optional Bridging tech optimization parameters for this channel.
  * \param pass_reference TRUE if the bridge reference is being passed by the caller.
  *
+ * \note Absolutely locks should be held before calling this
+ * function since it blocks.
+ *
  * \retval state that channel exited the bridge with
  *
  * Example usage:
@@ -653,6 +656,8 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  * \note The features parameter must be NULL or obtained by
  * ast_bridge_features_new().  You must not dereference features
  * after calling even if the call fails.
+ *
+ * \note chan is locked by this function.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -696,6 +701,8 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
  * \brief Depart a channel from a bridge
  *
  * \param chan Channel to depart
+ *
+ * \note chan is locked by this function.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -748,6 +755,9 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan);
  * \param kick_me Array of channels to kick from the bridges.
  * \param num_kick Number of channels in the kick_me array.
  *
+ * \note Absolutely _NO_ bridge or channel locks should be held
+ * before calling this function.
+ *
  * \retval 0 on success
  * \retval -1 on failure
  *
@@ -771,6 +781,9 @@ int ast_bridge_merge(struct ast_bridge *dst_bridge, struct ast_bridge *src_bridg
  * \param chan Channel to move.
  * \param swap Channel to replace in dst_bridge.
  * \param attempt_recovery TRUE if failure attempts to push channel back into original bridge.
+ *
+ * \note Absolutely _NO_ bridge or channel locks should be held
+ * before calling this function.
  *
  * \retval 0 on success.
  * \retval -1 on failure.
@@ -1264,14 +1277,14 @@ int ast_bridge_is_video_src(struct ast_bridge *bridge, struct ast_channel *chan)
 void ast_bridge_remove_video_src(struct ast_bridge *bridge, struct ast_channel *chan);
 
 enum ast_transfer_result {
-    /*! The transfer completed successfully */
-    AST_BRIDGE_TRANSFER_SUCCESS,
-    /*! A bridge involved does not permit transferring */
-    AST_BRIDGE_TRANSFER_NOT_PERMITTED,
-    /*! The current bridge setup makes transferring an invalid operation */
-    AST_BRIDGE_TRANSFER_INVALID,
-    /*! The transfer operation failed for a miscellaneous reason */
-    AST_BRIDGE_TRANSFER_FAIL,
+	/*! The transfer completed successfully */
+	AST_BRIDGE_TRANSFER_SUCCESS,
+	/*! A bridge involved does not permit transferring */
+	AST_BRIDGE_TRANSFER_NOT_PERMITTED,
+	/*! The current bridge setup makes transferring an invalid operation */
+	AST_BRIDGE_TRANSFER_INVALID,
+	/*! The transfer operation failed for a miscellaneous reason */
+	AST_BRIDGE_TRANSFER_FAIL,
 };
 
 typedef void (*transfer_channel_cb)(struct ast_channel *chan, void *user_data);
@@ -1289,7 +1302,8 @@ typedef void (*transfer_channel_cb)(struct ast_channel *chan, void *user_data);
  * This callback is guaranteed to be called in the same thread as
  * ast_bridge_transfer_blind() and before ast_bridge_transfer_blind() returns.
  *
- * \note Do not call this function with the transferer or its tech_pvt locked.
+ * \note Absolutely _NO_ channel locks should be held before
+ * calling this function.
  *
  * \param transferer The channel performing the blind transfer
  * \param exten The dialplan extension to send the call to
@@ -1315,8 +1329,8 @@ enum ast_transfer_result ast_bridge_transfer_blind(struct ast_channel *transfere
  * resulting call after the transfer completes. If the transfer fails, the
  * hook will not be attached to any call.
  *
- * \note Do not call this function with either of the channels or their
- * tech_pvts locked.
+ * \note Absolutely _NO_ channel locks should be held before
+ * calling this function.
  *
  * \param to_transferee Transferer channel on initial call (presumably bridged to transferee)
  * \param to_transfer_target Transferer channel on consultation call (presumably bridged to transfer target)
@@ -1334,6 +1348,8 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
  * \param exten Exten to goto after bridge.
  * \param priority Priority to goto after bridge.
  *
+ * \note chan is locked by this function.
+ *
  * \details Add a channel datastore to setup the goto location
  * when the channel leaves the bridge and run a PBX from there.
  *
@@ -1347,6 +1363,8 @@ void ast_after_bridge_set_goto(struct ast_channel *chan, const char *context, co
  *
  * \param chan Channel to setup after bridge goto location.
  * \param context Context to goto after bridge.
+ *
+ * \note chan is locked by this function.
  *
  * \details Add a channel datastore to setup the goto location
  * when the channel leaves the bridge and run a PBX from there.
@@ -1365,6 +1383,8 @@ void ast_after_bridge_set_h(struct ast_channel *chan, const char *context);
  * \param priority Current priority of the caller channel
  * \param parseable_goto User specified goto string from dialplan.
  *
+ * \note chan is locked by this function.
+ *
  * \details Add a channel datastore to setup the goto location
  * when the channel leaves the bridge and run a PBX from there.
  *
@@ -1381,6 +1401,8 @@ void ast_after_bridge_set_go_on(struct ast_channel *chan, const char *context, c
  * \since 12.0.0
  *
  * \param chan Channel to setup after bridge goto location.
+ *
+ * \note chan is locked by this function.
  *
  * \details Pull off any after bridge goto location datastore and
  * setup for dialplan execution there.
@@ -1399,6 +1421,8 @@ int ast_after_bridge_goto_setup(struct ast_channel *chan);
  *
  * \param chan Channel to execute after bridge goto location.
  *
+ * \note chan is locked by this function.
+ *
  * \details Pull off any after bridge goto location datastore
  * and run a PBX at that location.
  *
@@ -1414,6 +1438,8 @@ void ast_after_bridge_goto_run(struct ast_channel *chan);
  * \since 12.0.0
  *
  * \param chan Channel to discard after bridge goto location.
+ *
+ * \note chan is locked by this function.
  *
  * \return Nothing
  */
@@ -1462,6 +1488,8 @@ typedef void (*ast_after_bridge_cb)(struct ast_channel *chan, void *data);
  * \param chan Channel to discard after bridge callback.
  * \param reason Why are we doing this.
  *
+ * \note chan is locked by this function.
+ *
  * \return Nothing
  */
 void ast_after_bridge_callback_discard(struct ast_channel *chan, enum ast_after_bridge_cb_reason reason);
@@ -1472,8 +1500,10 @@ void ast_after_bridge_callback_discard(struct ast_channel *chan, enum ast_after_
  *
  * \param chan Channel to setup an after bridge callback on.
  * \param callback Function to call when the channel leaves the bridging system.
- * \param failed Function to call when will not be calling the callback.
+ * \param failed Function to call when it will not be calling the callback.
  * \param data Extra data to pass with the callback.
+ *
+ * \note chan is locked by this function.
  *
  * \retval 0 on success.
  * \retval -1 on error.
