@@ -3272,6 +3272,31 @@ int ast_bridge_remove(struct ast_bridge *bridge, struct ast_channel *chan)
 
 /*!
  * \internal
+ * \brief Point the bridge_channel to a new bridge.
+ * \since 12.0.0
+ *
+ * \param bridge_channel What is to point to a new bridge.
+ * \param new_bridge Where the bridge channel should point.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_change_bridge(struct ast_bridge_channel *bridge_channel, struct ast_bridge *new_bridge)
+{
+	struct ast_bridge *old_bridge;
+
+	ao2_ref(new_bridge, +1);
+	ast_bridge_channel_lock(bridge_channel);
+	ast_channel_lock(bridge_channel->chan);
+	old_bridge = bridge_channel->bridge;
+	bridge_channel->bridge = new_bridge;
+	ast_channel_internal_bridge_set(bridge_channel->chan, new_bridge);
+	ast_channel_unlock(bridge_channel->chan);
+	ast_bridge_channel_unlock(bridge_channel);
+	ao2_ref(old_bridge, -1);
+}
+
+/*!
+ * \internal
  * \brief Do the merge of two bridges.
  * \since 12.0.0
  *
@@ -3320,6 +3345,7 @@ static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *sr
 			for (idx = 0; idx < num_kick; ++idx) {
 				if (bridge_channel == kick_me[idx]) {
 					ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
+					break;
 				}
 			}
 		}
@@ -3333,14 +3359,7 @@ static void bridge_merge_do(struct ast_bridge *dst_bridge, struct ast_bridge *sr
 		}
 
 		/* Point to new bridge.*/
-		ao2_ref(dst_bridge, +1);
-		ast_bridge_channel_lock(bridge_channel);
-		ast_channel_lock(bridge_channel->chan);
-		bridge_channel->bridge = dst_bridge;
-		ast_channel_internal_bridge_set(bridge_channel->chan, dst_bridge);
-		ast_channel_unlock(bridge_channel->chan);
-		ast_bridge_channel_unlock(bridge_channel);
-		ao2_ref(src_bridge, -1);
+		bridge_channel_change_bridge(bridge_channel, dst_bridge);
 
 		if (bridge_channel_push(bridge_channel)) {
 			ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
@@ -3595,26 +3614,14 @@ static int bridge_move_do(struct ast_bridge *dst_bridge, struct ast_bridge_chann
 	}
 
 	/* Point to new bridge.*/
-	ao2_ref(dst_bridge, +1);
-	ast_bridge_channel_lock(bridge_channel);
-	ast_channel_lock(bridge_channel->chan);
-	bridge_channel->bridge = dst_bridge;
-	ast_channel_internal_bridge_set(bridge_channel->chan, dst_bridge);
-	ast_channel_unlock(bridge_channel->chan);
-	ast_bridge_channel_unlock(bridge_channel);
+	ao2_ref(orig_bridge, +1);/* Keep a ref in case the push fails. */
+	bridge_channel_change_bridge(bridge_channel, dst_bridge);
 
 	if (bridge_channel_push(bridge_channel)) {
 		/* Try to put the channel back into the original bridge. */
 		if (attempt_recovery && was_in_bridge) {
 			/* Point back to original bridge. */
-			ao2_ref(orig_bridge, +1);
-			ast_bridge_channel_lock(bridge_channel);
-			ast_channel_lock(bridge_channel->chan);
-			bridge_channel->bridge = orig_bridge;
-			ast_channel_internal_bridge_set(bridge_channel->chan, orig_bridge);
-			ast_channel_unlock(bridge_channel->chan);
-			ast_bridge_channel_unlock(bridge_channel);
-			ao2_ref(dst_bridge, -1);
+			bridge_channel_change_bridge(bridge_channel, orig_bridge);
 
 			if (bridge_channel_push(bridge_channel)) {
 				ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
