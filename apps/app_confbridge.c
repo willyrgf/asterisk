@@ -67,6 +67,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/paths.h"
 #include "asterisk/manager.h"
 #include "asterisk/test.h"
+#include "asterisk/stasis.h"
+#include "asterisk/stasis_bridging.h"
+#include "asterisk/json.h"
 
 /*** DOCUMENTATION
 	<application name="ConfBridge" language="en_US">
@@ -412,183 +415,77 @@ const char *conf_get_sound(enum conf_sounds sound, struct bridge_profile_sounds 
 	return "";
 }
 
-static void send_conf_start_event(const char *conf_name)
+static void send_conf_stasis(struct confbridge_conference *conference, struct ast_channel *chan, const char *type, struct ast_json *extras, int channel_topic)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a conference starts.</synopsis>
-			<syntax>
-				<parameter name="Conference">
-					<para>The name of the Confbridge conference.</para>
-				</parameter>
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeEnd</ref>
-				<ref type="application">ConfBridge</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "ConfbridgeStart", "Conference: %s\r\n", conf_name);
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_json *, json_object, NULL, ast_json_unref);
+
+	json_object = ast_json_pack("{s: s, s: s}",
+		"type", type,
+		"conference", conference->name);
+
+	if (!json_object) {
+		return;
+	}
+
+	if (extras) {
+		ast_json_object_update(json_object, extras);
+	}
+
+	msg = ast_bridge_blob_create(confbridge_message_type(),
+					 conference->bridge,
+					 chan,
+					 json_object);
+	if (!msg) {
+		return;
+	}
+
+	if (channel_topic) {
+		stasis_publish(ast_channel_topic(chan), msg);
+	} else {
+		stasis_publish(ast_bridge_topic(conference->bridge), msg);
+	}
+
 }
 
-static void send_conf_end_event(const char *conf_name)
+static void send_conf_start_event(struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a conference ends.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeStart</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "ConfbridgeEnd", "Conference: %s\r\n", conf_name);
+	send_conf_stasis(conference, NULL, "confbridge_start", NULL, 0);
 }
 
-static void send_join_event(struct ast_channel *chan, const char *conf_name)
+static void send_conf_end_event(struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a channel joins a Confbridge conference.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeLeave</ref>
-				<ref type="application">ConfBridge</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "ConfbridgeJoin",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Conference: %s\r\n"
-		"CallerIDnum: %s\r\n"
-		"CallerIDname: %s\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan),
-		conf_name,
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "<unknown>"),
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "<unknown>")
-	);
+	send_conf_stasis(conference, NULL, "confbridge_end", NULL, 0);
 }
 
-static void send_leave_event(struct ast_channel *chan, const char *conf_name)
+static void send_join_event(struct ast_channel *chan, struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a channel leaves a Confbridge conference.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeJoin</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "ConfbridgeLeave",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Conference: %s\r\n"
-		"CallerIDnum: %s\r\n"
-		"CallerIDname: %s\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan),
-		conf_name,
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "<unknown>"),
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "<unknown>")
-	);
+	send_conf_stasis(conference, chan, "confbridge_join", NULL, 0);
 }
 
-static void send_start_record_event(const char *conf_name)
+static void send_leave_event(struct ast_channel *chan, struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a conference recording starts.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeStopRecord</ref>
-				<ref type="application">ConfBridge</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-
-	manager_event(EVENT_FLAG_CALL, "ConfbridgeStartRecord", "Conference: %s\r\n", conf_name);
+	send_conf_stasis(conference, chan, "confbridge_leave", NULL, 0);
 }
 
-static void send_stop_record_event(const char *conf_name)
+static void send_start_record_event(struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a conference recording stops.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeStartRecord</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "ConfbridgeStopRecord", "Conference: %s\r\n", conf_name);
+	send_conf_stasis(conference, NULL, "confbridge_record", NULL, 0);
 }
 
-static void send_mute_event(struct ast_channel *chan, const char *conf_name)
+static void send_stop_record_event(struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a Confbridge participant mutes.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeUnmute</ref>
-				<ref type="application">ConfBridge</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "ConfbridgeMute",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Conference: %s\r\n"
-		"CallerIDnum: %s\r\n"
-		"CallerIDname: %s\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan),
-		conf_name,
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "<unknown>"),
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "<unknown>")
-	);
+	send_conf_stasis(conference, NULL, "confbridge_stop_record", NULL, 0);
 }
 
-static void send_unmute_event(struct ast_channel *chan, const char *conf_name)
+static void send_mute_event(struct ast_channel *chan, struct confbridge_conference *conference)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a Confbridge participant unmutes.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">ConfbridgeMute</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "ConfbridgeUnmute",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Conference: %s\r\n"
-		"CallerIDnum: %s\r\n"
-		"CallerIDname: %s\r\n",
-		ast_channel_name(chan),
-		ast_channel_uniqueid(chan),
-		conf_name,
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "<unknown>"),
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "<unknown>")
-	);
+	send_conf_stasis(conference, chan, "confbridge_mute", NULL, 1);
+}
+
+static void send_unmute_event(struct ast_channel *chan, struct confbridge_conference *conference)
+{
+	send_conf_stasis(conference, chan, "confbridge_unmute", NULL, 1);
 }
 
 
@@ -748,7 +645,7 @@ static int conf_stop_record(struct confbridge_conference *conference)
 	ast_queue_frame(chan, &ast_null_frame);
 	chan = ast_channel_unref(chan);
 	ast_test_suite_event_notify("CONF_STOP_RECORD", "Message: stopped conference recording channel\r\nConference: %s", conference->b_profile.name);
-	send_stop_record_event(conference->name);
+	send_stop_record_event(conference);
 
 	return 0;
 }
@@ -822,7 +719,7 @@ static int conf_start_record(struct confbridge_conference *conference)
 	ast_cond_signal(&conference->record_cond);
 	ast_mutex_unlock(&conference->record_lock);
 	ast_test_suite_event_notify("CONF_START_RECORD", "Message: started conference recording channel\r\nConference: %s", conference->b_profile.name);
-	send_start_record_event(conference->name);
+	send_start_record_event(conference);
 
 	return 0;
 }
@@ -1261,7 +1158,7 @@ void conf_ended(struct confbridge_conference *conference)
 {
 	/* Called with a reference to conference */
 	ao2_unlink(conference_bridges, conference);
-	send_conf_end_event(conference->name);
+	send_conf_end_event(conference);
 	conf_stop_record_thread(conference);
 }
 
@@ -1362,7 +1259,7 @@ static struct confbridge_conference *join_conference_bridge(const char *conferen
 			ao2_unlock(conference);
 		}
 
-		send_conf_start_event(conference->name);
+		send_conf_start_event(conference);
 		ast_debug(1, "Created conference '%s' and linked to container.\n", conference_name);
 	}
 
@@ -1564,31 +1461,22 @@ static void conf_handle_talker_destructor(void *pvt_data)
 static void conf_handle_talker_cb(struct ast_bridge_channel *bridge_channel, void *pvt_data, int talking)
 {
 	const char *conf_name = pvt_data;
+	struct confbridge_conference *conference = ao2_find(conference_bridges, conf_name, OBJ_KEY);
+	struct ast_json *talking_extras;
 
-	/* notify AMI someone is has either started or stopped talking */
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a conference participant has started or stopped talking.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='ConfbridgeStart']/managerEventInstance/syntax/parameter[@name='Conference'])" />
-				<parameter name="TalkingStatus">
-					<enumlist>
-						<enum name="on"/>
-						<enum name="off"/>
-					</enumlist>
-				</parameter>
-			</syntax>
-		</managerEventInstance>
-	***/
-	ast_manager_event(bridge_channel->chan, EVENT_FLAG_CALL, "ConfbridgeTalking",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Conference: %s\r\n"
-		"TalkingStatus: %s\r\n",
-		ast_channel_name(bridge_channel->chan),
-		ast_channel_uniqueid(bridge_channel->chan),
-		conf_name,
-		talking ? "on" : "off");
+	if (!conference) {
+		return;
+	}
+
+	talking_extras = ast_json_pack("{s: s}",
+					 "talking_status", talking ? "on" : "off");
+
+	if (!talking_extras) {
+		return;
+	}
+
+	send_conf_stasis(conference, bridge_channel->chan, "confbridge_talking", talking_extras, 0);
+	ast_json_unref(talking_extras);
 }
 
 static int conf_get_pin(struct ast_channel *chan, struct confbridge_user *user)
@@ -1838,14 +1726,14 @@ static int confbridge_exec(struct ast_channel *chan, const char *data)
 	conf_moh_unsuspend(&user);
 
 	/* Join our conference bridge for real */
-	send_join_event(user.chan, conference->name);
+	send_join_event(user.chan, conference);
 	ast_bridge_join(conference->bridge,
 		chan,
 		NULL,
 		&user.features,
 		&user.tech_args,
 		0);
-	send_leave_event(user.chan, conference->name);
+	send_leave_event(user.chan, conference);
 
 	/* if we're shutting down, don't attempt to do further processing */
 	if (ast_shutting_down()) {
@@ -1920,9 +1808,9 @@ static int action_toggle_mute(struct confbridge_conference *conference,
 		ast_bridge_mute_set(conference->bridge, user->chan, mute);
 		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(chan), mute ? "muted" : "unmuted", user->b_profile.name, ast_channel_name(chan));
 		if (mute) {
-			send_mute_event(chan, conference->name);
-		} else { 
-			send_unmute_event(chan, conference->name);
+			send_mute_event(chan, conference);
+		} else {
+			send_unmute_event(chan, conference);
 		}
 	}
 	return ast_stream_and_wait(chan, (mute ?
@@ -3243,6 +3131,9 @@ static int unload_module(void)
 	ast_manager_unregister("ConfbridgeStopRecord");
 	ast_manager_unregister("ConfbridgeSetSingleVideoSrc");
 
+	/* Unsubscribe from stasis confbridge message type and clean it up. */
+	manager_confbridge_shutdown();
+
 	/* Get rid of the conference bridges container. Since we only allow dynamic ones none will be active. */
 	ao2_cleanup(conference_bridges);
 	conference_bridges = NULL;
@@ -3292,6 +3183,9 @@ static int load_module(void)
 		unload_module();
 		return AST_MODULE_LOAD_FAILURE;
 	}
+
+	/* Setup manager stasis subscriptions */
+	res |= manager_confbridge_init();
 
 	res |= ast_register_application_xml(app, confbridge_exec);
 

@@ -460,4 +460,28 @@ void conf_remove_user_waiting(struct confbridge_conference *conference, struct c
  * \retval non-zero failure
  */
 int conf_add_post_join_action(struct confbridge_user *user, int (*func)(struct confbridge_user *user));
+
+/*!
+ * \since 12.0
+ * \brief get the confbridge stasis message type
+ *
+ * \retval stasis message type for confbridge messages if it's available
+ * \retval NULL if it isn't
+ */
+struct stasis_message_type *confbridge_message_type(void);
+
+/*!
+ * \since 12.0
+ * \brief register stasis message routers to handle manager events for confbridge messages
+ *
+ * \retval 0 success
+ * \retval non-zero failure
+ */
+int manager_confbridge_init(void);
+
+/*!
+ * \since 12.0
+ * \brief unregister stasis message routers to handle manager events for confbridge messages
+ */
+void manager_confbridge_shutdown(void);
 #endif
