@@ -27826,6 +27826,7 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 		ast_set_flag(&mask[2], SIP_PAGE3_PRACK);
 		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_PRACK);
 	} else if (!strcasecmp(v->name, "comfort-noise")) {
+		ast_set_flag(&mask[1], SIP_PAGE2_ALLOW_CN);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOW_CN);
 	} else
 		res = 0;
