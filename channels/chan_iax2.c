@@ -1334,9 +1334,7 @@ static void network_change_stasis_subscribe(void)
 
 static void network_change_stasis_unsubscribe(void)
 {
-	if (network_change_sub) {
-		network_change_sub = stasis_unsubscribe(network_change_sub);
-	}
+	network_change_sub = stasis_unsubscribe_and_join(network_change_sub);
 }
 
 static void acl_change_stasis_subscribe(void)
@@ -1349,9 +1347,7 @@ static void acl_change_stasis_subscribe(void)
 
 static void acl_change_stasis_unsubscribe(void)
 {
-	if (acl_change_sub) {
-		acl_change_sub = stasis_unsubscribe(acl_change_sub);
-	}
+	acl_change_sub = stasis_unsubscribe_and_join(acl_change_sub);
 }
 
 static int network_change_sched_cb(const void *data)
@@ -6262,7 +6258,7 @@ static int decrypt_frame(int callno, struct ast_iax2_full_hdr *fh, struct ast_fr
 		struct MD5Context md5;
 		unsigned char digest[16];
 		char *tmppw, *stringp;
-		
+
 		tmppw = ast_strdupa(iaxs[callno]->secret);
 		stringp = tmppw;
 		while ((tmppw = strsep(&stringp, ";"))) {
@@ -7824,10 +7820,13 @@ static int authenticate_verify(struct chan_iax2_pvt *p, struct iax_ies *ies)
 	if ((p->authmethods & IAX_AUTH_RSA) && !ast_strlen_zero(rsasecret) && !ast_strlen_zero(p->inkeys)) {
 		struct ast_key *key;
 		char *keyn;
-		char tmpkey[256];
+		char *tmpkey;
 		char *stringp=NULL;
-		ast_copy_string(tmpkey, p->inkeys, sizeof(tmpkey));
-		stringp=tmpkey;
+		if (!(tmpkey = ast_strdup(p->inkeys))) {
+			ast_log(LOG_ERROR, "Unable to create a temporary string for parsing stored 'inkeys'\n");
+			return res;
+		}
+		stringp = tmpkey;
 		keyn = strsep(&stringp, ":");
 		while(keyn) {
 			key = ast_key_get(keyn, AST_KEY_PUBLIC);
@@ -7838,11 +7837,12 @@ static int authenticate_verify(struct chan_iax2_pvt *p, struct iax_ies *ies)
 				ast_log(LOG_WARNING, "requested inkey '%s' for RSA authentication does not exist\n", keyn);
 			keyn = strsep(&stringp, ":");
 		}
+		ast_free(tmpkey);
 	} else if (p->authmethods & IAX_AUTH_MD5) {
 		struct MD5Context md5;
 		unsigned char digest[16];
 		char *tmppw, *stringp;
-		
+
 		tmppw = ast_strdupa(p->secret);
 		stringp = tmppw;
 		while((tmppw = strsep(&stringp, ";"))) {
@@ -7945,10 +7945,13 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 	/* Check secret against what we have on file */
 	if (!ast_strlen_zero(rsasecret) && (p->authmethods & IAX_AUTH_RSA) && !ast_strlen_zero(iaxs[callno]->challenge)) {
 		if (!ast_strlen_zero(p->inkeys)) {
-			char tmpkeys[256];
+			char *tmpkey;
 			char *stringp=NULL;
-			ast_copy_string(tmpkeys, p->inkeys, sizeof(tmpkeys));
-			stringp=tmpkeys;
+			if (!(tmpkey = ast_strdup(p->inkeys))) {
+				ast_log(LOG_ERROR, "Unable to create a temporary string for parsing stored 'inkeys'\n");
+				goto return_unref;
+			}
+			stringp = tmpkey;
 			keyn = strsep(&stringp, ":");
 			while(keyn) {
 				key = ast_key_get(keyn, AST_KEY_PUBLIC);
@@ -7959,6 +7962,7 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 					ast_log(LOG_WARNING, "requested inkey '%s' does not exist\n", keyn);
 				keyn = strsep(&stringp, ":");
 			}
+			ast_free(tmpkey);
 			if (!keyn) {
 				if (authdebug)
 					ast_log(LOG_NOTICE, "Host %s failed RSA authentication with inkeys '%s'\n", peer, p->inkeys);
@@ -12416,9 +12420,7 @@ static void peer_destructor(void *obj)
 	if (peer->dnsmgr)
 		ast_dnsmgr_release(peer->dnsmgr);
 
-	if (peer->mwi_event_sub) {
-		peer->mwi_event_sub = stasis_unsubscribe(peer->mwi_event_sub);
-	}
+	peer->mwi_event_sub = stasis_unsubscribe(peer->mwi_event_sub);
 
 	ast_string_field_free_memory(peer);
 }
@@ -14579,8 +14581,13 @@ static int users_data_provider_get(const struct ast_data_search *search,
 	struct ast_data *data_user, *data_authmethods, *data_enum_node;
 	struct iax2_user *user;
 	struct ao2_iterator i;
-	char auth[90];
+	struct ast_str *auth;
 	char *pstr = "";
+
+	if (!(auth = ast_str_create(90))) {
+		ast_log(LOG_ERROR, "Unable to create temporary string for storing 'secret'\n");
+		return 0;
+	}
 
 	i = ao2_iterator_init(users, 0);
 	for (; (user = ao2_iterator_next(&i)); user_unref(user)) {
@@ -14594,13 +14601,13 @@ static int users_data_provider_get(const struct ast_data_search *search,
 		iax2_data_add_codecs(data_user, "codecs", user->capability);
 
 		if (!ast_strlen_zero(user->secret)) {
-			ast_copy_string(auth, user->secret, sizeof(auth));
+			ast_str_set(&auth, 0, "%s", user->secret);
 		} else if (!ast_strlen_zero(user->inkeys)) {
-			snprintf(auth, sizeof(auth), "Key: %s", user->inkeys);
+			ast_str_set(&auth, 0, "Key: %s", user->inkeys);
 		} else {
-			ast_copy_string(auth, "no secret", sizeof(auth));
+			ast_str_set(&auth, 0, "no secret");
 		}
-		ast_data_add_password(data_user, "secret", auth);
+		ast_data_add_password(data_user, "secret", ast_str_buffer(auth));
 
 		ast_data_add_str(data_user, "context", user->contexts ? user->contexts->context : DEFAULT_CONTEXT);
 
@@ -14640,6 +14647,7 @@ static int users_data_provider_get(const struct ast_data_search *search,
 	}
 	ao2_iterator_destroy(&i);
 
+	ast_free(auth);
 	return 0;
 }
 
