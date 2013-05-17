@@ -781,7 +781,7 @@ struct ast_unreal_pvt *ast_unreal_alloc(size_t size, ao2_destructor_fn destructo
 
 struct ast_channel *ast_unreal_new_channels(struct ast_unreal_pvt *p,
 	const struct ast_channel_tech *tech, int semi1_state, int semi2_state,
-	const char *exten, const char *context, struct ast_channel *requestor,
+	const char *exten, const char *context, const struct ast_channel *requestor,
 	struct ast_callid *callid)
 {
 	struct ast_channel *owner;
@@ -839,7 +839,8 @@ struct ast_channel *ast_unreal_new_channels(struct ast_unreal_pvt *p,
 
 	ast_jb_configure(owner, &p->jb_conf);
 
-	if (ast_channel_cc_params_init(owner, requestor ? ast_channel_get_cc_config_params(requestor) : NULL)) {
+	if (ast_channel_cc_params_init(owner, requestor
+		? ast_channel_get_cc_config_params((struct ast_channel *) requestor) : NULL)) {
 		ast_channel_release(owner);
 		ast_channel_release(chan);
 		return NULL;

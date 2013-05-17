@@ -618,7 +618,7 @@ static struct ast_channel *local_request(const char *type, struct ast_format_cap
 	}
 	callid = ast_read_threadstorage_callid();
 	chan = ast_unreal_new_channels(&p->base, &local_tech, AST_STATE_DOWN, AST_STATE_RING,
-		p->exten, p->context, (struct ast_channel *) requestor, callid);
+		p->exten, p->context, requestor, callid);
 	if (chan) {
 		ao2_link(locals, p);
 	}

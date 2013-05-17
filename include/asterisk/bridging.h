@@ -684,9 +684,10 @@ enum ast_bridge_channel_state ast_bridge_join(struct ast_bridge *bridge,
  * parameter.
  *
  * \note If you impart a channel as not independent you MUST
- * ast_bridge_depart() the channel.  The bridge channel thread
- * is created join-able.  The implication is that the channel is
- * special and will not behave like a normal channel.
+ * ast_bridge_depart() the channel if this call succeeds.  The
+ * bridge channel thread is created join-able.  The implication
+ * is that the channel is special and will not behave like a
+ * normal channel.
  *
  * \note If you impart a channel as independent you must not
  * ast_bridge_depart() the channel.  The bridge channel thread
