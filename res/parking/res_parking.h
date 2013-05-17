@@ -29,7 +29,7 @@
 #include "asterisk/stasis_channels.h"
 
 #define DEFAULT_PARKING_LOT "default"
-
+#define DEFAULT_PARKING_EXTEN "700"
 #define PARK_DIAL_CONTEXT "park-dial"
 
 enum park_call_resolution {

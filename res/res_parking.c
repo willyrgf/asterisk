@@ -226,7 +226,7 @@ static void *parking_config_alloc(void);
 static void *parking_lot_cfg_alloc(const char *cat);
 static void *named_item_find(struct ao2_container *container, const char *name); /* XXX This is really just a generic string find. Move to astobj2.c? */
 
-static int mark_lots_as_disabled(void);
+static int config_parking_preapply(void);
 static void link_configured_disable_marked_lots(void);
 
 struct parking_global_config {
@@ -270,7 +270,7 @@ static AO2_GLOBAL_OBJ_STATIC(globals);
 
 CONFIG_INFO_STANDARD(cfg_info, globals, parking_config_alloc,
 	.files = ACO_FILES(&parking_lot_conf),
-	.pre_apply_config = mark_lots_as_disabled,
+	.pre_apply_config = config_parking_preapply,
 	.post_apply_config = link_configured_disable_marked_lots,
 );
 
@@ -663,7 +663,32 @@ static void generate_or_link_lots_to_configs(void)
 }
 
 /* Preapply */
-static int mark_lots_as_disabled(void)
+
+static int verify_default_parking_lot(void)
+{
+	struct parking_config *cfg = aco_pending_config(&cfg_info);
+	RAII_VAR(struct parking_lot_cfg *, lot_cfg, NULL, ao2_cleanup);
+
+	if (!cfg) {
+		return 0;
+	}
+
+	lot_cfg = ao2_find(cfg->parking_lots, DEFAULT_PARKING_LOT, OBJ_KEY);
+	if (!lot_cfg) {
+		lot_cfg = parking_lot_cfg_alloc(DEFAULT_PARKING_LOT);
+		if (!lot_cfg) {
+			return -1;
+		}
+		ast_log(AST_LOG_NOTICE, "Adding %s profile to res_parking\n", DEFAULT_PARKING_LOT);
+		aco_set_defaults(&parking_lot_type, DEFAULT_PARKING_LOT, lot_cfg);
+		ast_string_field_set(lot_cfg, parkext, DEFAULT_PARKING_EXTEN);
+		ao2_link(cfg->parking_lots, lot_cfg);
+	}
+
+	return 0;
+}
+
+static void mark_lots_as_disabled(void)
 {
 	struct ao2_iterator iter;
 	struct parking_lot *lot;
@@ -678,8 +703,12 @@ static int mark_lots_as_disabled(void)
 	}
 
 	ao2_iterator_destroy(&iter);
+}
 
-	return 0;
+static int config_parking_preapply(void)
+{
+	mark_lots_as_disabled();
+	return verify_default_parking_lot();
 }
 
 static void disable_marked_lots(void)
