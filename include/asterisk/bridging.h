@@ -615,8 +615,8 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan);
  * \param tech_args Optional Bridging tech optimization parameters for this channel.
  * \param pass_reference TRUE if the bridge reference is being passed by the caller.
  *
- * \note Absolutely locks should be held before calling this
- * function since it blocks.
+ * \note Absolutely _NO_ locks should be held before calling
+ * this function since it blocks.
  *
  * \retval state that channel exited the bridge with
  *
