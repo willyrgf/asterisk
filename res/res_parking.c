@@ -193,6 +193,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/manager.h"
 
 #define PARKED_CALL_APPLICATION "ParkedCall"
+#define PARK_AND_ANNOUNCE_APPLICATION "ParkAndAnnounce"
 
 /* TODO Add unit tests for parking */
 
@@ -748,6 +749,10 @@ static int load_module(void)
 	}
 
 	if (ast_register_application_xml(PARKED_CALL_APPLICATION, parked_call_app_exec)) {
+		goto error;
+	}
+
+	if (ast_register_application_xml(PARK_AND_ANNOUNCE_APPLICATION, park_and_announce_app_exec)) {
 		goto error;
 	}
 

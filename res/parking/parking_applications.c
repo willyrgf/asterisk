@@ -131,6 +131,69 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">Park</ref>
 		</see-also>
 	</application>
+
+	<application name="ParkAndAnnounce" language="en_US">
+		<synopsis>
+			Park and Announce.
+		</synopsis>
+		<syntax>
+			<parameter name="parking_lot_name">
+				<para>Specify in which parking lot to park a call.</para>
+				<para>The parking lot used is selected in the following order:</para>
+				<para>1) parking_lot_name option to this application</para>
+				<para>2) <variable>PARKINGLOT</variable> variable</para>
+				<para>3) <literal>CHANNEL(parkinglot)</literal> function
+				(Possibly preset by the channel driver.)</para>
+				<para>4) Default parking lot.</para>
+			</parameter>
+			<parameter name="options">
+				<para>A list of options for this parked call.</para>
+				<optionlist>
+					<option name="r">
+						<para>Send ringing instead of MOH to the parked call.</para>
+					</option>
+					<option name="R">
+						<para>Randomize the selection of a parking space.</para>
+					</option>
+					<option name="c" argsep=",">
+						<argument name="context" required="false" />
+						<argument name="extension" required="false" />
+						<argument name="priority" required="true" />
+						<para>If the parking times out, go to this place in the dialplan
+							instead of where the parking lot defines the call should go.
+						</para>
+					</option>
+					<option name="t">
+						<argument name="duration" required="true" />
+						<para>Use a timeout of <literal>duration</literal> seconds instead
+							of the timeout specified by the parking lot.</para>
+					</option>
+				</optionlist>
+			</parameter>
+			<parameter name="announce_template" required="true" argsep=":">
+				<argument name="announce" required="true">
+					<para>Colon-separated list of files to announce. The word
+					<literal>PARKED</literal> will be replaced by a say_digits of the extension in which
+					the call is parked.</para>
+				</argument>
+				<argument name="announce1" multiple="true" />
+			</parameter>
+			<parameter name="dial" required="true">
+				<para>The app_dial style resource to call to make the
+				announcement. Console/dsp calls the console.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>Park a call into the parkinglot and announce the call to another channel.</para>
+			<para>The variable <variable>PARKEDAT</variable> will contain the parking extension
+			into which the call was placed.  Use with the Local channel to allow the dialplan to make
+			use of this information.</para>
+		</description>
+		<see-also>
+			<ref type="application">Park</ref>
+			<ref type="application">ParkedCall</ref>
+		</see-also>
+	</application>
  ***/
 
 /* Park a call */
@@ -281,7 +344,8 @@ static int setup_park_common_datastore(struct ast_channel *parkee, const char *p
 	return 0;
 }
 
-void get_park_common_datastore_data(struct ast_channel *parkee, char **parker_uuid, char **comeback_override, int *randomize, int *time_limit, int *silence_announce)
+void get_park_common_datastore_data(struct ast_channel *parkee, char **parker_uuid, char **comeback_override,
+		int *randomize, int *time_limit, int *silence_announce)
 {
 	struct ast_datastore *datastore;
 	struct park_common_datastore *data;
@@ -311,7 +375,8 @@ void get_park_common_datastore_data(struct ast_channel *parkee, char **parker_uu
 	ast_channel_unlock(parkee);
 }
 
-struct ast_bridge *park_common_setup(struct ast_channel *parkee, struct ast_channel *parker, const char *app_data, int *silence_announcements)
+struct ast_bridge *park_common_setup(struct ast_channel *parkee, struct ast_channel *parker, const char *app_data,
+		int *silence_announcements)
 {
 	int use_ringing = 0;
 	int randomize = 0;
@@ -380,11 +445,6 @@ int park_app_exec(struct ast_channel *chan, const char *data)
 	int silence_announcements = 0;
 	const char *blind_transfer;
 
-	/* answer the channel if needed */
-	if (ast_channel_state(chan) != AST_STATE_UP) {
-		ast_answer(chan);
-	}
-
 	ast_channel_lock(chan);
 	if ((blind_transfer = pbx_builtin_getvar_helper(chan, "BLINDTRANSFER"))) {
 		blind_transfer = ast_strdupa(blind_transfer);
@@ -426,6 +486,8 @@ int park_app_exec(struct ast_channel *chan, const char *data)
 
 	return res;
 }
+
+/* Retrieve a parked call */
 
 int parked_call_app_exec(struct ast_channel *chan, const char *data)
 {
@@ -524,3 +586,218 @@ int parked_call_app_exec(struct ast_channel *chan, const char *data)
 	return 0;
 }
 
+struct park_announce_subscription_data {
+	char *parkee_uuid;
+	char *dial_string;
+	char *announce_string;
+};
+
+static void park_announce_subscription_data_destroy(void *data)
+{
+	struct park_announce_subscription_data *pa_data = data;
+	ast_free(pa_data->parkee_uuid);
+	ast_free(pa_data->dial_string);
+	ast_free(pa_data->announce_string);
+	ast_free(pa_data);
+}
+
+static struct park_announce_subscription_data *park_announce_subscription_data_create(const char *parkee_uuid,
+		const char *dial_string,
+		const char *announce_string)
+{
+	struct park_announce_subscription_data *pa_data;
+
+	if (!(pa_data = ast_calloc(1, sizeof(*pa_data)))) {
+		return NULL;
+	}
+
+	if (!(pa_data->parkee_uuid = ast_strdup(parkee_uuid))
+		|| !(pa_data->dial_string = ast_strdup(dial_string))
+		|| !(pa_data->announce_string = ast_strdup(announce_string))) {
+		park_announce_subscription_data_destroy(pa_data);
+		return NULL;
+	}
+
+	return pa_data;
+}
+
+static void announce_to_dial(char *dial_string, char *announce_string, int parkingspace, struct ast_channel_snapshot *parkee_snapshot)
+{
+	struct ast_channel *dchan;
+	struct outgoing_helper oh = { 0, };
+	int outstate;
+	struct ast_format_cap *cap_slin = ast_format_cap_alloc_nolock();
+	char buf[13];
+	char *dial_tech;
+	char *cur_announce;
+	struct ast_format tmpfmt;
+
+	dial_tech = strsep(&dial_string, "/");
+	ast_verb(3, "Dial Tech,String: (%s,%s)\n", dial_tech, dial_string);
+
+	if (!cap_slin) {
+		ast_log(LOG_WARNING, "PARK: Failed to announce park.\n");
+		goto announce_cleanup;
+	}
+	ast_format_cap_add(cap_slin, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));
+
+	snprintf(buf, sizeof(buf), "%d", parkingspace);
+	oh.vars = ast_variable_new("_PARKEDAT", buf, "");
+	dchan = __ast_request_and_dial(dial_tech, cap_slin, NULL, dial_string, 30000,
+		&outstate,
+		parkee_snapshot->caller_number,
+		parkee_snapshot->caller_name,
+		&oh);
+
+	ast_variables_destroy(oh.vars);
+	if (!dchan) {
+		ast_log(LOG_WARNING, "PARK: Unable to allocate announce channel.\n");
+		goto announce_cleanup;
+	}
+
+	ast_verb(4, "Announce Template: %s\n", announce_string);
+
+	for (cur_announce = strsep(&announce_string, ":"); cur_announce; cur_announce = strsep(&announce_string, ":")) {
+		ast_verb(4, "Announce:%s\n", cur_announce);
+		if (!strcmp(cur_announce, "PARKED")) {
+			ast_say_digits(dchan, parkingspace, "", ast_channel_language(dchan));
+		} else {
+			int dres = ast_streamfile(dchan, cur_announce, ast_channel_language(dchan));
+			if (!dres) {
+				dres = ast_waitstream(dchan, "");
+			} else {
+				ast_log(LOG_WARNING, "ast_streamfile of %s failed on %s\n", cur_announce, ast_channel_name(dchan));
+			}
+		}
+	}
+
+	ast_stopstream(dchan);
+	ast_hangup(dchan);
+
+announce_cleanup:
+	cap_slin = ast_format_cap_destroy(cap_slin);
+}
+
+static void park_announce_update_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message)
+{
+	struct park_announce_subscription_data *pa_data = data;
+	char *dial_string = pa_data->dial_string;
+
+	struct ast_parked_call_payload *payload = stasis_message_data(message);
+	struct ast_channel_snapshot *parkee_snapshot;
+
+	if (stasis_subscription_final_message(sub, message)) {
+		park_announce_subscription_data_destroy(data);
+		return;
+	}
+
+	if (payload->event_type != PARKED_CALL) {
+		/* We are only concerned with calls parked */
+		return;
+	}
+
+	parkee_snapshot = payload->parkee;
+	if (strcmp(payload->parkee->uniqueid, pa_data->parkee_uuid)) {
+		/* We are only concerned with the parkee we are subscribed for. */
+		return;
+	}
+
+	if (!ast_strlen_zero(dial_string)) {
+		announce_to_dial(dial_string, pa_data->announce_string, payload->parkingspace, payload->parkee);
+	}
+
+	*dial_string = '\0'; /* If we observe this dial string on a second pass, we don't want to do anything with it. */
+}
+
+int park_and_announce_app_exec(struct ast_channel *chan, const char *data)
+{
+	struct ast_bridge_features chan_features;
+	char *parse;
+	int res;
+	int silence_announcements = 1;
+
+	struct stasis_subscription *parking_subscription;
+	struct park_announce_subscription_data *pa_data;
+
+	RAII_VAR(struct ast_bridge *, parking_bridge, NULL, ao2_cleanup);
+
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(lot_name);
+		AST_APP_ARG(options);
+		AST_APP_ARG(announce_template);
+		AST_APP_ARG(dial);
+		AST_APP_ARG(others);/* Any remaining unused arguments */
+	);
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_ERROR, "ParkAndAnnounce has required arguments. No arguments were provided.\n");
+		return -1;
+	}
+
+	parse = ast_strdupa(data);
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (ast_strlen_zero(args.announce_template)) {
+		/* improperly configured arguments for the application */
+		ast_log(LOG_ERROR, "ParkAndAnnounce requires the announce_template argument.\n");
+		return -1;
+	}
+
+	if (ast_strlen_zero(args.dial)) {
+		/* improperly configured arguments */
+		ast_log(LOG_ERROR, "ParkAndAnnounce requires the dial argument.\n");
+		return -1;
+	}
+
+	if (!strchr(args.dial, '/')) {
+		ast_log(LOG_ERROR, "ParkAndAnnounce dial string '%s' is improperly formed.\n", args.dial);
+		return -1;
+	}
+
+	/* Handle the common parking setup stuff */
+	if (!(parking_bridge = park_common_setup(chan, chan, data, &silence_announcements))) {
+		return 0;
+	}
+
+	/* Initialize bridge features for the channel. */
+	res = ast_bridge_features_init(&chan_features);
+	if (res) {
+		ast_bridge_features_cleanup(&chan_features);
+		return -1;
+	}
+
+	/* subscribe to the parking message so that we can announce once it is parked */
+	pa_data = park_announce_subscription_data_create(ast_channel_uniqueid(chan), args.dial, args.announce_template);
+	if (!pa_data) {
+		return -1;
+	}
+
+	if (!(parking_subscription = stasis_subscribe(ast_parking_topic(), park_announce_update_cb, pa_data))) {
+		/* Failed to create subscription */
+		park_announce_subscription_data_destroy(pa_data);
+		return -1;
+	}
+
+	/* Now for the fun part... park it! */
+	ast_bridge_join(parking_bridge, chan, NULL, &chan_features, NULL, 0);
+
+	/* Toss the subscription since we aren't bridged at this point. */
+	stasis_unsubscribe(parking_subscription);
+
+	/*
+	 * If the bridge was broken for a hangup that isn't real, then
+	 * don't run the h extension, because the channel isn't really
+	 * hung up.  This should only happen with AST_SOFTHANGUP_ASYNCGOTO.
+	 */
+	res = -1;
+
+	ast_channel_lock(chan);
+	if (ast_channel_softhangup_internal_flag(chan) & AST_SOFTHANGUP_ASYNCGOTO) {
+		res = 0;
+	}
+	ast_channel_unlock(chan);
+
+	ast_bridge_features_cleanup(&chan_features);
+
+	return res;
+}

@@ -200,6 +200,11 @@ static int bridge_parking_push(struct ast_bridge_parking *self, struct ast_bridg
 
 	ast_bridge_base_v_table.push(&self->base, bridge_channel, swap);
 
+	/* Answer the channel if needed */
+	if (ast_channel_state(bridge_channel->chan) != AST_STATE_UP) {
+		ast_answer(bridge_channel->chan);
+	}
+
 	if (swap) {
 		ao2_lock(swap);
 		pu = swap->bridge_pvt;

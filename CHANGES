@@ -151,10 +151,11 @@ Parking
    methods and the contents of parking lots will be visible though certain bridge
    commands.
 
- * The order of arguments for the new parking application are different from the
-   old one to be more intuitive. Timeout and return context/exten/priority are now
+ * The order of arguments for the new parking applications are different from the
+   old ones to be more intuitive. Timeout and return context/exten/priority are now
    implemented as options. parking_lot_name is now the first parameter. See the
-   application documentation for Park for more in-depth information.
+   application documentation for Park, ParkedCall, and ParkAndAnnounce for more
+   in-depth information as well as syntax.
 
  * Extensions are no longer automatically created in the dialplan to park calls,
    pickup parked calls, etc by default.
@@ -176,6 +177,13 @@ Parking
 
  * The AMI command 'ParkedCalls' will now accept a 'ParkingLot' argument which
    can be used to get a list of parked calls only for a specific parking lot.
+
+ * The ParkAndAnnounce application is now provided through res_parking instead
+   of through the separate app_parkandannounce module.
+
+ * ParkAndAnnounce will no longer go to the next position in dialplan on timeout
+   by default. Instead, it will follow the timeout rules of the parking lot. The
+   old behavior can be reproduced by using the 'c' option.
 
 Queue
 -------------------

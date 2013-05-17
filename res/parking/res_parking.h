@@ -381,6 +381,20 @@ int parked_call_app_exec(struct ast_channel *chan, const char *data);
 
 /*!
  * \since 12
+ * \brief Execution function for the park and retrieve application
+ *
+ * \param chan ast_channel entering the application
+ * \param data arguments to the application
+ *
+ * \retval 0 the application executed in such a way that the channel should proceed in the dial plan
+ * \retval -1 the channel should no longer proceed through the dial plan
+ *
+ * \note this function should only be used to register the park and announce application and not generally to park and announce.
+ */
+int park_and_announce_app_exec(struct ast_channel *chan, const char *data);
+
+/*!
+ * \since 12
  * \brief Register CLI commands
  *
  * \retval 0 if successful

@@ -90,6 +90,12 @@ Features:
    DYNAMIC_FEATURES includes the feature is on.  Use predial to set different
    values of DYNAMIC_FEATURES on the channels
 
+Parking:
+ - The arguments for the Park, ParkedCall, and ParkAndAnnounce applications have
+   been modified significantly. See the application documents for specific details.
+   Also parking lot configuration is now done in res_parking.conf instead of
+   features.conf
+
 From 10 to 11:
 
 Voicemail:
