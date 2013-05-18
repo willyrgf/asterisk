@@ -684,7 +684,6 @@ static void park_announce_update_cb(void *data, struct stasis_subscription *sub,
 	char *dial_string = pa_data->dial_string;
 
 	struct ast_parked_call_payload *payload = stasis_message_data(message);
-	struct ast_channel_snapshot *parkee_snapshot;
 
 	if (stasis_subscription_final_message(sub, message)) {
 		park_announce_subscription_data_destroy(data);
@@ -696,7 +695,6 @@ static void park_announce_update_cb(void *data, struct stasis_subscription *sub,
 		return;
 	}
 
-	parkee_snapshot = payload->parkee;
 	if (strcmp(payload->parkee->uniqueid, pa_data->parkee_uuid)) {
 		/* We are only concerned with the parkee we are subscribed for. */
 		return;
