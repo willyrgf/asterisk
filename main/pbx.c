@@ -10118,6 +10118,8 @@ static int pbx_outgoing_attempt(const char *type, struct ast_format_cap *cap, co
 
 	ao2_ref(outgoing, +1);
 
+	ast_mutex_lock(&outgoing->lock);
+
 	if (ast_pthread_create_detached(&thread, NULL, pbx_outgoing_exec, outgoing)) {
 		ast_log(LOG_WARNING, "Unable to spawn dialing thread for '%s/%s'\n", type, addr);
 		if (channel) {
@@ -10128,8 +10130,7 @@ static int pbx_outgoing_attempt(const char *type, struct ast_format_cap *cap, co
 	}
 
 	/* Wait for dialing to complete */
-	if (synchronous) {
-		ast_mutex_lock(&outgoing->lock);
+	if (channel || synchronous) {
 		if (channel) {
 			ast_channel_unlock(*channel);
 		}
@@ -10139,17 +10140,16 @@ static int pbx_outgoing_attempt(const char *type, struct ast_format_cap *cap, co
 		if (channel) {
 			ast_channel_lock(*channel);
 		}
-		ast_mutex_unlock(&outgoing->lock);
 	}
 
 	/* Wait for execution to complete */
 	if (synchronous > 1) {
-		ast_mutex_lock(&outgoing->lock);
 		while (!outgoing->executed) {
 			ast_cond_wait(&outgoing->cond, &outgoing->lock);
 		}
-		ast_mutex_unlock(&outgoing->lock);
 	}
+
+	ast_mutex_unlock(&outgoing->lock);
 
 	if (reason) {
 		*reason = ast_dial_reason(outgoing->dial, 0);
