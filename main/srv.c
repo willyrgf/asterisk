@@ -261,6 +261,7 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 		(*context)->prev = AST_LIST_FIRST(&(*context)->entries);
 		*host = (*context)->prev->host;
 		*port = (*context)->prev->port;
+		(*context)-> current = (*context)->prev;
 		return 0;
 	}
 
@@ -268,6 +269,7 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 		/* Retrieve next item in result */
 		*host = (*context)->prev->host;
 		*port = (*context)->prev->port;
+		(*context)-> current = (*context)->prev;
 		return 0;
 	} else {
 		/* No more results */
@@ -389,6 +391,44 @@ unsigned int ast_srv_get_record_count(struct srv_context *context)
 	return context->num_records;
 }
 
+int ast_srv_get_next_record(struct srv_context *context, const char **host,
+		unsigned short *port, unsigned short *priority, unsigned short *weight)
+{
+	int i = 1;
+	int res = -1;
+	struct srv_entry *entry = NULL;
+
+	if (context == NULL) {
+		return res;
+	}
+
+	AST_LIST_TRAVERSE(&context->entries, entry, list) {
+		int this_is_it = 0;
+		if (context->current == NULL) {
+			/* Pick the first one */
+			this_is_it = 2;
+		}
+		if (this_is_it == 1) {
+			this_is_it = 2;
+		}
+		if (!this_is_it && context->current == entry) {
+			this_is_it = 1;	/* Take the next one */
+		}
+		if (this_is_it == 2) {
+			*host = entry->host;
+			*port = entry->port;
+			*priority = entry->priority;
+			*weight = entry->weight;
+			res = 0;
+			break;
+		}
+		++i;
+	}
+	context->current = entry;
+
+	return res;
+}
+
 int ast_srv_get_nth_record(struct srv_context *context, int record_num, const char **host,
 		unsigned short *port, unsigned short *priority, unsigned short *weight)
 {
@@ -415,6 +455,7 @@ int ast_srv_get_nth_record(struct srv_context *context, int record_num, const ch
 		}
 		++i;
 	}
+	context->current = entry;
 
 	return res;
 }

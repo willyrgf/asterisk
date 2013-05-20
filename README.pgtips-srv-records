@@ -31,14 +31,15 @@ In addition, address family needs to be handled properly. An IPv4 server needs t
 hosts with only IPv6 records and move on in the process of selecting a server and 
 vice versa for IPv6 only hosts. 
 
+This project is funded by Inteno Broadband Solutions AB, Sweden. http://www.intenogroup.com
+
 Happy Earballs
 ==============
 Dual stack hosts needs to contact both address families at the same time to minimize timeout effects on caller's
 call setup time.
+
 This is not in scope for this project. Work is in progress in the SIP Forum IPv6 wg
 to define a process for this situation.
-
-This work is funded by Inteno Broadband Solutions AB, Sweden. http://www.intenogroup.com
 
 Asterisk changes (brainstorm suggestion)
 ========================================
@@ -46,6 +47,7 @@ Asterisk changes (brainstorm suggestion)
 - Make sure that the SIP channel gets a list on a SRV lookup, not a single host.
 - Add failover based on that list
 - Make sure the list is searched on every transaction and have failover in a call
+- Add peer matching (see below)
 
 
 Peer matching
@@ -94,11 +96,12 @@ Todo:
 6. Add the same IPs to the AO2object for IP matching
 7. Make sure the ACL list is updated by DNS manager
 8. Change peer match by ip/port to use ACL list if available
-9. Avoid testing. Real developers don't test.
-10. Don't open a bug tracker issue on this project.
-11. De-install GDB. GDB is for weak developers.
-12. Do not write any documentation, regardless of what people say. It's a SEP.
-13. Stay calm and carry on.
+9. Fix outbound proxy SRV support (proxy_update)
+10. Avoid testing. Real developers don't test.
+11. Don't open a bug tracker issue on this project.
+12. De-install GDB. GDB is for weak developers.
+13. Do not write any documentation, regardless of what people say. It's a SEP.
+14. Stay calm and carry on.
 
 
 Query on AO2 object stuff:

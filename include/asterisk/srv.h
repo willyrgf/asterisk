@@ -90,6 +90,30 @@ extern int ast_get_srv_list(struct srv_context *context, struct ast_channel *cha
 unsigned int ast_srv_get_record_count(struct srv_context *context);
 
 /*!
+ * \brief Retrieve details from the next SRV record
+ *
+ * \details
+ * After calling ast_srv_lookup, the srv_context will contain
+ * the data from several records. There is a pointer to the current
+ * used record in the srv_context. This function selects the
+ * next record if it exists.
+ * The records are sorted based on priority and secondarily based on
+ * weight. See RFC 2782 for the exact sorting rules.
+ *
+ * \param context The context returned by ast_srv_lookup
+ * \param record_num The 1-indexed record number to retrieve
+ * \param[out] host The host portion of the record
+ * \param[out] port The port portion of the record
+ * \param[out] priority The priority portion of the record
+ * \param[out] weight The weight portion of the record
+ * \retval -1 Failed to retrieve information. Likely due to an out of
+ * range record_num
+ * \retval 0 Success
+ */
+int ast_srv_get_next_record(struct srv_context *context, const char **host,
+		unsigned short *port, unsigned short *priority, unsigned short *weight);
+
+/*!
  * \brief Retrieve details from a specific SRV record
  *
  * \details

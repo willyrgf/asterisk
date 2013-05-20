@@ -3377,7 +3377,9 @@ static void sip_alreadygone(struct sip_pvt *dialog)
 	dialog->alreadygone = 1;
 }
 
-/*! Resolve DNS srv name or host name in a sip_proxy structure */
+/*! Resolve DNS srv name or host name in a sip_proxy structure 
+ 	OEJ: XXX Needs to update SRV records
+*/
 static int proxy_update(struct sip_proxy *proxy)
 {
 	/* if it's actually an IP address and not a name,
