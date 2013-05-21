@@ -183,7 +183,7 @@ int hangup_sip2cause(int sipcode)
 		/* 6xx - global errors in the 4xx class */
 		return AST_CAUSE_INTERWORKING;
 	}
-	ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", s2c->cause, ast_cause2str(s2c->cause), sipcode);
+	ast_debug(4, "SIP2CAUSE returning default %d (%s) based on SIP code %d\n", AST_CAUSE_NORMAL, ast_cause2str( AST_CAUSE_NORMAL), sipcode);
 	return AST_CAUSE_NORMAL;
 }
 
