@@ -1751,7 +1751,6 @@ static int action_toggle_mute(struct confbridge_conference *conference,
 	if (!ast_test_flag(&user->u_profile, USER_OPT_WAITMARKED) || conference->markedusers) {
 		mute = !mute;
 		ast_bridge_mute_set(conference->bridge, user->chan, mute);
-		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(chan), mute ? "muted" : "unmuted", user->b_profile.name, ast_channel_name(chan));
 		if (mute) {
 			send_mute_event(chan, conference);
 		} else {
@@ -2339,8 +2338,16 @@ static int generic_mute_unmute_helper(int mute, const char *conference_name, con
 		}
 	}
 	if (user) {
-		ast_bridge_mute_set(conference->bridge, user->chan, mute);
-		ast_test_suite_event_notify("CONF_MUTE", "Message: participant %s %s\r\nConference: %s\r\nChannel: %s", ast_channel_name(user->chan), mute ? "muted" : "unmuted", conference->b_profile.name, ast_channel_name(user->chan));
+		res = ast_bridge_mute_set(conference->bridge, user->chan, mute);
+		if (!res) {
+			ast_channel_lock(user->chan);
+			if (mute) {
+				send_mute_event(user->chan, conference);
+			} else {
+				send_unmute_event(user->chan, conference);
+			}
+			ast_channel_unlock(user->chan);
+		}
 	} else {
 		res = -2;;
 	}

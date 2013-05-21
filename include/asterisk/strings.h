@@ -29,7 +29,6 @@
 
 #include "asterisk/utils.h"
 #include "asterisk/threadstorage.h"
-#include "asterisk/astobj2.h"
 
 #if defined(DEBUG_OPAQUE)
 #define __AST_STR_USED used2
@@ -1067,6 +1066,5 @@ static force_inline int attribute_pure ast_str_case_hash(const char *str)
 
 	return abs(hash);
 }
-
 
 #endif /* _ASTERISK_STRINGS_H */
