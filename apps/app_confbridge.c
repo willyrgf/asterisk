@@ -686,7 +686,8 @@ static void announce_channel_depart(struct ast_channel *chan)
  *
  * \param ast Either channel in the announcer channel pair.
  *
- * \return Nothing
+ * \retval 0 on success.
+ * \retval -1 on error.
  */
 static int announce_channel_push(struct ast_channel *ast)
 {
@@ -694,20 +695,20 @@ static int announce_channel_push(struct ast_channel *ast)
 	RAII_VAR(struct announce_pvt *, p, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_channel *, chan, NULL, ast_channel_unref);
 
-	ast_channel_lock(ast);
-	p = ast_channel_tech_pvt(ast);
-	if (!p) {
-		ast_channel_unlock(ast);
-		return -1;
+	{
+		SCOPED_CHANNELLOCK(lock, ast);
+
+		p = ast_channel_tech_pvt(ast);
+		if (!p) {
+			return -1;
+		}
+		ao2_ref(p, +1);
+		chan = p->base.chan;
+		if (!chan) {
+			return -1;
+		}
+		ast_channel_ref(chan);
 	}
-	ao2_ref(p, +1);
-	chan = p->base.chan;
-	if (!chan) {
-		ast_channel_unlock(ast);
-		return -1;
-	}
-	ast_channel_ref(chan);
-	ast_channel_unlock(ast);
 
 	features = ast_bridge_features_new();
 	if (!features) {
