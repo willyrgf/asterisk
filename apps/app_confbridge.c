@@ -70,7 +70,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stasis.h"
 #include "asterisk/stasis_bridging.h"
 #include "asterisk/json.h"
-#include "asterisk/core_unreal.h"
 
 /*** DOCUMENTATION
 	<application name="ConfBridge" language="en_US">
@@ -307,7 +306,7 @@ enum {
 };
 
 /*! \brief Container to hold all conference bridges in progress */
-static struct ao2_container *conference_bridges;
+struct ao2_container *conference_bridges;
 
 static void leave_conference(struct confbridge_user *user);
 static int play_sound_number(struct confbridge_conference *conference, int say_number);
@@ -487,243 +486,6 @@ static void send_mute_event(struct ast_channel *chan, struct confbridge_conferen
 static void send_unmute_event(struct ast_channel *chan, struct confbridge_conference *conference)
 {
 	send_conf_stasis(conference, chan, "confbridge_unmute", NULL, 1);
-}
-
-static int rec_call(struct ast_channel *chan, const char *addr, int timeout)
-{
-	/* Make sure anyone calling ast_call() for this channel driver is going to fail. */
-	return -1;
-}
-
-static struct ast_frame *rec_read(struct ast_channel *ast)
-{
-	return &ast_null_frame;
-}
-
-static int rec_write(struct ast_channel *ast, struct ast_frame *f)
-{
-	return 0;
-}
-
-static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
-
-static struct ast_channel_tech record_tech = {
-	.type = "CBRec",
-	.description = "Conference Bridge Recording Channel",
-	.requester = rec_request,
-	.call = rec_call,
-	.read = rec_read,
-	.write = rec_write,
-};
-
-static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
-{
-	struct ast_channel *chan;
-	struct ast_format format;
-	const char *conf_name = data;
-
-	chan = ast_channel_alloc(1, AST_STATE_UP, NULL, NULL, NULL, NULL, NULL, NULL, 0,
-		"CBRec/conf-%s-uid-%d",
-		conf_name, (int) ast_random());
-	if (!chan) {
-		return NULL;
-	}
-	if (ast_channel_add_bridge_role(chan, "recorder")) {
-		ast_channel_release(chan);
-		return NULL;
-	}
-	ast_format_set(&format, AST_FORMAT_SLINEAR, 0);
-	ast_channel_tech_set(chan, &record_tech);
-	ast_format_cap_add_all(ast_channel_nativeformats(chan));
-	ast_format_copy(ast_channel_writeformat(chan), &format);
-	ast_format_copy(ast_channel_rawwriteformat(chan), &format);
-	ast_format_copy(ast_channel_readformat(chan), &format);
-	ast_format_copy(ast_channel_rawreadformat(chan), &format);
-	return chan;
-}
-
-/*! ConfBridge announcer channel private. */
-struct announce_pvt {
-	/*! Unreal channel driver base class values. */
-	struct ast_unreal_pvt base;
-	/*! Conference bridge associated with this announcer. */
-	struct ast_bridge *bridge;
-};
-
-static int announce_call(struct ast_channel *chan, const char *addr, int timeout)
-{
-	/* Make sure anyone calling ast_call() for this channel driver is going to fail. */
-	return -1;
-}
-
-static int announce_hangup(struct ast_channel *ast)
-{
-	struct announce_pvt *p = ast_channel_tech_pvt(ast);
-	int res;
-
-	if (!p) {
-		return -1;
-	}
-
-	/* give the pvt a ref to fulfill calling requirements. */
-	ao2_ref(p, +1);
-	res = ast_unreal_hangup(&p->base, ast);
-	ao2_ref(p, -1);
-
-	return res;
-}
-
-static struct ast_channel *announce_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
-
-static struct ast_channel_tech announce_tech = {
-	.type = "CBAnn",
-	.description = "Conference Bridge Announcing Channel",
-	.requester = announce_request,
-	.call = announce_call,
-	.hangup = announce_hangup,
-
-	.send_digit_begin = ast_unreal_digit_begin,
-	.send_digit_end = ast_unreal_digit_end,
-	.read = ast_unreal_read,
-	.write = ast_unreal_write,
-	.write_video = ast_unreal_write,
-	.exception = ast_unreal_read,
-	.indicate = ast_unreal_indicate,
-	.fixup = ast_unreal_fixup,
-	.send_html = ast_unreal_sendhtml,
-	.send_text = ast_unreal_sendtext,
-	.queryoption = ast_unreal_queryoption,
-	.setoption = ast_unreal_setoption,
-};
-
-static void announce_pvt_destructor(void *vdoomed)
-{
-	struct announce_pvt *doomed = vdoomed;
-
-	ao2_cleanup(doomed->bridge);
-	doomed->bridge = NULL;
-}
-
-static struct ast_channel *announce_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
-{
-	struct ast_channel *chan;
-	const char *conf_name = data;
-	RAII_VAR(struct confbridge_conference *, conference, NULL, ao2_cleanup);
-	RAII_VAR(struct announce_pvt *, pvt, NULL, ao2_cleanup);
-
-	conference = ao2_find(conference_bridges, conf_name, OBJ_KEY);
-	if (!conference) {
-		return NULL;
-	}
-	ast_assert(conference->bridge != NULL);
-
-	/* Allocate a new private structure and then Asterisk channels */
-	pvt = (struct announce_pvt *) ast_unreal_alloc(sizeof(*pvt), announce_pvt_destructor,
-		cap);
-	if (!pvt) {
-		return NULL;
-	}
-	ast_set_flag(&pvt->base, AST_UNREAL_NO_OPTIMIZATION);
-	ast_copy_string(pvt->base.name, conf_name, sizeof(pvt->base.name));
-	pvt->bridge = conference->bridge;
-	ao2_ref(pvt->bridge, +1);
-
-	chan = ast_unreal_new_channels(&pvt->base, &announce_tech, AST_STATE_UP, AST_STATE_UP,
-		NULL, NULL, requestor, NULL);
-	if (chan) {
-		ast_answer(pvt->base.owner);
-		ast_answer(pvt->base.chan);
-		if (ast_channel_add_bridge_role(pvt->base.chan, "announcer")) {
-			ast_hangup(chan);
-			chan = NULL;
-		}
-	}
-
-	return chan;
-}
-
-/*!
- * \internal
- * \brief Remove the announcer channel from the conference.
- * \since 12.0.0
- *
- * \param chan Either channel in the announcer channel pair.
- *
- * \return Nothing
- */
-static void announce_channel_depart(struct ast_channel *chan)
-{
-	struct announce_pvt *p = ast_channel_tech_pvt(chan);
-
-	if (!p) {
-		return;
-	}
-
-	ao2_ref(p, +1);
-	ao2_lock(p);
-	if (!ast_test_flag(&p->base, AST_UNREAL_CARETAKER_THREAD)) {
-		ao2_unlock(p);
-		ao2_ref(p, -1);
-		return;
-	}
-	ast_clear_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
-	chan = p->base.chan;
-	if (chan) {
-		ast_channel_ref(chan);
-	}
-	ao2_unlock(p);
-	ao2_ref(p, -1);
-	if (chan) {
-		ast_bridge_depart(chan);
-		ast_channel_unref(chan);
-	}
-}
-
-/*!
- * \internal
- * \brief Push the announcer channel into the conference.
- * \since 12.0.0
- *
- * \param ast Either channel in the announcer channel pair.
- *
- * \retval 0 on success.
- * \retval -1 on error.
- */
-static int announce_channel_push(struct ast_channel *ast)
-{
-	struct ast_bridge_features *features;
-	RAII_VAR(struct announce_pvt *, p, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_channel *, chan, NULL, ast_channel_unref);
-
-	{
-		SCOPED_CHANNELLOCK(lock, ast);
-
-		p = ast_channel_tech_pvt(ast);
-		if (!p) {
-			return -1;
-		}
-		ao2_ref(p, +1);
-		chan = p->base.chan;
-		if (!chan) {
-			return -1;
-		}
-		ast_channel_ref(chan);
-	}
-
-	features = ast_bridge_features_new();
-	if (!features) {
-		return -1;
-	}
-	ast_set_flag(&features->feature_flags, AST_BRIDGE_CHANNEL_FLAG_IMMOVABLE);
-
-	/* Impart the output channel into the bridge */
-	if (ast_bridge_impart(p->bridge, chan, NULL, features, 0)) {
-		return -1;
-	}
-	ao2_lock(p);
-	ast_set_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
-	ao2_unlock(p);
-	return 0;
 }
 
 static void set_rec_filename(struct confbridge_conference *conference, struct ast_str **filename, int is_new)
@@ -1124,7 +886,7 @@ static void destroy_conference_bridge(void *obj)
 	ast_debug(1, "Destroying conference bridge '%s'\n", conference->name);
 
 	if (conference->playback_chan) {
-		announce_channel_depart(conference->playback_chan);
+		conf_announce_channel_depart(conference->playback_chan);
 		ast_hangup(conference->playback_chan);
 		conference->playback_chan = NULL;
 	}
@@ -1595,7 +1357,7 @@ static int play_sound_helper(struct confbridge_conference *conference, const cha
 		ast_mutex_unlock(&conference->playback_lock);
 		return -1;
 	}
-	if (announce_channel_push(conference->playback_chan)) {
+	if (conf_announce_channel_push(conference->playback_chan)) {
 		ast_mutex_unlock(&conference->playback_lock);
 		return -1;
 	}
@@ -1610,7 +1372,7 @@ static int play_sound_helper(struct confbridge_conference *conference, const cha
 
 	ast_debug(1, "Departing announcer channel '%s' from conference bridge '%s'\n",
 		ast_channel_name(conference->playback_chan), conference->name);
-	announce_channel_depart(conference->playback_chan);
+	conf_announce_channel_depart(conference->playback_chan);
 
 	ast_mutex_unlock(&conference->playback_lock);
 
@@ -3363,8 +3125,8 @@ static int unload_module(void)
 
 	conf_destroy_config();
 
-	unregister_channel_tech(&announce_tech);
-	unregister_channel_tech(&record_tech);
+	unregister_channel_tech(conf_announce_get_tech());
+	unregister_channel_tech(conf_record_get_tech());
 
 	return 0;
 }
@@ -3388,8 +3150,8 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	if (register_channel_tech(&record_tech)
-		|| register_channel_tech(&announce_tech)) {
+	if (register_channel_tech(conf_record_get_tech())
+		|| register_channel_tech(conf_announce_get_tech())) {
 		unload_module();
 		return AST_MODULE_LOAD_FAILURE;
 	}
