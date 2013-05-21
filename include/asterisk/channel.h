@@ -643,6 +643,7 @@ struct ast_channel_tech {
 	/*! \brief Handle an exception, reading a frame */
 	struct ast_frame * (* const exception)(struct ast_channel *chan);
 
+/* BUGBUG this tech callback is to be removed. */
 	/*! \brief Bridge two channels of the same type together */
 	enum ast_bridge_result (* const bridge)(struct ast_channel *c0, struct ast_channel *c1, int flags,
 						struct ast_frame **fo, struct ast_channel **rc, int timeoutms);
@@ -671,6 +672,7 @@ struct ast_channel_tech {
 	/*! \brief Write a text frame, in standard format */
 	int (* const write_text)(struct ast_channel *chan, struct ast_frame *frame);
 
+/* BUGBUG this tech callback is to be removed. */
 	/*! \brief Find bridged channel */
 	struct ast_channel *(* const bridged_channel)(struct ast_channel *chan, struct ast_channel *bridge);
 
@@ -686,6 +688,7 @@ struct ast_channel_tech {
 	 */
 	int (* func_channel_write)(struct ast_channel *chan, const char *function, char *data, const char *value);
 
+/* BUGBUG this tech callback is to be removed. */
 	/*! \brief Retrieve base channel (agent and local) */
 	struct ast_channel* (* get_base_channel)(struct ast_channel *chan);
 

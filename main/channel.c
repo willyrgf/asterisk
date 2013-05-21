@@ -6240,87 +6240,21 @@ int ast_channel_make_compatible(struct ast_channel *chan, struct ast_channel *pe
 static int __ast_channel_masquerade(struct ast_channel *original, struct ast_channel *clonechan, struct ast_datastore *xfer_ds)
 {
 	int res = -1;
-	struct ast_channel *final_orig, *final_clone, *base;
-
-	for (;;) {
-		final_orig = original;
-		final_clone = clonechan;
-
-		ast_channel_lock_both(original, clonechan);
-
-		if (ast_test_flag(ast_channel_flags(original), AST_FLAG_ZOMBIE)
-			|| ast_test_flag(ast_channel_flags(clonechan), AST_FLAG_ZOMBIE)) {
-			/* Zombies! Run! */
-			ast_log(LOG_WARNING,
-				"Can't setup masquerade. One or both channels is dead. (%s <-- %s)\n",
-				ast_channel_name(original), ast_channel_name(clonechan));
-			ast_channel_unlock(clonechan);
-			ast_channel_unlock(original);
-			return -1;
-		}
-
-		/*
-		 * Each of these channels may be sitting behind a channel proxy
-		 * (i.e. chan_agent) and if so, we don't really want to
-		 * masquerade it, but its proxy
-		 */
-		if (ast_channel_internal_bridged_channel(original)
-			&& (ast_channel_internal_bridged_channel(original) != ast_bridged_channel(original))
-			&& (ast_channel_internal_bridged_channel(ast_channel_internal_bridged_channel(original)) != original)) {
-			final_orig = ast_channel_internal_bridged_channel(original);
-		}
-		if (ast_channel_internal_bridged_channel(clonechan)
-			&& (ast_channel_internal_bridged_channel(clonechan) != ast_bridged_channel(clonechan))
-			&& (ast_channel_internal_bridged_channel(ast_channel_internal_bridged_channel(clonechan)) != clonechan)) {
-			final_clone = ast_channel_internal_bridged_channel(clonechan);
-		}
-		if (ast_channel_tech(final_clone)->get_base_channel
-			&& (base = ast_channel_tech(final_clone)->get_base_channel(final_clone))) {
-			final_clone = base;
-		}
-
-		if ((final_orig != original) || (final_clone != clonechan)) {
-			/*
-			 * Lots and lots of deadlock avoidance.  The main one we're
-			 * competing with is ast_write(), which locks channels
-			 * recursively, when working with a proxy channel.
-			 */
-			if (ast_channel_trylock(final_orig)) {
-				ast_channel_unlock(clonechan);
-				ast_channel_unlock(original);
-
-				/* Try again */
-				continue;
-			}
-			if (ast_channel_trylock(final_clone)) {
-				ast_channel_unlock(final_orig);
-				ast_channel_unlock(clonechan);
-				ast_channel_unlock(original);
-
-				/* Try again */
-				continue;
-			}
-			ast_channel_unlock(clonechan);
-			ast_channel_unlock(original);
-			original = final_orig;
-			clonechan = final_clone;
-
-			if (ast_test_flag(ast_channel_flags(original), AST_FLAG_ZOMBIE)
-				|| ast_test_flag(ast_channel_flags(clonechan), AST_FLAG_ZOMBIE)) {
-				/* Zombies! Run! */
-				ast_log(LOG_WARNING,
-					"Can't setup masquerade. One or both channels is dead. (%s <-- %s)\n",
-					ast_channel_name(original), ast_channel_name(clonechan));
-				ast_channel_unlock(clonechan);
-				ast_channel_unlock(original);
-				return -1;
-			}
-		}
-		break;
-	}
 
 	if (original == clonechan) {
-		ast_log(LOG_WARNING, "Can't masquerade channel '%s' into itself!\n", ast_channel_name(original));
+		ast_log(LOG_WARNING, "Can't masquerade channel '%s' into itself!\n",
+			ast_channel_name(original));
+		return -1;
+	}
+
+	ast_channel_lock_both(original, clonechan);
+
+	if (ast_test_flag(ast_channel_flags(original), AST_FLAG_ZOMBIE)
+		|| ast_test_flag(ast_channel_flags(clonechan), AST_FLAG_ZOMBIE)) {
+		/* Zombies! Run! */
+		ast_log(LOG_WARNING,
+			"Can't setup masquerade. One or both channels is dead. (%s <-- %s)\n",
+			ast_channel_name(original), ast_channel_name(clonechan));
 		ast_channel_unlock(clonechan);
 		ast_channel_unlock(original);
 		return -1;
@@ -6641,15 +6575,33 @@ static void ast_channel_change_linkedid(struct ast_channel *chan, const char *li
 	ast_cel_linkedid_ref(linkedid);
 }
 
-/*!
-  \brief Propagate the oldest linkedid between associated channels
-
-*/
+/*! \brief Propagate the oldest linkedid between associated channels */
 void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *peer)
 {
 	const char* linkedid=NULL;
 	struct ast_channel *bridged;
 
+/*
+ * BUGBUG this needs to be updated to not use ast_channel_internal_bridged_channel().
+ * BUGBUG this needs to be updated to not use ast_bridged_channel().
+ *
+ * We may be better off making this a function of the bridging
+ * framework.  Essentially, as each channel joins a bridge, the
+ * oldest linkedid should be propagated between all pairs of
+ * channels.  This should be handled by bridging (unless you're
+ * in an infinite wait bridge...) just like the BRIDGEPEER
+ * channel variable.
+ *
+ * This is currently called in two places:
+ *
+ * (1) In channel masquerade. To some extent this shouldn't
+ * really be done any longer - we don't really want a channel to
+ * have its linkedid change, even if it replaces a channel that
+ * had an older linkedid.  The two channels aren't really
+ * 'related', they're simply swapping with each other.
+ *
+ * (2) In features.c as two channels are bridged.
+ */
 	linkedid = oldest_linkedid(ast_channel_linkedid(chan), ast_channel_linkedid(peer));
 	linkedid = oldest_linkedid(linkedid, ast_channel_uniqueid(chan));
 	linkedid = oldest_linkedid(linkedid, ast_channel_uniqueid(peer));
@@ -7149,11 +7101,6 @@ void ast_do_masquerade(struct ast_channel *original)
 
 	/* copy over accuntcode and set peeraccount across the bridge */
 	ast_channel_accountcode_set(original, S_OR(ast_channel_accountcode(clonechan), ""));
-	if (ast_channel_internal_bridged_channel(original)) {
-		/* XXX - should we try to lock original's bridged channel here? */
-		ast_channel_peeraccount_set(ast_channel_internal_bridged_channel(original), S_OR(ast_channel_accountcode(clonechan), ""));
-		ast_cel_report_event(original, AST_CEL_BRIDGE_UPDATE, NULL, NULL, NULL);
-	}
 
 	ast_debug(1, "Putting channel %s in %s/%s formats\n", ast_channel_name(original),
 		ast_getformatname(&wformat), ast_getformatname(&rformat));
@@ -7353,14 +7300,10 @@ int ast_setstate(struct ast_channel *chan, enum ast_channel_state state)
 	return 0;
 }
 
-/*! \brief Find bridged channel */
+/*! BUGBUG ast_bridged_channel() is to be removed. */
 struct ast_channel *ast_bridged_channel(struct ast_channel *chan)
 {
-	struct ast_channel *bridged;
-	bridged = ast_channel_internal_bridged_channel(chan);
-	if (bridged && ast_channel_tech(bridged)->bridged_channel)
-		bridged = ast_channel_tech(bridged)->bridged_channel(chan, bridged);
-	return bridged;
+	return NULL;
 }
 
 static void bridge_playfile(struct ast_channel *chan, struct ast_channel *peer, const char *sound, int remain)

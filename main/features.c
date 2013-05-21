@@ -4033,18 +4033,17 @@ void ast_channel_log(char *title, struct ast_channel *chan) /* for debug, this i
 {
 	ast_log(LOG_NOTICE, "______ %s (%lx)______\n", title, (unsigned long) chan);
 	ast_log(LOG_NOTICE, "CHAN: name: %s;  appl: %s; data: %s; contxt: %s;  exten: %s; pri: %d;\n",
-		ast_channel_name(chan), ast_channel_appl(chan), ast_channel_data(chan), ast_channel_context(chan), ast_channel_exten(chan), ast_channel_priority(chan));
+		ast_channel_name(chan), ast_channel_appl(chan), ast_channel_data(chan),
+		ast_channel_context(chan), ast_channel_exten(chan), ast_channel_priority(chan));
 	ast_log(LOG_NOTICE, "CHAN: acctcode: %s;  dialcontext: %s; amaflags: %x; maccontxt: %s;  macexten: %s; macpri: %d;\n",
-		ast_channel_accountcode(chan), ast_channel_dialcontext(chan), ast_channel_amaflags(chan), ast_channel_macrocontext(chan), ast_channel_macroexten(chan), ast_channel_macropriority(chan));
-	ast_log(LOG_NOTICE, "CHAN: masq: %p;  masqr: %p; _bridge: %p; uniqueID: %s; linkedID:%s\n",
+		ast_channel_accountcode(chan), ast_channel_dialcontext(chan), ast_channel_amaflags(chan),
+		ast_channel_macrocontext(chan), ast_channel_macroexten(chan), ast_channel_macropriority(chan));
+	ast_log(LOG_NOTICE, "CHAN: masq: %p;  masqr: %p; uniqueID: %s; linkedID:%s\n",
 		ast_channel_masq(chan), ast_channel_masqr(chan),
-		ast_channel_internal_bridged_channel(chan), ast_channel_uniqueid(chan), ast_channel_linkedid(chan));
+		ast_channel_uniqueid(chan), ast_channel_linkedid(chan));
 	if (ast_channel_masqr(chan)) {
 		ast_log(LOG_NOTICE, "CHAN: masquerading as: %s;  cdr: %p;\n",
 			ast_channel_name(ast_channel_masqr(chan)), ast_channel_cdr(ast_channel_masqr(chan)));
-	}
-	if (ast_channel_internal_bridged_channel(chan)) {
-		ast_log(LOG_NOTICE, "CHAN: Bridged to %s\n", ast_channel_name(ast_channel_internal_bridged_channel(chan)));
 	}
 
 	ast_log(LOG_NOTICE, "===== done ====\n");

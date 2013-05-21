@@ -1259,6 +1259,7 @@ static void sched_delay_remove(struct sockaddr_in *sin, callno_entry entry);
 static void network_change_stasis_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message);
 static void acl_change_stasis_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message);
 
+/* BUGBUG The IAX2 channel driver needs its own native bridge technology. */
 static struct ast_channel_tech iax2_tech = {
 	.type = "IAX2",
 	.description = tdesc,

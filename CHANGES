@@ -72,6 +72,10 @@ AMI (Asterisk Manager Interface)
    event, the various ChanVariable fields will contain a suffix that specifies
    which channel they correspond to.
 
+ * The AMI 'Status' response event to the AMI Status action replaces the
+   BridgedChannel and BridgedUniqueid headers with the BridgeID header to
+   indicate what bridge the channel is currently in.
+
 Channel Drivers
 ------------------
  * When a channel driver is configured to enable jiterbuffers, they are now

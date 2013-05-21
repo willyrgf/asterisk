@@ -345,6 +345,7 @@ static char *complete_agent_logoff_cmd(const char *line, const char *word, int p
 static struct ast_channel* agent_get_base_channel(struct ast_channel *chan);
 static int agent_logoff(const char *agent, int soft);
 
+/* BUGBUG This channel driver is totally hosed until it is rewritten. */
 /*! \brief Channel interface description for PBX integration */
 static struct ast_channel_tech agent_tech = {
 	.type = "Agent",
