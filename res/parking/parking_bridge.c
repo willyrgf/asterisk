@@ -29,6 +29,7 @@
 #include "asterisk/astobj2.h"
 #include "asterisk/features.h"
 #include "asterisk/say.h"
+#include "asterisk/term.h"
 
 struct ast_bridge_parking
 {
@@ -56,15 +57,7 @@ static void bridge_parking_destroy(struct ast_bridge_parking *self)
 
 static void bridge_parking_dissolving(struct ast_bridge_parking *self)
 {
-	struct parking_lot *lot = self->lot;
-
-	/* Unlink the parking bridge from the parking lot that owns it */
-	lot->parking_bridge = NULL;
-	ao2_ref(lot, -1);
-
-	/* Disassociate the bridge from the parking lot as well. */
 	self->lot = NULL;
-
 	ast_bridge_base_v_table.dissolving(&self->base);
 }
 
@@ -200,6 +193,8 @@ static int bridge_parking_push(struct ast_bridge_parking *self, struct ast_bridg
 
 	ast_bridge_base_v_table.push(&self->base, bridge_channel, swap);
 
+	ast_assert(self->lot != NULL);
+
 	/* Answer the channel if needed */
 	if (ast_channel_state(bridge_channel->chan) != AST_STATE_UP) {
 		ast_answer(bridge_channel->chan);
@@ -226,6 +221,12 @@ static int bridge_parking_push(struct ast_bridge_parking *self, struct ast_bridg
 		ao2_unlock(swap);
 
 		parking_set_duration(bridge_channel->features, pu);
+
+		/* BUGBUG Adding back local channel swapping made us not hear music on hold for the channel that got swapped
+		 * into the parking lot. Setting the roels back up gets around that, but we still need to deal with the ringing option
+		 * to the park application here somehow.
+		 */
+		parking_channel_set_roles(bridge_channel->chan, self->lot, 0);
 
 		return 0;
 	}
@@ -283,6 +284,11 @@ static int bridge_parking_push(struct ast_bridge_parking *self, struct ast_bridg
 
 	/* Set this to the bridge pvt so that we don't have to refind the parked user associated with this bridge channel again. */
 	bridge_channel->bridge_pvt = pu;
+
+	ast_verb(3, "Parking '" COLORIZE_FMT "' in '" COLORIZE_FMT "' at space %d\n",
+		COLORIZE(COLOR_BRMAGENTA, 0, ast_channel_name(bridge_channel->chan)),
+		COLORIZE(COLOR_BRMAGENTA, 0, self->lot->name),
+		pu->parking_space);
 
 	return 0;
 }
