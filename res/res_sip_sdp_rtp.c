@@ -121,6 +121,12 @@ static int create_rtp(struct ast_sip_session *session, struct ast_sip_session_me
 		ice->stop(session_media->rtp);
 	}
 
+	if (session->endpoint->dtmf == AST_SIP_DTMF_RFC_4733) {
+		ast_rtp_instance_dtmf_mode_set(session_media->rtp, AST_RTP_DTMF_MODE_RFC2833);
+	} else if (session->endpoint->dtmf == AST_SIP_DTMF_INBAND) {
+		ast_rtp_instance_dtmf_mode_set(session_media->rtp, AST_RTP_DTMF_MODE_INBAND);
+	}
+
 	return 0;
 }
 
@@ -224,11 +230,11 @@ static int set_caps(struct ast_sip_session *session, struct ast_sip_session_medi
 	if (session->channel) {
 		ast_format_cap_copy(caps, ast_channel_nativeformats(session->channel));
 		ast_format_cap_remove_bytype(caps, media_type);
-		ast_format_cap_append(caps, joint);
+		ast_codec_choose(&session->endpoint->prefs, joint, 1, &fmt);
+		ast_format_cap_add(caps, &fmt);
 
 		/* Apply the new formats to the channel, potentially changing read/write formats while doing so */
-		ast_format_cap_append(ast_channel_nativeformats(session->channel), caps);
-		ast_codec_choose(&session->endpoint->prefs, caps, 0, &fmt);
+		ast_format_cap_copy(ast_channel_nativeformats(session->channel), caps);
 		ast_format_copy(ast_channel_rawwriteformat(session->channel), &fmt);
 		ast_format_copy(ast_channel_rawreadformat(session->channel), &fmt);
 		ast_set_read_format(session->channel, ast_channel_readformat(session->channel));
