@@ -7356,10 +7356,12 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		res = -1;
 		break;
 	case AST_CONTROL_HOLD:
+		ast_set_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER);
 		ast_rtp_instance_update_source(p->rtp);
 		ast_moh_start(ast, data, p->mohinterpret);
 		break;
 	case AST_CONTROL_UNHOLD:
+		ast_clear_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER);
 		ast_rtp_instance_update_source(p->rtp);
 		ast_moh_stop(ast);
 		break;
@@ -24110,6 +24112,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 	int localtransfer = 0;
 	int attendedtransfer = 0;
 	int res = 0;
+	int currentlyonhold = ast_test_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER);;
 
 	if (req->debug) {
 		ast_verbose("Call %s got a SIP call transfer from %s: (REFER)!\n",
@@ -24295,6 +24298,7 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 		/* Fallthrough if we can't find the call leg internally */
 	}
 
+
 	/* Copy data we can not safely access after letting the pvt lock go. */
 	refer_to = ast_strdupa(p->refer->refer_to);
 	refer_to_domain = ast_strdupa(p->refer->refer_to_domain);
@@ -24423,6 +24427,10 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 	sip_pvt_unlock(p);
 	ast_indicate(current.chan2, AST_CONTROL_UNHOLD);
 	res = ast_async_goto(current.chan2, refer_to_context, refer_to, 1);
+	if (currentlyonhold) {
+		/* If this call was put on hold, let's put the new call on hold too */
+		ast_indicate(current.chan2, AST_CONTROL_HOLD);
+	}
 
 	if (!res) {
 		ast_manager_event_multichan(EVENT_FLAG_CALL, "Transfer", 2, chans,

@@ -22,3 +22,24 @@ C answers call.
 C doesn't get music on hold - just silence.
 
 The moh status is not following the transfer.
+
+---
+BLIND Transfer
+
+chan1 ->transferer to asterisk
+chan2 ->asterisk to transferee
+target -> new channel
+
+Todo: Copy MOH status from chan1 to target.
+Or after target is set up, check hold status on chan2 and take action on that
+-------
+Attended transfer
+
+- Chan1 -> transferer to asterisk
+- Chan2 -> asterisk to transferee
+- target.chan1 Target channel
+- target.chan2 channel bridged to target
+- What's the name of the channel between transferer and asterisk bridged to target???
+We're bridging chan2 to target.chan1
+
+
