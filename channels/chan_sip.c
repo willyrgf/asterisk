@@ -9879,16 +9879,9 @@ static int find_sdp(struct sip_request *req)
 /*! \brief Change hold state for a call */
 static void change_hold_state(struct sip_pvt *dialog, struct sip_request *req, int holdstate, int sendonly)
 {
-	if (sip_cfg.notifyhold && (!holdstate || !ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD)))
+	if (sip_cfg.notifyhold && (!holdstate || !ast_test_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD))) {
 		sip_peer_hold(dialog, holdstate);
-	if (sip_cfg.callevents)
-		manager_event(EVENT_FLAG_CALL, "Hold",
-			      "Status: %s\r\n"
-			      "Channel: %s\r\n"
-			      "Uniqueid: %s\r\n",
-			      holdstate ? "On" : "Off",
-			      ast_channel_name(dialog->owner),
-			      ast_channel_uniqueid(dialog->owner));
+	}
 	append_history(dialog, holdstate ? "Hold" : "Unhold", "%s", ast_str_buffer(req->data));
 	if (!holdstate) {	/* Put off remote hold */
 		ast_clear_flag(&dialog->flags[1], SIP_PAGE2_CALL_ONHOLD);	/* Clear both flags */
@@ -10795,16 +10788,14 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) && (!ast_sockaddr_isnull(sa) || !ast_sockaddr_isnull(vsa) || !ast_sockaddr_isnull(tsa) || !ast_sockaddr_isnull(isa)) && (!sendonly || sendonly == -1)) {
 		if (!ast_test_flag(&p->flags[2], SIP_PAGE3_DISCARD_REMOTE_HOLD_RETRIEVAL)) {
-			ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
+			ast_queue_unhold(p->owner);
 		}
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
 		change_hold_state(p, req, FALSE, sendonly);
 	} else if ((sockaddr_is_null_or_any(sa) && sockaddr_is_null_or_any(vsa) && sockaddr_is_null_or_any(tsa) && sockaddr_is_null_or_any(isa)) || (sendonly && sendonly != -1)) {
 		if (!ast_test_flag(&p->flags[2], SIP_PAGE3_DISCARD_REMOTE_HOLD_RETRIEVAL)) {
-			ast_queue_control_data(p->owner, AST_CONTROL_HOLD,
-				       S_OR(p->mohsuggest, NULL),
-				       !ast_strlen_zero(p->mohsuggest) ? strlen(p->mohsuggest) + 1 : 0);
+			ast_queue_hold(p->owner, p->mohsuggest);
 		}
 		if (sendonly)
 			ast_rtp_instance_stop(p->rtp);
@@ -16724,7 +16715,7 @@ static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct
 		ao2_cleanup(peer);
 		return;
 	}
-	if (stasis_mwi_state_type() == stasis_message_type(msg)) {
+	if (ast_mwi_state_type() == stasis_message_type(msg)) {
 		sip_send_mwi_to_peer(peer, 0);
 	}
 }
@@ -24767,7 +24758,7 @@ static int handle_request_notify(struct sip_pvt *p, struct sip_request *req, str
 			char *old = strsep(&c, " ");
 			char *new = strsep(&old, "/");
 
-			stasis_publish_mwi_state(mailbox, "SIP_Remote", atoi(new), atoi(old));
+			ast_publish_mwi_state(mailbox, "SIP_Remote", atoi(new), atoi(old));
 
 			transmit_response(p, "200 OK", req);
 		} else {
@@ -25440,7 +25431,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 				   *without* an SDP, which is supposed to mean "Go back to your state"
 				   and since they put os on remote hold, we go back to off hold */
 				if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD)) {
-					ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
+					ast_queue_unhold(p->owner);
 					/* Activate a re-invite */
 					ast_queue_frame(p->owner, &ast_null_frame);
 					change_hold_state(p, req, FALSE, 0);
@@ -26703,7 +26694,7 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 				bridged_to = ast_bridged_channel(c);
 				if (bridged_to) {
 					/* Don't actually hangup here... */
-					ast_queue_control(c, AST_CONTROL_UNHOLD);
+					ast_queue_unhold(c);
 					ast_channel_unlock(c);  /* async_goto can do a masquerade, no locks can be held during a masq */
 					ast_async_goto(bridged_to, p->context, p->refer->refer_to, 1);
 					ast_channel_lock(c);
@@ -27420,7 +27411,7 @@ static void add_peer_mwi_subs(struct sip_peer *peer)
 		ast_str_reset(uniqueid);
 		ast_str_set(&uniqueid, 0, "%s@%s", mailbox->mailbox, S_OR(mailbox->context, "default"));
 
-		mailbox_specific_topic = stasis_mwi_topic(ast_str_buffer(uniqueid));
+		mailbox_specific_topic = ast_mwi_topic(ast_str_buffer(uniqueid));
 		if (mailbox_specific_topic) {
 			ao2_ref(peer, +1);
 			mailbox->event_sub = stasis_subscribe(mailbox_specific_topic, mwi_event_cb, peer);
@@ -28630,12 +28621,12 @@ static int get_cached_mwi(struct sip_peer *peer, int *new, int *old)
 	in_cache = 0;
 	AST_LIST_TRAVERSE(&peer->mailboxes, mailbox, entry) {
 		RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
-		struct stasis_mwi_state *mwi_state;
+		struct ast_mwi_state *mwi_state;
 
 		ast_str_reset(uniqueid);
 		ast_str_set(&uniqueid, 0, "%s@%s", mailbox->mailbox, S_OR(mailbox->context, "default"));
 
-		msg = stasis_cache_get(stasis_mwi_topic_cached(), stasis_mwi_state_type(), ast_str_buffer(uniqueid));
+		msg = stasis_cache_get(ast_mwi_topic_cached(), ast_mwi_state_type(), ast_str_buffer(uniqueid));
 		if (!msg) {
 			continue;
 		}
