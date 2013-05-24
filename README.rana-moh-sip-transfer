@@ -1,0 +1,24 @@
+Edvina AB
+Olle E. Johansson
+
+
+
+
+
+
+
+
+
+
+
+
+Problem:
+
+A calls B.
+B puts A on hold.
+A gets music on hold.
+A transfers B to C.
+C answers call.
+C doesn't get music on hold - just silence.
+
+The moh status is not following the transfer.
