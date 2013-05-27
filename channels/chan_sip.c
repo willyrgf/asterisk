@@ -7358,11 +7358,13 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	case AST_CONTROL_HOLD:
 		ast_set_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER);
 		ast_rtp_instance_update_source(p->rtp);
+		ast_debug(3, "Starting music on hold - received AST_CONTROL_HOLD - channel %s\n", ast->name);
 		ast_moh_start(ast, data, p->mohinterpret);
 		break;
 	case AST_CONTROL_UNHOLD:
 		ast_clear_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER);
 		ast_rtp_instance_update_source(p->rtp);
+		ast_debug(3, "Stopping music on hold - received AST_CONTROL_UNHOLD - channel %s\n", ast->name);
 		ast_moh_stop(ast);
 		break;
 	case AST_CONTROL_VIDUPDATE:	/* Request a video frame update */
