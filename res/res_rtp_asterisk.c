@@ -722,6 +722,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 	rtp->send_duration = 160;
+	rtp->received_duration = 160;
 	rtp->lastdigitts = rtp->lastts + rtp->send_duration;
 
 	/* Create the actual packet that we will be sending */
@@ -744,7 +745,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 				    payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 		}
 		rtp->seqno++;
-		rtp->send_duration += 160;	/* OEJ - check what's going on here. */
+		//rtp->send_duration += 160;	/* OEJ - check what's going on here. */
 		
 		rtpheader[0] = htonl((2 << 30) | (payload << 16) | (rtp->seqno));
 	}
@@ -754,7 +755,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
 
-	ast_log(LOG_DEBUG, "DEBUG DTMF BEGIN - Digit %d send-digit %d\n", digit, rtp->send_digit);
+	ast_debug(4, "DEBUG DTMF BEGIN - Digit %d send-digit %d\n", digit, rtp->send_digit);
 
 	return 0;
 }
@@ -819,20 +820,27 @@ static int ast_rtp_dtmf_cont(struct ast_rtp_instance *instance)
 		return -1;
 	}
 
-	ast_debug(4, "---- Send duration %d Received duration %d Endflag %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, rtp->send_digit);
 
 	/*! \todo XXX This code assumes 160 samples, which is for 20 ms of 8000 samples
 		we need to calculate this based on the current sample rate and the rtp 
 		stream packetization. Please help me figure this out :-)
 	 */
-	if (rtp->received_duration == 0 || rtp->send_duration + 160 <= rtp->received_duration) {
+	if (!rtp->send_endflag && rtp->send_duration + 160 > rtp->received_duration) {
+		/* We need to wait with sending this continue, as we're sending 160 frames */
+		ast_debug(4, "---- Send duration %d Received duration %d - Skipping this continue frame until we have a proper 20 ms/160 samples to send\n", rtp->send_duration, rtp->received_duration);
+		return -1;
+	}
+	if (rtp->received_duration == 0 || rtp->send_duration + 160 < rtp->received_duration) {
+		ast_debug(3, "---- Adding 160 samples before sending : (previous values) Send duration %d Received duration %d\n", rtp->send_duration, rtp->received_duration);
 		rtp->send_duration += 160;
-	} else if (rtp->send_endflag) {
-		ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d - sending END packet\n", rtp->send_duration, rtp->received_duration);
+	} 
+	if (rtp->send_endflag) {
+		ast_debug(4, "---- Send duration %d Received duration %d - sending END packet\n", rtp->send_duration, rtp->received_duration);
 		/* We are done, ready to send end flag */
 		rtp->send_endflag = 0;
 		return ast_rtp_dtmf_end_with_duration(instance, 0, rtp->received_duration);
 	}
+	ast_debug(4, "---- Send duration %d Received duration %d Endflag %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, rtp->send_digit);
 	/* Actually create the packet we will be sending */
 	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastdigitts);
@@ -856,6 +864,7 @@ static int ast_rtp_dtmf_cont(struct ast_rtp_instance *instance)
 	/* And now we increment some values for the next time we swing by */
 	rtp->seqno++;
 	rtp->send_duration += 160;	/* Again assuming 20 ms packetization and 8000 samples */
+	ast_debug(4, "---- Adding 160 samples after sending : Send duration %d Received duration %d\n", rtp->send_duration, rtp->received_duration);
 
 	return 0;
 }
@@ -884,7 +893,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 		/* We still have to send DTMF continuation, because otherwise we will end prematurely. Set end flag to indicate
 		   that we will have to end ourselves when we're done with the actual duration
 		 */
-		ast_log(LOG_DEBUG, "---- Send duration %d Received duration %d - Avoiding sending END packet\n", rtp->send_duration, rtp->received_duration);
+		ast_debug(4, "---- Send duration %d Received duration %d - Avoiding sending END packet\n", rtp->send_duration, rtp->received_duration);
 		rtp->send_endflag = 1;
 		return ast_rtp_dtmf_cont(instance);
 	}
@@ -941,6 +950,8 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 
 	/* Oh and we can't forget to turn off the stuff that says we are sending DTMF */
 	rtp->lastts += rtp->send_duration;
+
+cleanup:
 	rtp->sending_dtmf = DTMF_NOT_SENDING;
 	rtp->send_digit = 0;
 
@@ -1628,7 +1639,7 @@ static struct ast_frame *create_dtmf_frame(struct ast_rtp_instance *instance, en
 		return &ast_null_frame;
 	}
 	ast_debug(1, "Creating %s DTMF Frame: %d (%c), at %s\n",
-		type == AST_FRAME_DTMF_END ? "END" : "BEGIN",
+		type == AST_FRAME_DTMF_END ? "END" : "BEGIN/CONT",
 		rtp->resp, rtp->resp,
 		ast_sockaddr_stringify(&remote_address));
 	if (rtp->resp == 'X') {
@@ -1957,7 +1968,7 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 		if ((i + length) > packetwords) {
 			if (rtpdebug || option_debug) {
 				/* Because of rtpdebug, this can't be ast_debug() */
-				ast_log(LOG_DEBUG, "RTCP Read too short\n");
+				ast_debug(1, "RTCP Read too short\n");
 			}
 			return &ast_null_frame;
 		}
