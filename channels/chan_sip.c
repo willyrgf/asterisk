@@ -7086,7 +7086,7 @@ static int sip_senddigit_continue(struct ast_channel *ast, char digit, unsigned 
 	int res = 0;
 
 	if (!p) {
-		ast_debug(1, "Asked to continue DTMF on channel %s with no pvt, ignoring\n", ast_channel_name(ast));
+		ast_debug(1, "Asked to continue DTMF on channel %s with no pvt, ignoring\n", ast->name);
 		return res;
 	}
 
