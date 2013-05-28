@@ -4765,6 +4765,16 @@ static int sip_queryoption(struct ast_channel *chan, int option, void *data, int
 		 * implied else case here
 		 */
 		break;
+	case AST_OPTION_LOCAL_HOLD:
+		/* Are we on hold by the device owning this channel */
+		*((unsigned int *) data) = ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) ? 1 : 0;
+		res = 0;
+		break;
+	case AST_OPTION_BRIDGE_HOLD:
+		/* Are we on hold by the bridged peer to this channel */
+		*((unsigned int *) data) = ast_test_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER) ? 1 : 0;
+		res = 0;
+		break;
 	default:
 		break;
 	}
@@ -20913,6 +20923,9 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 
 		if (!req->ignore && p->owner) {
 			int rpid_changed;
+			int caller_hold_state = 0;	/* True if the caller (requestor) is on hold when placing the call */
+			int dummy = sizeof(caller_hold_state);
+			struct ast_channel *bridgedchan = NULL;
 
 			rpid_changed = get_rpid(p, req);
 			if (rpid_changed || !reinvite) {
@@ -20942,6 +20955,18 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 						&update_connected);
 				}
 			}
+			/* Check if the calling channel is on hold */
+			if (p->owner && (bridgedchan = ast_bridged_channel(p->owner)) != NULL) {
+				ast_debug(3, "====> Checking for HOLD state on bridged channel %s\n", bridgedchan->name);
+				ast_channel_queryoption(bridgedchan, AST_OPTION_LOCAL_HOLD, &caller_hold_state, &dummy, 0);
+				if (caller_hold_state) {
+					ast_indicate(p->owner, AST_CONTROL_HOLD);
+					ast_debug(3, "====> Bridged channel was on hold, indicating on this channel too \n");
+				}
+			} else {
+				ast_debug(3, "====> No bridged channel, not checking for hold status \n");
+			}
+
 		}
 
 		/* Parse contact header for continued conversation */
@@ -24114,7 +24139,6 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 	int localtransfer = 0;
 	int attendedtransfer = 0;
 	int res = 0;
-	int currentlyonhold = ast_test_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER);;
 
 	if (req->debug) {
 		ast_verbose("Call %s got a SIP call transfer from %s: (REFER)!\n",
@@ -24429,10 +24453,6 @@ static int handle_request_refer(struct sip_pvt *p, struct sip_request *req, int 
 	sip_pvt_unlock(p);
 	ast_indicate(current.chan2, AST_CONTROL_UNHOLD);
 	res = ast_async_goto(current.chan2, refer_to_context, refer_to, 1);
-	if (currentlyonhold) {
-		/* If this call was put on hold, let's put the new call on hold too */
-		ast_indicate(current.chan2, AST_CONTROL_HOLD);
-	}
 
 	if (!res) {
 		ast_manager_event_multichan(EVENT_FLAG_CALL, "Transfer", 2, chans,
@@ -27283,6 +27303,7 @@ static struct ast_channel *sip_request_call(const char *type, format_t format, c
 	char *trans = NULL;
 	char dialstring[256];
 	char *remote_address;
+
 	enum sip_transport transport = 0;
 	format_t oldformat = format;
 	AST_DECLARE_APP_ARGS(args,
@@ -27449,6 +27470,8 @@ static struct ast_channel *sip_request_call(const char *type, format_t format, c
 		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
 			"Channel: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\nPeername: %s\r\n",
 			p->owner? p->owner->name : "", "SIP", p->callid, p->fullcontact, p->peername);
+
+	
 	sip_pvt_unlock(p);
 	if (!tmpc) {
 		dialog_unlink_all(p);
