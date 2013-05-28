@@ -233,6 +233,13 @@ Core
    reason to any string. It also allows for custom strings to be read as the
    redirecting reason from SIP Diversion headers.
 
+ * The channel variable TRANSFER_CONTEXT must be on the channel initiating a
+   DTMF blind transfer or DTMF attended transfer to have any effect.
+
+ * The channel variable ATTENDED_TRANSFER_COMPLETE_SOUND is no longer channel
+   driver specific.  If the channel variable is set, the sound will be played
+   to the target of an attended transfer.
+
 Realtime
 ------------------
  * Dynamic realtime tables for SIP Users can now include a 'path' field. This

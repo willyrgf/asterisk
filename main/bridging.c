@@ -1701,6 +1701,54 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
 
 /*!
  * \internal
+ * \brief Bridge channel to check if a BRIDGE_PLAY_SOUND needs to be played.
+ * \since 12.0.0
+ *
+ * \param bridge_channel What to check.
+ *
+ * \return Nothing
+ */
+static void handle_bridge_play_sound(struct ast_bridge_channel *bridge_channel)
+{
+	const char *play_file;
+
+	ast_channel_lock(bridge_channel->chan);
+	play_file = pbx_builtin_getvar_helper(bridge_channel->chan, "BRIDGE_PLAY_SOUND");
+	if (!ast_strlen_zero(play_file)) {
+		play_file = ast_strdupa(play_file);
+		pbx_builtin_setvar_helper(bridge_channel->chan, "BRIDGE_PLAY_SOUND", NULL);
+	} else {
+		play_file = NULL;
+	}
+	ast_channel_unlock(bridge_channel->chan);
+
+	if (play_file) {
+		ast_bridge_channel_queue_playfile(bridge_channel, NULL, play_file, NULL);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Handle any BRIDGE_PLAY_SOUND channel variables in the bridge.
+ * \since 12.0.0
+ *
+ * \param bridge What to operate on.
+ *
+ * \note On entry, the bridge is already locked.
+ *
+ * \return Nothing
+ */
+static void handle_bridge_play_sounds(struct ast_bridge *bridge)
+{
+	struct ast_bridge_channel *bridge_channel;
+
+	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		handle_bridge_play_sound(bridge_channel);
+	}
+}
+
+/*!
+ * \internal
  * \brief Notify the bridge that it has been reconfigured.
  * \since 12.0.0
  *
@@ -1729,6 +1777,11 @@ static void bridge_reconfigured(struct ast_bridge *bridge)
 		return;
 	}
 	bridge_complete_join(bridge);
+
+	if (bridge->dissolved) {
+		return;
+	}
+	handle_bridge_play_sounds(bridge);
 }
 
 /*!
@@ -5536,11 +5589,8 @@ static struct ast_bridge *acquire_bridge(struct ast_channel *chan)
 	bridge = ast_channel_get_bridge(chan);
 	ast_channel_unlock(chan);
 
-	if (!bridge) {
-		return NULL;
-	}
-
-	if (ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY)) {
+	if (bridge
+		&& ast_test_flag(&bridge->feature_flags, AST_BRIDGE_FLAG_MASQUERADE_ONLY)) {
 		ao2_ref(bridge, -1);
 		bridge = NULL;
 	}
@@ -5642,6 +5692,7 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 	RAII_VAR(struct ast_bridge *, to_target_bridge, NULL, ao2_cleanup);
 	RAII_VAR(struct ao2_container *, channels, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_channel *, transferee, NULL, ao2_cleanup);
+	const char *target_complete_sound;
 	struct ast_bridge *the_bridge;
 	struct ast_channel *chan_bridged;
 	struct ast_channel *chan_unbridged;
@@ -5654,6 +5705,43 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 	/* They can't both be unbridged, you silly goose! */
 	if (!to_transferee_bridge && !to_target_bridge) {
 		return AST_BRIDGE_TRANSFER_INVALID;
+	}
+
+	/* Is there a courtesy sound to play to the target? */
+	if (to_target_bridge) {
+		struct ast_bridge_channel *to_target_bridge_channel;
+
+		ast_channel_lock(to_transfer_target);
+		to_target_bridge_channel = ast_channel_get_bridge_channel(to_transfer_target);
+
+		target_complete_sound = pbx_builtin_getvar_helper(to_transfer_target,
+			"ATTENDED_TRANSFER_COMPLETE_SOUND");
+		if (!ast_strlen_zero(target_complete_sound)) {
+			target_complete_sound = ast_strdupa(target_complete_sound);
+		} else {
+			target_complete_sound = NULL;
+		}
+		ast_channel_unlock(to_transfer_target);
+
+		if (!target_complete_sound) {
+			ast_channel_lock(to_transferee);
+			target_complete_sound = pbx_builtin_getvar_helper(to_transferee,
+				"ATTENDED_TRANSFER_COMPLETE_SOUND");
+			if (!ast_strlen_zero(target_complete_sound)) {
+				target_complete_sound = ast_strdupa(target_complete_sound);
+			} else {
+				target_complete_sound = NULL;
+			}
+			ast_channel_unlock(to_transferee);
+		}
+
+		if (target_complete_sound) {
+			ast_bridge_channel_write_playfile(to_target_bridge_channel, NULL,
+				target_complete_sound, NULL);
+		}
+		ao2_cleanup(to_target_bridge_channel);
+	} else {
+		target_complete_sound = NULL;
 	}
 
 	/* Let's get the easy one out of the way first */
