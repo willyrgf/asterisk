@@ -42,4 +42,13 @@ Attended transfer
 - What's the name of the channel between transferer and asterisk bridged to target???
 We're bridging chan2 to target.chan1
 
+Implementation notes
+====================
 
+- Add hold state to channel structure
+- Add musiconhold class set by channel initiator
+- make all channels set this class
+- After bridge set up, check hold state on bridged channel
+- If it's locally on hold, send AST_CONTROL_HOLD to the channel with the musicclass from the bridged channel
+
+(After brainstorm with Matt Jordan 2013-05-28)
