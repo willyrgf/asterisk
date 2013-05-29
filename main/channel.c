@@ -1348,11 +1348,10 @@ int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *fin)
 	return __ast_queue_frame(chan, fin, 1, NULL);
 }
 
-/*! \internal \brief Publish a channel blob message */
-static void publish_channel_blob(struct ast_channel *chan,
-	struct stasis_message_type *type, struct ast_json *blob)
+void ast_channel_publish_blob(struct ast_channel *chan, struct stasis_message_type *type, struct ast_json *blob)
 {
 	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
+
 	if (!blob) {
 		blob = ast_json_null();
 	}
@@ -1372,7 +1371,7 @@ int ast_queue_hangup(struct ast_channel *chan)
 	/* Yeah, let's not change a lock-critical value without locking */
 	ast_channel_lock(chan);
 	ast_channel_softhangup_internal_flag_add(chan, AST_SOFTHANGUP_DEV);
-	publish_channel_blob(chan, ast_channel_hangup_request_type(), NULL);
+	ast_channel_publish_blob(chan, ast_channel_hangup_request_type(), NULL);
 
 	res = ast_queue_frame(chan, &f);
 	ast_channel_unlock(chan);
@@ -1398,7 +1397,7 @@ int ast_queue_hangup_with_cause(struct ast_channel *chan, int cause)
 	}
 	blob = ast_json_pack("{s: i}",
 			     "cause", cause);
-	publish_channel_blob(chan, ast_channel_hangup_request_type(), blob);
+	ast_channel_publish_blob(chan, ast_channel_hangup_request_type(), blob);
 
 	res = ast_queue_frame(chan, &f);
 	ast_channel_unlock(chan);
@@ -1419,7 +1418,7 @@ int ast_queue_hold(struct ast_channel *chan, const char *musicclass)
 				     "musicclass", musicclass);
 	}
 
-	publish_channel_blob(chan, ast_channel_hold_type(), blob);
+	ast_channel_publish_blob(chan, ast_channel_hold_type(), blob);
 
 	res = ast_queue_frame(chan, &f);
 	return res;
@@ -1430,7 +1429,7 @@ int ast_queue_unhold(struct ast_channel *chan)
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_UNHOLD };
 	int res;
 
-	publish_channel_blob(chan, ast_channel_unhold_type(), NULL);
+	ast_channel_publish_blob(chan, ast_channel_unhold_type(), NULL);
 
 	res = ast_queue_frame(chan, &f);
 	return res;
@@ -2741,7 +2740,7 @@ int ast_softhangup(struct ast_channel *chan, int cause)
 	blob = ast_json_pack("{s: i, s: b}",
 			     "cause", cause,
 			     "soft", 1);
-	publish_channel_blob(chan, ast_channel_hangup_request_type(), blob);
+	ast_channel_publish_blob(chan, ast_channel_hangup_request_type(), blob);
 	ast_channel_unlock(chan);
 
 	return res;
@@ -3755,7 +3754,7 @@ static void send_dtmf_begin_event(struct ast_channel *chan,
 		return;
 	}
 
-	publish_channel_blob(chan, ast_channel_dtmf_begin_type(), blob);
+	ast_channel_publish_blob(chan, ast_channel_dtmf_begin_type(), blob);
 }
 
 static void send_dtmf_end_event(struct ast_channel *chan,
@@ -3772,7 +3771,7 @@ static void send_dtmf_end_event(struct ast_channel *chan,
 		return;
 	}
 
-	publish_channel_blob(chan, ast_channel_dtmf_end_type(), blob);
+	ast_channel_publish_blob(chan, ast_channel_dtmf_end_type(), blob);
 }
 
 static void ast_read_generator_actions(struct ast_channel *chan, struct ast_frame *f)

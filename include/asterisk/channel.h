@@ -1157,6 +1157,18 @@ struct ast_channel *ast_dummy_channel_alloc(void);
 #endif
 
 /*!
+ * \brief Publish a channel blob message.
+ * \since 12.0.0
+ *
+ * \param chan Channel publishing the blob.
+ * \param type Type of stasis message.
+ * \param blob The blob being published. (NULL if no blob)
+ *
+ * \return Nothing
+ */
+void ast_channel_publish_blob(struct ast_channel *chan, struct stasis_message_type *type, struct ast_json *blob);
+
+/*!
  * \brief Queue one or more frames to a channel's frame queue
  *
  * \param chan the channel to queue the frame(s) on

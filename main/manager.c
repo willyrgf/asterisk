@@ -4080,7 +4080,7 @@ static int action_atxfer(struct mansession *s, const struct message *m)
 		pbx_builtin_setvar_helper(chan, "TRANSFER_CONTEXT", context);
 	}
 
-/* BUGBUG this is broken because the bridge DTMF hooks need both begin and end events to match correctly. */
+/* BUGBUG action_atxfer() is broken because the bridge DTMF hooks need both begin and end events to match correctly. */
 	for (feature_code = atxfer_feature->exten; feature_code && *feature_code; ++feature_code) {
 		struct ast_frame f = { AST_FRAME_DTMF, .subclass.integer = *feature_code };
 		ast_queue_frame(chan, &f);

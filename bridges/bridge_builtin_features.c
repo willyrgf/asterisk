@@ -185,7 +185,7 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 	const char *context;
 	char *goto_on_blindxfr;
 
-	ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD, NULL, 0);
+	ast_bridge_channel_write_hold(bridge_channel, NULL);
 
 	ast_channel_lock(bridge_channel->chan);
 	context = ast_strdupa(get_transfer_context(bridge_channel->chan,
@@ -196,7 +196,7 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 
 	/* Grab the extension to transfer to */
 	if (grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		return 0;
 	}
 
@@ -205,8 +205,6 @@ static int feature_blind_transfer(struct ast_bridge *bridge, struct ast_bridge_c
 				ast_channel_name(bridge_channel->chan), goto_on_blindxfr);
 		ast_after_bridge_set_go_on(bridge_channel->chan, NULL, NULL, 0, goto_on_blindxfr);
 	}
-
-	ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
 
 	if (ast_bridge_transfer_blind(bridge_channel->chan, exten, context, blind_transfer_cb,
 			bridge_channel->chan) != AST_BRIDGE_TRANSFER_SUCCESS &&
@@ -272,7 +270,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	const char *context;
 	enum atxfer_code transfer_code = ATXFER_INCOMPLETE;
 
-	ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD, NULL, 0);
+	ast_bridge_channel_write_hold(bridge_channel, NULL);
 
 	bridge = ast_bridge_channel_merge_inhibit(bridge_channel, +1);
 
@@ -285,7 +283,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 	if (grab_transfer(bridge_channel->chan, exten, sizeof(exten), context)) {
 		ast_bridge_merge_inhibit(bridge, -1);
 		ao2_ref(bridge, -1);
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		return 0;
 	}
 
@@ -296,7 +294,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		ao2_ref(bridge, -1);
 /* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		return 0;
 	}
 
@@ -324,7 +322,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		ao2_ref(bridge, -1);
 /* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		return 0;
 	}
 
@@ -338,7 +336,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		ao2_ref(bridge, -1);
 /* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		return 0;
 	}
 	ast_bridge_merge_inhibit(attended_bridge, +1);
@@ -353,7 +351,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		ao2_ref(bridge, -1);
 /* BUGBUG beeperr needs to be configurable from features.conf */
 		ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		return 0;
 	}
 
@@ -412,7 +410,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		break;
 	case ATXFER_COMPLETE:
 		/* The peer takes our place in the bridge. */
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_HANGUP);
 		xfer_failed = ast_bridge_impart(bridge_channel->bridge, peer, bridge_channel->chan, NULL, 1);
 		break;
@@ -423,7 +421,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		 * Just impart the peer onto the bridge and have us return to it
 		 * as normal.
 		 */
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 		xfer_failed = ast_bridge_impart(bridge_channel->bridge, peer, NULL, NULL, 1);
 		break;
 	case ATXFER_ABORT:
@@ -437,7 +435,7 @@ static int feature_attended_transfer(struct ast_bridge *bridge, struct ast_bridg
 		if (!ast_check_hangup_locked(bridge_channel->chan)) {
 			ast_stream_and_wait(bridge_channel->chan, "beeperr", AST_DIGIT_NONE);
 		}
-		ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
+		ast_bridge_channel_write_unhold(bridge_channel);
 	}
 
 	return 0;
