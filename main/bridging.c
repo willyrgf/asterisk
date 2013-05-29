@@ -586,6 +586,9 @@ static int bridge_channel_push(struct ast_bridge_channel *bridge_channel)
 		bridge_channel_pull(swap);
 	}
 
+	/* Clear any BLINDTRANSFER since the transfer has completed. */
+	pbx_builtin_setvar_helper(bridge_channel->chan, "BLINDTRANSFER", NULL);
+
 	bridge->reconfigured = 1;
 	ast_bridge_publish_enter(bridge, bridge_channel->chan);
 	return 0;

@@ -888,65 +888,6 @@ static void set_c_e_p(struct ast_channel *chan, const char *context, const char 
 	ast_channel_priority_set(chan, pri);
 }
 
-/*!
- * \brief Check goto on transfer
- * \param chan
- *
- * Check if channel has 'GOTO_ON_BLINDXFR' set, if not exit.
- * When found make sure the types are compatible. Check if channel is valid
- * if so start the new channel else hangup the call.
- */
-static void check_goto_on_transfer(struct ast_channel *chan)
-{
-	struct ast_channel *xferchan;
-	const char *val;
-	char *goto_on_transfer;
-	char *x;
-
-	ast_channel_lock(chan);
-	val = pbx_builtin_getvar_helper(chan, "GOTO_ON_BLINDXFR");
-	if (ast_strlen_zero(val)) {
-		ast_channel_unlock(chan);
-		return;
-	}
-	goto_on_transfer = ast_strdupa(val);
-	ast_channel_unlock(chan);
-
-	ast_debug(1, "Attempting GOTO_ON_BLINDXFR=%s for %s.\n", val, ast_channel_name(chan));
-
-	xferchan = ast_channel_alloc(0, AST_STATE_DOWN, 0, 0, "", "", "", ast_channel_linkedid(chan), 0,
-		"%s", ast_channel_name(chan));
-	if (!xferchan) {
-		return;
-	}
-
-	/* Make formats okay */
-	ast_format_copy(ast_channel_readformat(xferchan), ast_channel_readformat(chan));
-	ast_format_copy(ast_channel_writeformat(xferchan), ast_channel_writeformat(chan));
-
-	if (ast_channel_masquerade(xferchan, chan)) {
-		/* Failed to setup masquerade. */
-		ast_hangup(xferchan);
-		return;
-	}
-
-	for (x = goto_on_transfer; *x; ++x) {
-		if (*x == '^') {
-			*x = ',';
-		}
-	}
-	ast_parseable_goto(xferchan, goto_on_transfer);
-	ast_channel_state_set(xferchan, AST_STATE_UP);
-	ast_clear_flag(ast_channel_flags(xferchan), AST_FLAGS_ALL);
-	ast_channel_clear_softhangup(xferchan, AST_SOFTHANGUP_ALL);
-
-	ast_do_masquerade(xferchan);
-	if (ast_pbx_start(xferchan)) {
-		/* Failed to start PBX. */
-		ast_hangup(xferchan);
-	}
-}
-
 static struct ast_channel *feature_request_and_dial(struct ast_channel *caller,
 	const char *caller_name, struct ast_channel *requestor,
 	struct ast_channel *transferee, const char *type, struct ast_format_cap *cap, const char *addr,
@@ -2325,117 +2266,6 @@ static const char *real_ctx(struct ast_channel *transferer, struct ast_channel *
 }
 
 /*!
- * \brief Blind transfer user to another extension
- * \param chan channel to be transfered
- * \param peer channel initiated blind transfer
- * \param config
- * \param code
- * \param data
- * \param sense  feature options
- *
- * Place chan on hold, check if transferred to parkinglot extension,
- * otherwise check extension exists and transfer caller.
- * \retval AST_FEATURE_RETURN_SUCCESS.
- * \retval -1 on failure.
- */
-static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
-{
-	struct ast_channel *transferer;
-	struct ast_channel *transferee;
-	struct ast_exten *park_exten;
-	const char *transferer_real_context;
-	char xferto[256] = "";
-	int res;
-
-	ast_debug(1, "Executing Blind Transfer %s, %s (sense=%d) \n", ast_channel_name(chan), ast_channel_name(peer), sense);
-	set_peers(&transferer, &transferee, peer, chan, sense);
-	transferer_real_context = ast_strdupa(real_ctx(transferer, transferee));
-
-	/* Start autoservice on transferee while we talk to the transferer */
-	ast_autoservice_start(transferee);
-	ast_indicate(transferee, AST_CONTROL_HOLD);
-
-	/* Transfer */
-	res = ast_stream_and_wait(transferer, "pbx-transfer", AST_DIGIT_ANY);
-	if (res < 0) {
-		finishup(transferee);
-		return -1; /* error ? */
-	}
-	if (res > 0) { /* If they've typed a digit already, handle it */
-		xferto[0] = (char) res;
-	}
-
-	res = ast_app_dtget(transferer, transferer_real_context, xferto, sizeof(xferto), 100, transferdigittimeout);
-	if (res < 0) {  /* hangup or error, (would be 0 for invalid and 1 for valid) */
-		finishup(transferee);
-		return -1;
-	}
-	if (res == 0) {
-		if (xferto[0]) {
-			ast_log(LOG_WARNING, "Extension '%s' does not exist in context '%s'\n",
-				xferto, transferer_real_context);
-		} else {
-			/* Does anyone care about this case? */
-			ast_log(LOG_WARNING, "No digits dialed.\n");
-		}
-		ast_stream_and_wait(transferer, "pbx-invalid", "");
-		finishup(transferee);
-		return AST_FEATURE_RETURN_SUCCESS;
-	}
-
-	park_exten = get_parking_exten(xferto, transferer, transferer_real_context);
-	if (park_exten) {
-		/* We are transfering the transferee to a parking lot. */
-		return xfer_park_call_helper(transferee, transferer, park_exten);
-	}
-
-	/* Do blind transfer. */
-	ast_verb(3, "Blind transferring %s to '%s' (context %s) priority 1\n",
-		ast_channel_name(transferee), xferto, transferer_real_context);
-	ast_cel_report_event(transferer, AST_CEL_BLINDTRANSFER, NULL, xferto, transferee);
-	pbx_builtin_setvar_helper(transferer, "BLINDTRANSFER", ast_channel_name(transferee));
-	pbx_builtin_setvar_helper(transferee, "BLINDTRANSFER", ast_channel_name(transferer));
-	finishup(transferee);
-	ast_channel_lock(transferer);
-	if (!ast_channel_cdr(transferer)) {
-		/* this code should never get called (in a perfect world) */
-		ast_channel_cdr_set(transferer, ast_cdr_alloc());
-		if (ast_channel_cdr(transferer)) {
-			ast_cdr_init(ast_channel_cdr(transferer), transferer); /* initialize our channel's cdr */
-			ast_cdr_start(ast_channel_cdr(transferer));
-		}
-	}
-	ast_channel_unlock(transferer);
-	if (ast_channel_cdr(transferer)) {
-		struct ast_cdr *swap = ast_channel_cdr(transferer);
-
-		ast_debug(1,
-			"transferer=%s; transferee=%s; lastapp=%s; lastdata=%s; chan=%s; dstchan=%s\n",
-			ast_channel_name(transferer), ast_channel_name(transferee), ast_channel_cdr(transferer)->lastapp,
-			ast_channel_cdr(transferer)->lastdata, ast_channel_cdr(transferer)->channel,
-			ast_channel_cdr(transferer)->dstchannel);
-		ast_debug(1, "TRANSFEREE; lastapp=%s; lastdata=%s, chan=%s; dstchan=%s\n",
-			ast_channel_cdr(transferee)->lastapp, ast_channel_cdr(transferee)->lastdata, ast_channel_cdr(transferee)->channel,
-			ast_channel_cdr(transferee)->dstchannel);
-		ast_debug(1, "transferer_real_context=%s; xferto=%s\n",
-			transferer_real_context, xferto);
-		/* swap cdrs-- it will save us some time & work */
-		ast_channel_cdr_set(transferer, ast_channel_cdr(transferee));
-		ast_channel_cdr_set(transferee, swap);
-	}
-
-	res = ast_channel_pbx(transferee) ? AST_FEATURE_RETURN_SUCCESSBREAK : -1;
-
-	/* Doh!  Use our handy async_goto functions */
-	if (ast_async_goto(transferee, transferer_real_context, xferto, 1)) {
-		ast_log(LOG_WARNING, "Async goto failed :-(\n");
-		res = -1;
-	}
-	check_goto_on_transfer(transferer);
-	return res;
-}
-
-/*!
  * \brief make channels compatible
  * \param c
  * \param newchan
@@ -2958,7 +2788,6 @@ void ast_unlock_call_features(void)
 
 /*! \note This is protected by features_lock. */
 static struct ast_call_feature builtin_features[] = {
-	{ AST_FEATURE_REDIRECT, "Blind Transfer", "blindxfer", "#", "#", builtin_blindtransfer, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_REDIRECT, "Attended Transfer", "atxfer", "", "", builtin_atxfer, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_AUTOMON, "One Touch Monitor", "automon", "", "", builtin_automonitor, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_DISCONNECT, "Disconnect Call", "disconnect", "*", "*", builtin_disconnect, AST_FEATURE_FLAG_NEEDSDTMF, "" },
@@ -4483,11 +4312,6 @@ static int pre_bridge_setup(struct ast_channel *chan, struct ast_channel *peer, 
 /* BUGBUG these channel vars may need to be made dynamic so they update when transfers happen. */
 	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", ast_channel_name(peer));
 	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", ast_channel_name(chan));
-
-/* BUGBUG revisit how BLINDTRANSFER operates with the new bridging model. */
-	/* Clear any BLINDTRANSFER since the transfer has completed. */
-	pbx_builtin_setvar_helper(chan, "BLINDTRANSFER", NULL);
-	pbx_builtin_setvar_helper(peer, "BLINDTRANSFER", NULL);
 
 	set_bridge_features_on_config(config, pbx_builtin_getvar_helper(chan, "BRIDGE_FEATURES"));
 	add_features_datastores(chan, peer, config);
