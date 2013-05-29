@@ -2265,6 +2265,11 @@ static const char *real_ctx(struct ast_channel *transferer, struct ast_channel *
 	return s;
 }
 
+static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
+{
+	return AST_FEATURE_RETURN_SUCCESS;
+}
+
 /*!
  * \brief make channels compatible
  * \param c
@@ -2788,6 +2793,7 @@ void ast_unlock_call_features(void)
 
 /*! \note This is protected by features_lock. */
 static struct ast_call_feature builtin_features[] = {
+	{ AST_FEATURE_REDIRECT, "Blind Transfer", "blindxfer", "#", "#", builtin_blindtransfer, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_REDIRECT, "Attended Transfer", "atxfer", "", "", builtin_atxfer, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_AUTOMON, "One Touch Monitor", "automon", "", "", builtin_automonitor, AST_FEATURE_FLAG_NEEDSDTMF, "" },
 	{ AST_FEATURE_DISCONNECT, "Disconnect Call", "disconnect", "*", "*", builtin_disconnect, AST_FEATURE_FLAG_NEEDSDTMF, "" },
