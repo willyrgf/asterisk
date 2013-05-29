@@ -1366,7 +1366,6 @@ static void publish_channel_blob(struct ast_channel *chan,
 /*! \brief Queue a hangup frame for channel */
 int ast_queue_hangup(struct ast_channel *chan)
 {
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_HANGUP };
 	int res;
 
@@ -1384,7 +1383,6 @@ int ast_queue_hangup(struct ast_channel *chan)
 int ast_queue_hangup_with_cause(struct ast_channel *chan, int cause)
 {
 	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_HANGUP };
 	int res;
 
@@ -1410,7 +1408,6 @@ int ast_queue_hangup_with_cause(struct ast_channel *chan, int cause)
 int ast_queue_hold(struct ast_channel *chan, const char *musicclass)
 {
 	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_HOLD };
 	int res;
 
@@ -1430,7 +1427,6 @@ int ast_queue_hold(struct ast_channel *chan, const char *musicclass)
 
 int ast_queue_unhold(struct ast_channel *chan)
 {
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
 	struct ast_frame f = { AST_FRAME_CONTROL, .subclass.integer = AST_CONTROL_UNHOLD };
 	int res;
 
@@ -6642,14 +6638,14 @@ void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *pee
 	linkedid = oldest_linkedid(linkedid, ast_channel_uniqueid(peer));
 	if (ast_channel_internal_bridged_channel(chan)) {
 		bridged = ast_bridged_channel(chan);
-		if (bridged != peer) {
+		if (bridged && bridged != peer) {
 			linkedid = oldest_linkedid(linkedid, ast_channel_linkedid(bridged));
 			linkedid = oldest_linkedid(linkedid, ast_channel_uniqueid(bridged));
 		}
 	}
 	if (ast_channel_internal_bridged_channel(peer)) {
 		bridged = ast_bridged_channel(peer);
-		if (bridged != chan) {
+		if (bridged && bridged != chan) {
 			linkedid = oldest_linkedid(linkedid, ast_channel_linkedid(bridged));
 			linkedid = oldest_linkedid(linkedid, ast_channel_uniqueid(bridged));
 		}
@@ -6662,13 +6658,13 @@ void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *pee
 	ast_channel_change_linkedid(peer, linkedid);
 	if (ast_channel_internal_bridged_channel(chan)) {
 		bridged = ast_bridged_channel(chan);
-		if (bridged != peer) {
+		if (bridged && bridged != peer) {
 			ast_channel_change_linkedid(bridged, linkedid);
 		}
 	}
 	if (ast_channel_internal_bridged_channel(peer)) {
 		bridged = ast_bridged_channel(peer);
-		if (bridged != chan) {
+		if (bridged && bridged != chan) {
 			ast_channel_change_linkedid(bridged, linkedid);
 		}
 	}
