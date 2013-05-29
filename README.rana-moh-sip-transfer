@@ -9,8 +9,11 @@ Olle E. Johansson
 
 
 
-
-
+Rana-moh-SIP-transfer: Getting music on hold back
+=================================================
+When the caller puts the callee on hold and the callee transfers the call while hearing music-on-hold,
+the music disappears and the new callee gets a silent call. Originally we thought it was a SIP transfer
+problem, but it turned out to be a core PBX issue.
 
 Problem:
 
@@ -22,6 +25,12 @@ C answers call.
 C doesn't get music on hold - just silence.
 
 The moh status is not following the transfer.
+
+To check
+========
+1. Blind transfers in SIP
+2. Attended transfers in SIP
+3. Transfers to a queue
 
 ---
 BLIND Transfer
