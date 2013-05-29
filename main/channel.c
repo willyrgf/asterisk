@@ -9784,9 +9784,9 @@ int ast_channel_set_local_hold(struct ast_channel *chan, int hold)
 		return -1;
 	}
 	if (hold) {
-		chan->hold_state.state &= AST_MEDIA_LOCAL_HOLD;
+		chan->hold_state.state |= AST_MEDIA_LOCAL_HOLD;
 	} else {
-		chan->hold_state.state |= AST_MEDIA_LOCAL_HOLD;	/* ?? */
+		chan->hold_state.state &= ~AST_MEDIA_LOCAL_HOLD;
 	}
 	return 0;
 }
@@ -9797,9 +9797,9 @@ int ast_channel_set_remote_hold(struct ast_channel *chan, int hold)
 		return -1;
 	}
 	if (hold) {
-		chan->hold_state.state &= AST_MEDIA_REMOTE_HOLD;
+		chan->hold_state.state |= AST_MEDIA_REMOTE_HOLD;
 	} else {
-		chan->hold_state.state |= AST_MEDIA_REMOTE_HOLD;	/* ?? */
+		chan->hold_state.state &= ~AST_MEDIA_REMOTE_HOLD;
 	}
 	return 0;
 }
