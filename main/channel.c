@@ -9732,6 +9732,61 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
 	return 0;
 }
 
+
+int ast_channel_set_musicclass(struct ast_channel *chan, const char *musicclass)
+{
+	if (!chan || musicclass == NULL) {
+		return -1;
+	}
+
+	ast_copy_string(chan->hold_state.musicclass, musicclass, sizeof(chan->hold_state.musicclass));
+	return 0;
+}
+
+int ast_channel_set_local_hold(struct ast_channel *chan, int hold)
+{
+	if (!chan) {
+		return -1;
+	}
+	if (hold) {
+		chan->hold_state.state &= AST_MEDIA_LOCAL_HOLD;
+	} else {
+		chan->hold_state.state |= AST_MEDIA_LOCAL_HOLD;	/* ?? */
+	}
+	return 0;
+}
+
+int ast_channel_set_remote_hold(struct ast_channel *chan, int hold)
+{
+	if (!chan) {
+		return -1;
+	}
+	if (hold) {
+		chan->hold_state.state &= AST_MEDIA_REMOTE_HOLD;
+	} else {
+		chan->hold_state.state |= AST_MEDIA_REMOTE_HOLD;	/* ?? */
+	}
+	return 0;
+}
+
+int ast_channel_get_local_hold_state(struct ast_channel *chan)
+{
+	if (!chan) {
+		return -1;
+	}
+	return ((int) chan->hold_state.state & AST_MEDIA_LOCAL_HOLD);
+}
+
+int ast_channel_get_remote_hold_state(struct ast_channel *chan)
+{
+	if (!chan) {
+		return -1;
+	}
+	return ((int) chan->hold_state.state & AST_MEDIA_REMOTE_HOLD);
+}
+
+
+
 /* DO NOT PUT ADDITIONAL FUNCTIONS BELOW THIS BOUNDARY
  *
  * ONLY FUNCTIONS FOR PROVIDING BACKWARDS ABI COMPATIBILITY BELONG HERE

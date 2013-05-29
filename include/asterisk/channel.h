@@ -490,6 +490,18 @@ typedef struct {
 	const char *value;
 } ast_chan_write_info_t;
 
+/*! \brief Enum for hold states */
+enum ast_hold_state {
+	AST_MEDIA_LOCAL_HOLD = (1 << 0),		/* The device owning this channel put it on hold/mute */
+	AST_MEDIA_REMOTE_HOLD = (1 << 1),		/* The bridged device put this channel on hold, typically playing music */
+};
+
+/*! \brief Structure for hold states */
+struct media_hold_state {
+	char musicclass[128];
+	enum ast_hold_state state;
+};
+
 /*!
  * \brief
  * Structure to describe a channel "technology", ie a channel driver
@@ -812,6 +824,8 @@ struct ast_channel {
 
 	/*! \brief Redirecting/Diversion information */
 	struct ast_party_redirecting redirecting;
+
+	struct media_hold_state hold_state;		/*!< Hold state for this channel */
 
 	struct ast_frame dtmff;				/*!< DTMF frame */
 	struct varshead varshead;			/*!< A linked list for channel variables. See \ref AstChanVar */
@@ -3518,6 +3532,29 @@ int ast_channel_get_device_name(struct ast_channel *chan, char *device_name, siz
  * \param size The size of the buffer to write to
  */
 int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
+
+/* \brief Set musicclass used if this channel puts another channel on hold */
+int ast_channel_set_musicclass(struct ast_channel *chan, const char *musicclass);
+
+/* \brief Set local hold - the device connected to the line to Asterisk puts a call on hold, i.e. mutes the audio stream */
+int ast_channel_set_local_hold(struct ast_channel *chan, int hold);
+
+/* \brief Set remote hold - the device on the other side of the bridge puts this channel on hold */
+int ast_channel_set_remote_hold(struct ast_channel *chan, int hold);
+
+/* \brief Get local hold state from channel 
+
+Has the device on the other end of this channel put the call on hold?
+*/
+int ast_channel_get_local_hold_state(struct ast_channel *chan);
+
+/* \brief Get remote hold state from channel
+
+Has this channel been put on hold by another channel?
+*/
+int ast_channel_get_remote_hold_state(struct ast_channel *chan);
+
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
