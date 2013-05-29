@@ -5564,6 +5564,7 @@ enum ast_transfer_result ast_bridge_transfer_blind(struct ast_channel *transfere
 		return AST_BRIDGE_TRANSFER_INVALID;
 	}
 
+	/* Take off hold if they are on hold. */
 	ast_bridge_channel_write_unhold(bridge_channel);
 
 	parking_result = try_parking(bridge, transferer, exten, context);
