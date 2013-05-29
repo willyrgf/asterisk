@@ -494,12 +494,6 @@ enum ast_control_transfer {
 #define AST_OPTION_SECURE_SIGNALING        18
 #define AST_OPTION_SECURE_MEDIA            19
 
-/*! Check hold status - hold locally by attached endpoint */
-#define AST_OPTION_LOCAL_HOLD        20
-
-/*! Check hold status - hold by bridged channel */
-#define AST_OPTION_BRIDGE_HOLD        21
-
 struct oprmode {
 	struct ast_channel *peer;
 	int mode;

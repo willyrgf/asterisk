@@ -4765,16 +4765,6 @@ static int sip_queryoption(struct ast_channel *chan, int option, void *data, int
 		 * implied else case here
 		 */
 		break;
-	case AST_OPTION_LOCAL_HOLD:
-		/* Are we on hold by the device owning this channel */
-		*((unsigned int *) data) = ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) ? 1 : 0;
-		res = 0;
-		break;
-	case AST_OPTION_BRIDGE_HOLD:
-		/* Are we on hold by the bridged peer to this channel */
-		*((unsigned int *) data) = ast_test_flag(&p->flags[2], SIP_PAGE3_ONHOLD_BY_BRIDGEPEER) ? 1 : 0;
-		res = 0;
-		break;
 	default:
 		break;
 	}
@@ -7504,6 +7494,7 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 	ast_channel_lock(tmp);
 	sip_pvt_lock(i);
 	ast_channel_cc_params_init(tmp, i->cc_params);
+	ast_channel_set_musicclass(tmp, i->mohsuggest);
 	tmp->caller.id.tag = ast_strdup(i->cid_tag);
 
 	tmp->tech = ( ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_INFO || ast_test_flag(&i->flags[0], SIP_DTMF) == SIP_DTMF_SHORTINFO) ?  &sip_tech_info : &sip_tech;
@@ -9902,11 +9893,13 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 	}
 
 	if (ast_test_flag(&p->flags[1], SIP_PAGE2_CALL_ONHOLD) && (!ast_sockaddr_isnull(sa) || !ast_sockaddr_isnull(vsa) || !ast_sockaddr_isnull(tsa) || !ast_sockaddr_isnull(isa)) && (!sendonly || sendonly == -1)) {
+		ast_channel_set_local_hold(p->owner, FALSE);
 		ast_queue_control(p->owner, AST_CONTROL_UNHOLD);
 		/* Activate a re-invite */
 		ast_queue_frame(p->owner, &ast_null_frame);
 		change_hold_state(p, req, FALSE, sendonly);
 	} else if ((sockaddr_is_null_or_any(sa) && sockaddr_is_null_or_any(vsa) && sockaddr_is_null_or_any(tsa) && sockaddr_is_null_or_any(isa)) || (sendonly && sendonly != -1)) {
+		ast_channel_set_local_hold(p->owner, TRUE);
 		ast_queue_control_data(p->owner, AST_CONTROL_HOLD,
 				       S_OR(p->mohsuggest, NULL),
 				       !ast_strlen_zero(p->mohsuggest) ? strlen(p->mohsuggest) + 1 : 0);
@@ -20958,8 +20951,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			/* Check if the calling channel is on hold */
 			if (p->owner && (bridgedchan = ast_bridged_channel(p->owner)) != NULL) {
 				ast_debug(3, "====> Checking for HOLD state on bridged channel %s\n", bridgedchan->name);
-				ast_channel_queryoption(bridgedchan, AST_OPTION_LOCAL_HOLD, &caller_hold_state, &dummy, 0);
-				if (caller_hold_state) {
+				if (ast_get_local_hold_state(bridgedchan)) {
 					ast_indicate(p->owner, AST_CONTROL_HOLD);
 					ast_debug(3, "====> Bridged channel was on hold, indicating on this channel too \n");
 				}

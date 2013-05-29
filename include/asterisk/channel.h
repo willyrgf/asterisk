@@ -498,7 +498,7 @@ enum ast_hold_state {
 
 /*! \brief Structure for hold states */
 struct media_hold_state {
-	char musicclass[128];
+	char mohsuggest[128];
 	enum ast_hold_state state;
 };
 
@@ -3534,7 +3534,7 @@ int ast_channel_get_device_name(struct ast_channel *chan, char *device_name, siz
 int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, size_t size);
 
 /* \brief Set musicclass used if this channel puts another channel on hold */
-int ast_channel_set_musicclass(struct ast_channel *chan, const char *musicclass);
+int ast_channel_set_hold_musicclass(struct ast_channel *chan, const char *musicclass);
 
 /* \brief Set local hold - the device connected to the line to Asterisk puts a call on hold, i.e. mutes the audio stream */
 int ast_channel_set_local_hold(struct ast_channel *chan, int hold);

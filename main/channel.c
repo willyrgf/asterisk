@@ -4471,6 +4471,13 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 			ast_party_redirecting_free(&redirecting);
 		}
 		break;
+
+	case AST_CONTROL_HOLD:
+		ast_channel_set_remote_hold(chan, 1);
+		break;
+	case AST_CONTROL_UNHOLD:
+		ast_channel_set_remote_hold(chan, 0);
+		break;
 	
 	default:
 		break;
@@ -6820,6 +6827,9 @@ int ast_do_masquerade(struct ast_channel *original)
 
 	/* Copy the music class */
 	ast_string_field_set(original, musicclass, clonechan->musicclass);
+
+	/* Copy the hold settings */
+	original->hold_state = clonechan->hold_state;
 
 	/* copy over accuntcode and set peeraccount across the bridge */
 	ast_string_field_set(original, accountcode, S_OR(clonechan->accountcode, ""));
@@ -9733,13 +9743,13 @@ int ast_channel_get_cc_agent_type(struct ast_channel *chan, char *agent_type, si
 }
 
 
-int ast_channel_set_musicclass(struct ast_channel *chan, const char *musicclass)
+int ast_channel_set_hold_musicclass(struct ast_channel *chan, const char *musicclass)
 {
 	if (!chan || musicclass == NULL) {
 		return -1;
 	}
 
-	ast_copy_string(chan->hold_state.musicclass, musicclass, sizeof(chan->hold_state.musicclass));
+	ast_copy_string(chan->hold_state.mohsuggest, musicclass, sizeof(chan->hold_state.mohsuggest));
 	return 0;
 }
 
