@@ -20912,8 +20912,6 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 
 		if (!req->ignore && p->owner) {
 			int rpid_changed;
-			int caller_hold_state = 0;	/* True if the caller (requestor) is on hold when placing the call */
-			int dummy = sizeof(caller_hold_state);
 			struct ast_channel *bridgedchan = NULL;
 
 			rpid_changed = get_rpid(p, req);
@@ -20947,7 +20945,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			/* Check if the calling channel is on hold */
 			if (p->owner && (bridgedchan = ast_bridged_channel(p->owner)) != NULL) {
 				ast_debug(3, "====> Checking for HOLD state on bridged channel %s\n", bridgedchan->name);
-				if (ast_get_local_hold_state(bridgedchan)) {
+				if (ast_channel_get_local_hold_state(bridgedchan)) {
 					ast_indicate(p->owner, AST_CONTROL_HOLD);
 					ast_debug(3, "====> Bridged channel was on hold, indicating on this channel too \n");
 				}

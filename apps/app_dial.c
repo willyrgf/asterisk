@@ -2952,6 +2952,11 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 
 				ast_channel_setoption(chan, AST_OPTION_OPRMODE, &oprmode, sizeof(oprmode), 0);
 			}
+			/* If the caller has put the line on local hold, make sure we do something about it. */
+			if (ast_channel_get_local_hold_state(chan)) {
+				ast_debug(4, "====>> Putting channel %s on remote hold since %s was locally held\n", peer->name, chan->name);
+				ast_channel_put_remote_on_hold(chan, chan->hold_state.mohsuggest);
+			}
 			res = ast_bridge_call(chan, peer, &config);
 		}
 
