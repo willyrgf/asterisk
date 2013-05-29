@@ -3554,6 +3554,20 @@ Has this channel been put on hold by another channel?
 */
 int ast_channel_get_remote_hold_state(struct ast_channel *chan);
 
+/*! \brief Put the bridged channel on hold.
+
+This means that we send AST_CONTROL_HOLD to the other side and
+let that channel driver decide what to do - send hold all the way out
+or just play some funky music. 
+
+This change state of the channel to local hold. 
+*/
+int ast_channel_put_remote_on_hold(struct ast_channel *chan, const char *mohsuggest);
+
+/*! \brief Take the other side of the bridge OFF hold 
+*/
+int ast_channel_put_remote_off_hold(struct ast_channel *chan);
+
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

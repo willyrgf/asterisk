@@ -52,3 +52,11 @@ Implementation notes
 - If it's locally on hold, send AST_CONTROL_HOLD to the channel with the musicclass from the bridged channel
 
 (After brainstorm with Matt Jordan 2013-05-28)
+
+Other channel drivers
+=====================
+- chan_dahdi:		Don't understand the hold functions...
+- chan_iax2:
+- chan_mgcp:
+- chan_?
+- chan_local 		No changes needed

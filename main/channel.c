@@ -9753,6 +9753,31 @@ int ast_channel_set_hold_musicclass(struct ast_channel *chan, const char *musicc
 	return 0;
 }
 
+int ast_channel_put_remote_on_hold(struct ast_channel *chan, const char *mohsuggest)
+{
+	if (!chan) {
+		return -1;
+	}
+	ast_channel_set_local_hold(chan, 1);	/* Put this channel on hold */
+	ast_queue_control_data(chan, AST_CONTROL_HOLD, S_OR(mohsuggest, NULL), !ast_strlen_zero(mohsuggest) ? strlen(mohsuggest) + 1 : 0);
+
+	/* Remember this music class for transfers */
+	if (ast_strlen_zero(chan->hold_state.mohsuggest)) {
+		ast_channel_set_hold_musicclass(chan, mohsuggest);
+	}
+	return 0;
+}
+
+int ast_channel_put_remote_off_hold(struct ast_channel *chan)
+{
+	if (!chan) {
+		return -1;
+	}
+	ast_channel_set_local_hold(chan, 0);	/* Put this channel off hold */
+	ast_queue_control(chan, AST_CONTROL_UNHOLD);
+	return 0;
+}
+
 int ast_channel_set_local_hold(struct ast_channel *chan, int hold)
 {
 	if (!chan) {
