@@ -1868,8 +1868,7 @@ static void set_bridge_peer_vars_multiparty(struct ast_bridge *bridge)
  * list.  The plus one is for the current channel which is not
  * put in the list.
  */
-#define MAX_BRIDGEPEER_CHANS	(2 + 1)//BUGBUG
-//#define MAX_BRIDGEPEER_CHANS	(10 + 1)
+#define MAX_BRIDGEPEER_CHANS	(10 + 1)
 
 	unsigned int idx;
 	unsigned int num_names;
@@ -1908,7 +1907,6 @@ static void set_bridge_peer_vars_multiparty(struct ast_bridge *bridge)
 		++idx;
 
 		ast_channel_lock(bridge_channel->chan);
-ast_log(LOG_NOTICE, "BUGBUG Chan %s: BRIDGEPEER=%s\n", ast_channel_name(bridge_channel->chan), buf);
 		update_bridge_vars_set(bridge_channel->chan, buf, NULL);
 		ast_channel_unlock(bridge_channel->chan);
 	}
