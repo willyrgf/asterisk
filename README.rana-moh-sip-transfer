@@ -1,6 +1,8 @@
 Edvina AB
 Olle E. Johansson
 
+2013-05-30
+
 
 
 
@@ -28,8 +30,8 @@ The moh status is not following the transfer.
 
 To check
 ========
-1. Blind transfers in SIP
-2. Attended transfers in SIP
+1. Blind transfers in SIP	- works ok
+2. Attended transfers in SIP	- works ok
 3. Transfers to a queue
 
 ---
