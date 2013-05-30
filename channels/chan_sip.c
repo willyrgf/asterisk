@@ -23991,10 +23991,10 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 		/* After the masq, the old current->chan2 is now target.chan1 bridged to target.chan2 */
 		if (target.chan1 && target.chan2 && ast_channel_get_local_hold_state(target.chan1)) {
 			ast_debug(4, "====>> Putting channel %s on remote hold since %s was locally held\n", target.chan2->name, target.chan1->name);
-			ast_channel_put_remote_on_hold(target.chan2, target.chan2->hold_state.mohsuggest);
+			ast_channel_put_remote_on_hold(target.chan1, target.chan1->hold_state.mohsuggest);
 		} else if (target.chan2 && target.chan1 && ast_channel_get_local_hold_state(target.chan2)) {
 			ast_debug(4, "====>> Putting channel %s on remote hold since %s was locally held\n", target.chan1->name, target.chan2->name);
-			ast_channel_put_remote_on_hold(target.chan1, target.chan1->hold_state.mohsuggest);
+			ast_channel_put_remote_on_hold(target.chan2, target.chan2->hold_state.mohsuggest);
 		} else if (target.chan2) {
 			ast_indicate(target.chan2, AST_CONTROL_UNHOLD);
 		}
