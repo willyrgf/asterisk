@@ -38,6 +38,11 @@ CEL:
  - The Uniqueid field for a channel is now a stable identifier, and will not
    change due to transfers, parking, etc.
 
+Core:
+ - The following channel variables have changed behavior which is described in
+   the CHANGES file: TRANSFER_CONTEXT, BRIDGEPEER, BRIDGEPVTCALLID,
+   ATTENDED_TRANSFER_COMPLETE_SOUND, and DYNAMIC_PEERNAME.
+
 Queues:
  - Queue logging for PAUSEALL/UNPAUSEALL now only occurs if the interface this is
    performed on is a member of at least one queue.
