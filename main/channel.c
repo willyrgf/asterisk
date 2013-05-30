@@ -7983,9 +7983,6 @@ struct varshead *ast_channel_get_manager_vars(struct ast_channel *chan)
 
 static void channels_shutdown(void)
 {
-
-	ast_stasis_channels_shutdown();
-
 	free_channelvars();
 
 	ast_data_unregister(NULL);
