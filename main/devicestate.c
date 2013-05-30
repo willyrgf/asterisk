@@ -775,7 +775,7 @@ static const char *device_state_get_id(struct stasis_message *message)
 	return device_state->cache_id;
 }
 
-static void devstate_exit(void)
+static void devstate_cleanup(void)
 {
 	ao2_cleanup(device_state_topic_all);
 	device_state_topic_all = NULL;
@@ -787,6 +787,8 @@ static void devstate_exit(void)
 
 int devstate_init(void)
 {
+	ast_register_cleanup(devstate_cleanup);
+
 	if (STASIS_MESSAGE_TYPE_INIT(ast_device_state_message_type) != 0) {
 		return -1;
 	}
@@ -810,6 +812,5 @@ int devstate_init(void)
 		return -1;
 	}
 
-	ast_register_atexit(devstate_exit);
 	return 0;
 }
