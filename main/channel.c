@@ -1348,20 +1348,6 @@ int ast_queue_frame_head(struct ast_channel *chan, struct ast_frame *fin)
 	return __ast_queue_frame(chan, fin, 1, NULL);
 }
 
-void ast_channel_publish_blob(struct ast_channel *chan, struct stasis_message_type *type, struct ast_json *blob)
-{
-	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
-
-	if (!blob) {
-		blob = ast_json_null();
-	}
-
-	message = ast_channel_blob_create(chan, type, blob);
-	if (message) {
-		stasis_publish(ast_channel_topic(chan), message);
-	}
-}
-
 /*! \brief Queue a hangup frame for channel */
 int ast_queue_hangup(struct ast_channel *chan)
 {
