@@ -1500,8 +1500,8 @@ static char *handle_showchan(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		c->fout & ~DEBUGCHAN_FLAG, (c->fout & DEBUGCHAN_FLAG) ? " (DEBUGGED)" : "",
 		(long)c->whentohangup.tv_sec,
 		cdrtime, c->_bridge ? c->_bridge->name : "<none>", ast_bridged_channel(c) ? ast_bridged_channel(c)->name : "<none>", 
-		ast_channel_get_local_hold_state(c) ? "Local" : "",
-		ast_channel_get_remote_hold_state(c) ? "Remote" : "",
+		ast_channel_get_local_hold_state(c) ? "Local" : "-",
+		ast_channel_get_remote_hold_state(c) ? "Remote" : "-",
 		c->context, c->exten, c->priority, c->callgroup, c->pickupgroup, ( c->appl ? c->appl : "(N/A)" ),
 		( c-> data ? S_OR(c->data, "(Empty)") : "(None)"),
 		(ast_test_flag(c, AST_FLAG_BLOCKING) ? c->blockproc : "(Not Blocking)"));
