@@ -23987,10 +23987,17 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 
 		ast_do_masquerade(target.chan1);
 
-		ast_indicate(target.chan1, AST_CONTROL_UNHOLD);
-		if (target.chan2) {
+
+		if (current->chan2 && target.chan2 && ast_channel_get_local_hold_state(current->chan2)) {
+			ast_debug(4, "====>> Putting channel %s on remote hold since %s was locally held\n", target.chan2->name, current->chan2->name);
+			ast_channel_put_remote_on_hold(target.chan2, target.chan2->hold_state.mohsuggest);
+		} else if (target.chan2 && current->chan2 && ast_channel_get_local_hold_state(target.chan2)) {
+			ast_debug(4, "====>> Putting channel %s on remote hold since %s was locally held\n", current->chan2->name, target.chan1->name);
+			ast_channel_put_remote_on_hold(current->chan2, current->chan2->hold_state.mohsuggest);
+		} else if (target.chan2) {
 			ast_indicate(target.chan2, AST_CONTROL_UNHOLD);
 		}
+		ast_indicate(target.chan1, AST_CONTROL_UNHOLD);
 
 		if (current->chan2 && current->chan2->_state == AST_STATE_RING) {
 			ast_indicate(target.chan1, AST_CONTROL_RINGING);
