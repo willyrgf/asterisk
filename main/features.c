@@ -4315,10 +4315,6 @@ static int pre_bridge_setup(struct ast_channel *chan, struct ast_channel *peer, 
 {
 	int res;
 
-/* BUGBUG these channel vars may need to be made dynamic so they update when transfers happen. */
-	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", ast_channel_name(peer));
-	pbx_builtin_setvar_helper(peer, "BRIDGEPEER", ast_channel_name(chan));
-
 	set_bridge_features_on_config(config, pbx_builtin_getvar_helper(chan, "BRIDGE_FEATURES"));
 	add_features_datastores(chan, peer, config);
 

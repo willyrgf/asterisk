@@ -1724,7 +1724,7 @@ static int smart_bridge_operation(struct ast_bridge *bridge)
  *
  * \return Nothing
  */
-static void handle_bridge_play_sound(struct ast_bridge_channel *bridge_channel)
+static void check_bridge_play_sound(struct ast_bridge_channel *bridge_channel)
 {
 	const char *play_file;
 
@@ -1745,7 +1745,7 @@ static void handle_bridge_play_sound(struct ast_bridge_channel *bridge_channel)
 
 /*!
  * \internal
- * \brief Handle any BRIDGE_PLAY_SOUND channel variables in the bridge.
+ * \brief Check for any BRIDGE_PLAY_SOUND channel variables in the bridge.
  * \since 12.0.0
  *
  * \param bridge What to operate on.
@@ -1754,12 +1754,213 @@ static void handle_bridge_play_sound(struct ast_bridge_channel *bridge_channel)
  *
  * \return Nothing
  */
-static void handle_bridge_play_sounds(struct ast_bridge *bridge)
+static void check_bridge_play_sounds(struct ast_bridge *bridge)
 {
 	struct ast_bridge_channel *bridge_channel;
 
 	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
-		handle_bridge_play_sound(bridge_channel);
+		check_bridge_play_sound(bridge_channel);
+	}
+}
+
+static void update_bridge_vars_set(struct ast_channel *chan, const char *name, const char *pvtid)
+{
+	pbx_builtin_setvar_helper(chan, "BRIDGEPEER", name);
+	pbx_builtin_setvar_helper(chan, "BRIDGEPVTCALLID", pvtid);
+}
+
+/*!
+ * \internal
+ * \brief Set BRIDGEPEER and BRIDGEPVTCALLID channel variables in a 2 party bridge.
+ * \since 12.0.0
+ *
+ * \param c0 Party of the first part.
+ * \param c1 Party of the second part.
+ *
+ * \note On entry, the bridge is already locked.
+ * \note The bridge is expected to have exactly two parties.
+ *
+ * \return Nothing
+ */
+static void set_bridge_peer_vars_2party(struct ast_channel *c0, struct ast_channel *c1)
+{
+	const char *c0_name;
+	const char *c1_name;
+	const char *c0_pvtid = NULL;
+	const char *c1_pvtid = NULL;
+#define UPDATE_BRIDGE_VARS_GET(chan, name, pvtid)									\
+	do {																			\
+		name = ast_strdupa(ast_channel_name(chan));									\
+		if (ast_channel_tech(chan)->get_pvt_uniqueid) {								\
+			pvtid = ast_strdupa(ast_channel_tech(chan)->get_pvt_uniqueid(chan));	\
+		}																			\
+	} while (0)
+
+	ast_channel_lock(c1);
+	UPDATE_BRIDGE_VARS_GET(c1, c1_name, c1_pvtid);
+	ast_channel_unlock(c1);
+
+	ast_channel_lock(c0);
+	update_bridge_vars_set(c0, c1_name, c1_pvtid);
+	UPDATE_BRIDGE_VARS_GET(c0, c0_name, c0_pvtid);
+	ast_channel_unlock(c0);
+
+	ast_channel_lock(c1);
+	update_bridge_vars_set(c1, c0_name, c0_pvtid);
+	ast_channel_unlock(c1);
+}
+
+/*!
+ * \internal
+ * \brief Fill the BRIDGEPEER value buffer with a comma separated list of channel names.
+ * \since 12.0.0
+ *
+ * \param buf Buffer to fill.  Is guaranteed to be large enough.
+ * \param cur_idx Which index into names[] to skip.
+ * \param names Channel names to put in the buffer.
+ * \param num_names Number of names in the array.
+ *
+ * \return Nothing
+ */
+static void fill_bridgepeer_buf(char *buf, unsigned int cur_idx, const char *names[], unsigned int num_names)
+{
+	int need_separator = 0;
+	unsigned int idx;
+	const char *src;
+	char *pos;
+
+	pos = buf;
+	for (idx = 0; idx < num_names; ++idx) {
+		if (idx == cur_idx) {
+			continue;
+		}
+
+		if (need_separator) {
+			*pos++ = ',';
+		}
+		need_separator = 1;
+
+		/* Copy name into buffer. */
+		src = names[idx];
+		while (*src) {
+			*pos++ = *src++;
+		}
+	}
+	*pos = '\0';
+}
+
+/*!
+ * \internal
+ * \brief Set BRIDGEPEER and BRIDGEPVTCALLID channel variables in a multi-party bridge.
+ * \since 12.0.0
+ *
+ * \param bridge What to operate on.
+ *
+ * \note On entry, the bridge is already locked.
+ * \note The bridge is expected to have more than two parties.
+ *
+ * \return Nothing
+ */
+static void set_bridge_peer_vars_multiparty(struct ast_bridge *bridge)
+{
+/*
+ * Set a maximum number of channel names for the BRIDGEPEER
+ * list.  The plus one is for the current channel which is not
+ * put in the list.
+ */
+#define MAX_BRIDGEPEER_CHANS	(2 + 1)//BUGBUG
+//#define MAX_BRIDGEPEER_CHANS	(10 + 1)
+
+	unsigned int idx;
+	unsigned int num_names;
+	unsigned int len;
+	const char **names;
+	char *buf;
+	struct ast_bridge_channel *bridge_channel;
+
+	/* Get first MAX_BRIDGEPEER_CHANS channel names. */
+	num_names = MIN(bridge->num_channels, MAX_BRIDGEPEER_CHANS);
+	names = ast_alloca(num_names * sizeof(*names));
+	idx = 0;
+	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		if (num_names <= idx) {
+			break;
+		}
+		ast_channel_lock(bridge_channel->chan);
+		names[idx++] = ast_strdupa(ast_channel_name(bridge_channel->chan));
+		ast_channel_unlock(bridge_channel->chan);
+	}
+
+	/* Determine maximum buf size needed. */
+	len = num_names;
+	for (idx = 0; idx < num_names; ++idx) {
+		len += strlen(names[idx]);
+	}
+	buf = ast_alloca(len);
+
+	/* Set the bridge channel variables. */
+	idx = 0;
+	buf[0] = '\0';
+	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		if (idx < num_names) {
+			fill_bridgepeer_buf(buf, idx, names, num_names);
+		}
+		++idx;
+
+		ast_channel_lock(bridge_channel->chan);
+ast_log(LOG_NOTICE, "BUGBUG Chan %s: BRIDGEPEER=%s\n", ast_channel_name(bridge_channel->chan), buf);
+		update_bridge_vars_set(bridge_channel->chan, buf, NULL);
+		ast_channel_unlock(bridge_channel->chan);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Set BRIDGEPEER and BRIDGEPVTCALLID channel variables in a holding bridge.
+ * \since 12.0.0
+ *
+ * \param bridge What to operate on.
+ *
+ * \note On entry, the bridge is already locked.
+ *
+ * \return Nothing
+ */
+static void set_bridge_peer_vars_holding(struct ast_bridge *bridge)
+{
+	struct ast_bridge_channel *bridge_channel;
+
+	AST_LIST_TRAVERSE(&bridge->channels, bridge_channel, entry) {
+		ast_channel_lock(bridge_channel->chan);
+		update_bridge_vars_set(bridge_channel->chan, NULL, NULL);
+		ast_channel_unlock(bridge_channel->chan);
+	}
+}
+
+/*!
+ * \internal
+ * \brief Set BRIDGEPEER and BRIDGEPVTCALLID channel variables in the bridge.
+ * \since 12.0.0
+ *
+ * \param bridge What to operate on.
+ *
+ * \note On entry, the bridge is already locked.
+ *
+ * \return Nothing
+ */
+static void set_bridge_peer_vars(struct ast_bridge *bridge)
+{
+	if (bridge->technology->capabilities & AST_BRIDGE_CAPABILITY_HOLDING) {
+		set_bridge_peer_vars_holding(bridge);
+		return;
+	}
+	if (bridge->num_channels < 2) {
+		return;
+	}
+	if (bridge->num_channels == 2) {
+		set_bridge_peer_vars_2party(AST_LIST_FIRST(&bridge->channels)->chan,
+			AST_LIST_LAST(&bridge->channels)->chan);
+	} else {
+		set_bridge_peer_vars_multiparty(bridge);
 	}
 }
 
@@ -1797,7 +1998,8 @@ static void bridge_reconfigured(struct ast_bridge *bridge)
 	if (bridge->dissolved) {
 		return;
 	}
-	handle_bridge_play_sounds(bridge);
+	check_bridge_play_sounds(bridge);
+	set_bridge_peer_vars(bridge);
 }
 
 /*!
