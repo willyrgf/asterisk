@@ -409,6 +409,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define MAX_DIAL_FEATURE_OPTIONS 30
 
 /* TODO Scrape all of the parking stuff out of features.c */
+#define builtin_blindtransfer NULL	/* BUGBUG delete me when builtin_features[] is deleted. */
 
 struct feature_group_exten {
 	AST_LIST_ENTRY(feature_group_exten) entry;
@@ -2263,11 +2264,6 @@ static const char *real_ctx(struct ast_channel *transferer, struct ast_channel *
 		s = ast_channel_context(transferer);
 	}
 	return s;
-}
-
-static int builtin_blindtransfer(struct ast_channel *chan, struct ast_channel *peer, struct ast_bridge_config *config, const char *code, int sense, void *data)
-{
-	return AST_FEATURE_RETURN_SUCCESS;
 }
 
 /*!
