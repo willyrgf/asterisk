@@ -99,10 +99,8 @@ static void leave_marked(struct confbridge_user *user)
 				ast_bridge_remove(user_iter->conference->bridge, user_iter->chan);
 			} else if (ast_test_flag(&user_iter->u_profile, USER_OPT_WAITMARKED) &&
 					!ast_test_flag(&user_iter->u_profile, USER_OPT_MARKEDUSER)) {
-				AST_LIST_REMOVE_CURRENT(list);
-				user_iter->conference->activeusers--;
-				AST_LIST_INSERT_TAIL(&user_iter->conference->waiting_list, user_iter, list);
-				user_iter->conference->waitingusers++;
+				conf_remove_user_active(user_iter->conference, user_iter);
+				conf_add_user_waiting(user_iter->conference, user_iter);
 				/* Handle muting/moh of user_iter if necessary */
 				if (ast_test_flag(&user_iter->u_profile, USER_OPT_MUSICONHOLD)) {
 					ast_bridge_mute_set(user_iter->conference->bridge, user_iter->chan, 1);
