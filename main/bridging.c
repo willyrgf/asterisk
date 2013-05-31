@@ -924,6 +924,68 @@ void ast_bridge_channel_queue_playfile(struct ast_bridge_channel *bridge_channel
 		bridge_channel, custom_play, playfile, moh_class);
 }
 
+struct bridge_custom_callback {
+	/*! Call this function on the bridge channel thread. */
+	ast_bridge_custom_callback_fn callback;
+	/*! Size of the payload if it exists.  A number otherwise. */
+	size_t payload_size;
+	/*! Nonzero if the payload exists. */
+	char payload_exists;
+	/*! Payload to give to callback. */
+	char payload[0];
+};
+
+/*!
+ * \internal
+ * \brief Handle the do custom callback bridge action.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Which channel to run the application on.
+ * \param data Action frame data to run the application.
+ *
+ * \return Nothing
+ */
+static void bridge_channel_do_callback(struct ast_bridge_channel *bridge_channel, struct bridge_custom_callback *data)
+{
+	data->callback(bridge_channel, data->payload_exists ? data->payload : NULL, data->payload_size);
+}
+
+static void payload_helper_cb(ast_bridge_channel_post_action_data post_it,
+	struct ast_bridge_channel *bridge_channel, ast_bridge_custom_callback_fn callback, const void *payload, size_t payload_size)
+{
+	struct bridge_custom_callback *cb_data;
+	size_t len_data = sizeof(*cb_data) + (payload ? payload_size : 0);
+
+	/* Sanity check. */
+	if (!callback) {
+		ast_assert(0);
+		return;
+	}
+
+	/* Fill in custom callback frame data. */
+	cb_data = alloca(len_data);
+	cb_data->callback = callback;
+	cb_data->payload_size = payload_size;
+	cb_data->payload_exists = payload && payload_size;
+	if (cb_data->payload_exists) {
+		memcpy(cb_data->payload, payload, payload_size);/* Safe */
+	}
+
+	post_it(bridge_channel, AST_BRIDGE_ACTION_CALLBACK, cb_data, len_data);
+}
+
+void ast_bridge_channel_write_callback(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_callback_fn callback, const void *payload, size_t payload_size)
+{
+	payload_helper_cb(ast_bridge_channel_write_action_data,
+		bridge_channel, callback, payload, payload_size);
+}
+
+void ast_bridge_channel_queue_callback(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_callback_fn callback, const void *payload, size_t payload_size)
+{
+	payload_helper_cb(ast_bridge_channel_queue_action_data,
+		bridge_channel, callback, payload, payload_size);
+}
+
 struct bridge_park {
 	int parker_uuid_offset;
 	int app_data_offset;
@@ -2361,17 +2423,24 @@ static void bridge_channel_handle_action(struct ast_bridge_channel *bridge_chann
 		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
 		break;
-	case AST_BRIDGE_ACTION_PARK:
-		bridge_channel_suspend(bridge_channel);
-		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
-		bridge_channel_park(bridge_channel, action->data.ptr);
-		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
-		bridge_channel_unsuspend(bridge_channel);
-		break;
 	case AST_BRIDGE_ACTION_RUN_APP:
 		bridge_channel_suspend(bridge_channel);
 		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_run_app(bridge_channel, action->data.ptr);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
+		break;
+	case AST_BRIDGE_ACTION_CALLBACK:
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_do_callback(bridge_channel, action->data.ptr);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_unsuspend(bridge_channel);
+		break;
+	case AST_BRIDGE_ACTION_PARK:
+		bridge_channel_suspend(bridge_channel);
+		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
+		bridge_channel_park(bridge_channel, action->data.ptr);
 		ast_indicate(bridge_channel->chan, AST_CONTROL_SRCUPDATE);
 		bridge_channel_unsuspend(bridge_channel);
 		break;

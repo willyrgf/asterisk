@@ -249,6 +249,15 @@ Core
  * The channel variable BRIDGEPVTCALLID is only valid for two party bridges
    and will contain a value if the BRIDGEPEER's channel driver supports it.
 
+ * The channel variable DYNAMIC_PEERNAME is redundant with BRIDGEPEER and is
+   removed.  The more useful DYNAMIC_WHO_ACTIVATED gives the channel name that
+   activated the dynamic feature.
+
+ * The channel variables DYNAMIC_FEATURENAME and DYNAMIC_WHO_ACTIVATED are set
+   only on the channel executing the dynamic feature.  Executing a dynamic
+   feature on the bridge peer in a multi-party bridge will execute it on all
+   peers of the activating channel.
+
 Realtime
 ------------------
  * Dynamic realtime tables for SIP Users can now include a 'path' field. This

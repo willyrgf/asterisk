@@ -4049,9 +4049,46 @@ static int setup_bridge_features_builtin(struct ast_bridge_features *features, s
 #endif
 }
 
-struct dtmf_hook_run_app {
+struct dynamic_dtmf_hook_run {
+	/*! Offset into app_name[] where the channel name that activated the hook starts. */
+	int activated_offset;
+	/*! Offset into app_name[] where the dynamic feature name starts. */
+	int feature_offset;
+	/*! Offset into app_name[] where the MOH class name starts.  (zero if no MOH) */
+	int moh_offset;
+	/*! Offset into app_name[] where the application argument string starts. (zero if no arguments) */
+	int app_args_offset;
+	/*! Application name to run. */
+	char app_name[0];
+};
+
+static void dynamic_dtmf_hook_callback(struct ast_bridge_channel *bridge_channel,
+	const void *payload, size_t payload_size)
+{
+	struct ast_channel *chan = bridge_channel->chan;
+	const struct dynamic_dtmf_hook_run *run_data = payload;
+
+	pbx_builtin_setvar_helper(chan, "DYNAMIC_FEATURENAME",
+		&run_data->app_name[run_data->feature_offset]);
+	pbx_builtin_setvar_helper(chan, "DYNAMIC_WHO_ACTIVATED",
+		&run_data->app_name[run_data->activated_offset]);
+
+	ast_bridge_channel_run_app(bridge_channel, run_data->app_name,
+		run_data->app_args_offset ? &run_data->app_name[run_data->app_args_offset] : NULL,
+		run_data->moh_offset ? &run_data->app_name[run_data->moh_offset] : NULL);
+}
+
+static void dynamic_dtmf_hook_run_callback(struct ast_bridge_channel *bridge_channel,
+	ast_bridge_custom_callback_fn callback, const void *payload, size_t payload_size)
+{
+	callback(bridge_channel, payload, payload_size);
+}
+
+struct dynamic_dtmf_hook_data {
 	/*! Which side of bridge to run app (AST_FEATURE_FLAG_ONSELF/AST_FEATURE_FLAG_ONPEER) */
 	unsigned int flags;
+	/*! Offset into app_name[] where the dynamic feature name starts. */
+	int feature_offset;
 	/*! Offset into app_name[] where the MOH class name starts.  (zero if no MOH) */
 	int moh_offset;
 	/*! Offset into app_name[] where the application argument string starts. (zero if no arguments) */
@@ -4062,7 +4099,7 @@ struct dtmf_hook_run_app {
 
 /*!
  * \internal
- * \brief Setup bridge dynamic features.
+ * \brief Activated dynamic DTMF feature hook.
  * \since 12.0.0
  *
  * \param bridge The bridge that the channel is part of
@@ -4072,27 +4109,55 @@ struct dtmf_hook_run_app {
  * \retval 0 Keep the callback hook.
  * \retval -1 Remove the callback hook.
  */
-static int app_dtmf_feature_hook(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+static int dynamic_dtmf_hook_trip(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-	struct dtmf_hook_run_app *pvt = hook_pvt;
-	void (*run_it)(struct ast_bridge_channel *bridge_channel, const char *app_name, const char *app_args, const char *moh_class);
+	struct dynamic_dtmf_hook_data *pvt = hook_pvt;
+	void (*run_it)(struct ast_bridge_channel *bridge_channel, ast_bridge_custom_callback_fn callback, const void *payload, size_t payload_size);
+	struct dynamic_dtmf_hook_run *run_data;
+	const char *activated_name;
+	size_t len_name;
+	size_t len_args;
+	size_t len_moh;
+	size_t len_feature;
+	size_t len_activated;
+	size_t len_data;
+
+	/* Determine lengths of things. */
+	len_name = strlen(pvt->app_name) + 1;
+	len_args = pvt->app_args_offset ? strlen(&pvt->app_name[pvt->app_args_offset]) + 1 : 0;
+	len_moh = pvt->moh_offset ? strlen(&pvt->app_name[pvt->moh_offset]) + 1 : 0;
+	len_feature = strlen(&pvt->app_name[pvt->feature_offset]) + 1;
+	ast_channel_lock(bridge_channel->chan);
+	activated_name = ast_strdupa(ast_channel_name(bridge_channel->chan));
+	ast_channel_unlock(bridge_channel->chan);
+	len_activated = strlen(activated_name) + 1;
+	len_data = sizeof(*run_data) + len_name + len_args + len_moh + len_feature + len_activated;
+
+	/* Fill in dynamic feature run hook data. */
+	run_data = ast_alloca(len_data);
+	run_data->app_args_offset = len_args ? len_name : 0;
+	run_data->moh_offset = len_moh ? len_name + len_args : 0;
+	run_data->feature_offset = len_name + len_args + len_moh;
+	run_data->activated_offset = len_name + len_args + len_moh + len_feature;
+	strcpy(run_data->app_name, pvt->app_name);/* Safe */
+	if (len_args) {
+		strcpy(&run_data->app_name[run_data->app_args_offset],
+			&pvt->app_name[pvt->app_args_offset]);/* Safe */
+	}
+	if (len_moh) {
+		strcpy(&run_data->app_name[run_data->moh_offset],
+			&pvt->app_name[pvt->moh_offset]);/* Safe */
+	}
+	strcpy(&run_data->app_name[run_data->feature_offset],
+		&pvt->app_name[pvt->feature_offset]);/* Safe */
+	strcpy(&run_data->app_name[run_data->activated_offset], activated_name);/* Safe */
 
 	if (ast_test_flag(pvt, AST_FEATURE_FLAG_ONPEER)) {
-		run_it = ast_bridge_channel_write_app;
+		run_it = ast_bridge_channel_write_callback;
 	} else {
-		run_it = ast_bridge_channel_run_app;
+		run_it = dynamic_dtmf_hook_run_callback;
 	}
-
-/*
- * BUGBUG need to pass to run_it the triggering channel name so DYNAMIC_WHO_TRIGGERED can be set on the channel when it is run.
- *
- * This would replace DYNAMIC_PEERNAME which is redundant with
- * BRIDGEPEER anyway.  The value of DYNAMIC_WHO_TRIGGERED is
- * really useful in the case of a multi-party bridge.
- */
-	run_it(bridge_channel, pvt->app_name,
-		pvt->app_args_offset ? &pvt->app_name[pvt->app_args_offset] : NULL,
-		pvt->moh_offset ? &pvt->app_name[pvt->moh_offset] : NULL);
+	run_it(bridge_channel, dynamic_dtmf_hook_callback, run_data, len_data);
 	return 0;
 }
 
@@ -4104,6 +4169,7 @@ static int app_dtmf_feature_hook(struct ast_bridge *bridge, struct ast_bridge_ch
  * \param features Bridge features to setup.
  * \param flags Which side of bridge to run app (AST_FEATURE_FLAG_ONSELF/AST_FEATURE_FLAG_ONPEER).
  * \param dtmf DTMF trigger sequence.
+ * \param feature_name Name of the dynamic feature.
  * \param app_name Dialplan application name to run.
  * \param app_args Dialplan application arguments. (Empty or NULL if no arguments)
  * \param moh_class MOH class to play to peer. (Empty or NULL if no MOH played)
@@ -4111,32 +4177,35 @@ static int app_dtmf_feature_hook(struct ast_bridge *bridge, struct ast_bridge_ch
  * \retval 0 on success.
  * \retval -1 on error.
  */
-static int add_dynamic_dtmf_hook(struct ast_bridge_features *features, unsigned int flags, const char *dtmf, const char *app_name, const char *app_args, const char *moh_class)
+static int dynamic_dtmf_hook_add(struct ast_bridge_features *features, unsigned int flags, const char *dtmf, const char *feature_name, const char *app_name, const char *app_args, const char *moh_class)
 {
-	struct dtmf_hook_run_app *app_data;
+	struct dynamic_dtmf_hook_data *hook_data;
 	size_t len_name = strlen(app_name) + 1;
 	size_t len_args = ast_strlen_zero(app_args) ? 0 : strlen(app_args) + 1;
 	size_t len_moh = ast_strlen_zero(moh_class) ? 0 : strlen(moh_class) + 1;
-	size_t len_data = sizeof(*app_data) + len_name + len_args + len_moh;
+	size_t len_feature = strlen(feature_name) + 1;
+	size_t len_data = sizeof(*hook_data) + len_name + len_args + len_moh + len_feature;
 
 	/* Fill in application run hook data. */
-	app_data = ast_malloc(len_data);
-	if (!app_data) {
+	hook_data = ast_malloc(len_data);
+	if (!hook_data) {
 		return -1;
 	}
-	app_data->flags = flags;
-	app_data->app_args_offset = len_args ? len_name : 0;
-	app_data->moh_offset = len_moh ? len_name + len_args : 0;
-	strcpy(app_data->app_name, app_name);/* Safe */
+	hook_data->flags = flags;
+	hook_data->app_args_offset = len_args ? len_name : 0;
+	hook_data->moh_offset = len_moh ? len_name + len_args : 0;
+	hook_data->feature_offset = len_name + len_args + len_moh;
+	strcpy(hook_data->app_name, app_name);/* Safe */
 	if (len_args) {
-		strcpy(&app_data->app_name[app_data->app_args_offset], app_args);/* Safe */
+		strcpy(&hook_data->app_name[hook_data->app_args_offset], app_args);/* Safe */
 	}
 	if (len_moh) {
-		strcpy(&app_data->app_name[app_data->moh_offset], moh_class);/* Safe */
+		strcpy(&hook_data->app_name[hook_data->moh_offset], moh_class);/* Safe */
 	}
+	strcpy(&hook_data->app_name[hook_data->feature_offset], feature_name);/* Safe */
 
-	return ast_bridge_dtmf_hook(features, dtmf, app_dtmf_feature_hook,
-		app_data, ast_free_ptr, 1);
+	return ast_bridge_dtmf_hook(features, dtmf, dynamic_dtmf_hook_trip, hook_data,
+		ast_free_ptr, 1);
 }
 
 /*!
@@ -4167,7 +4236,6 @@ static int setup_bridge_features_dynamic(struct ast_bridge_features *features, s
 		return 0;
 	}
 
-/* BUGBUG need to pass to add_dynamic_dtmf_hook the applicationmap name (feature->sname) so the DYNAMIC_FEATURENAME can be set on the channel when it is run. */
 	res = 0;
 	while ((tok = strsep(&dynamic_features, "#"))) {
 		struct feature_group *fg;
@@ -4179,8 +4247,9 @@ static int setup_bridge_features_dynamic(struct ast_bridge_features *features, s
 			struct feature_group_exten *fge;
 
 			AST_LIST_TRAVERSE(&fg->features, fge, entry) {
-				res |= add_dynamic_dtmf_hook(features, fge->feature->flags, fge->exten,
-					fge->feature->app, fge->feature->app_args, fge->feature->moh_class);
+				feature = fge->feature;
+				res |= dynamic_dtmf_hook_add(features, feature->flags, fge->exten,
+					feature->sname, feature->app, feature->app_args, feature->moh_class);
 			}
 		}
 		AST_RWLIST_UNLOCK(&feature_groups);
@@ -4188,8 +4257,8 @@ static int setup_bridge_features_dynamic(struct ast_bridge_features *features, s
 		ast_rdlock_call_features();
 		feature = find_dynamic_feature(tok);
 		if (feature) {
-			res |= add_dynamic_dtmf_hook(features, feature->flags, feature->exten,
-				feature->app, feature->app_args, feature->moh_class);
+			res |= dynamic_dtmf_hook_add(features, feature->flags, feature->exten,
+				feature->sname, feature->app, feature->app_args, feature->moh_class);
 		}
 		ast_unlock_call_features();
 	}
