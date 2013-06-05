@@ -4697,7 +4697,7 @@ static void bridge_hook_destroy(void *vhook)
  * \param callback Function to execute upon activation
  * \param hook_pvt Unique data
  * \param destructor Optional destructor callback for hook_pvt data
- * \param remove_on_pull TRUE if remove the hook when the channel is pulled from the bridge.
+ * \param remove_flags Dictates what situations the hook should be removed.
  *
  * \retval hook on success.
  * \retval NULL on error.
@@ -4706,7 +4706,7 @@ static struct ast_bridge_hook *bridge_hook_generic(size_t size,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	struct ast_bridge_hook *hook;
 
@@ -4716,7 +4716,7 @@ static struct ast_bridge_hook *bridge_hook_generic(size_t size,
 		hook->callback = callback;
 		hook->destructor = destructor;
 		hook->hook_pvt = hook_pvt;
-		ast_set_flag(&hook->remove_flags, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
+		ast_set_flag(&hook->remove_flags, remove_flags);
 	}
 
 	return hook;
@@ -4727,14 +4727,14 @@ int ast_bridge_dtmf_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	struct ast_bridge_hook *hook;
 	int res;
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
-		remove_on_pull);
+		remove_flags);
 	if (!hook) {
 		return -1;
 	}
@@ -4751,14 +4751,14 @@ int ast_bridge_hangup_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	struct ast_bridge_hook *hook;
 	int res;
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
-		remove_on_pull);
+		remove_flags);
 	if (!hook) {
 		return -1;
 	}
@@ -4774,14 +4774,14 @@ int ast_bridge_join_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	struct ast_bridge_hook *hook;
 	int res;
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
-		remove_on_pull);
+		remove_flags);
 	if (!hook) {
 		return -1;
 	}
@@ -4797,14 +4797,14 @@ int ast_bridge_leave_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	struct ast_bridge_hook *hook;
 	int res;
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
-		remove_on_pull);
+		remove_flags);
 	if (!hook) {
 		return -1;
 	}
@@ -4831,7 +4831,7 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 	ast_bridge_hook_callback callback,
 	void *hook_pvt,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	struct ast_bridge_hook *hook;
 	int res;
@@ -4850,7 +4850,7 @@ int ast_bridge_interval_hook(struct ast_bridge_features *features,
 
 	/* Allocate new hook and setup it's various variables */
 	hook = bridge_hook_generic(sizeof(*hook), callback, hook_pvt, destructor,
-		remove_on_pull);
+		remove_flags);
 	if (!hook) {
 		return -1;
 	}
@@ -4876,7 +4876,7 @@ int ast_bridge_features_enable(struct ast_bridge_features *features,
 	const char *dtmf,
 	void *config,
 	ast_bridge_hook_pvt_destructor destructor,
-	int remove_on_pull)
+	enum ast_bridge_hook_remove_flags remove_flags)
 {
 	if (ARRAY_LEN(builtin_features_handlers) <= feature
 		|| !builtin_features_handlers[feature]) {
@@ -4899,7 +4899,7 @@ int ast_bridge_features_enable(struct ast_bridge_features *features,
 	 * using the built in feature's DTMF callback.  Easy as pie.
 	 */
 	return ast_bridge_dtmf_hook(features, dtmf, builtin_features_handlers[feature],
-		config, destructor, remove_on_pull);
+		config, destructor, remove_flags);
 }
 
 int ast_bridge_features_limits_construct(struct ast_bridge_features_limits *limits)
@@ -4919,13 +4919,14 @@ void ast_bridge_features_limits_destroy(struct ast_bridge_features_limits *limit
 	ast_string_field_free_memory(limits);
 }
 
-int ast_bridge_features_set_limits(struct ast_bridge_features *features, struct ast_bridge_features_limits *limits, int remove_on_pull)
+int ast_bridge_features_set_limits(struct ast_bridge_features *features,
+		struct ast_bridge_features_limits *limits, enum ast_bridge_hook_remove_flags remove_flags)
 {
 	if (builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_LIMITS]) {
 		ast_bridge_builtin_set_limits_fn bridge_features_set_limits_callback;
 
 		bridge_features_set_limits_callback = builtin_interval_handlers[AST_BRIDGE_BUILTIN_INTERVAL_LIMITS];
-		return bridge_features_set_limits_callback(features, limits, remove_on_pull);
+		return bridge_features_set_limits_callback(features, limits, remove_flags);
 	}
 
 	ast_log(LOG_ERROR, "Attempted to set limits without an AST_BRIDGE_BUILTIN_INTERVAL_LIMITS callback registered.\n");
@@ -4940,7 +4941,7 @@ void ast_bridge_features_set_flag(struct ast_bridge_features *features, unsigned
 
 /*!
  * \internal
- * \brief ao2 object match remove_on_pull hooks.
+ * \brief ao2 object match hooks with appropriate remove_flags.
  * \since 12.0.0
  *
  * \param obj Feature hook object.
@@ -4964,7 +4965,7 @@ static int hook_remove_match(void *obj, void *arg, int unused)
 
 /*!
  * \internal
- * \brief Remove all remove_on_pull hooks in the container.
+ * \brief Remove all hooks with appropriate remove_flags in the container.
  * \since 12.0.0
  *
  * \param hooks Hooks container to work on.
@@ -4980,7 +4981,7 @@ static void hooks_remove_container(struct ao2_container *hooks, enum ast_bridge_
 
 /*!
  * \internal
- * \brief Remove all remove_on_pull hooks in the heap.
+ * \brief Remove all hooks in the heap with appropriate remove_flags set.
  * \since 12.0.0
  *
  * \param hooks Hooks heap to work on.
