@@ -1877,7 +1877,7 @@ static void set_bridge_peer_vars_2party(struct ast_channel *c0, struct ast_chann
  * \brief Fill the BRIDGEPEER value buffer with a comma separated list of channel names.
  * \since 12.0.0
  *
- * \param buf Buffer to fill.  Is guaranteed to be large enough.
+ * \param buf Buffer to fill.  The caller must guarantee the buffer is large enough.
  * \param cur_idx Which index into names[] to skip.
  * \param names Channel names to put in the buffer.
  * \param num_names Number of names in the array.
