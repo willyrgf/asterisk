@@ -4207,7 +4207,7 @@ static int dynamic_dtmf_hook_add(struct ast_bridge_features *features, unsigned 
 	strcpy(&hook_data->app_name[hook_data->feature_offset], feature_name);/* Safe */
 
 	return ast_bridge_dtmf_hook(features, dtmf, dynamic_dtmf_hook_trip, hook_data,
-		ast_free_ptr, 1);
+		ast_free_ptr, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
 }
 
 /*!
