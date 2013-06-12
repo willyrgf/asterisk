@@ -151,7 +151,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * gives warning if present and declines to load.
  *
  * [1001] <- agent-id/username
- * type=agent <- to leave section names open for other purposes
  * secret=password
  * fullname=Agent name used for logging purposes.
  * other parameters.
@@ -232,11 +231,9 @@ struct agents_cfg {
 
 static struct aco_type agent_type = {
 	.type = ACO_ITEM,
-	.name = "agent",
+	.name = "agent-id",
 	.category_match = ACO_BLACKLIST,
 	.category = "^(general|agents)$",
-	.matchfield = "type",
-	.matchvalue = "agent",
 	.item_alloc = agent_cfg_alloc,
 	.item_find = agent_cfg_find,
 	.item_offset = offsetof(struct agents_cfg, agents),

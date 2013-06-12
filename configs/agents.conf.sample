@@ -1,104 +1,117 @@
 ;
-; Agent configuration
+; Agent pool configuration
 ;
 
 [general]
 ; The general section of this config is not currently used, but reserved
 ; for future use.
 
-[agents]
+;[agent-id]
 ;
-; Define maxlogintries to allow agent to try max logins before
-; failed.
-; default to 3
-;
+; Define maxlogintries to allow the agent to try max logins before failed.
+; Default is 3
 ;maxlogintries=5
 ;
-;
-; Define autologoff times if appropriate.  This is how long
-; the phone has to ring with no answer before the agent is
-; automatically logged off (in seconds)
-;
+; Define autologoff times if appropriate.  This is how long a call for
+; the agent has to wait for the agent to acknowledge the call before the
+; agent is automatically logged off (in seconds)
 ;autologoff=15
 ;
+;BUGBUG the following is going away: autologoffunavail
 ; Define autologoffunavail to have agents automatically logged
 ; out when the extension that they are at returns a CHANUNAVAIL
 ; status when a call is attempted to be sent there.
 ; Default is "no".
-;
 ;autologoffunavail=yes
 ;
-; Define ackcall to require a DTMF acknowledgement when
-; a logged-in agent receives a call.  Default is "no".
-; Use the acceptdtmf option to configure what DTMF key
-; press should be used to acknowledge the call. The
-; default is '#'.
-;
+; Define ackcall to require the agent to give a DTMF acknowledgement
+; when the agent receives a call.
+; Default is "no".
 ;ackcall=no
+;
+; Set what DTMF key sequence the agent should use to acknowledge a call.
+; Default is '#'.
 ;acceptdtmf=#
 ;
-; Define endcall to allow an agent to hangup a call with a
-; DTMF keypress. Default is "yes". Use the enddtmf option to
-; configure which DTMF key will end a call. The default is
-; '*'.
-;
+; Define endcall to allow the agent to hangup a call with a DTMF key
+; sequence.
+; Default is "yes".
 ;endcall=yes
+;
+; Set what DTMF key sequence the agent should use to end a call.
+; Default is '*'.
 ;enddtmf=*
 ;
-; Define wrapuptime.  This is the minimum amount of time when
-; after disconnecting before the caller can receive a new call
-; note this is in milliseconds.
-;
+; Set the minimum amount of time after disconnecting a call before
+; the agent can receive a new call in milliseconds.
+; Default is 0.
 ;wrapuptime=5000
 ;
-; Define the default musiconhold for agents
-; musiconhold => music_class
+; Set the musiconhold class for the agent.
+; Default is default.
+;musiconhold=default
 ;
-;musiconhold => default
-;
+;BUGBUG the following is going away: goodbye
 ; Define the default good bye sound file for agents
 ; default to vm-goodbye
-;
 ;goodbye => goodbye_file
 ;
+;BUGBUG the following is going away: updatecdr
 ; Define updatecdr. This is whether or not to change the source
 ; channel in the CDR record for this call to agent/agent_id so
 ; that we know which agent generates the call
-;
 ;updatecdr=no
 ;
-; Group memberships for agents (may change in mid-file)
-;
+; Set the agent groups this agent belongs to.
+; Default is none.
 ;group=3
 ;group=1,2
 ;group=
 ;
-; --------------------------------------------------
-; This section is devoted to recording agent's calls
-; The keywords are global to the chan_agent channel driver
-;
-; Enable recording calls addressed to agents. It's turned off by default.
+; Enable recording calls the agent takes.
+; Default is no.
 ;recordagentcalls=yes
 ;
-; The format to be used to record the calls: wav, gsm, wav49.
-; By default its "wav".
+; The format used to record the calls: wav, gsm, wav49.
+; Default is "wav".
 ;recordformat=gsm
 ;
+;BUGBUG the following is going away: urlprefix
 ; The text to be added to the name of the recording. Allows forming a url link.
 ;urlprefix=http://localhost/calls/
 ;
-; The optional directory to save the conversations in. The default is
-; /var/spool/asterisk/monitor
+; Set the directory to save the agent's conversations in.
+; Default is /var/spool/asterisk/monitor
 ;savecallsin=/var/calls
 ;
-; An optional custom beep sound file to play to always-connected agents.
+; A custom beep sound file to play to the agent.
 ;custom_beep=beep
+;
+; Set the password the agent uses to login.
+;secret=1234
+;
+; Set the agent name used in logging messages.
+;fullname=Mark Spencer
 ;
 ; --------------------------------------------------
 ;
-; This section contains the agent definitions, in the form:
+; This section contains example agent definitions:
 ;
-; agent => agentid,agentpassword,name
+; Define a template called my-agents:
+;[my-agents](!)
+;maxlogintries=5
+;autologoff=15
+;ackcall=yes
+;acceptdtmf=##
+;endcall=yes
+;enddtmf=**
 ;
-;agent => 1001,4321,Mark Spencer
-;agent => 1002,4321,Will Meadows
+; Define agent 1001 using the my-agents template:
+;[1001](my-agents)
+;secret=1234
+;fullname=Mark Spencer
+;
+; Define agent 1002 using the my-agents template:
+;[1002](my-agents)
+;secret=4321
+;fullname=Will Meadows
