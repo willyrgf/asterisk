@@ -3,6 +3,8 @@
 ;
 
 [general]
+; The general section of this config is not currently used, but reserved
+; for future use.
 
 [agents]
 ;
