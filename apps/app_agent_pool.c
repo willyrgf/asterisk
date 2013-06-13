@@ -464,12 +464,10 @@ static void destroy_config(void)
 	aco_info_destroy(&cfg_info);
 }
 
-static int load_config(int reload)
+static int load_config(void)
 {
-	if (!reload) {
-		if (aco_info_init(&cfg_info)) {
-			return -1;
-		}
+	if (aco_info_init(&cfg_info)) {
+		return -1;
 	}
 
 	/* Agent options */
@@ -491,17 +489,14 @@ static int load_config(int reload)
 
 	/*! \todo BUGBUG load_config() needs users.conf handling. */
 
-	if (aco_process_config(&cfg_info, reload) == ACO_PROCESS_ERROR) {
+	if (aco_process_config(&cfg_info, 0) == ACO_PROCESS_ERROR) {
 		goto error;
 	}
 
 	return 0;
 
 error:
-	/* On a reload, just keep the config we already have in place. */
-	if (!reload) {
-		destroy_config();
-	}
+	destroy_config();
 	return -1;
 }
 
@@ -513,7 +508,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (load_config(0)) {
+	if (load_config()) {
 		ast_log(LOG_ERROR, "Unable to load config. Not loading module.\n");
 		return AST_MODULE_LOAD_DECLINE;
 	}
@@ -523,7 +518,11 @@ static int load_module(void)
 
 static int reload(void)
 {
-	return load_config(1);
+	if (aco_process_config(&cfg_info, 1) == ACO_PROCESS_ERROR) {
+		/* Just keep the config we already have in place. */
+		return -1;
+	}
+	return 0;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "Call center agent pool applications",
