@@ -142,24 +142,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /* ------------------------------------------------------------------- */
 
-/*
- * BUGBUG Change agents.conf to use this format:
- * [general]
- * section reserved
- *
- * [agents]
- * gives warning if present and declines to load.
- *
- * [1001] <- agent-id/username
- * secret=password
- * fullname=Agent name used for logging purposes.
- * other parameters.
- *
- * None of the current global options need to remain global.
- * They can be made per agent.
- */
-
-/*! Single agent config line parameters. */
+/*! Agent config parameters. */
 struct agent_cfg {
 	AST_DECLARE_STRING_FIELDS(
 		/*! Identification of the agent.  (agents config container key) */
@@ -169,63 +152,131 @@ struct agent_cfg {
 		/*! Name of agent for logging and querying purposes */
 		AST_STRING_FIELD(full_name);
 
-		/*! DTMF string for an agent to accept a call. (login override) */
+		/*!
+		 * \brief DTMF string for an agent to accept a call.
+		 *
+		 * \note The channel variable AGENTACCEPTDTMF overrides on login.
+		 */
 		AST_STRING_FIELD(dtmf_accept);
-		/*! DTMF string for an agent to end a call. (login override) */
+		/*!
+		 * \brief DTMF string for an agent to end a call.
+		 *
+		 * \note The channel variable AGENTENDDTMF overrides on login.
+		 */
 		AST_STRING_FIELD(dtmf_end);
 		/*! Beep sound file to use.  Alert the agent a call is waiting. */
 		AST_STRING_FIELD(beep_sound);
-/* BUGBUG NOT USED agents.conf goodbye option */
-		AST_STRING_FIELD(goodbye_sound);
 		/*! MOH class to use while agent waiting for call. */
 		AST_STRING_FIELD(moh);
 		/*! Absolute recording filename directory. (Made to start and end with '/') */
 		AST_STRING_FIELD(save_calls_in);
-		/*! Recording filename extension. */
+		/*! Recording format filename extension. */
 		AST_STRING_FIELD(record_format);
-/* BUGBUG the following config option likely cannot be supported: record_format_text */
-		/*! Recording filename extension used with url_prefix. */
-		AST_STRING_FIELD(record_format_text);
-/* BUGBUG the following config option likely cannot be supported: url_prefix */
-		/*! CDR userfield recording filename directory. */
-		AST_STRING_FIELD(url_prefix);
 	);
 	/*! Agent groups an agent belongs to. */
 	ast_group_t group;
-	/*! Number of seconds for agent to ack a call before being logged off if non-zero. (login override) */
-	int auto_logoff;
-	/*! TRUE if agent needs to ack a call to accept it. (login override) */
+	/*!
+	 * \brief Number of failed login attempts allowed.
+	 *
+	 * \note The channel variable AGENTLMAXLOGINTRIES overrides on login.
+	 * \note If zero then unlimited attempts.
+	 */
+	unsigned int max_login_tries;
+	/*!
+	 * \brief Number of seconds for agent to ack a call before being logged off.
+	 *
+	 * \note The channel variable AGENTAUTOLOGOFF overrides on login.
+	 * \note If zero then timer is disabled.
+	 */
+	unsigned int auto_logoff;
+	/*!
+	 * \brief Time after a call in ms before the agent can get a new call.
+	 *
+	 * \note The channel variable AGENTWRAPUPTIME overrides on login.
+	 */
+	unsigned int wrapup_time;
+	/*!
+	 * \brief TRUE if agent needs to ack a call to accept it.
+	 *
+	 * \note The channel variable AGENTACKCALL overrides on login.
+	 */
 	int ack_call;
-	/*! TRUE if agent can use DTMF to end a call. */
+	/*!
+	 * \brief TRUE if agent can use DTMF to end a call.
+	 *
+	 * \note The channel variable AGENTENDCALL overrides on login.
+	 */
 	int end_call;
-	/*! Number ms after a call before can get a new call. (login override) */
-	int wrapup_time;
-	/*! Number of failed login attempts allowed. (login override) */
-	int max_login_tries;
-/* BUGBUG the following config option likely cannot be supported: updatecdr */
-	/*! TRUE if CDR is to be updated with agent id.  (login override) */
-	int updatecdr;
-/* BUGBUG NOT USED agents.conf autologoffunavail option */
-	int autologoffunavail;
 	/*! TRUE if agent calls are recorded. */
 	int record_agent_calls;
 };
 
-static void *agent_cfg_alloc(const char *username)
+/*!
+ * \internal
+ * \brief Agent config ao2 container sort function.
+ * \since 12.0.0
+ *
+ * \param obj_left pointer to the (user-defined part) of an object.
+ * \param obj_right pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'obj_right', is an object.
+ *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
+ *
+ * \retval <0 if obj_left < obj_right
+ * \retval =0 if obj_left == obj_right
+ * \retval >0 if obj_left > obj_right
+ */
+static int agent_cfg_sort_cmp(const void *obj_left, const void *obj_right, int flags)
 {
-	/*! \todo BUGBUG agent_cfg_alloc() not written */
-	return NULL;
+	const struct agent_cfg *cfg_left = obj_left;
+	const struct agent_cfg *cfg_right = obj_right;
+	const char *right_key = obj_right;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_key = cfg_right->username;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcmp(cfg_left->username, right_key);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncmp(cfg_left->username, right_key, strlen(right_key));
+		break;
+	}
+	return cmp;
+}
+
+static void agent_cfg_destructor(void *vdoomed)
+{
+	struct agent_cfg *doomed = vdoomed;
+
+	ast_string_field_free_memory(doomed);
+}
+
+static void *agent_cfg_alloc(const char *name)
+{
+	struct agent_cfg *cfg;
+
+	cfg = ao2_alloc_options(sizeof(*cfg), agent_cfg_destructor,
+		AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!cfg || ast_string_field_init(cfg, 64)) {
+		return NULL;
+	}
+	ast_string_field_set(cfg, username, name);
+	return cfg;
 }
 
 static void *agent_cfg_find(struct ao2_container *agents, const char *username)
 {
-	/*! \todo BUGBUG agent_cfg_find() not written */
-	return NULL;
+	return ao2_find(agents, username, OBJ_KEY);
 }
 
-/*! Agents config section */
+/*! Agents configuration */
 struct agents_cfg {
-	/*! Configured agents */
+	/*! Master configured agents container. */
 	struct ao2_container *agents;
 };
 
@@ -238,6 +289,8 @@ static struct aco_type agent_type = {
 	.item_find = agent_cfg_find,
 	.item_offset = offsetof(struct agents_cfg, agents),
 };
+
+static struct aco_type *agent_types[] = ACO_TYPES(&agent_type);
 
 /* The general category is reserved, but unused */
 static struct aco_type general_type = {
@@ -280,25 +333,130 @@ static struct aco_file agents_conf = {
  *	.types = ACO_TYPES(&users_type, &users_general_type),
  *};
  *
- *	.files = ACO_FILES(&agents_conf, &users_conf),
+ *  .files = ACO_FILES(&agents_conf, &users_conf),
+ *
+ * Will need a preapply config function to create valid users.conf
+ * agents in the master agents config container.
+ * See verify_default_profiles();
  */
 
 static AO2_GLOBAL_OBJ_STATIC(cfg_handle);
 
+static void agents_cfg_destructor(void *vdoomed)
+{
+	struct agents_cfg *doomed = vdoomed;
+
+	ao2_cleanup(doomed->agents);
+	doomed->agents = NULL;
+}
+
+/*!
+ * \internal
+ * \brief Create struct agents_cfg object.
+ * \since 12.0.0
+ *
+ * \note A lock is not needed for the object or any secondary
+ * created cfg objects.  These objects are immutable after the
+ * config is loaded and applied.
+ *
+ * \retval New struct agents_cfg object.
+ * \retval NULL on error.
+ */
 static void *agents_cfg_alloc(void)
 {
-	/*
-	 * Create struct agents_cfg object.  A lock is not needed for
-	 * the object or any secondary created cfg objects.  These
-	 * objects are immutable after the config is loaded.
-	 */
-	/*! \todo BUGBUG agents_cfg_alloc() not written */
-	return NULL;
+	struct agents_cfg *cfg;
+
+	cfg = ao2_alloc_options(sizeof(*cfg), agents_cfg_destructor,
+		AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!cfg) {
+		return NULL;
+	}
+	cfg->agents = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_NOLOCK,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT, agent_cfg_sort_cmp, NULL);
+	return cfg;
 }
 
 CONFIG_INFO_STANDARD(cfg_info, cfg_handle, agents_cfg_alloc,
 	.files = ACO_FILES(&agents_conf),
 );
+
+/*!
+ * \internal
+ * \brief Handle the agent group option.
+ * \since 12.0.0
+ *
+ * \param opt The option being configured
+ * \param var The config variable to use to configure \a obj
+ * \param obj The object to be configured
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int agent_group_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct agent_cfg *cfg = obj;
+
+/* BUGBUG config framework needs to handle group and groupname parsing. */
+	cfg->group = ast_get_group(var->value);
+	return 0;
+}
+
+/*!
+ * \internal
+ * \brief Handle the agent savecallsin option.
+ * \since 12.0.0
+ *
+ * \param opt The option being configured
+ * \param var The config variable to use to configure \a obj
+ * \param obj The object to be configured
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int agent_savecallsin_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct agent_cfg *cfg = obj;
+	size_t len;
+	int need_leading;
+	int need_trailing;
+
+	if (ast_strlen_zero(var->value)) {
+		ast_string_field_set(cfg, save_calls_in, "");
+		return 0;
+	}
+
+	/* Add a leading and/or trailing '/' if needed. */
+	len = strlen(var->value);
+	need_leading = var->value[0] != '/';
+	need_trailing = var->value[len - 1] != '/';
+	ast_string_field_build(cfg, save_calls_in, "%s%s%s",
+		need_leading ? "/" : "", var->value, need_trailing ? "/" : "");
+	return 0;
+}
+
+/*!
+ * \internal
+ * \brief Handle the agent custom_beep option.
+ * \since 12.0.0
+ *
+ * \param opt The option being configured
+ * \param var The config variable to use to configure \a obj
+ * \param obj The object to be configured
+ *
+ * \retval 0 on success.
+ * \retval -1 on error.
+ */
+static int agent_custom_beep_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
+{
+	struct agent_cfg *cfg = obj;
+
+	if (ast_strlen_zero(var->value)) {
+		return -1;
+	}
+
+	ast_string_field_set(cfg, beep_sound, "");
+	return 0;
+}
 
 static void destroy_config(void)
 {
@@ -314,7 +472,24 @@ static int load_config(int reload)
 		}
 	}
 
-	/*! \todo BUGBUG load_config() not written */
+	/* Agent options */
+	aco_option_register(&cfg_info, "maxlogintries", ACO_EXACT, agent_types, "3", OPT_UINT_T, 0, FLDSET(struct agent_cfg, max_login_tries));
+	aco_option_register(&cfg_info, "autologoff", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, auto_logoff));
+	aco_option_register(&cfg_info, "ackcall", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, ack_call));
+	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_accept));
+	aco_option_register(&cfg_info, "endcall", ACO_EXACT, agent_types, "yes", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, end_call));
+	aco_option_register(&cfg_info, "enddtmf", ACO_EXACT, agent_types, "*", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_end));
+	aco_option_register(&cfg_info, "wrapuptime", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, wrapup_time));
+	aco_option_register(&cfg_info, "musiconhold", ACO_EXACT, agent_types, "default", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, moh));
+	aco_option_register_custom(&cfg_info, "group", ACO_EXACT, agent_types, "", agent_group_handler, 0);
+	aco_option_register(&cfg_info, "recordagentcalls", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, record_agent_calls));
+	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, record_format));
+	aco_option_register_custom(&cfg_info, "savecallsin", ACO_EXACT, agent_types, "", agent_savecallsin_handler, 0);
+	aco_option_register_custom(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", agent_custom_beep_handler, 0);
+	aco_option_register(&cfg_info, "password", ACO_EXACT, agent_types, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, password));
+	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
+
+	/*! \todo BUGBUG load_config() needs users.conf handling. */
 
 	if (aco_process_config(&cfg_info, reload) == ACO_PROCESS_ERROR) {
 		goto error;
