@@ -376,8 +376,11 @@ static void *agents_cfg_alloc(void)
 	return cfg;
 }
 
+static void agents_post_apply_config(void);
+
 CONFIG_INFO_STANDARD(cfg_info, cfg_handle, agents_cfg_alloc,
 	.files = ACO_FILES(&agents_conf),
+	.post_apply_config = agents_post_apply_config,
 );
 
 /*!
@@ -500,19 +503,295 @@ error:
 	return -1;
 }
 
+/*! Agent config option override flags. */
+enum agent_override_flags {
+	AGENT_FLAG_ACK_CALL = (1 << 0),
+	AGENT_FLAG_END_CALL = (1 << 1),
+	AGENT_FLAG_DTMF_ACCEPT = (1 << 2),
+	AGENT_FLAG_DTMF_END = (1 << 3),
+	AGENT_FLAG_AUTO_LOGOFF = (1 << 4),
+	AGENT_FLAG_WRAPUP_TIME = (1 << 5),
+	AGENT_FLAG_MAX_LOGIN_TRIES = (1 << 6),
+};
+
+/*! \brief Structure representing an agent. */
+struct agent_pvt {
+	AST_DECLARE_STRING_FIELDS(
+		/*! Identification of the agent.  (agents container key) */
+		AST_STRING_FIELD(username);
+		/*! Login override DTMF string for an agent to accept a call. */
+		AST_STRING_FIELD(override_dtmf_accept);
+		/*! Login override DTMF string for an agent to end a call. */
+		AST_STRING_FIELD(override_dtmf_end);
+	);
+	/*! Flags show if settings were overridden by channel vars. */
+	unsigned int flags;
+	/*! Login override number of failed login attempts allowed. */
+	unsigned int override_max_login_tries;
+	/*! Login override number of seconds for agent to ack a call before being logged off. */
+	unsigned int override_auto_logoff;
+	/*! Login override time after a call in ms before the agent can get a new call. */
+	unsigned int override_wrapup_time;
+	/*! Login override if agent needs to ack a call to accept it. */
+	int override_ack_call:1;
+	/*! Login override if agent can use DTMF to end a call. */
+	int override_end_call:1;
+
+	/*! Mark and sweep config update to determine if an agent is dead. */
+	unsigned int the_mark:1;
+	/*!
+	 * \brief TRUE if the agent is waiting to die.
+	 *
+	 * \note Agents cannot log in if they are dead.
+	 *
+	 * \note Agents destroy themselves when they are in the agent
+	 * holding bridge.
+	 */
+	unsigned int dead:1;
+	/*! TRUE if we joined the logged in channel to the bridging system. */
+	unsigned int we_joined:1;
+
+	/*! Custom device state of agent. */
+	enum ast_device_state state;
+
+	/*! When agent first logged in */
+	time_t start_login;
+	/*! When call started */
+	time_t start_call;
+	/*! When last disconnected */
+	struct timeval last_disconnect;
+
+	/*! Agent is logged in with this channel. (Holds ref) (NULL if not logged in.) */
+	struct ast_channel *chan;
+	/*! Active config values from config file. (Holds ref) */
+	struct agent_cfg *cfg;
+};
+
+static void agent_pvt_destructor(void *vdoomed)
+{
+	struct agent_pvt *doomed = vdoomed;
+
+	if (doomed->chan) {
+		doomed->chan = ast_channel_unref(doomed->chan);
+	}
+	ao2_cleanup(doomed->cfg);
+	doomed->cfg = NULL;
+	ast_string_field_free_memory(doomed);
+}
+
+static struct agent_pvt *agent_pvt_new(struct agent_cfg *cfg)
+{
+	struct agent_pvt *agent;
+
+	agent = ao2_alloc(sizeof(*agent), agent_pvt_destructor);
+	if (!agent || ast_string_field_init(agent, 32)) {
+		return NULL;
+	}
+	ast_string_field_set(agent, username, cfg->username);
+	ao2_ref(cfg, +1);
+	agent->cfg = cfg;
+	agent->state = AST_DEVICE_UNAVAILABLE;
+	return agent;
+}
+
+/*! Container of defined agents. */
+static struct ao2_container *agents;
+
+/*!
+ * \internal
+ * \brief Agents ao2 container sort function.
+ * \since 12.0.0
+ *
+ * \param obj_left pointer to the (user-defined part) of an object.
+ * \param obj_right pointer to the (user-defined part) of an object.
+ * \param flags flags from ao2_callback()
+ *   OBJ_POINTER - if set, 'obj_right', is an object.
+ *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
+ *
+ * \retval <0 if obj_left < obj_right
+ * \retval =0 if obj_left == obj_right
+ * \retval >0 if obj_left > obj_right
+ */
+static int agent_pvt_sort_cmp(const void *obj_left, const void *obj_right, int flags)
+{
+	const struct agent_pvt *agent_left = obj_left;
+	const struct agent_pvt *agent_right = obj_right;
+	const char *right_key = obj_right;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_key = agent_right->username;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcmp(agent_left->username, right_key);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncmp(agent_left->username, right_key, strlen(right_key));
+		break;
+	}
+	return cmp;
+}
+
+/*!
+ * \internal
+ * \brief ao2_find() callback function.
+ * \since 12.0.0
+ *
+ * Usage:
+ * found = ao2_find(agents, agent, OBJ_POINTER);
+ * found = ao2_find(agents, "agent-id", OBJ_KEY);
+ * found = ao2_find(agents, agent->chan, 0);
+ */
+static int agent_pvt_cmp(void *obj, void *arg, int flags)
+{
+	const struct agent_pvt *agent = obj;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	case OBJ_POINTER:
+	case OBJ_KEY:
+	case OBJ_PARTIAL_KEY:
+		cmp = CMP_MATCH;
+		break;
+	default:
+		if (agent->chan == arg) {
+			cmp = CMP_MATCH;
+		} else {
+			cmp = 0;
+		}
+		break;
+	}
+	return cmp;
+}
+
+/*!
+ * \internal
+ * \brief Get the agent device state.
+ * \since 12.0.0
+ *
+ * \param agent_id Username of the agent.
+ *
+ * \details
+ * Search the agents container for the agent and return the
+ * current state.
+ *
+ * \return Device state of the agent.
+ */
+static enum ast_device_state agent_pvt_devstate_get(const char *agent_id)
+{
+	RAII_VAR(struct agent_pvt *, agent, ao2_find(agents, agent_id, OBJ_KEY), ao2_cleanup);
+
+	if (agent) {
+		return agent->state;
+	}
+	return AST_DEVICE_INVALID;
+}
+
+static int agent_mark(void *obj, void *arg, int flags)
+{
+	struct agent_pvt *agent = obj;
+
+	ao2_lock(agent);
+	agent->the_mark = 1;
+	ao2_unlock(agent);
+	return 0;
+}
+
+static void agents_mark(void)
+{
+	ao2_callback(agents, 0, agent_mark, NULL);
+}
+
+static int agent_sweep(void *obj, void *arg, int flags)
+{
+	struct agent_pvt *agent = obj;
+	int cmp = 0;
+
+	ao2_lock(agent);
+	if (agent->the_mark) {
+		agent->the_mark = 0;
+		agent->dead = 1;
+		if (!agent->chan) {
+			/* Agent isn't logged in at this time.  Destroy it now. */
+			cmp = CMP_MATCH;
+		}
+	} else {
+		/* Resurect a dead agent if it hasn't left yet or is still on a call. */
+		agent->dead = 0;
+	}
+	ao2_unlock(agent);
+	return cmp;
+}
+
+static void agents_sweep(void)
+{
+	ao2_callback(agents, OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA, agent_sweep, NULL);
+}
+
+static void agents_post_apply_config(void)
+{
+	struct ao2_iterator iter;
+	struct agent_cfg *cfg;
+	RAII_VAR(struct agents_cfg *, cfgs, ao2_global_obj_ref(cfg_handle), ao2_cleanup);
+
+	ast_assert(cfgs != NULL);
+
+	agents_mark();
+	iter = ao2_iterator_init(cfgs->agents, 0);
+	for (; (cfg = ao2_iterator_next(&iter)); ao2_ref(cfg, -1)) {
+		RAII_VAR(struct agent_pvt *, agent, ao2_find(agents, cfg->username, OBJ_KEY), ao2_cleanup);
+
+		if (agent) {
+			ao2_lock(agent);
+			agent->the_mark = 0;
+			ao2_unlock(agent);
+			continue;
+		}
+		agent = agent_pvt_new(cfg);
+		if (!agent) {
+			continue;
+		}
+		ao2_link(agents, agent);
+	}
+	ao2_iterator_destroy(&iter);
+	agents_sweep();
+}
+
 static int unload_module(void)
 {
+	ast_devstate_prov_del("Agent");
 	destroy_config();
+	ao2_ref(agents, -1);
+	agents = NULL;
 	return 0;
 }
 
 static int load_module(void)
 {
+	int res = 0;
+
+	agents = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_MUTEX,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE, agent_pvt_sort_cmp, agent_pvt_cmp);
+	if (!agents) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
 	if (load_config()) {
 		ast_log(LOG_ERROR, "Unable to load config. Not loading module.\n");
+		ao2_ref(agents, -1);
+		agents = NULL;
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
+	/* Setup to provide Agent:agent-id device state. */
+	res |= ast_devstate_prov_add("Agent", agent_pvt_devstate_get);
+
+	if (res) {
+		unload_module();
+		return AST_MODULE_LOAD_FAILURE;
+	}
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
