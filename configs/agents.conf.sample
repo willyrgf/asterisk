@@ -38,9 +38,9 @@
 ; Default is "#".
 ;acceptdtmf=#
 ;
+;BUGBUG endcall and enddtmf need to go away in favor of the normal bridge disconnect feature.
 ; Define endcall to allow the agent to hangup a call with a DTMF key
 ; sequence.
-; The channel variable AGENTENDCALL overrides on login.
 ; Default is "yes".
 ;endcall=yes
 ;
