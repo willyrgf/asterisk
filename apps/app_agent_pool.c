@@ -37,6 +37,7 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/cli.h"
+#include "asterisk/app.h"
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
@@ -67,7 +68,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Login an agent to the system.  Always returns <literal>-1</literal>.
 			While logged in, the agent can receive calls and will hear a <literal>beep</literal>
-			when a new call comes in.  The agent can dump the call by pressing the star key.</para>
+			when a new call comes in.</para>
 		</description>
 		<see-also>
 			<ref type="application">Queue</ref>
@@ -120,7 +121,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 		</syntax>
 		<description>
-			<para>Will list info about all possible agents.</para>
+			<para>Will list info about all defined agents.</para>
 		</description>
 	</manager>
 	<manager name="AgentLogoff" language="en_US">
@@ -854,6 +855,85 @@ static int agent_logoff(const char *agent_id, int soft)
 	return 0;
 }
 
+static int agent_function_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
+{
+	char *parse;
+	struct agent_pvt *agent;
+	struct ast_channel *logged;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(agentid);
+		AST_APP_ARG(item);
+	);
+
+	buf[0] = '\0';
+
+	if (ast_strlen_zero(data)) {
+		ast_log(LOG_WARNING, "The AGENT function requires an argument - agentid!\n");
+		return -1;
+	}
+
+	parse = ast_strdupa(data);
+
+	AST_NONSTANDARD_APP_ARGS(args, parse, ':');
+	if (!args.item) {
+		args.item = "status";
+	}
+
+	agent = ao2_find(agents, args.agentid, OBJ_KEY);
+	if (!agent) {
+		ast_log(LOG_WARNING, "Agent '%s' not found!\n", args.agentid);
+		return -1;
+	}
+
+	agent_lock(agent);
+	if (!strcasecmp(args.item, "status")) {
+		const char *status;
+
+		if (agent->logged) {
+			status = "LOGGEDIN";
+		} else {
+			status = "LOGGEDOUT";
+		}
+		ast_copy_string(buf, status, len);
+	} else if (!strcasecmp(args.item, "password")) {
+		ast_copy_string(buf, agent->cfg->password, len);
+	} else if (!strcasecmp(args.item, "name")) {
+		ast_copy_string(buf, agent->cfg->full_name, len);
+	} else if (!strcasecmp(args.item, "mohclass")) {
+		ast_copy_string(buf, agent->cfg->moh, len);
+	} else if (!strcasecmp(args.item, "channel")) {
+		logged = agent_lock_logged(agent);
+		if (logged) {
+			char *pos;
+
+			ast_copy_string(buf, ast_channel_name(logged), len);
+			ast_channel_unlock(logged);
+			ast_channel_unref(logged);
+
+			pos = strrchr(buf, '-');
+			if (pos) {
+				*pos = '\0';
+			}
+		}
+	} else if (!strcasecmp(args.item, "fullchannel")) {
+		logged = agent_lock_logged(agent);
+		if (logged) {
+			ast_copy_string(buf, ast_channel_name(logged), len);
+			ast_channel_unlock(logged);
+			ast_channel_unref(logged);
+		}
+	}
+	agent_unlock(agent);
+	ao2_ref(agent, -1);
+
+	return 0;
+}
+
+static struct ast_custom_function agent_function = {
+	.name = "AGENT",
+	.read = agent_function_read,
+};
+
 struct agent_complete {
 	/*! Nth match to return. */
 	int state;
@@ -1227,6 +1307,9 @@ static int action_agent_logoff(struct mansession *s, const struct message *m)
 
 static int unload_module(void)
 {
+	/* Unregister dialplan functions */
+	ast_custom_function_unregister(&agent_function);
+
 	/* Unregister manager command */
 	ast_manager_unregister("Agents");
 	ast_manager_unregister("AgentLogoff");
@@ -1268,7 +1351,9 @@ static int load_module(void)
 	res |= ast_manager_register_xml("Agents", EVENT_FLAG_AGENT, action_agents);
 	res |= ast_manager_register_xml("AgentLogoff", EVENT_FLAG_AGENT, action_agent_logoff);
 
-/* BUGBUG AGENT dialplan function not written. */
+	/* Dialplan Functions */
+	res |= ast_custom_function_register(&agent_function);
+
 /* BUGBUG Agent holding bridge subclass not written. */
 /* BUGBUG bridge channel swap hook not written. */
 /* BUGBUG AgentLogin dialplan application not written. */
