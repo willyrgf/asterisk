@@ -144,6 +144,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /* ------------------------------------------------------------------- */
 
+#define AST_MAX_BUF	256
+
 /*! Agent config parameters. */
 struct agent_cfg {
 	AST_DECLARE_STRING_FIELDS(
@@ -557,9 +559,9 @@ struct agent_pvt {
 	enum ast_device_state state;
 
 	/*! When agent first logged in */
-	time_t start_login;
+	time_t login_start;
 	/*! When call started */
-	time_t start_call;
+	time_t call_start;
 	/*! When last disconnected */
 	struct timeval last_disconnect;
 
@@ -1061,11 +1063,11 @@ static char *agent_handle_show_specific(struct ast_cli_entry *e, int cmd, struct
 		const char *talking_with;
 
 		ast_str_append(&out, 0, "LoggedInChannel: %s\n", ast_channel_name(logged));
-		ast_str_append(&out, 0, "LoggedInTime: %ld\n", (long) agent->start_login);
+		ast_str_append(&out, 0, "LoggedInTime: %ld\n", (long) agent->login_start);
 		talking_with = pbx_builtin_getvar_helper(logged, "BRIDGEPEER");
 		if (!ast_strlen_zero(talking_with)) {
 			ast_str_append(&out, 0, "TalkingWith: %s\n", talking_with);
-			ast_str_append(&out, 0, "CallStarted: %ld\n", (long) agent->start_call);
+			ast_str_append(&out, 0, "CallStarted: %ld\n", (long) agent->call_start);
 		}
 		ast_channel_unlock(logged);
 		ast_channel_unref(logged);
@@ -1120,9 +1122,118 @@ static struct ast_cli_entry cli_agents[] = {
 	AST_CLI_DEFINE(agent_handle_logoff_cmd, "Sets an agent offline"),
 };
 
+static int action_agents(struct mansession *s, const struct message *m)
+{
+	const char *id = astman_get_header(m, "ActionID");
+	char id_text[AST_MAX_BUF];
+	struct ao2_iterator iter;
+	struct agent_pvt *agent;
+	struct ast_str *out = ast_str_alloca(4096);
+
+	if (!ast_strlen_zero(id)) {
+		snprintf(id_text, sizeof(id_text), "ActionID: %s\r\n", id);
+	} else {
+		id_text[0] = '\0';
+	}
+	astman_send_ack(s, m, "Agents will follow");
+
+	iter = ao2_iterator_init(agents, 0);
+	for (; (agent = ao2_iterator_next(&iter)); ao2_ref(agent, -1)) {
+		struct ast_party_id party_id;
+		struct ast_channel *logged;
+		const char *login_chan;
+		const char *talking_to;
+		const char *talking_to_chan;
+		const char *status;
+		time_t login_start;
+
+		agent_lock(agent);
+		logged = agent_lock_logged(agent);
+
+		/*
+		 * Status Values:
+		 * AGENT_LOGGEDOFF - Agent isn't logged in
+		 * AGENT_IDLE      - Agent is logged in, and waiting for call
+		 * AGENT_ONCALL    - Agent is logged in, and on a call
+		 * AGENT_UNKNOWN   - Don't know anything about agent. Shouldn't ever get this.
+		 */
+
+		if (logged) {
+			login_chan = ast_channel_name(logged);
+			login_start = agent->login_start;
+			talking_to_chan = pbx_builtin_getvar_helper(logged, "BRIDGEPEER");
+			if (!ast_strlen_zero(talking_to_chan)) {
+/* BUGBUG need to deal with COLP to agents when a call is pending. */
+				party_id = ast_channel_connected_effective_id(logged);
+				talking_to = S_COR(party_id.number.valid, party_id.number.str, "n/a");
+				status = "AGENT_ONCALL";
+			} else {
+				talking_to = "n/a";
+				talking_to_chan = "n/a";
+				status = "AGENT_IDLE";
+			}
+		} else {
+			login_chan = "n/a";
+			login_start = 0;
+			talking_to = "n/a";
+			talking_to_chan = "n/a";
+			status = "AGENT_LOGGEDOFF";
+		}
+
+		ast_str_set(&out, 0, "Agent: %s\r\n", agent->username);
+		ast_str_append(&out, 0, "Name: %s\r\n", S_OR(agent->cfg->full_name, "None"));
+		ast_str_append(&out, 0, "Status: %s\r\n", status);
+		ast_str_append(&out, 0, "LoggedInChan: %s\r\n", login_chan);
+		ast_str_append(&out, 0, "LoggedInTime: %ld\r\n", (long) login_start);
+		ast_str_append(&out, 0, "TalkingTo: %s\r\n", talking_to);
+		ast_str_append(&out, 0, "TalkingToChan: %s\r\n", talking_to_chan);
+
+		if (logged) {
+			ast_channel_unlock(logged);
+			ast_channel_unref(logged);
+		}
+		agent_unlock(agent);
+
+		astman_append(s, "Event: Agents\r\n"
+			"%s%s\r\n",
+			ast_str_buffer(out), id_text);
+	}
+	ao2_iterator_destroy(&iter);
+
+	astman_append(s, "Event: AgentsComplete\r\n"
+		"%s"
+		"\r\n", id_text);
+	return 0;
+}
+
+static int action_agent_logoff(struct mansession *s, const struct message *m)
+{
+	const char *agent = astman_get_header(m, "Agent");
+	const char *soft_s = astman_get_header(m, "Soft"); /* "true" is don't hangup */
+
+	if (ast_strlen_zero(agent)) {
+		astman_send_error(s, m, "No agent specified");
+		return 0;
+	}
+
+	if (!agent_logoff(agent, ast_true(soft_s))) {
+		astman_send_ack(s, m, "Agent logged out");
+	} else {
+		astman_send_error(s, m, "No such agent");
+	}
+
+	return 0;
+}
+
 static int unload_module(void)
 {
+	/* Unregister manager command */
+	ast_manager_unregister("Agents");
+	ast_manager_unregister("AgentLogoff");
+
+	/* Unregister CLI commands */
 	ast_cli_unregister_multiple(cli_agents, ARRAY_LEN(cli_agents));
+
 	ast_devstate_prov_del("Agent");
 	destroy_config();
 	ao2_ref(agents, -1);
@@ -1146,11 +1257,23 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
+/* BUGBUG Agent:agent-id device state not written. */
 	/* Setup to provide Agent:agent-id device state. */
 	res |= ast_devstate_prov_add("Agent", agent_pvt_devstate_get);
 
 	/* CLI Commands */
 	res |= ast_cli_register_multiple(cli_agents, ARRAY_LEN(cli_agents));
+
+	/* Manager commands */
+	res |= ast_manager_register_xml("Agents", EVENT_FLAG_AGENT, action_agents);
+	res |= ast_manager_register_xml("AgentLogoff", EVENT_FLAG_AGENT, action_agent_logoff);
+
+/* BUGBUG AGENT dialplan function not written. */
+/* BUGBUG Agent holding bridge subclass not written. */
+/* BUGBUG bridge channel swap hook not written. */
+/* BUGBUG AgentLogin dialplan application not written. */
+/* BUGBUG AgentRequest dialplan application not written. */
+/* BUGBUG Agent data provider not written. */
 
 	if (res) {
 		unload_module();
