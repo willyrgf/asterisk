@@ -1358,7 +1358,6 @@ static int load_module(void)
 /* BUGBUG bridge channel swap hook not written. */
 /* BUGBUG AgentLogin dialplan application not written. */
 /* BUGBUG AgentRequest dialplan application not written. */
-/* BUGBUG Agent data provider not written. */
 
 	if (res) {
 		unload_module();

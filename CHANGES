@@ -18,6 +18,8 @@ AgentMonitorOutgoing
 ------------------
  * The 'c' option has been removed. It is not possible to modify the name of a
    channel involved in a CDR.
+ * Application removed.  It was a holdover from when AgentCallbackLogin was
+   removed.
 
 ForkCDR
 ------------------
@@ -378,6 +380,8 @@ chan_agent
    and pretending otherwise helps no one.
  * The AGENTUPDATECDR channel variable has also been removed, for the same
    reason as the updatecdr option.
+ * The driver is no longer a Data retrieval API data provider for the
+   AMI DataGet action.
 
 chan_local
 ------------------
