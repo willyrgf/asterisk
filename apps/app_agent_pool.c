@@ -41,7 +41,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/pbx.h"
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
+#include "asterisk/bridging.h"
+#include "asterisk/bridging_basic.h"
 #include "asterisk/config_options.h"
+#include "asterisk/features_config.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/stringfields.h"
 
@@ -147,6 +150,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define AST_MAX_BUF	256
 
+/* BUGBUG Document in CHANGES that endcall and enddtmf are going away in favor of the normal bridge disconnect feature.  Override using FEATUREMAP. */
+
 /*! Agent config parameters. */
 struct agent_cfg {
 	AST_DECLARE_STRING_FIELDS(
@@ -163,12 +168,6 @@ struct agent_cfg {
 		 * \note The channel variable AGENTACCEPTDTMF overrides on login.
 		 */
 		AST_STRING_FIELD(dtmf_accept);
-		/*!
-		 * \brief DTMF string for an agent to end a call.
-		 *
-		 * \note The channel variable AGENTENDDTMF overrides on login.
-		 */
-		AST_STRING_FIELD(dtmf_end);
 		/*! Beep sound file to use.  Alert the agent a call is waiting. */
 		AST_STRING_FIELD(beep_sound);
 		/*! MOH class to use while agent waiting for call. */
@@ -206,8 +205,6 @@ struct agent_cfg {
 	 * \note The channel variable AGENTACKCALL overrides on login.
 	 */
 	int ack_call;
-	/*! \brief TRUE if agent can use DTMF to end a call. */
-	int end_call;
 	/*! TRUE if agent calls are recorded. */
 	int record_agent_calls;
 };
@@ -479,9 +476,6 @@ static int load_config(void)
 	aco_option_register(&cfg_info, "autologoff", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, auto_logoff));
 	aco_option_register(&cfg_info, "ackcall", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, ack_call));
 	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_accept));
-/* BUGBUG endcall and enddtmf need to go away in favor of using the normal bridge disconnect DTMF feature. */
-	aco_option_register(&cfg_info, "endcall", ACO_EXACT, agent_types, "yes", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, end_call));
-	aco_option_register(&cfg_info, "enddtmf", ACO_EXACT, agent_types, "*", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_end));
 	aco_option_register(&cfg_info, "wrapuptime", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, wrapup_time));
 	aco_option_register(&cfg_info, "musiconhold", ACO_EXACT, agent_types, "default", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, moh));
 	aco_option_register_custom(&cfg_info, "group", ACO_EXACT, agent_types, "", agent_group_handler, 0);
@@ -508,12 +502,9 @@ error:
 /*! Agent config option override flags. */
 enum agent_override_flags {
 	AGENT_FLAG_ACK_CALL = (1 << 0),
-	AGENT_FLAG_END_CALL = (1 << 1),
-	AGENT_FLAG_DTMF_ACCEPT = (1 << 2),
-	AGENT_FLAG_DTMF_END = (1 << 3),
-	AGENT_FLAG_AUTO_LOGOFF = (1 << 4),
-	AGENT_FLAG_WRAPUP_TIME = (1 << 5),
-	AGENT_FLAG_MAX_LOGIN_TRIES = (1 << 6),
+	AGENT_FLAG_DTMF_ACCEPT = (1 << 1),
+	AGENT_FLAG_AUTO_LOGOFF = (1 << 2),
+	AGENT_FLAG_WRAPUP_TIME = (1 << 3),
 };
 
 /*! \brief Structure representing an agent. */
@@ -523,21 +514,15 @@ struct agent_pvt {
 		AST_STRING_FIELD(username);
 		/*! Login override DTMF string for an agent to accept a call. */
 		AST_STRING_FIELD(override_dtmf_accept);
-		/*! Login override DTMF string for an agent to end a call. */
-		AST_STRING_FIELD(override_dtmf_end);
 	);
 	/*! Flags show if settings were overridden by channel vars. */
 	unsigned int flags;
-	/*! Login override number of failed login attempts allowed. */
-	unsigned int override_max_login_tries;
 	/*! Login override number of seconds for agent to ack a call before being logged off. */
 	unsigned int override_auto_logoff;
 	/*! Login override time after a call in ms before the agent can get a new call. */
 	unsigned int override_wrapup_time;
 	/*! Login override if agent needs to ack a call to accept it. */
 	unsigned int override_ack_call:1;
-	/*! Login override if agent can use DTMF to end a call. */
-	unsigned int override_end_call:1;
 
 	/*! TRUE if the agent is requested to logoff when the current call ends. */
 	unsigned int deferred_logoff:1;
@@ -853,6 +838,132 @@ static int agent_logoff(const char *agent_id, int soft)
 	}
 	agent_unlock(agent);
 	return 0;
+}
+
+/*! Agent holding bridge instance. */
+static struct ast_bridge *agent_holding;
+
+static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	/*! \todo BUGBUG bridge_agent_hold_ack() not written */
+	return 0;
+}
+
+static int bridge_agent_hold_disconnect(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	ast_softhangup(bridge_channel->chan, AST_SOFTHANGUP_EXPLICIT);
+	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+	return 0;
+}
+
+/*!
+ * \internal
+ * \brief ast_bridge agent_hold push method.
+ * \since 12.0.0
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to push.
+ * \param swap Bridge channel to swap places with if not NULL.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap)
+{
+	int res = 0;
+	char dtmf[AST_FEATURE_MAX_LEN];
+	struct ast_channel *chan;
+	struct ast_flags *flags;
+	const char *moh_class;
+	RAII_VAR(struct agent_pvt *, agent, NULL, ao2_cleanup);
+
+	chan = bridge_channel->chan;
+
+	agent = ao2_find(agents, swap ? swap->chan : chan, 0);
+	if (!agent) {
+		/* Could not find the agent. */
+		return -1;
+	}
+
+/*! \todo BUGBUG bridge_agent_hold_push() needs one second heartbeat interval hook added.  */
+
+	/* Add DTMF disconnect hook. */
+	dtmf[0] = '\0';
+	ast_channel_lock(chan);
+	flags = ast_bridge_features_ds_get(chan);
+	if (flags && ast_test_flag(flags, AST_FEATURE_DISCONNECT)) {
+		ast_get_builtin_feature(chan, "disconnect", dtmf, sizeof(dtmf));
+	}
+	ast_channel_unlock(chan);
+	if (!ast_strlen_zero(dtmf)) {
+		res |= ast_bridge_dtmf_hook(bridge_channel->features, dtmf,
+			bridge_agent_hold_disconnect, NULL, NULL, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
+	}
+
+	agent_lock(agent);
+	moh_class = ast_strdupa(agent->cfg->moh);
+
+	/* Add DTMF acknowledge hook. */
+	dtmf[0] = '\0';
+	if (ast_test_flag(agent, AGENT_FLAG_ACK_CALL) ? agent->override_ack_call : agent->cfg->ack_call) {
+		const char *dtmf_accept;
+
+		dtmf_accept = ast_test_flag(agent, AGENT_FLAG_DTMF_ACCEPT)
+			? agent->override_dtmf_accept : agent->cfg->dtmf_accept;
+		ast_copy_string(dtmf, dtmf_accept, sizeof(dtmf));
+	}
+	agent_unlock(agent);
+	if (!ast_strlen_zero(dtmf)) {
+		res |= ast_bridge_dtmf_hook(bridge_channel->features, dtmf,
+			bridge_agent_hold_ack, NULL, NULL, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
+	}
+
+	/* Setup agent entertainment */
+	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "idle_mode", "musiconhold");
+	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "moh_class", moh_class);
+
+	if (res) {
+		return -1;
+	}
+
+	res = ast_bridge_base_v_table.push(self, bridge_channel, swap);
+	if (res) {
+		return -1;
+	}
+
+	if (swap) {
+/*! \todo BUGBUG bridge_agent_hold_push() needs swap after bridge callback added.  */
+		agent_lock(agent);
+		ast_channel_unref(agent->logged);
+		agent->logged = ast_channel_ref(chan);
+		agent->we_joined = 0;
+		agent_unlock(agent);
+	}
+	return 0;
+}
+
+static struct ast_bridge_methods bridge_agent_hold_v_table;
+
+static struct ast_bridge *bridge_agent_hold_new(void)
+{
+	struct ast_bridge *bridge;
+
+	bridge = ast_bridge_alloc(sizeof(struct ast_bridge), &bridge_agent_hold_v_table);
+	bridge = ast_bridge_base_init(bridge, AST_BRIDGE_CAPABILITY_HOLDING,
+		AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM
+			| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED);
+	bridge = ast_bridge_register(bridge);
+	return bridge;
+}
+
+static void bridging_init_agent_hold(void)
+{
+	/* Setup bridge agent_hold subclass v_table. */
+	bridge_agent_hold_v_table = ast_bridge_base_v_table;
+	bridge_agent_hold_v_table.name = "agent_hold";
+	bridge_agent_hold_v_table.push = bridge_agent_hold_push;
 }
 
 static int agent_function_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
@@ -1318,6 +1429,13 @@ static int unload_module(void)
 	ast_cli_unregister_multiple(cli_agents, ARRAY_LEN(cli_agents));
 
 	ast_devstate_prov_del("Agent");
+
+	/* Destroy agent holding bridge. */
+	if (agent_holding) {
+		ast_bridge_destroy(agent_holding);
+		agent_holding = NULL;
+	}
+
 	destroy_config();
 	ao2_ref(agents, -1);
 	agents = NULL;
@@ -1340,6 +1458,14 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
+	/* Create agent holding bridge. */
+	bridging_init_agent_hold();
+	agent_holding = bridge_agent_hold_new();
+	if (!agent_holding) {
+		unload_module();
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
 /* BUGBUG Agent:agent-id device state not written. */
 	/* Setup to provide Agent:agent-id device state. */
 	res |= ast_devstate_prov_add("Agent", agent_pvt_devstate_get);
@@ -1354,7 +1480,6 @@ static int load_module(void)
 	/* Dialplan Functions */
 	res |= ast_custom_function_register(&agent_function);
 
-/* BUGBUG Agent holding bridge subclass not written. */
 /* BUGBUG bridge channel swap hook not written. */
 /* BUGBUG AgentLogin dialplan application not written. */
 /* BUGBUG AgentRequest dialplan application not written. */
