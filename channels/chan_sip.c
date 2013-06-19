@@ -7187,7 +7187,15 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		break;
 	case AST_CONTROL_CONGESTION:
 		if (ast->_state != AST_STATE_UP) {
-			transmit_response_reliable(p, "503 Service Unavailable", &p->initreq);
+			const char *res;
+			if (p->owner) {
+                		p->hangupcause = p->owner->hangupcause;
+			}
+			if (p->hangupcause && (res = hangup_cause2sip(p->hangupcause))) {
+				transmit_response_reliable(p, res, &p->initreq);
+			} else {
+				transmit_response_reliable(p, "503 Service Unavailable", &p->initreq);
+			}
 			p->invitestate = INV_COMPLETED;
 			sip_alreadygone(p);
 			ast_softhangup_nolock(ast, AST_SOFTHANGUP_DEV);
