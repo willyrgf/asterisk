@@ -995,8 +995,72 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 
+/*
+ * BUGBUG need to look at the agent->state to determine if can request the agent or not.
+ *
+ * The agent may not have gotten pushed into the holding bridge yet if just look at agent->logged.
+ */
+
 	/*! \todo BUGBUG agent_request_exec() not written */
 	return -1;
+}
+
+/*!
+ * \internal
+ * \brief Setup agent override config values.
+ * \since 12.0.0
+ *
+ * \param agent What to setup override config values on.
+ * \param chan Channel logging in as an agent.
+ *
+ * \return Nothing
+ */
+static void agent_login_override_config(struct agent_pvt *agent, struct ast_channel *chan)
+{
+	struct ast_flags opts = { 0 };
+	unsigned int override_ack_call = 0;
+	unsigned int override_auto_logoff = 0;
+	unsigned int override_wrapup_time = 0;
+	const char *override_dtmf_accept = NULL;
+	const char *var;
+
+	/* Get override values from channel. */
+	ast_channel_lock(chan);
+	var = pbx_builtin_getvar_helper(chan, "AGENTACKCALL");
+	if (!ast_strlen_zero(var)) {
+		override_ack_call = ast_true(var) ? 1 : 0;
+		ast_set_flag(&opts, AGENT_FLAG_ACK_CALL);
+	}
+
+	var = pbx_builtin_getvar_helper(chan, "AGENTACCEPTDTMF");
+	if (!ast_strlen_zero(var)) {
+		override_dtmf_accept = ast_strdupa(var);
+		ast_set_flag(&opts, AGENT_FLAG_DTMF_ACCEPT);
+	}
+
+	var = pbx_builtin_getvar_helper(chan, "AGENTAUTOLOGOFF");
+	if (!ast_strlen_zero(var)) {
+		if (sscanf(var, "%u", &override_auto_logoff) == 1) {
+			ast_set_flag(&opts, AGENT_FLAG_AUTO_LOGOFF);
+		}
+	}
+
+	var = pbx_builtin_getvar_helper(chan, "AGENTWRAPUPTIME");
+	if (!ast_strlen_zero(var)) {
+		if (sscanf(var, "%u", &override_wrapup_time) == 1) {
+			ast_set_flag(&opts, AGENT_FLAG_WRAPUP_TIME);
+		}
+	}
+	ast_channel_unlock(chan);
+
+	/* Set override values on agent. */
+	agent_lock(agent);
+	ast_string_field_set(agent, override_dtmf_accept, override_dtmf_accept);
+	ast_copy_flags(agent, &opts, AST_FLAGS_ALL);
+	agent->override_auto_logoff = override_auto_logoff;
+	agent->override_wrapup_time = override_wrapup_time;
+	agent->override_ack_call = override_ack_call;
+	agent_unlock(agent);
 }
 
 enum AGENT_LOGIN_OPT_FLAGS {
@@ -1058,9 +1122,30 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		return 0;
 	}
 
+	/* Has someone already logged in as this agent already? */
+	agent_lock(agent);
+	if (agent->logged) {
+		agent_unlock(agent);
+		ast_verb(3, "Agent '%s' already logged in.\n", agent->username);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "ALREADY_LOGGED_IN");
+		return 0;
+	}
+	agent->logged = ast_channel_ref(chan);
+	agent_unlock(agent);
 
+	agent_login_override_config(agent, chan);
 
+	if (!ast_test_flag(&opts, OPT_SILENT)
+		&& !ast_streamfile(chan, "agent-loginok", ast_channel_language(chan))) {
+		ast_waitstream(chan, "");
+	}
 
+	agent->last_disconnect = ast_tvnow();
+	time(&agent->login_start);
+
+	ast_verb(2, "Agent '%s' logged in (format %s/%s)\n", agent->username,
+		ast_getformatname(ast_channel_readformat(chan)),
+		ast_getformatname(ast_channel_writeformat(chan)));
 
 	/*! \todo BUGBUG agent_login_exec() not written */
 	return -1;
