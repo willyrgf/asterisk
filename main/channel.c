@@ -5724,6 +5724,7 @@ int ast_call(struct ast_channel *chan, char *addr, int timeout)
 	   return anyway.  */
 	int res = -1;
 	/* Stop if we're a zombie or need a soft hangup */
+	ast_debug(1, "***** Trying a call to %s \n", addr);
 	ast_channel_lock(chan);
 	if (!ast_test_flag(chan, AST_FLAG_ZOMBIE) && !ast_check_hangup(chan)) {
 		if (chan->cdr) {

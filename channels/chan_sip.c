@@ -6627,6 +6627,7 @@ static int sip_hangup(struct ast_channel *ast)
 			} else {	/* Incoming call, not up */
 				const char *res;
 				AST_SCHED_DEL_UNREF(sched, p->provisional_keepalive_sched_id, dialog_unref(p, "when you delete the provisional_keepalive_sched_id, you should dec the refcount for the stored dialog ptr"));
+				ast_debug(2, "==> Hangupcause %d \n", p->hangupcause)
 				if (p->hangupcause && (res = hangup_cause2sip(p->hangupcause)))
 					transmit_response_reliable(p, res, &p->initreq);
 				else
