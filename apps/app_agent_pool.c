@@ -47,6 +47,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/features_config.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/stringfields.h"
+#include "asterisk/stasis_channels.h"
 
 /*** DOCUMENTATION
 	<application name="AgentLogin" language="en_US">
@@ -159,6 +160,35 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Sets an agent as no longer logged in.</para>
 		</description>
 	</manager>
+	<managerEvent language="en_US" name="AgentLogin">
+		<managerEventInstance class="EVENT_FLAG_AGENT">
+			<synopsis>Raised when an Agent has logged in.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<parameter name="Agent">
+					<para>The name of the agent.</para>
+				</parameter>
+			</syntax>
+			<see-also>
+				<ref type="application">AgentLogin</ref>
+				<ref type="managerEvent">Agentlogoff</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="AgentLogoff">
+		<managerEventInstance class="EVENT_FLAG_AGENT">
+			<synopsis>Raised when an Agent has logged off.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='AgentLogin']/managerEventInstance/syntax/parameter)" />
+				<parameter name="Logintime">
+					<para>The number of seconds the agent was logged in.</para>
+				</parameter>
+			</syntax>
+			<see-also>
+				<ref type="managerEvent">AgentLogin</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
  ***/
 
 /* ------------------------------------------------------------------- */
@@ -978,6 +1008,83 @@ static int bridge_agent_hold_deferred_create(void)
 	return 0;
 }
 
+static struct ast_manager_event_blob *login_to_ami(struct stasis_message *msg)
+{
+	RAII_VAR(struct ast_str *, channel_string, NULL, ast_free);
+	RAII_VAR(struct ast_str *, party_string, ast_str_create(256), ast_free);
+	struct ast_channel_blob *obj = stasis_message_data(msg);
+	const char *agent = ast_json_string_get(ast_json_object_get(obj->blob, "agent"));
+
+	channel_string = ast_manager_build_channel_state_string(obj->snapshot);
+	if (!channel_string) {
+		return NULL;
+	}
+
+	return ast_manager_event_blob_create(EVENT_FLAG_AGENT, "AgentLogin",
+		"%s"
+		"Agent: %s\r\n",
+		ast_str_buffer(channel_string), agent);
+}
+
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(login_type,
+	.to_ami = login_to_ami,
+	);
+
+static void send_agent_login(struct ast_channel *chan, const char *agent)
+{
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+
+	ast_assert(agent != NULL);
+
+	blob = ast_json_pack("{s: s}",
+		"agent", agent);
+	if (!blob) {
+		return;
+	}
+
+	ast_channel_publish_blob(chan, login_type(), blob);
+}
+
+static struct ast_manager_event_blob *logoff_to_ami(struct stasis_message *msg)
+{
+	RAII_VAR(struct ast_str *, channel_string, NULL, ast_free);
+	RAII_VAR(struct ast_str *, party_string, ast_str_create(256), ast_free);
+	struct ast_channel_blob *obj = stasis_message_data(msg);
+	const char *agent = ast_json_string_get(ast_json_object_get(obj->blob, "agent"));
+	long logintime = ast_json_integer_get(ast_json_object_get(obj->blob, "logintime"));
+
+	channel_string = ast_manager_build_channel_state_string(obj->snapshot);
+	if (!channel_string) {
+		return NULL;
+	}
+
+	return ast_manager_event_blob_create(EVENT_FLAG_AGENT, "AgentLogoff",
+		"%s"
+		"Agent: %s\r\n"
+		"Logintime: %ld\r\n",
+		ast_str_buffer(channel_string), agent, logintime);
+}
+
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(logoff_type,
+	.to_ami = logoff_to_ami,
+	);
+
+static void send_agent_logoff(struct ast_channel *chan, const char *agent, long logintime)
+{
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+
+	ast_assert(agent != NULL);
+
+	blob = ast_json_pack("{s: s, s: i}",
+		"agent", agent,
+		"logintime", logintime);
+	if (!blob) {
+		return;
+	}
+
+	ast_channel_publish_blob(chan, logoff_type(), blob);
+}
+
 /*!
  * Called by the AgentRequest application (from the dial plan).
  *
@@ -1131,6 +1238,8 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		return 0;
 	}
 	agent->logged = ast_channel_ref(chan);
+	agent->last_disconnect = ast_tvnow();
+	time(&agent->login_start);
 	agent_unlock(agent);
 
 	agent_login_override_config(agent, chan);
@@ -1140,12 +1249,22 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		ast_waitstream(chan, "");
 	}
 
-	agent->last_disconnect = ast_tvnow();
-	time(&agent->login_start);
-
 	ast_verb(2, "Agent '%s' logged in (format %s/%s)\n", agent->username,
 		ast_getformatname(ast_channel_readformat(chan)),
 		ast_getformatname(ast_channel_writeformat(chan)));
+	send_agent_login(chan, agent->username);
+
+	{
+		long logintime;
+	
+		agent_lock(agent);
+		logintime = time(NULL) - agent->login_start;
+		agent->logged = ast_channel_unref(chan);
+		agent_unlock(agent);
+	
+		send_agent_logoff(chan, agent->username, logintime);
+		ast_verb(2, "Agent '%s' logged out\n", agent->username);
+	}
 
 	/*! \todo BUGBUG agent_login_exec() not written */
 	return -1;
@@ -1625,6 +1744,9 @@ static int unload_module(void)
 	destroy_config();
 	ao2_ref(agents, -1);
 	agents = NULL;
+
+	STASIS_MESSAGE_TYPE_CLEANUP(login_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(logoff_type);
 	return 0;
 }
 
@@ -1632,15 +1754,29 @@ static int load_module(void)
 {
 	int res = 0;
 
+/* BUGBUG need to make these message types public so app_queue can subscribe to them for its log. */
+	if (STASIS_MESSAGE_TYPE_INIT(login_type)) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (STASIS_MESSAGE_TYPE_INIT(logoff_type)) {
+		STASIS_MESSAGE_TYPE_CLEANUP(login_type);
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
 	agents = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_MUTEX,
 		AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE, agent_pvt_sort_cmp, agent_pvt_cmp);
 	if (!agents) {
+		STASIS_MESSAGE_TYPE_CLEANUP(login_type);
+		STASIS_MESSAGE_TYPE_CLEANUP(logoff_type);
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	if (load_config()) {
 		ast_log(LOG_ERROR, "Unable to load config. Not loading module.\n");
 		ao2_ref(agents, -1);
 		agents = NULL;
+		STASIS_MESSAGE_TYPE_CLEANUP(login_type);
+		STASIS_MESSAGE_TYPE_CLEANUP(logoff_type);
 		return AST_MODULE_LOAD_DECLINE;
 	}
 

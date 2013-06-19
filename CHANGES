@@ -247,6 +247,9 @@ AMI (Asterisk Manager Interface)
    information about each channel.  The (infamous) "Join" and "Leave" AMI
    events have been changed to "QueueCallerJoin" and "QueueCallerLeave".
 
+ * The AMI events "Agentlogin" and "Agentlogoff" have been renamed
+   "AgentLogin" and "AgentLogoff" respectively.
+
 AGI (Asterisk Gateway Interface)
 ------------------
  * The manager event AGIExec has been split into AGIExecStart and AGIExecEnd.
