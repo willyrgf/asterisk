@@ -90,24 +90,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Request an agent to connect with the channel.
 		</synopsis>
 		<syntax argsep=",">
-			<parameter name="Locator" required="true">
-				<para>The value can be:</para>
-				<para>1) A specific agent id.</para>
-				<para>2) Use @<replaceable>group-id</replaceable> to locate an available
-					agent in a group.</para>
-				<para>3) Use :<replaceable>group-id</replaceable> to locate an available
-					agent in a group or wait for one to become available.</para>
-			</parameter>
+			<parameter name="AgentId" required="true" />
 			<parameter name="timeout">
 				<para>Specifies the number of seconds to wait for an available agent.</para>
 			</parameter>
 		</syntax>
-		<description>
-			<para>
-				Request a specific agent or an agent from a group to connect
-				with the channel.
-			</para>
-		</description>
 		<see-also>
 			<ref type="application">AgentLogin</ref>
 		</see-also>
@@ -204,8 +191,6 @@ struct agent_cfg {
 		/*! Recording format filename extension. */
 		AST_STRING_FIELD(record_format);
 	);
-	/*! Agent groups an agent belongs to. */
-	ast_group_t group;
 	/*!
 	 * \brief Number of seconds for agent to ack a call before being logged off.
 	 *
@@ -406,27 +391,6 @@ CONFIG_INFO_STANDARD(cfg_info, cfg_handle, agents_cfg_alloc,
 
 /*!
  * \internal
- * \brief Handle the agent group option.
- * \since 12.0.0
- *
- * \param opt The option being configured
- * \param var The config variable to use to configure \a obj
- * \param obj The object to be configured
- *
- * \retval 0 on success.
- * \retval -1 on error.
- */
-static int agent_group_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
-{
-	struct agent_cfg *cfg = obj;
-
-/* BUGBUG config framework needs to handle group and groupname parsing. */
-	cfg->group = ast_get_group(var->value);
-	return 0;
-}
-
-/*!
- * \internal
  * \brief Handle the agent savecallsin option.
  * \since 12.0.0
  *
@@ -500,7 +464,6 @@ static int load_config(void)
 	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_accept));
 	aco_option_register(&cfg_info, "wrapuptime", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, wrapup_time));
 	aco_option_register(&cfg_info, "musiconhold", ACO_EXACT, agent_types, "default", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, moh));
-	aco_option_register_custom(&cfg_info, "group", ACO_EXACT, agent_types, "", agent_group_handler, 0);
 	aco_option_register(&cfg_info, "recordagentcalls", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, record_agent_calls));
 	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, record_format));
 	aco_option_register_custom(&cfg_info, "savecallsin", ACO_EXACT, agent_types, "", agent_savecallsin_handler, 0);

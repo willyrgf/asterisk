@@ -35,12 +35,6 @@
 ; Default is "default".
 ;musiconhold=default
 ;
-; Set the agent groups this agent belongs to.
-; Default is "".
-;group=3
-;group=1,2
-;group=
-;
 ; Enable recording calls the agent takes.
 ; Default is "no".
 ;recordagentcalls=yes
