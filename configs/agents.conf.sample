@@ -7,25 +7,12 @@
 ; for future use.
 
 ;[agent-id]
-;
-; Define maxlogintries to allow the agent to try max logins before failed.
-; The channel variable AGENTLMAXLOGINTRIES overrides on login.
-; Default is 3.
-;maxlogintries=5
-;
 ; Set how long a call for the agent has to wait for the agent to acknowledge
 ; the call before the agent is automatically logged off (in seconds).
 ; If set to zero then the call will wait forever for the agent to acknowledge.
 ; The channel variable AGENTAUTOLOGOFF overrides on login.
 ; Default is 0.
 ;autologoff=15
-;
-;BUGBUG the following is going away: autologoffunavail
-; Define autologoffunavail to have agents automatically logged
-; out when the extension that they are at returns a CHANUNAVAIL
-; status when a call is attempted to be sent there.
-; Default is "no".
-;autologoffunavail=yes
 ;
 ; Define ackcall to require the agent to give a DTMF acknowledgement
 ; when the agent receives a call.
@@ -38,17 +25,6 @@
 ; Default is "#".
 ;acceptdtmf=#
 ;
-;BUGBUG endcall and enddtmf need to go away in favor of the normal bridge disconnect feature.
-; Define endcall to allow the agent to hangup a call with a DTMF key
-; sequence.
-; Default is "yes".
-;endcall=yes
-;
-; Set what DTMF key sequence the agent should use to end a call.
-; The channel variable AGENTENDDTMF overrides on login.
-; Default is "*".
-;enddtmf=*
-;
 ; Set the minimum amount of time after disconnecting a call before
 ; the agent can receive a new call in milliseconds.
 ; The channel variable AGENTWRAPUPTIME overrides on login.
@@ -58,17 +34,6 @@
 ; Set the musiconhold class for the agent.
 ; Default is "default".
 ;musiconhold=default
-;
-;BUGBUG the following is going away: goodbye
-; Define the default good bye sound file for agents
-; default to vm-goodbye
-;goodbye => goodbye_file
-;
-;BUGBUG the following is going away: updatecdr
-; Define updatecdr. This is whether or not to change the source
-; channel in the CDR record for this call to agent/agent_id so
-; that we know which agent generates the call
-;updatecdr=no
 ;
 ; Set the agent groups this agent belongs to.
 ; Default is "".
@@ -84,10 +49,6 @@
 ; Default is "wav".
 ;recordformat=gsm
 ;
-;BUGBUG the following is going away: urlprefix
-; The text to be added to the name of the recording. Allows forming a url link.
-;urlprefix=http://localhost/calls/
-;
 ; Set the absolute directory to save the agent's conversations in.
 ; Default is "".
 ; An empty string becomes asterisk.conf's astspooldir/monitor
@@ -97,10 +58,6 @@
 ; A custom beep sound file to play to the agent.
 ; Default is "beep".
 ;custom_beep=beep
-;
-; Set the password the agent uses to login.
-; Default is "".
-;password=1234
 ;
 ; Set the agent name used in logging messages.
 ; Default is "".
@@ -112,19 +69,14 @@
 ;
 ; Define a template called my-agents:
 ;[my-agents](!)
-;maxlogintries=5
 ;autologoff=15
 ;ackcall=yes
 ;acceptdtmf=##
-;endcall=yes
-;enddtmf=**
 ;
 ; Define agent 1001 using the my-agents template:
 ;[1001](my-agents)
-;password=1234
 ;fullname=Mark Spencer
 ;
 ; Define agent 1002 using the my-agents template:
 ;[1002](my-agents)
-;password=4321
 ;fullname=Will Meadows

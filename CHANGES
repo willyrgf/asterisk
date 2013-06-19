@@ -14,6 +14,13 @@
 Applications
 ------------------
 
+AgentLogin
+------------------
+ * The application no longer does agent authentication.  The dialplan needs to
+   perform this function before running AgentLogin.  If the agent is already
+   logged in, dialplan will continue with the AGENT_STATUS channel variable
+   set to ALREADY_LOGGED_IN.
+
 AgentMonitorOutgoing
 ------------------
  * The 'c' option has been removed. It is not possible to modify the name of a
@@ -382,6 +389,12 @@ chan_agent
    reason as the updatecdr option.
  * The driver is no longer a Data retrieval API data provider for the
    AMI DataGet action.
+ * The endcall and enddtmf configuration options are removed.  Use the
+   dialplan function CHANNEL(dtmf-features) to set DTMF features on the agent
+   channel before calling AgentLogin.
+ * chan_agent is removed and replaced with AgentLogin and AgentRequest dialplan
+   applications.  Agents are connected with callers using the new AgentRequest
+   dialplan application.  See agents.conf.sample for valid configuration options.
 
 chan_local
 ------------------

@@ -71,7 +71,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/data.h"
 
 /*** DOCUMENTATION
-	<application name="AgentLogin" language="en_US">
+	<application name="AgentLoginOld" language="en_US">
 		<synopsis>
 			Call agent login.
 		</synopsis>
@@ -102,7 +102,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="filename">queues.conf</ref>
 		</see-also>
 	</application>
-	<application name="AgentMonitorOutgoing" language="en_US">
+	<application name="AgentMonitorOutgoingOld" language="en_US">
 		<synopsis>
 			Record agent's outgoing call.
 		</synopsis>
@@ -133,7 +133,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="filename">agents.conf</ref>
 		</see-also>
 	</application>
-	<function name="AGENT" language="en_US">
+	<function name="AGENTOld" language="en_US">
 		<synopsis>
 			Gets information about an Agent
 		</synopsis>
@@ -165,7 +165,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description></description>
 	</function>
-	<manager name="Agents" language="en_US">
+	<manager name="AgentsOld" language="en_US">
 		<synopsis>
 			Lists agents and their status.
 		</synopsis>
@@ -176,7 +176,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Will list info about all possible agents.</para>
 		</description>
 	</manager>
-	<manager name="AgentLogoff" language="en_US">
+	<manager name="AgentLogoffOld" language="en_US">
 		<synopsis>
 			Sets an agent as no longer logged in.
 		</synopsis>

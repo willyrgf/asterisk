@@ -51,37 +51,65 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*** DOCUMENTATION
 	<application name="AgentLogin" language="en_US">
 		<synopsis>
-			Call agent login.
+			Login an agent.
 		</synopsis>
-		<syntax>
-			<parameter name="AgentId">
-				<para>
-	 				If not present the agent is prompted for an identifier.
-	 			</para>
-			</parameter>
+		<syntax argsep=",">
+			<parameter name="AgentId" required="true" />
 			<parameter name="options">
 				<optionlist>
 					<option name="s">
 						<para>silent login - do not announce the login ok segment after
-						agent logged on/off</para>
+						agent logged on.</para>
 					</option>
 				</optionlist>
 			</parameter>
 		</syntax>
 		<description>
-			<para>Login an agent to the system.  Always returns <literal>-1</literal>.
+			<para>Login an agent to the system.  Any agent authentication is assumed to
+			already be done by dialplan.  If the agent is already logged in, the
+			application will continue in the dialplan with <variable>AGENT_STATUS</variable> set
+ 			to <literal>ALREADY_LOGGED_IN</literal>.
 			While logged in, the agent can receive calls and will hear a <literal>beep</literal>
 			when a new call comes in.</para>
 		</description>
 		<see-also>
+			<ref type="application">Authenticate</ref>
 			<ref type="application">Queue</ref>
 			<ref type="application">AddQueueMember</ref>
 			<ref type="application">RemoveQueueMember</ref>
 			<ref type="application">PauseQueueMember</ref>
 			<ref type="application">UnpauseQueueMember</ref>
 			<ref type="function">AGENT</ref>
+			<ref type="function">CHANNEL(dtmf-features)</ref>
 			<ref type="filename">agents.conf</ref>
 			<ref type="filename">queues.conf</ref>
+		</see-also>
+	</application>
+	<application name="AgentRequest" language="en_US">
+		<synopsis>
+			Request an agent to connect with the channel.
+		</synopsis>
+		<syntax argsep=",">
+			<parameter name="Locator" required="true">
+				<para>The value can be:</para>
+				<para>1) A specific agent id.</para>
+				<para>2) Use @<replaceable>group-id</replaceable> to locate an available
+					agent in a group.</para>
+				<para>3) Use :<replaceable>group-id</replaceable> to locate an available
+					agent in a group or wait for one to become available.</para>
+			</parameter>
+			<parameter name="timeout">
+				<para>Specifies the number of seconds to wait for an available agent.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>
+				Request a specific agent or an agent from a group to connect
+				with the channel.
+			</para>
+		</description>
+		<see-also>
+			<ref type="application">AgentLogin</ref>
 		</see-also>
 	</application>
 	<function name="AGENT" language="en_US">
@@ -89,7 +117,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Gets information about an Agent
 		</synopsis>
 		<syntax argsep=":">
-			<parameter name="agentid" required="true" />
+			<parameter name="AgentId" required="true" />
 			<parameter name="item">
 				<para>The valid items to retrieve are:</para>
 				<enumlist>
@@ -97,7 +125,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>(default) The status of the agent (LOGGEDIN | LOGGEDOUT)</para>
 					</enum>
 					<enum name="password">
-						<para>The password of the agent</para>
+						<para>Deprecated.  The dialplan handles any agent authentication.</para>
 					</enum>
 					<enum name="name">
 						<para>The name of the agent</para>
@@ -150,15 +178,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define AST_MAX_BUF	256
 
-/* BUGBUG Document in CHANGES that endcall and enddtmf are going away in favor of the normal bridge disconnect feature.  Override using FEATUREMAP. */
+static const char app_agent_login[] = "AgentLogin";
+static const char app_agent_request[] = "AgentRequest";
 
 /*! Agent config parameters. */
 struct agent_cfg {
 	AST_DECLARE_STRING_FIELDS(
 		/*! Identification of the agent.  (agents config container key) */
 		AST_STRING_FIELD(username);
-		/*! Password the agent needs when logging in. */
-		AST_STRING_FIELD(password);
 		/*! Name of agent for logging and querying purposes */
 		AST_STRING_FIELD(full_name);
 
@@ -179,13 +206,6 @@ struct agent_cfg {
 	);
 	/*! Agent groups an agent belongs to. */
 	ast_group_t group;
-	/*!
-	 * \brief Number of failed login attempts allowed.
-	 *
-	 * \note The channel variable AGENTLMAXLOGINTRIES overrides on login.
-	 * \note If zero then unlimited attempts.
-	 */
-	unsigned int max_login_tries;
 	/*!
 	 * \brief Number of seconds for agent to ack a call before being logged off.
 	 *
@@ -323,7 +343,6 @@ static struct aco_file agents_conf = {
  * [user] <- agent-id/username
  * hasagent = yes/no
  * fullname=name
- * secret=password
  *
  *static struct aco_file users_conf = {
  *	.filename = "users.conf",
@@ -371,6 +390,10 @@ static void *agents_cfg_alloc(void)
 	}
 	cfg->agents = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_NOLOCK,
 		AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT, agent_cfg_sort_cmp, NULL);
+	if (!cfg->agents) {
+		ao2_ref(cfg, -1);
+		cfg = NULL;
+	}
 	return cfg;
 }
 
@@ -472,7 +495,6 @@ static int load_config(void)
 	}
 
 	/* Agent options */
-	aco_option_register(&cfg_info, "maxlogintries", ACO_EXACT, agent_types, "3", OPT_UINT_T, 0, FLDSET(struct agent_cfg, max_login_tries));
 	aco_option_register(&cfg_info, "autologoff", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, auto_logoff));
 	aco_option_register(&cfg_info, "ackcall", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, ack_call));
 	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_accept));
@@ -483,7 +505,6 @@ static int load_config(void)
 	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, record_format));
 	aco_option_register_custom(&cfg_info, "savecallsin", ACO_EXACT, agent_types, "", agent_savecallsin_handler, 0);
 	aco_option_register_custom(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", agent_custom_beep_handler, 0);
-	aco_option_register(&cfg_info, "password", ACO_EXACT, agent_types, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, password));
 	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
 
 	/*! \todo BUGBUG load_config() needs users.conf handling. */
@@ -803,6 +824,15 @@ static void agents_post_apply_config(void)
 		if (agent) {
 			agent_lock(agent);
 			agent->the_mark = 0;
+			if (!agent->logged) {
+				struct agent_cfg *cfg_old;
+
+				/* Replace the config of agents not logged in. */
+				cfg_old = agent->cfg;
+				ao2_ref(cfg, +1);
+				agent->cfg = cfg;
+				ao2_cleanup(cfg_old);
+			}
 			agent_unlock(agent);
 			continue;
 		}
@@ -842,6 +872,9 @@ static int agent_logoff(const char *agent_id, int soft)
 
 /*! Agent holding bridge instance. */
 static struct ast_bridge *agent_holding;
+
+/*! Agent holding bridge deferred creation lock. */
+AST_MUTEX_DEFINE_STATIC(agent_holding_lock);
 
 static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
@@ -966,6 +999,110 @@ static void bridging_init_agent_hold(void)
 	bridge_agent_hold_v_table.push = bridge_agent_hold_push;
 }
 
+static int bridge_agent_hold_deferred_create(void)
+{
+	if (!agent_holding) {
+		ast_mutex_lock(&agent_holding_lock);
+		if (!agent_holding) {
+			agent_holding = bridge_agent_hold_new();
+		}
+		ast_mutex_unlock(&agent_holding_lock);
+		if (!agent_holding) {
+			ast_log(LOG_ERROR, "Could not create agent holding bridge.\n");
+			return -1;
+		}
+	}
+	return 0;
+}
+
+/*!
+ * Called by the AgentRequest application (from the dial plan).
+ *
+ * \brief Application to locate an agent to talk with.
+ *
+ * \param chan Channel wanting to talk with an agent.
+ * \param data Application parameters
+ *
+ * \retval 0 To continue in dialplan.
+ * \retval -1 To hangup.
+ */
+static int agent_request_exec(struct ast_channel *chan, const char *data)
+{
+	if (bridge_agent_hold_deferred_create()) {
+		return -1;
+	}
+
+	/*! \todo BUGBUG agent_request_exec() not written */
+	return -1;
+}
+
+enum AGENT_LOGIN_OPT_FLAGS {
+	OPT_SILENT = (1 << 0),
+};
+AST_APP_OPTIONS(agent_login_opts, BEGIN_OPTIONS
+	AST_APP_OPTION('s', OPT_SILENT),
+END_OPTIONS);
+
+/*!
+ * Called by the AgentLogin application (from the dial plan).
+ *
+ * \brief Application to log in an agent.
+ *
+ * \param chan Channel attempting to login as an agent.
+ * \param data Application parameters
+ *
+ * \retval 0 To continue in dialplan.
+ * \retval -1 To hangup.
+ */
+static int agent_login_exec(struct ast_channel *chan, const char *data)
+{
+	char *parse;
+	struct ast_flags opts;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(agent_id);
+		AST_APP_ARG(options);
+		AST_APP_ARG(other);		/* Any remaining unused arguments */
+	);
+
+	RAII_VAR(struct agent_pvt *, agent, NULL, ao2_cleanup);
+
+	if (bridge_agent_hold_deferred_create()) {
+		return -1;
+	}
+
+	if (ast_channel_state(chan) != AST_STATE_UP && ast_answer(chan)) {
+		return -1;
+	}
+
+	parse = ast_strdupa(data ?: "");
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (ast_strlen_zero(args.agent_id)) {
+		ast_log(LOG_WARNING, "AgentLogin requires an AgentId\n");
+		return -1;
+	}
+
+	if (ast_app_parse_options(agent_login_opts, &opts, NULL, args.options)) {
+		/* General invalid option syntax. */
+		return -1;
+	}
+
+	/* Find the agent. */
+	agent = ao2_find(agents, args.agent_id, OBJ_KEY);
+	if (!agent) {
+		ast_verb(3, "Agent '%s' does not exist.\n", args.agent_id);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "UNKNOWN_AGENT");
+		return 0;
+	}
+
+
+
+
+
+	/*! \todo BUGBUG agent_login_exec() not written */
+	return -1;
+}
+
 static int agent_function_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
 	char *parse;
@@ -978,14 +1115,13 @@ static int agent_function_read(struct ast_channel *chan, const char *cmd, char *
 
 	buf[0] = '\0';
 
-	if (ast_strlen_zero(data)) {
+	parse = ast_strdupa(data ?: "");
+	AST_NONSTANDARD_APP_ARGS(args, parse, ':');
+
+	if (ast_strlen_zero(args.agentid)) {
 		ast_log(LOG_WARNING, "The AGENT function requires an argument - agentid!\n");
 		return -1;
 	}
-
-	parse = ast_strdupa(data);
-
-	AST_NONSTANDARD_APP_ARGS(args, parse, ':');
 	if (!args.item) {
 		args.item = "status";
 	}
@@ -1006,8 +1142,6 @@ static int agent_function_read(struct ast_channel *chan, const char *cmd, char *
 			status = "LOGGEDOUT";
 		}
 		ast_copy_string(buf, status, len);
-	} else if (!strcasecmp(args.item, "password")) {
-		ast_copy_string(buf, agent->cfg->password, len);
 	} else if (!strcasecmp(args.item, "name")) {
 		ast_copy_string(buf, agent->cfg->full_name, len);
 	} else if (!strcasecmp(args.item, "mohclass")) {
@@ -1418,6 +1552,10 @@ static int action_agent_logoff(struct mansession *s, const struct message *m)
 
 static int unload_module(void)
 {
+	/* Unregister dialplan applications */
+	ast_unregister_application(app_agent_login);
+	ast_unregister_application(app_agent_request);
+
 	/* Unregister dialplan functions */
 	ast_custom_function_unregister(&agent_function);
 
@@ -1458,13 +1596,8 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	/* Create agent holding bridge. */
+	/* Init agent holding bridge v_table. */
 	bridging_init_agent_hold();
-	agent_holding = bridge_agent_hold_new();
-	if (!agent_holding) {
-		unload_module();
-		return AST_MODULE_LOAD_FAILURE;
-	}
 
 /* BUGBUG Agent:agent-id device state not written. */
 	/* Setup to provide Agent:agent-id device state. */
@@ -1480,9 +1613,11 @@ static int load_module(void)
 	/* Dialplan Functions */
 	res |= ast_custom_function_register(&agent_function);
 
+	/* Dialplan applications */
+	res |= ast_register_application_xml(app_agent_login, agent_login_exec);
+	res |= ast_register_application_xml(app_agent_request, agent_request_exec);
+
 /* BUGBUG bridge channel swap hook not written. */
-/* BUGBUG AgentLogin dialplan application not written. */
-/* BUGBUG AgentRequest dialplan application not written. */
 
 	if (res) {
 		unload_module();
