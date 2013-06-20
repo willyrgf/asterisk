@@ -964,6 +964,7 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	}
 
 	/* Setup agent entertainment */
+	res |= ast_channel_add_bridge_role(chan, "holding_participant");
 	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "idle_mode", "musiconhold");
 	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "moh_class", moh_class);
 
