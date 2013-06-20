@@ -878,8 +878,8 @@ static int agent_logoff(const char *agent_id, int soft)
 	return 0;
 }
 
-/*! Agent holding bridge instance. */
-static struct ast_bridge *agent_holding;
+/*! Agent holding bridge instance holder. */
+static AO2_GLOBAL_OBJ_STATIC(agent_holding);
 
 /*! Agent holding bridge deferred creation lock. */
 AST_MUTEX_DEFINE_STATIC(agent_holding_lock);
@@ -889,12 +889,6 @@ static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_ch
 //	struct agent_pvt *agent = bridge_channel->bridge_pvt;
 
 	/*! \todo BUGBUG bridge_agent_hold_ack() not written */
-	return 0;
-}
-
-static int bridge_agent_hold_disconnect(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
-{
-	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 	return 0;
 }
 
@@ -917,7 +911,6 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	int res = 0;
 	char dtmf[AST_FEATURE_MAX_LEN];
 	struct ast_channel *chan;
-	struct ast_flags *flags;
 	const char *moh_class;
 	RAII_VAR(struct agent_pvt *, agent, NULL, ao2_cleanup);
 
@@ -931,19 +924,6 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 
 /*! \todo BUGBUG bridge_agent_hold_push() needs one second heartbeat interval hook added.  */
 /* BUGBUG Agent:agent-id device state to NOT_INUSE if currently INUSE after wrapup_time timeout. */
-
-	/* Add DTMF disconnect hook. */
-	dtmf[0] = '\0';
-	ast_channel_lock(chan);
-	flags = ast_bridge_features_ds_get(chan);
-	if (flags && ast_test_flag(flags, AST_FEATURE_DISCONNECT)) {
-		ast_get_builtin_feature(chan, "disconnect", dtmf, sizeof(dtmf));
-	}
-	ast_channel_unlock(chan);
-	if (!ast_strlen_zero(dtmf)) {
-		res |= ast_bridge_dtmf_hook(bridge_channel->features, dtmf,
-			bridge_agent_hold_disconnect, NULL, NULL, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
-	}
 
 	agent_lock(agent);
 	moh_class = ast_strdupa(agent->cfg->moh);
@@ -1020,6 +1000,18 @@ static void bridge_agent_hold_pull(struct ast_bridge *self, struct ast_bridge_ch
 	bridge_channel->bridge_pvt = NULL;
 }
 
+/*!
+ * \brief Destroy the bridge.
+ *
+ * \param self Bridge to operate upon.
+ *
+ * \return Nothing
+ */
+static void bridge_agent_hold_destroy(struct ast_bridge *self)
+{
+	ao2_global_obj_replace_unref(agent_holding, NULL);
+}
+
 static struct ast_bridge_methods bridge_agent_hold_v_table;
 
 static struct ast_bridge *bridge_agent_hold_new(void)
@@ -1039,19 +1031,24 @@ static void bridging_init_agent_hold(void)
 	/* Setup bridge agent_hold subclass v_table. */
 	bridge_agent_hold_v_table = ast_bridge_base_v_table;
 	bridge_agent_hold_v_table.name = "agent_hold";
+	bridge_agent_hold_v_table.destroy = bridge_agent_hold_destroy;
 	bridge_agent_hold_v_table.push = bridge_agent_hold_push;
 	bridge_agent_hold_v_table.pull = bridge_agent_hold_pull;
 }
 
 static int bridge_agent_hold_deferred_create(void)
 {
-	if (!agent_holding) {
+	RAII_VAR(struct ast_bridge *, holding, ao2_global_obj_ref(agent_holding), ao2_cleanup);
+
+	if (!holding) {
 		ast_mutex_lock(&agent_holding_lock);
-		if (!agent_holding) {
-			agent_holding = bridge_agent_hold_new();
+		holding = ao2_global_obj_ref(agent_holding);
+		if (!holding) {
+			holding = bridge_agent_hold_new();
+			ao2_global_obj_replace_unref(agent_holding, holding);
 		}
 		ast_mutex_unlock(&agent_holding_lock);
-		if (!agent_holding) {
+		if (!holding) {
 			ast_log(LOG_ERROR, "Could not create agent holding bridge.\n");
 			return -1;
 		}
@@ -1185,8 +1182,14 @@ static void agent_run(struct agent_pvt *agent)
 		for (;;) {
 			struct agents_cfg *cfgs;
 			struct agent_cfg *cfg;
+			struct ast_bridge *holding;
 
-			ast_bridge_join(agent_holding, logged, NULL, &features, NULL, 0);
+			holding = ao2_global_obj_ref(agent_holding);
+			if (!holding) {
+				break;
+			}
+
+			ast_bridge_join(holding, logged, NULL, &features, NULL, 1);
 			if (logged != agent->logged) {
 				/*
 				 * We are no longer the agent channel because of local channel
@@ -1850,6 +1853,8 @@ static int action_agent_logoff(struct mansession *s, const struct message *m)
 
 static int unload_module(void)
 {
+	struct ast_bridge *holding;
+
 	/* Unregister dialplan applications */
 	ast_unregister_application(app_agent_login);
 	ast_unregister_application(app_agent_request);
@@ -1867,9 +1872,9 @@ static int unload_module(void)
 	ast_devstate_prov_del("Agent");
 
 	/* Destroy agent holding bridge. */
-	if (agent_holding) {
-		ast_bridge_destroy(agent_holding);
-		agent_holding = NULL;
+	holding = ao2_global_obj_replace(agent_holding, NULL);
+	if (holding) {
+		ast_bridge_destroy(holding);
 	}
 
 	destroy_config();
