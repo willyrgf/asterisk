@@ -544,16 +544,11 @@ struct agent_pvt {
 	/*! Mark and sweep config update to determine if an agent is dead. */
 	unsigned int the_mark:1;
 	/*!
-	 * \brief TRUE if the agent is waiting to die.
+	 * \brief TRUE if the agent is no longer configured and is being destroyed.
 	 *
 	 * \note Agents cannot log in if they are dead.
-	 *
-	 * \note Agents destroy themselves when they are in the agent
-	 * holding bridge.
 	 */
 	unsigned int dead:1;
-	/*! TRUE if we joined the logged in channel to the bridging system. */
-	unsigned int we_joined:1;
 
 	/*! Custom device state of agent. */
 	enum ast_device_state state;
@@ -784,13 +779,8 @@ static int agent_sweep(void *obj, void *arg, int flags)
 	if (agent->the_mark) {
 		agent->the_mark = 0;
 		agent->dead = 1;
-		if (!agent->logged) {
-			/* Agent isn't logged in at this time.  Destroy it now. */
-			cmp = CMP_MATCH;
-		}
-	} else {
-		/* Resurect a dead agent if it hasn't left yet or is still on a call. */
-		agent->dead = 0;
+		/* Unlink dead agents immediately. */
+		cmp = CMP_MATCH;
 	}
 	agent_unlock(agent);
 	return cmp;
@@ -798,7 +788,32 @@ static int agent_sweep(void *obj, void *arg, int flags)
 
 static void agents_sweep(void)
 {
-	ao2_callback(agents, OBJ_MULTIPLE | OBJ_UNLINK | OBJ_NODATA, agent_sweep, NULL);
+	struct ao2_iterator *iter;
+	struct agent_pvt *agent;
+	struct ast_channel *logged;
+
+	iter = ao2_callback(agents, OBJ_MULTIPLE | OBJ_UNLINK, agent_sweep, NULL);
+	if (!iter) {
+		return;
+	}
+	for (; (agent = ao2_iterator_next(iter)); ao2_ref(agent, -1)) {
+		agent_lock(agent);
+		if (agent->logged) {
+			logged = ast_channel_ref(agent->logged);
+		} else {
+			logged = NULL;
+		}
+		agent_unlock(agent);
+		if (!logged) {
+			continue;
+		}
+		ast_log(LOG_NOTICE,
+			"Forced logoff of agent %s(%s).  Agent no longer configured.\n",
+			agent->username, ast_channel_name(logged));
+		ast_softhangup(logged, AST_SOFTHANGUP_EXPLICIT);
+		ast_channel_unref(logged);
+	}
+	ao2_iterator_destroy(iter);
 }
 
 static void agents_post_apply_config(void)
@@ -871,13 +886,14 @@ AST_MUTEX_DEFINE_STATIC(agent_holding_lock);
 
 static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
+//	struct agent_pvt *agent = bridge_channel->bridge_pvt;
+
 	/*! \todo BUGBUG bridge_agent_hold_ack() not written */
 	return 0;
 }
 
 static int bridge_agent_hold_disconnect(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-	ast_softhangup(bridge_channel->chan, AST_SOFTHANGUP_EXPLICIT);
 	ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 	return 0;
 }
@@ -914,6 +930,7 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	}
 
 /*! \todo BUGBUG bridge_agent_hold_push() needs one second heartbeat interval hook added.  */
+/* BUGBUG Agent:agent-id device state to NOT_INUSE if currently INUSE after wrapup_time timeout. */
 
 	/* Add DTMF disconnect hook. */
 	dtmf[0] = '\0';
@@ -951,11 +968,13 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "moh_class", moh_class);
 
 	if (res) {
+		ast_channel_remove_bridge_role(chan, "holding_participant");
 		return -1;
 	}
 
 	res = ast_bridge_base_v_table.push(self, bridge_channel, swap);
 	if (res) {
+		ast_channel_remove_bridge_role(chan, "holding_participant");
 		return -1;
 	}
 
@@ -964,10 +983,40 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		agent_lock(agent);
 		ast_channel_unref(agent->logged);
 		agent->logged = ast_channel_ref(chan);
-		agent->we_joined = 0;
 		agent_unlock(agent);
 	}
+
+	ast_assert(bridge_channel->bridge_pvt == NULL);
+	ao2_ref(agent, +1);
+	bridge_channel->bridge_pvt = agent;
+/* BUGBUG Agent:agent-id device state to NOT_INUSE if currently UNAVAILABLE. */
 	return 0;
+}
+
+/*!
+ * \internal
+ * \brief ast_bridge agent_hold pull method.
+ *
+ * \param self Bridge to operate upon.
+ * \param bridge_channel Bridge channel to pull.
+ *
+ * \details
+ * Remove any channel hooks controlled by the bridge.  Release
+ * any resources held by bridge_channel->bridge_pvt and release
+ * bridge_channel->bridge_pvt.
+ *
+ * \note On entry, self is already locked.
+ *
+ * \return Nothing
+ */
+static void bridge_agent_hold_pull(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel)
+{
+	struct agent_pvt *agent = bridge_channel->bridge_pvt;
+
+	ast_channel_remove_bridge_role(bridge_channel->chan, "holding_participant");
+
+	ao2_cleanup(agent);
+	bridge_channel->bridge_pvt = NULL;
 }
 
 static struct ast_bridge_methods bridge_agent_hold_v_table;
@@ -990,6 +1039,7 @@ static void bridging_init_agent_hold(void)
 	bridge_agent_hold_v_table = ast_bridge_base_v_table;
 	bridge_agent_hold_v_table.name = "agent_hold";
 	bridge_agent_hold_v_table.push = bridge_agent_hold_push;
+	bridge_agent_hold_v_table.pull = bridge_agent_hold_pull;
 }
 
 static int bridge_agent_hold_deferred_create(void)
@@ -1086,6 +1136,97 @@ static void send_agent_logoff(struct ast_channel *chan, const char *agent, long 
 }
 
 /*!
+ * \internal
+ * \brief Logout the agent.
+ * \since 12.0.0
+ *
+ * \param agent Which agent logging out.
+ *
+ * \return Nothing
+ */
+static void agent_logout(struct agent_pvt *agent)
+{
+	struct ast_channel *logged;
+	long time_logged_in;
+
+	agent_lock(agent);
+	time_logged_in = time(NULL) - agent->login_start;
+	logged = agent->logged;
+	agent->logged = NULL;
+	agent_unlock(agent);
+
+	send_agent_logoff(logged, agent->username, time_logged_in);
+	ast_verb(2, "Agent '%s' logged out.  Logged in for %ld seconds.\n",
+		agent->username, time_logged_in);
+	ast_channel_unref(logged);
+/* BUGBUG Agent:agent-id device state to UNAVAILABLE. */
+}
+
+/*!
+ * \internal
+ * \brief Agent driver loop.
+ * \since 12.0.0
+ *
+ * \param agent Which agent.
+ *
+ * \return Nothing
+ */
+static void agent_run(struct agent_pvt *agent)
+{
+	struct ast_channel *logged;
+	struct ast_bridge_features features;
+
+	if (!ast_bridge_features_init(&features)) {
+		agent_lock(agent);
+		logged = ast_channel_ref(agent->logged);
+		agent_unlock(agent);
+
+		for (;;) {
+			struct agents_cfg *cfgs;
+			struct agent_cfg *cfg;
+
+			ast_bridge_join(agent_holding, logged, NULL, &features, NULL, 0);
+			if (logged != agent->logged) {
+				/*
+				 * We are no longer the agent channel because of local channel
+				 * optimization.
+				 */
+				ast_channel_unref(logged);
+				ast_bridge_features_cleanup(&features);
+				return;
+			}
+
+			if (agent->dead) {
+				break;
+			}
+
+			/* Update the agent's config before rejoining the holding bridge. */
+			cfgs = ao2_global_obj_ref(cfg_handle);
+			if (!cfgs) {
+				break;
+			}
+			cfg = ao2_find(cfgs->agents, agent->username, OBJ_KEY);
+			ao2_ref(cfgs, -1);
+			if (!cfg) {
+				break;
+			}
+			agent_lock(agent);
+			ao2_cleanup(agent->cfg);
+			agent->cfg = cfg;
+			agent_unlock(agent);
+
+			if (agent->deferred_logoff || ast_check_hangup_locked(logged)) {
+				break;
+			}
+		}
+		ast_channel_unref(logged);
+		ast_bridge_features_cleanup(&features);
+	}
+
+	agent_logout(agent);
+}
+
+/*!
  * Called by the AgentRequest application (from the dial plan).
  *
  * \brief Application to locate an agent to talk with.
@@ -1108,6 +1249,7 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
  * The agent may not have gotten pushed into the holding bridge yet if just look at agent->logged.
  */
 
+/* BUGBUG Agent:agent-id device state to INUSE if currently NOT_INUSE. */
 	/*! \todo BUGBUG agent_request_exec() not written */
 	return -1;
 }
@@ -1254,19 +1396,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		ast_getformatname(ast_channel_writeformat(chan)));
 	send_agent_login(chan, agent->username);
 
-	{
-		long logintime;
-	
-		agent_lock(agent);
-		logintime = time(NULL) - agent->login_start;
-		agent->logged = ast_channel_unref(chan);
-		agent_unlock(agent);
-	
-		send_agent_logoff(chan, agent->username, logintime);
-		ast_verb(2, "Agent '%s' logged out\n", agent->username);
-	}
-
-	/*! \todo BUGBUG agent_login_exec() not written */
+	agent_run(agent);
 	return -1;
 }
 
