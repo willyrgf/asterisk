@@ -7382,9 +7382,9 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 			ast_clear_flag(&p->flags[2], SIP_PAGE3_REMOTE_HOLD_STATUS);
 			ast_debug(1, "--- HOLD - cleared remote hold \n");
 			if (T38_ENABLED == p->t38.state) {
-				transmit_reinvite_with_sdp(p, TRUE, TRUE);
+				transmit_reinvite_with_sdp(p, TRUE, FALSE);
 			} else {
-				transmit_reinvite_with_sdp(p, FALSE, TRUE);
+				transmit_reinvite_with_sdp(p, FALSE, FALSE);
 			}
 		} else {
 			ast_rtp_instance_update_source(p->rtp);
