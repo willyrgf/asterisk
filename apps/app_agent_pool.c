@@ -1001,15 +1001,22 @@ static void bridge_agent_hold_pull(struct ast_bridge *self, struct ast_bridge_ch
 }
 
 /*!
- * \brief Destroy the bridge.
+ * \brief The bridge is being dissolved.
  *
  * \param self Bridge to operate upon.
  *
+ * \details
+ * The bridge is being dissolved.  Remove any external
+ * references to the bridge so it can be destroyed.
+ *
+ * \note On entry, self must NOT be locked.
+ *
  * \return Nothing
  */
-static void bridge_agent_hold_destroy(struct ast_bridge *self)
+static void bridge_agent_hold_dissolving(struct ast_bridge *self)
 {
 	ao2_global_obj_replace_unref(agent_holding, NULL);
+	ast_bridge_base_v_table.dissolving(self);
 }
 
 static struct ast_bridge_methods bridge_agent_hold_v_table;
@@ -1031,7 +1038,7 @@ static void bridging_init_agent_hold(void)
 	/* Setup bridge agent_hold subclass v_table. */
 	bridge_agent_hold_v_table = ast_bridge_base_v_table;
 	bridge_agent_hold_v_table.name = "agent_hold";
-	bridge_agent_hold_v_table.destroy = bridge_agent_hold_destroy;
+	bridge_agent_hold_v_table.dissolving = bridge_agent_hold_dissolving;
 	bridge_agent_hold_v_table.push = bridge_agent_hold_push;
 	bridge_agent_hold_v_table.pull = bridge_agent_hold_pull;
 }
