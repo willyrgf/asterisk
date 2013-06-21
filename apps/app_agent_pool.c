@@ -551,20 +551,27 @@ struct agent_pvt {
 	unsigned int dead:1;
 
 	/*! Custom device state of agent. */
-	enum ast_device_state state;
+	enum ast_device_state devstate;
 
 	/*! When agent first logged in */
 	time_t login_start;
 	/*! When call started */
 	time_t call_start;
+	/*! When call first appeared */
+	struct timeval call_present;
 	/*! When last disconnected */
 	struct timeval last_disconnect;
 
+	/*! Caller is waiting in this bridge for agent to join. */
+	struct ast_bridge *caller_bridge;
 	/*! Agent is logged in with this channel. (Holds ref) (NULL if not logged in.) */
 	struct ast_channel *logged;
 	/*! Active config values from config file. (Holds ref) */
 	struct agent_cfg *cfg;
 };
+
+/*! Container of defined agents. */
+static struct ao2_container *agents;
 
 /*!
  * \brief Lock the agent.
@@ -632,9 +639,52 @@ static struct ast_channel *agent_lock_logged(struct agent_pvt *agent)
 	}
 }
 
+/*!
+ * \internal
+ * \brief Get the Agent:agent_id device state.
+ * \since 12.0.0
+ *
+ * \param agent_id Username of the agent.
+ *
+ * \details
+ * Search the agents container for the agent and return the
+ * current state.
+ *
+ * \return Device state of the agent.
+ */
+static enum ast_device_state agent_pvt_devstate_get(const char *agent_id)
+{
+	RAII_VAR(struct agent_pvt *, agent, ao2_find(agents, agent_id, OBJ_KEY), ao2_cleanup);
+
+	if (agent) {
+		return agent->devstate;
+	}
+	return AST_DEVICE_INVALID;
+}
+
+/*!
+ * \internal
+ * \brief Request an agent device state be updated.
+ * \since 12.0.0
+ *
+ * \param agent_id Which agent needs the device state updated.
+ *
+ * \return Nothing
+ */
+static void agent_devstate_changed(const char *agent_id)
+{
+	ast_devstate_changed(AST_DEVICE_UNKNOWN, AST_DEVSTATE_CACHABLE, "Agent:%s", agent_id);
+}
+
 static void agent_pvt_destructor(void *vdoomed)
 {
 	struct agent_pvt *doomed = vdoomed;
+
+	/* Make sure device state reflects agent destruction. */
+	if (!ast_strlen_zero(doomed->username)) {
+		ast_debug(1, "Agent %s: Destroyed.\n", doomed->username);
+		agent_devstate_changed(doomed->username);
+	}
 
 	if (doomed->logged) {
 		doomed->logged = ast_channel_unref(doomed->logged);
@@ -649,18 +699,19 @@ static struct agent_pvt *agent_pvt_new(struct agent_cfg *cfg)
 	struct agent_pvt *agent;
 
 	agent = ao2_alloc(sizeof(*agent), agent_pvt_destructor);
-	if (!agent || ast_string_field_init(agent, 32)) {
+	if (!agent) {
+		return NULL;
+	}
+	if (ast_string_field_init(agent, 32)) {
+		ao2_ref(agent, -1);
 		return NULL;
 	}
 	ast_string_field_set(agent, username, cfg->username);
 	ao2_ref(cfg, +1);
 	agent->cfg = cfg;
-	agent->state = AST_DEVICE_UNAVAILABLE;
+	agent->devstate = AST_DEVICE_UNAVAILABLE;
 	return agent;
 }
-
-/*! Container of defined agents. */
-static struct ao2_container *agents;
 
 /*!
  * \internal
@@ -730,29 +781,6 @@ static int agent_pvt_cmp(void *obj, void *arg, int flags)
 		break;
 	}
 	return cmp;
-}
-
-/*!
- * \internal
- * \brief Get the agent device state.
- * \since 12.0.0
- *
- * \param agent_id Username of the agent.
- *
- * \details
- * Search the agents container for the agent and return the
- * current state.
- *
- * \return Device state of the agent.
- */
-static enum ast_device_state agent_pvt_devstate_get(const char *agent_id)
-{
-	RAII_VAR(struct agent_pvt *, agent, ao2_find(agents, agent_id, OBJ_KEY), ao2_cleanup);
-
-	if (agent) {
-		return agent->state;
-	}
-	return AST_DEVICE_INVALID;
 }
 
 static int agent_mark(void *obj, void *arg, int flags)
@@ -849,6 +877,8 @@ static void agents_post_apply_config(void)
 			continue;
 		}
 		ao2_link(agents, agent);
+		ast_debug(1, "Agent %s: Created.\n", agent->username);
+		agent_devstate_changed(agent->username);
 	}
 	ao2_iterator_destroy(&iter);
 	agents_sweep();
@@ -886,9 +916,63 @@ AST_MUTEX_DEFINE_STATIC(agent_holding_lock);
 
 static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-//	struct agent_pvt *agent = bridge_channel->bridge_pvt;
+//	struct agent_pvt *agent = hook_pvt;
 
 	/*! \todo BUGBUG bridge_agent_hold_ack() not written */
+	return 0;
+}
+
+static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	struct agent_pvt *agent = hook_pvt;
+	int ack_timedout = 0;
+	int wrapup_timedout = 0;
+	unsigned int wrapup_time;
+	unsigned int auto_logoff;
+
+	agent_lock(agent);
+	switch (agent->devstate) {
+	case AST_DEVICE_NOT_INUSE:
+		/* Check ack call time. */
+		if (agent->caller_bridge
+			&& (ast_test_flag(agent, AGENT_FLAG_ACK_CALL)
+				? agent->override_ack_call : agent->cfg->ack_call)) {
+			auto_logoff = agent->cfg->auto_logoff;
+			if (ast_test_flag(agent, AGENT_FLAG_AUTO_LOGOFF)) {
+				auto_logoff = agent->override_auto_logoff;
+			}
+			auto_logoff *= 1000;
+			ack_timedout = ast_tvdiff_ms(ast_tvnow(), agent->call_present) > auto_logoff;
+			if (ack_timedout) {
+				agent->devstate = AST_DEVICE_UNAVAILABLE;
+			}
+		}
+		break;
+	case AST_DEVICE_INUSE:
+		/* Check wrapup time. */
+		wrapup_time = agent->cfg->wrapup_time;
+		if (ast_test_flag(agent, AGENT_FLAG_WRAPUP_TIME)) {
+			wrapup_time = agent->override_wrapup_time;
+		}
+		wrapup_timedout = ast_tvdiff_ms(ast_tvnow(), agent->last_disconnect) > wrapup_time;
+		if (wrapup_timedout) {
+			agent->devstate = AST_DEVICE_NOT_INUSE;
+		}
+		break;
+	default:
+		break;
+	}
+	agent_unlock(agent);
+
+	if (ack_timedout) {
+		ast_debug(1, "Agent %s: Ack call timeout.\n", agent->username);
+		ast_softhangup(bridge_channel->chan, AST_SOFTHANGUP_EXPLICIT);
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+	} else if (wrapup_timedout) {
+		ast_debug(1, "Agent %s: Wrapup timeout.\n", agent->username);
+		agent_devstate_changed(agent->username);
+	}
+
 	return 0;
 }
 
@@ -922,15 +1006,19 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		return -1;
 	}
 
-/*! \todo BUGBUG bridge_agent_hold_push() needs one second heartbeat interval hook added.  */
-/* BUGBUG Agent:agent-id device state to NOT_INUSE if currently INUSE after wrapup_time timeout. */
-
+	/* Setup agent entertainment */
 	agent_lock(agent);
 	moh_class = ast_strdupa(agent->cfg->moh);
+	agent_unlock(agent);
+	res |= ast_channel_add_bridge_role(chan, "holding_participant");
+	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "idle_mode", "musiconhold");
+	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "moh_class", moh_class);
 
 	/* Add DTMF acknowledge hook. */
 	dtmf[0] = '\0';
-	if (ast_test_flag(agent, AGENT_FLAG_ACK_CALL) ? agent->override_ack_call : agent->cfg->ack_call) {
+	agent_lock(agent);
+	if (ast_test_flag(agent, AGENT_FLAG_ACK_CALL)
+		? agent->override_ack_call : agent->cfg->ack_call) {
 		const char *dtmf_accept;
 
 		dtmf_accept = ast_test_flag(agent, AGENT_FLAG_DTMF_ACCEPT)
@@ -939,14 +1027,21 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	}
 	agent_unlock(agent);
 	if (!ast_strlen_zero(dtmf)) {
-		res |= ast_bridge_dtmf_hook(bridge_channel->features, dtmf,
-			bridge_agent_hold_ack, NULL, NULL, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
+		ao2_ref(agent, +1);
+		if (ast_bridge_dtmf_hook(bridge_channel->features, dtmf, bridge_agent_hold_ack,
+			agent, __ao2_cleanup, AST_BRIDGE_HOOK_REMOVE_ON_PULL)) {
+			ao2_ref(agent, -1);
+			res = -1;
+		}
 	}
 
-	/* Setup agent entertainment */
-	res |= ast_channel_add_bridge_role(chan, "holding_participant");
-	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "idle_mode", "musiconhold");
-	res |= ast_channel_set_bridge_role_option(chan, "holding_participant", "moh_class", moh_class);
+	/* Add heartbeat interval hook. */
+	ao2_ref(agent, +1);
+	if (ast_bridge_interval_hook(bridge_channel->features, 1000,
+		bridge_agent_hold_heartbeat, agent, __ao2_cleanup, AST_BRIDGE_HOOK_REMOVE_ON_PULL)) {
+		ao2_ref(agent, -1);
+		res = -1;
+	}
 
 	if (res) {
 		ast_channel_remove_bridge_role(chan, "holding_participant");
@@ -970,7 +1065,18 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	ast_assert(bridge_channel->bridge_pvt == NULL);
 	ao2_ref(agent, +1);
 	bridge_channel->bridge_pvt = agent;
-/* BUGBUG Agent:agent-id device state to NOT_INUSE if currently UNAVAILABLE. */
+
+	agent_lock(agent);
+	if (agent->devstate == AST_DEVICE_UNAVAILABLE) {
+		/* Now ready for a caller. */
+		agent->devstate = AST_DEVICE_NOT_INUSE;
+		agent_unlock(agent);
+		ast_debug(1, "Agent %s: Login complete.\n", agent->username);
+		agent_devstate_changed(agent->username);
+	} else {
+		agent_unlock(agent);
+	}
+
 	return 0;
 }
 
@@ -1152,19 +1258,27 @@ static void send_agent_logoff(struct ast_channel *chan, const char *agent, long 
 static void agent_logout(struct agent_pvt *agent)
 {
 	struct ast_channel *logged;
+	struct ast_bridge *caller_bridge;
 	long time_logged_in;
 
 	agent_lock(agent);
 	time_logged_in = time(NULL) - agent->login_start;
 	logged = agent->logged;
 	agent->logged = NULL;
+	caller_bridge = agent->caller_bridge;
+	caller_bridge = NULL;
+	agent->devstate = AST_DEVICE_UNAVAILABLE;
 	agent_unlock(agent);
+	agent_devstate_changed(agent->username);
+
+	if (caller_bridge) {
+		ast_bridge_destroy(caller_bridge);
+	}
 
 	send_agent_logoff(logged, agent->username, time_logged_in);
 	ast_verb(2, "Agent '%s' logged out.  Logged in for %ld seconds.\n",
 		agent->username, time_logged_in);
 	ast_channel_unref(logged);
-/* BUGBUG Agent:agent-id device state to UNAVAILABLE. */
 }
 
 /*!
@@ -1255,12 +1369,13 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 	}
 
 /*
- * BUGBUG need to look at the agent->state to determine if can request the agent or not.
+ * BUGBUG need to look at the agent->state and call bridge present to determine if can request the agent or not.
  *
  * The agent may not have gotten pushed into the holding bridge yet if just look at agent->logged.
+ *
+ * if agent->devstate == AST_DEVICE_NOT_INUSE && !agent->call_bridge
  */
 
-/* BUGBUG Agent:agent-id device state to INUSE if currently NOT_INUSE. */
 	/*! \todo BUGBUG agent_request_exec() not written */
 	return -1;
 }
@@ -1587,12 +1702,12 @@ static void agent_show_requested(struct ast_cli_args *a, int online_only)
 				talking_with = "";
 			}
 			ast_str_set(&out, 0, FORMAT_ROW, agent->username, agent->cfg->full_name,
-				ast_devstate_str(agent->state), ast_channel_name(logged), talking_with);
+				ast_devstate_str(agent->devstate), ast_channel_name(logged), talking_with);
 			ast_channel_unlock(logged);
 			ast_channel_unref(logged);
 		} else {
 			ast_str_set(&out, 0, FORMAT_ROW, agent->username, agent->cfg->full_name,
-				ast_devstate_str(agent->state), "", "");
+				ast_devstate_str(agent->devstate), "", "");
 		}
 		agent_unlock(agent);
 
@@ -1691,7 +1806,7 @@ static char *agent_handle_show_specific(struct ast_cli_entry *e, int cmd, struct
 	ast_str_append(&out, 0, "MOH: %s\n", agent->cfg->moh);
 	ast_str_append(&out, 0, "RecordCalls: %s\n", AST_CLI_YESNO(agent->cfg->record_agent_calls));
 	ast_str_append(&out, 0, "SaveCallsIn: %s\n", agent->cfg->save_calls_in);
-	ast_str_append(&out, 0, "State: %s\n", ast_devstate_str(agent->state));
+	ast_str_append(&out, 0, "State: %s\n", ast_devstate_str(agent->devstate));
 	if (logged) {
 		const char *talking_with;
 
@@ -1926,7 +2041,6 @@ static int load_module(void)
 	/* Init agent holding bridge v_table. */
 	bridging_init_agent_hold();
 
-/* BUGBUG Agent:agent-id device state not written. */
 	/* Setup to provide Agent:agent-id device state. */
 	res |= ast_devstate_prov_add("Agent", agent_pvt_devstate_get);
 
