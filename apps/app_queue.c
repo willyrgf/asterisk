@@ -1126,6 +1126,7 @@ struct call_queue {
 	unsigned int dead:1;
 	unsigned int eventwhencalled:2;
 	unsigned int ringinuse:1;
+	unsigned int announce_to_first_user:1; /*!< Whether or not we announce to the first user in a queue */
 	unsigned int setinterfacevar:1;
 	unsigned int setqueuevar:1;
 	unsigned int setqueueentryvar:1;
@@ -1730,6 +1731,7 @@ static void init_queue(struct call_queue *q)
 	q->roundingseconds = 0; /* Default - don't announce seconds */
 	q->servicelevel = 0;
 	q->ringinuse = 1;
+	q->announce_to_first_user = 0;
 	q->setinterfacevar = 0;
 	q->setqueuevar = 0;
 	q->setqueueentryvar = 0;
@@ -1992,6 +1994,8 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 		ast_string_field_set(q, sound_reporthold, val);
 	} else if (!strcasecmp(param, "announce-frequency")) {
 		q->announcefrequency = atoi(val);
+	} else if (!strcasecmp(param, "announce-to-first-user")) {
+		q->announce_to_first_user = ast_true(val);
 	} else if (!strcasecmp(param, "min-announce-frequency")) {
 		q->minannouncefrequency = atoi(val);
 		ast_debug(1, "%s=%s for queue '%s'\n", param, val, q->name);
@@ -3607,7 +3611,7 @@ static void rna(int rnatime, struct queue_ent *qe, char *interface, char *member
  *
  * \todo eventually all call forward logic should be intergerated into and replaced by ast_call_forward()
  */
-static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callattempt *outgoing, int *to, char *digit, int prebusies, int caller_disconnect, int forwardsallowed)
+static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callattempt *outgoing, int *to, char *digit, int prebusies, int caller_disconnect, int forwardsallowed, int ringing)
 {
 	const char *queue = qe->parent->name;
 	struct callattempt *o, *start = NULL, *prev = NULL;
@@ -4087,6 +4091,16 @@ skip_frame:;
 		}
 	}
 
+	/* Make a position announcement, if enabled */
+ 	if (qe->parent->announcefrequency && qe->parent->announce_to_first_user) {
+		say_position(qe, ringing);
+	}
+
+ 	/* Make a periodic announcement, if enabled */
+ 	if (qe->parent->periodicannouncefrequency && qe->parent->announce_to_first_user) {
+ 		say_periodic_announcement(qe, ringing);
+ 	}
+ 
 	if (!*to) {
 		for (o = start; o; o = o->call_next) {
 			rna(orig, qe, o->interface, o->member->membername, 1);
@@ -4833,7 +4847,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	ring_one(qe, outgoing, &numbusies);
 	lpeer = wait_for_answer(qe, outgoing, &to, &digit, numbusies,
 		ast_test_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT),
-		forwardsallowed);
+		forwardsallowed, ringing);
 	/* The ast_channel_datastore_remove() function could fail here if the
 	 * datastore was moved to another channel during a masquerade. If this is
 	 * the case, don't free the datastore here because later, when the channel
@@ -8429,6 +8443,7 @@ static struct ast_cli_entry cli_queue[] = {
 	MEMBER(call_queue, dead, AST_DATA_BOOLEAN)			\
 	MEMBER(call_queue, eventwhencalled, AST_DATA_BOOLEAN)		\
 	MEMBER(call_queue, ringinuse, AST_DATA_BOOLEAN)			\
+	MEMBER(call_queue, announce_to_first_user, AST_DATA_BOOLEAN)	\
 	MEMBER(call_queue, setinterfacevar, AST_DATA_BOOLEAN)		\
 	MEMBER(call_queue, setqueuevar, AST_DATA_BOOLEAN)		\
 	MEMBER(call_queue, setqueueentryvar, AST_DATA_BOOLEAN)		\
