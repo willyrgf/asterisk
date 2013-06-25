@@ -339,37 +339,12 @@ static struct aco_file agents_conf = {
 };
 
 /*
+ * Move this note into config framework and create an issue.
+ *
  * BUGBUG must fix config framework loading of multiple files.
  *
  * A reload with multiple files must reload all files if any
  * file has been touched.
- */
-/*
- * BUGBUG chan_agent stupidly deals with users.conf.
- *
- * Agents built by users.conf will use defaults except for the
- * three parameters obtained from users.conf.  Also any agent
- * declared by users.conf must not already be declared by
- * agents.conf.
- *
- * [general]
- * hasagent = yes/no (global [user] hasagent=yes value)
- *
- * [user] <- agent-id/username
- * hasagent = yes/no
- * fullname=name
- *
- *static struct aco_file users_conf = {
- *	.filename = "users.conf",
- *	.preload = { "general", NULL }
- *	.types = ACO_TYPES(&users_type, &users_general_type),
- *};
- *
- *  .files = ACO_FILES(&agents_conf, &users_conf),
- *
- * Will need a preapply config function to create valid users.conf
- * agents in the master agents config container.
- * See verify_default_profiles();
  */
 
 static AO2_GLOBAL_OBJ_STATIC(cfg_handle);
@@ -500,8 +475,6 @@ static int load_config(void)
 	aco_option_register_custom(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", agent_custom_beep_handler, 0);
 	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
 
-	/*! \todo BUGBUG load_config() needs users.conf handling. */
-
 	if (aco_process_config(&cfg_info, 0) == ACO_PROCESS_ERROR) {
 		goto error;
 	}
@@ -512,6 +485,23 @@ error:
 	destroy_config();
 	return -1;
 }
+
+enum agent_state {
+	/*! The agent is defined but an agent is not present. */
+	AGENT_STATE_LOGGED_OUT,
+	/*! The agent is ready for a call. */
+	AGENT_STATE_READY_FOR_CALL,
+	/*! The agent has a call waiting to connect. */
+	AGENT_STATE_CALL_PRESENT,
+	/*! The agent needs to ack the call. */
+	AGENT_STATE_CALL_WAIT_ACK,
+	/*! The agent is connected with a call. */
+	AGENT_STATE_ON_CALL,
+	/*! The agent is resting between calls. */
+	AGENT_STATE_CALL_WRAPUP,
+	/*! The agent is being kicked out. */
+	AGENT_STATE_LOGGING_OUT,
+};
 
 /*! Agent config option override flags. */
 enum agent_override_flags {
@@ -550,6 +540,8 @@ struct agent_pvt {
 	 */
 	unsigned int dead:1;
 
+	/*! Agent control state variable. */
+	enum agent_state state;
 	/*! Custom device state of agent. */
 	enum ast_device_state devstate;
 
@@ -557,12 +549,12 @@ struct agent_pvt {
 	time_t login_start;
 	/*! When call started */
 	time_t call_start;
-	/*! When call first appeared */
-	struct timeval call_present;
+	/*! When ack timer started */
+	struct timeval ack_time;
 	/*! When last disconnected */
 	struct timeval last_disconnect;
 
-	/*! Caller is waiting in this bridge for agent to join. */
+	/*! Caller is waiting in this bridge for agent to join. (Holds ref) */
 	struct ast_bridge *caller_bridge;
 	/*! Agent is logged in with this channel. (Holds ref) (NULL if not logged in.) */
 	struct ast_channel *logged;
@@ -884,7 +876,7 @@ static void agents_post_apply_config(void)
 	agents_sweep();
 }
 
-static int agent_logoff(const char *agent_id, int soft)
+static int agent_logoff_request(const char *agent_id, int soft)
 {
 	struct ast_channel *logged;
 	RAII_VAR(struct agent_pvt *, agent, ao2_find(agents, agent_id, OBJ_KEY), ao2_cleanup);
@@ -927,28 +919,32 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 	struct agent_pvt *agent = hook_pvt;
 	int ack_timedout = 0;
 	int wrapup_timedout = 0;
+	int deferred_logoff;
 	unsigned int wrapup_time;
 	unsigned int auto_logoff;
 
 	agent_lock(agent);
-	switch (agent->devstate) {
-	case AST_DEVICE_NOT_INUSE:
+	deferred_logoff = agent->deferred_logoff;
+	if (deferred_logoff) {
+		agent->state = AGENT_STATE_LOGGING_OUT;
+	}
+
+	switch (agent->state) {
+	case AGENT_STATE_CALL_WAIT_ACK:
 		/* Check ack call time. */
-		if (agent->caller_bridge
-			&& (ast_test_flag(agent, AGENT_FLAG_ACK_CALL)
-				? agent->override_ack_call : agent->cfg->ack_call)) {
-			auto_logoff = agent->cfg->auto_logoff;
-			if (ast_test_flag(agent, AGENT_FLAG_AUTO_LOGOFF)) {
-				auto_logoff = agent->override_auto_logoff;
-			}
+		auto_logoff = agent->cfg->auto_logoff;
+		if (ast_test_flag(agent, AGENT_FLAG_AUTO_LOGOFF)) {
+			auto_logoff = agent->override_auto_logoff;
+		}
+		if (auto_logoff) {
 			auto_logoff *= 1000;
-			ack_timedout = ast_tvdiff_ms(ast_tvnow(), agent->call_present) > auto_logoff;
+			ack_timedout = ast_tvdiff_ms(ast_tvnow(), agent->ack_time) > auto_logoff;
 			if (ack_timedout) {
-				agent->devstate = AST_DEVICE_UNAVAILABLE;
+				agent->state = AGENT_STATE_LOGGING_OUT;
 			}
 		}
 		break;
-	case AST_DEVICE_INUSE:
+	case AGENT_STATE_CALL_WRAPUP:
 		/* Check wrapup time. */
 		wrapup_time = agent->cfg->wrapup_time;
 		if (ast_test_flag(agent, AGENT_FLAG_WRAPUP_TIME)) {
@@ -956,6 +952,7 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 		}
 		wrapup_timedout = ast_tvdiff_ms(ast_tvnow(), agent->last_disconnect) > wrapup_time;
 		if (wrapup_timedout) {
+			agent->state = AGENT_STATE_READY_FOR_CALL;
 			agent->devstate = AST_DEVICE_NOT_INUSE;
 		}
 		break;
@@ -964,9 +961,11 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 	}
 	agent_unlock(agent);
 
-	if (ack_timedout) {
+	if (deferred_logoff) {
+		ast_debug(1, "Agent %s: Deferred logoff.\n", agent->username);
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+	} else if (ack_timedout) {
 		ast_debug(1, "Agent %s: Ack call timeout.\n", agent->username);
-		ast_softhangup(bridge_channel->chan, AST_SOFTHANGUP_EXPLICIT);
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 	} else if (wrapup_timedout) {
 		ast_debug(1, "Agent %s: Wrapup timeout.\n", agent->username);
@@ -993,6 +992,7 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel, struct ast_bridge_channel *swap)
 {
 	int res = 0;
+	unsigned int wrapup_time;
 	char dtmf[AST_FEATURE_MAX_LEN];
 	struct ast_channel *chan;
 	const char *moh_class;
@@ -1067,14 +1067,32 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	bridge_channel->bridge_pvt = agent;
 
 	agent_lock(agent);
-	if (agent->devstate == AST_DEVICE_UNAVAILABLE) {
+	switch (agent->state) {
+	case AGENT_STATE_LOGGED_OUT:
 		/* Now ready for a caller. */
+		agent->state = AGENT_STATE_READY_FOR_CALL;
 		agent->devstate = AST_DEVICE_NOT_INUSE;
 		agent_unlock(agent);
 		ast_debug(1, "Agent %s: Login complete.\n", agent->username);
 		agent_devstate_changed(agent->username);
-	} else {
+		break;
+	default:
+		wrapup_time = agent->cfg->wrapup_time;
+		if (ast_test_flag(agent, AGENT_FLAG_WRAPUP_TIME)) {
+			wrapup_time = agent->override_wrapup_time;
+		}
+		if (wrapup_time) {
+			agent->state = AGENT_STATE_CALL_WRAPUP;
+		} else {
+			agent->state = AGENT_STATE_READY_FOR_CALL;
+			agent->devstate = AST_DEVICE_NOT_INUSE;
+		}
 		agent_unlock(agent);
+		if (!wrapup_time) {
+			/* No wrapup time. */
+			agent_devstate_changed(agent->username);
+		}
+		break;
 	}
 
 	return 0;
@@ -1267,6 +1285,7 @@ static void agent_logout(struct agent_pvt *agent)
 	agent->logged = NULL;
 	caller_bridge = agent->caller_bridge;
 	caller_bridge = NULL;
+	agent->state = AGENT_STATE_LOGGED_OUT;
 	agent->devstate = AST_DEVICE_UNAVAILABLE;
 	agent_unlock(agent);
 	agent_devstate_changed(agent->username);
@@ -1302,7 +1321,8 @@ static void agent_run(struct agent_pvt *agent)
 
 		for (;;) {
 			struct agents_cfg *cfgs;
-			struct agent_cfg *cfg;
+			struct agent_cfg *cfg_new;
+			struct agent_cfg *cfg_old;
 			struct ast_bridge *holding;
 
 			holding = ao2_global_obj_ref(agent_holding);
@@ -1330,17 +1350,20 @@ static void agent_run(struct agent_pvt *agent)
 			if (!cfgs) {
 				break;
 			}
-			cfg = ao2_find(cfgs->agents, agent->username, OBJ_KEY);
+			cfg_new = ao2_find(cfgs->agents, agent->username, OBJ_KEY);
 			ao2_ref(cfgs, -1);
-			if (!cfg) {
+			if (!cfg_new) {
 				break;
 			}
 			agent_lock(agent);
-			ao2_cleanup(agent->cfg);
-			agent->cfg = cfg;
+			cfg_old = agent->cfg;
+			agent->cfg = cfg_new;
 			agent_unlock(agent);
+			ao2_cleanup(cfg_old);
 
-			if (agent->deferred_logoff || ast_check_hangup_locked(logged)) {
+			if (agent->state == AGENT_STATE_LOGGING_OUT
+				|| agent->deferred_logoff
+				|| ast_check_hangup_locked(logged)) {
 				break;
 			}
 		}
@@ -1368,12 +1391,16 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 
+/* BUGBUG need to deal with COLP to agents when a call is pending. */
 /*
- * BUGBUG need to look at the agent->state and call bridge present to determine if can request the agent or not.
+ * Need to look at the agent->state to determine if can request the agent or not.
  *
  * The agent may not have gotten pushed into the holding bridge yet if just look at agent->logged.
  *
- * if agent->devstate == AST_DEVICE_NOT_INUSE && !agent->call_bridge
+ * if agent->state == AGENT_STATE_READY_FOR_CALL
+ *
+ * After custom_beep plays, the beep callback needs to determine if call must be acked or not.
+ * if (ast_test_flag(agent, AGENT_FLAG_ACK_CALL) ? agent->override_ack_call : agent->cfg->ack_call)
  */
 
 	/*! \todo BUGBUG agent_request_exec() not written */
@@ -1856,7 +1883,7 @@ static char *agent_handle_logoff_cmd(struct ast_cli_entry *e, int cmd, struct as
 		return CLI_SHOWUSAGE;
 	}
 
-	if (!agent_logoff(a->argv[2], a->argc == 4)) {
+	if (!agent_logoff_request(a->argv[2], a->argc == 4)) {
 		ast_cli(a->fd, "Logging out %s\n", a->argv[2]);
 	}
 
@@ -1911,7 +1938,6 @@ static int action_agents(struct mansession *s, const struct message *m)
 			login_start = agent->login_start;
 			talking_to_chan = pbx_builtin_getvar_helper(logged, "BRIDGEPEER");
 			if (!ast_strlen_zero(talking_to_chan)) {
-/* BUGBUG need to deal with COLP to agents when a call is pending. */
 				party_id = ast_channel_connected_effective_id(logged);
 				talking_to = S_COR(party_id.number.valid, party_id.number.str, "n/a");
 				status = "AGENT_ONCALL";
@@ -1964,7 +1990,7 @@ static int action_agent_logoff(struct mansession *s, const struct message *m)
 		return 0;
 	}
 
-	if (!agent_logoff(agent, ast_true(soft_s))) {
+	if (!agent_logoff_request(agent, ast_true(soft_s))) {
 		astman_send_ack(s, m, "Agent logged out");
 	} else {
 		astman_send_error(s, m, "No such agent");
