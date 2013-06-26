@@ -49,6 +49,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/stasis_channels.h"
 
+/* BUGBUG Need config framework option documentation. */
 /*** DOCUMENTATION
 	<application name="AgentLogin" language="en_US">
 		<synopsis>
@@ -66,18 +67,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</parameter>
 		</syntax>
 		<description>
-			<para>
-				Login an agent to the system.  Any agent authentication is assumed to
-				already be done by dialplan.  While logged in, the agent can receive calls
-				and will hear a configurable <literal>beep</literal> sound when a new call
-				comes in for the agent.  Login failures will continue in the dialplan
-				with AGENT_STATUS set.
-			</para>
-			<para>
-				AGENT_STATUS enumeration values:
- 			</para>
+			<para>Login an agent to the system.  Any agent authentication is assumed to
+			already be done by dialplan.  While logged in, the agent can receive calls
+			and will hear a configurable <literal>beep</literal> sound when a new call
+			comes in for the agent.  Login failures will continue in the dialplan
+			with AGENT_STATUS set.</para>
+			<para>AGENT_STATUS enumeration values:</para>
 			<enumlist>
-				<enum name = "NOT_EXIST"><para>The specified agent is invalid.</para></enum>
+				<enum name = "INVALID"><para>The specified agent is invalid.</para></enum>
 				<enum name = "ALREADY_LOGGED_IN"><para>The agent is already logged in.</para></enum>
 			</enumlist>
 		</description>
@@ -102,17 +99,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="AgentId" required="true" />
 		</syntax>
 		<description>
-			<para>
-				Request an agent to connect with the channel.
-			</para>
-			<para>
-				AGENT_STATUS enumeration values for this application when it continues
-				in the dialplan:
- 			</para>
+			<para>Request an agent to connect with the channel.  Failure to find and
+			alert an agent will continue in the dialplan with AGENT_STATUS set.</para>
+			<para>AGENT_STATUS enumeration values:</para>
 			<enumlist>
-				<enum name = "NOT_EXIST"><para>The specified agent is invalid.</para></enum>
+				<enum name = "INVALID"><para>The specified agent is invalid.</para></enum>
 				<enum name = "NOT_LOGGED_IN"><para>The agent is not available.</para></enum>
 				<enum name = "BUSY"><para>The agent is on another call.</para></enum>
+				<enum name = "ERROR"><para>Alerting the agent failed.</para></enum>
 			</enumlist>
 		</description>
 		<see-also>
@@ -1607,7 +1601,7 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 	agent = ao2_find(agents, args.agent_id, OBJ_KEY);
 	if (!agent) {
 		ast_verb(3, "Agent '%s' does not exist.\n", args.agent_id);
-		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_EXIST");
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "INVALID");
 		return 0;
 	}
 
@@ -1808,7 +1802,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 	agent = ao2_find(agents, args.agent_id, OBJ_KEY);
 	if (!agent) {
 		ast_verb(3, "Agent '%s' does not exist.\n", args.agent_id);
-		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_EXIST");
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "INVALID");
 		return 0;
 	}
 
