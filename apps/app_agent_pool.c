@@ -66,12 +66,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</parameter>
 		</syntax>
 		<description>
-			<para>Login an agent to the system.  Any agent authentication is assumed to
-			already be done by dialplan.  If the agent is already logged in, the
-			application will continue in the dialplan with <variable>AGENT_STATUS</variable> set
- 			to <literal>ALREADY_LOGGED_IN</literal>.
-			While logged in, the agent can receive calls and will hear a <literal>beep</literal>
-			when a new call comes in.</para>
+			<para>
+				Login an agent to the system.  Any agent authentication is assumed to
+				already be done by dialplan.  While logged in, the agent can receive calls
+				and will hear a configurable <literal>beep</literal> sound when a new call
+				comes in for the agent.  Login failures will continue in the dialplan
+				with AGENT_STATUS set.
+			</para>
+			<para>
+				AGENT_STATUS enumeration values:
+ 			</para>
+			<enumlist>
+				<enum name = "NOT_EXIST"><para>The specified agent is invalid.</para></enum>
+				<enum name = "ALREADY_LOGGED_IN"><para>The agent is already logged in.</para></enum>
+			</enumlist>
 		</description>
 		<see-also>
 			<ref type="application">Authenticate</ref>
@@ -92,10 +100,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax argsep=",">
 			<parameter name="AgentId" required="true" />
-			<parameter name="timeout">
-				<para>Specifies the number of seconds to wait for an available agent.</para>
-			</parameter>
 		</syntax>
+		<description>
+			<para>
+				Request an agent to connect with the channel.
+			</para>
+			<para>
+				AGENT_STATUS enumeration values for this application when it continues
+				in the dialplan:
+ 			</para>
+			<enumlist>
+				<enum name = "NOT_EXIST"><para>The specified agent is invalid.</para></enum>
+				<enum name = "NOT_LOGGED_IN"><para>The agent is not available.</para></enum>
+				<enum name = "BUSY"><para>The agent is on another call.</para></enum>
+			</enumlist>
+		</description>
 		<see-also>
 			<ref type="application">AgentLogin</ref>
 		</see-also>
@@ -194,6 +213,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /* ------------------------------------------------------------------- */
 
 #define AST_MAX_BUF	256
+
+/*! Maximum wait time (in ms) for the custom_beep file to play announcing the caller. */
+#define CALLER_SAFETY_TIMEOUT_TIME	(2 * 60 * 1000)
 
 static const char app_agent_login[] = "AgentLogin";
 static const char app_agent_request[] = "AgentRequest";
@@ -447,7 +469,7 @@ static int agent_custom_beep_handler(const struct aco_option *opt, struct ast_va
 		return -1;
 	}
 
-	ast_string_field_set(cfg, beep_sound, "");
+	ast_string_field_set(cfg, beep_sound, var->value);
 	return 0;
 }
 
@@ -473,7 +495,7 @@ static int load_config(void)
 	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, record_format));
 	aco_option_register_custom(&cfg_info, "savecallsin", ACO_EXACT, agent_types, "", agent_savecallsin_handler, 0);
 	aco_option_register_custom(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", agent_custom_beep_handler, 0);
-	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
+	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, NULL, OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
 
 	if (aco_process_config(&cfg_info, 0) == ACO_PROCESS_ERROR) {
 		goto error;
@@ -910,6 +932,7 @@ static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_ch
 {
 //	struct agent_pvt *agent = hook_pvt;
 
+	/* Connect to caller now. */
 	/*! \todo BUGBUG bridge_agent_hold_ack() not written */
 	return 0;
 }
@@ -1060,11 +1083,8 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		ast_channel_unref(agent->logged);
 		agent->logged = ast_channel_ref(chan);
 		agent_unlock(agent);
+		return 0;
 	}
-
-	ast_assert(bridge_channel->bridge_pvt == NULL);
-	ao2_ref(agent, +1);
-	bridge_channel->bridge_pvt = agent;
 
 	agent_lock(agent);
 	switch (agent->state) {
@@ -1076,7 +1096,27 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		ast_debug(1, "Agent %s: Login complete.\n", agent->username);
 		agent_devstate_changed(agent->username);
 		break;
+	case AGENT_STATE_READY_FOR_CALL:
+		/*
+		 * Likely someone manally kicked us out of the holding bridge
+		 * and we came right back in.
+		 */
+		agent_unlock(agent);
+		break;
 	default:
+		/* Unexpected agent state. */
+		ast_assert(0);
+		/* Fall through */
+	case AGENT_STATE_CALL_PRESENT:
+	case AGENT_STATE_CALL_WAIT_ACK:
+		agent->state = AGENT_STATE_READY_FOR_CALL;
+		agent->devstate = AST_DEVICE_NOT_INUSE;
+		agent_unlock(agent);
+		ast_debug(1, "Agent %s: Call abort recovery complete.\n", agent->username);
+		agent_devstate_changed(agent->username);
+		break;
+	case AGENT_STATE_ON_CALL:
+	case AGENT_STATE_CALL_WRAPUP:
 		wrapup_time = agent->cfg->wrapup_time;
 		if (ast_test_flag(agent, AGENT_FLAG_WRAPUP_TIME)) {
 			wrapup_time = agent->override_wrapup_time;
@@ -1116,12 +1156,7 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
  */
 static void bridge_agent_hold_pull(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel)
 {
-	struct agent_pvt *agent = bridge_channel->bridge_pvt;
-
 	ast_channel_remove_bridge_role(bridge_channel->chan, "holding_participant");
-
-	ao2_cleanup(agent);
-	bridge_channel->bridge_pvt = NULL;
 }
 
 /*!
@@ -1287,6 +1322,7 @@ static void agent_logout(struct agent_pvt *agent)
 	caller_bridge = NULL;
 	agent->state = AGENT_STATE_LOGGED_OUT;
 	agent->devstate = AST_DEVICE_UNAVAILABLE;
+	ast_clear_flag(agent, AST_FLAGS_ALL);
 	agent_unlock(agent);
 	agent_devstate_changed(agent->username);
 
@@ -1324,6 +1360,7 @@ static void agent_run(struct agent_pvt *agent)
 			struct agent_cfg *cfg_new;
 			struct agent_cfg *cfg_old;
 			struct ast_bridge *holding;
+			struct ast_bridge *caller_bridge;
 
 			holding = ao2_global_obj_ref(agent_holding);
 			if (!holding) {
@@ -1358,8 +1395,17 @@ static void agent_run(struct agent_pvt *agent)
 			agent_lock(agent);
 			cfg_old = agent->cfg;
 			agent->cfg = cfg_new;
+
+			agent->last_disconnect = ast_tvnow();
+
+			/* Clear out any caller bridge before rejoining the holding bridge. */
+			caller_bridge = agent->caller_bridge;
+			agent->caller_bridge = NULL;
 			agent_unlock(agent);
-			ao2_cleanup(cfg_old);
+			ao2_ref(cfg_old, -1);
+			if (caller_bridge) {
+				ast_bridge_destroy(caller_bridge);
+			}
 
 			if (agent->state == AGENT_STATE_LOGGING_OUT
 				|| agent->deferred_logoff
@@ -1375,9 +1421,154 @@ static void agent_run(struct agent_pvt *agent)
 }
 
 /*!
- * Called by the AgentRequest application (from the dial plan).
+ * \internal
+ * \brief Get the lock on the agent bridge_channel and return it.
+ * \since 12.0.0
  *
- * \brief Application to locate an agent to talk with.
+ * \param agent Whose bridge_chanel to get.
+ *
+ * \retval bridge_channel on success (Reffed and locked).
+ * \retval NULL on error.
+ */
+static struct ast_bridge_channel *agent_bridge_channel_get_lock(struct agent_pvt *agent)
+{
+	struct ast_channel *logged;
+	struct ast_bridge_channel *bc;
+
+	for (;;) {
+		agent_lock(agent);
+		logged = agent->logged;
+		if (!logged) {
+			agent_unlock(agent);
+			return NULL;
+		}
+		ast_channel_ref(logged);
+		agent_unlock(agent);
+
+		ast_channel_lock(logged);
+		bc = ast_channel_get_bridge_channel(logged);
+		ast_channel_unlock(logged);
+		ast_channel_unref(logged);
+		if (!bc) {
+			if (agent->logged != logged) {
+				continue;
+			}
+			return NULL;
+		}
+
+		ast_bridge_channel_lock(bc);
+		if (bc->chan != logged || agent->logged != logged) {
+			ast_bridge_channel_unlock(bc);
+			ao2_ref(bc, -1);
+			continue;
+		}
+		return bc;
+	}
+}
+
+static void caller_abort_agent(struct agent_pvt *agent)
+{
+	struct ast_bridge_channel *logged;
+
+	logged = agent_bridge_channel_get_lock(agent);
+	if (!logged) {
+		struct ast_bridge *caller_bridge;
+
+		ast_debug(1, "Agent '%s' no longer logged in.\n", agent->username);
+
+		agent_lock(agent);
+		caller_bridge = agent->caller_bridge;
+		agent->caller_bridge = NULL;
+		agent_unlock(agent);
+		if (caller_bridge) {
+			ast_bridge_destroy(caller_bridge);
+		}
+		return;
+	}
+
+	/* Kick the agent out of the holding bridge to reset it. */
+	ast_bridge_change_state_nolock(logged, AST_BRIDGE_CHANNEL_STATE_END);
+	ast_bridge_channel_unlock(logged);
+}
+
+static int caller_safety_timeout(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
+{
+	struct agent_pvt *agent = hook_pvt;
+
+	if (agent->state == AGENT_STATE_CALL_PRESENT) {
+		ast_verb(3, "Agent '%s' did not respond.  Safety timeout.\n", agent->username);
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+		caller_abort_agent(agent);
+	}
+
+	return -1;
+}
+
+static void agent_alert(struct ast_bridge_channel *bridge_channel, const void *payload, size_t payload_size)
+{
+	const char *agent_id = payload;
+	const char *playfile;
+	RAII_VAR(struct agent_pvt *, agent, NULL, ao2_cleanup);
+
+	agent = ao2_find(agents, agent_id, OBJ_KEY);
+	if (!agent) {
+		ast_debug(1, "Agent '%s' does not exist.  Where did it go?\n", agent_id);
+		return;
+	}
+
+	/* Alert the agent. */
+	agent_lock(agent);
+	playfile = ast_strdupa(agent->cfg->beep_sound);
+	agent_unlock(agent);
+	ast_stream_and_wait(bridge_channel->chan, playfile, AST_DIGIT_NONE);
+
+	agent_lock(agent);
+	switch (agent->state) {
+	case AGENT_STATE_CALL_PRESENT:
+		if (ast_test_flag(agent, AGENT_FLAG_ACK_CALL)
+			? agent->override_ack_call : agent->cfg->ack_call) {
+			agent->state = AGENT_STATE_CALL_WAIT_ACK;
+			agent->ack_time = ast_tvnow();
+		} else {
+			/* Connect to caller now. */
+/* BUGBUG need to finish here. */
+		}
+		break;
+	default:
+		break;
+	}
+	agent_unlock(agent);
+
+	/*! \todo BUGBUG agent_alert() not written */
+}
+
+static int send_alert_to_agent(struct ast_bridge_channel *bridge_channel, const char *agent_id)
+{
+	return ast_bridge_channel_queue_callback(bridge_channel, agent_alert, agent_id,
+		strlen(agent_id) + 1);
+}
+
+static int send_colp_to_agent(struct ast_bridge_channel *bridge_channel, struct ast_party_connected_line *connected)
+{
+	struct ast_set_party_connected_line update = {
+		.id.name = 1,
+		.id.number = 1,
+		.id.subaddress = 1,
+	};
+	unsigned char data[1024];	/* This should be large enough */
+	size_t datalen;
+
+	datalen = ast_connected_line_build_data(data, sizeof(data), connected, &update);
+	if (datalen == (size_t) -1) {
+		return 0;
+	}
+
+	return ast_bridge_channel_queue_control_data(bridge_channel,
+		AST_CONTROL_CONNECTED_LINE, data, datalen);
+}
+
+/*!
+ * \brief Dialplan AgentRequest application to locate an agent to talk with.
  *
  * \param chan Channel wanting to talk with an agent.
  * \param data Application parameters
@@ -1387,23 +1578,122 @@ static void agent_run(struct agent_pvt *agent)
  */
 static int agent_request_exec(struct ast_channel *chan, const char *data)
 {
+	struct ast_bridge *caller_bridge;
+	struct ast_bridge_channel *logged;
+	char *parse;
+	int res;
+	struct ast_bridge_features caller_features;
+	struct ast_party_connected_line connected;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(agent_id);
+		AST_APP_ARG(other);		/* Any remaining unused arguments */
+	);
+
+	RAII_VAR(struct agent_pvt *, agent, NULL, ao2_cleanup);
+
 	if (bridge_agent_hold_deferred_create()) {
 		return -1;
 	}
 
-/* BUGBUG need to deal with COLP to agents when a call is pending. */
-/*
- * Need to look at the agent->state to determine if can request the agent or not.
- *
- * The agent may not have gotten pushed into the holding bridge yet if just look at agent->logged.
- *
- * if agent->state == AGENT_STATE_READY_FOR_CALL
- *
- * After custom_beep plays, the beep callback needs to determine if call must be acked or not.
- * if (ast_test_flag(agent, AGENT_FLAG_ACK_CALL) ? agent->override_ack_call : agent->cfg->ack_call)
- */
+	parse = ast_strdupa(data ?: "");
+	AST_STANDARD_APP_ARGS(args, parse);
 
-	/*! \todo BUGBUG agent_request_exec() not written */
+	if (ast_strlen_zero(args.agent_id)) {
+		ast_log(LOG_WARNING, "AgentRequest requires an AgentId\n");
+		return -1;
+	}
+
+	/* Find the agent. */
+	agent = ao2_find(agents, args.agent_id, OBJ_KEY);
+	if (!agent) {
+		ast_verb(3, "Agent '%s' does not exist.\n", args.agent_id);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_EXIST");
+		return 0;
+	}
+
+	if (ast_bridge_features_init(&caller_features)) {
+		return -1;
+	}
+
+	/* Add safety timeout hook. */
+	ao2_ref(agent, +1);
+	if (ast_bridge_interval_hook(&caller_features, CALLER_SAFETY_TIMEOUT_TIME,
+		caller_safety_timeout, agent, __ao2_cleanup, AST_BRIDGE_HOOK_REMOVE_ON_PULL)) {
+		ao2_ref(agent, -1);
+		ast_bridge_features_cleanup(&caller_features);
+		return -1;
+	}
+
+	caller_bridge = ast_bridge_basic_new();
+	if (!caller_bridge) {
+		ast_bridge_features_cleanup(&caller_features);
+		return -1;
+	}
+
+	/* Get COLP for agent. */
+	ast_party_connected_line_init(&connected);
+	ast_channel_lock(chan);
+	ast_connected_line_copy_from_caller(&connected, ast_channel_caller(chan));
+	ast_channel_unlock(chan);
+
+	agent_lock(agent);
+	switch (agent->state) {
+	case AGENT_STATE_LOGGED_OUT:
+	case AGENT_STATE_LOGGING_OUT:
+		agent_unlock(agent);
+		ast_party_connected_line_free(&connected);
+		ast_bridge_destroy(caller_bridge);
+		ast_bridge_features_cleanup(&caller_features);
+		ast_verb(3, "Agent '%s' not logged in.\n", agent->username);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_LOGGED_IN");
+		return 0;
+	case AGENT_STATE_READY_FOR_CALL:
+		ao2_ref(caller_bridge, +1);
+		agent->caller_bridge = caller_bridge;
+		agent->state = AGENT_STATE_CALL_PRESENT;
+		agent->devstate = AST_DEVICE_INUSE;
+		break;
+	default:
+		agent_unlock(agent);
+		ast_party_connected_line_free(&connected);
+		ast_bridge_destroy(caller_bridge);
+		ast_bridge_features_cleanup(&caller_features);
+		ast_verb(3, "Agent '%s' is busy.\n", agent->username);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "BUSY");
+		return 0;
+	}
+	agent_unlock(agent);
+	agent_devstate_changed(agent->username);
+
+	logged = agent_bridge_channel_get_lock(agent);
+	if (!logged) {
+		ast_party_connected_line_free(&connected);
+		ast_bridge_destroy(caller_bridge);
+		ast_bridge_features_cleanup(&caller_features);
+		ast_verb(3, "Agent '%s' not logged in.\n", agent->username);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_LOGGED_IN");
+		return 0;
+	}
+
+	send_colp_to_agent(logged, &connected);
+	ast_party_connected_line_free(&connected);
+
+	res = send_alert_to_agent(logged, agent->username);
+	ast_bridge_channel_unlock(logged);
+	ao2_ref(logged, -1);
+	if (res) {
+		ast_bridge_destroy(caller_bridge);
+		ast_bridge_features_cleanup(&caller_features);
+		ast_verb(3, "Agent '%s': Failed to alert the agent.\n", agent->username);
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "ERROR");
+		caller_abort_agent(agent);
+		return 0;
+	}
+
+	ast_queue_control(chan, AST_CONTROL_RINGING);
+	ast_bridge_join(caller_bridge, chan, NULL, &caller_features, NULL, 1);
+	ast_bridge_features_cleanup(&caller_features);
+
 	return -1;
 }
 
@@ -1473,9 +1763,7 @@ AST_APP_OPTIONS(agent_login_opts, BEGIN_OPTIONS
 END_OPTIONS);
 
 /*!
- * Called by the AgentLogin application (from the dial plan).
- *
- * \brief Application to log in an agent.
+ * \brief Dialplan AgentLogin application to log in an agent.
  *
  * \param chan Channel attempting to login as an agent.
  * \param data Application parameters
@@ -1520,7 +1808,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 	agent = ao2_find(agents, args.agent_id, OBJ_KEY);
 	if (!agent) {
 		ast_verb(3, "Agent '%s' does not exist.\n", args.agent_id);
-		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "UNKNOWN_AGENT");
+		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_EXIST");
 		return 0;
 	}
 
@@ -2084,6 +2372,7 @@ static int load_module(void)
 	res |= ast_register_application_xml(app_agent_login, agent_login_exec);
 	res |= ast_register_application_xml(app_agent_request, agent_request_exec);
 
+/* BUGBUG agent call recording not written. */
 /* BUGBUG bridge channel swap hook not written. */
 
 	if (res) {
