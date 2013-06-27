@@ -1034,7 +1034,7 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 		ast_debug(1, "Agent %s: Ack call timeout.\n", agent->username);
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
 	} else if (wrapup_timedout) {
-		ast_debug(1, "Agent %s: Wrapup timeout.\n", agent->username);
+		ast_debug(1, "Agent %s: Wrapup timeout. Ready for new call.\n", agent->username);
 		agent_devstate_changed(agent->username);
 	}
 
@@ -1173,6 +1173,7 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		agent_unlock(agent);
 		if (!wrapup_time) {
 			/* No wrapup time. */
+			ast_debug(1, "Agent %s: Ready for new call.\n", agent->username);
 			agent_devstate_changed(agent->username);
 		}
 		break;
