@@ -236,6 +236,7 @@ struct agent_cfg {
 		AST_STRING_FIELD(save_calls_in);
 		/*! Recording format filename extension. */
 		AST_STRING_FIELD(record_format);
+/* BUGBUG Add an agent waiting COLP to differentiate between an incomming caller's COLP and so the caller's COLP does not hang around after the call. */
 	);
 	/*!
 	 * \brief Number of seconds for agent to ack a call before being logged off.
@@ -922,12 +923,60 @@ static AO2_GLOBAL_OBJ_STATIC(agent_holding);
 /*! Agent holding bridge deferred creation lock. */
 AST_MUTEX_DEFINE_STATIC(agent_holding_lock);
 
+/*!
+ * \internal
+ * \brief Connect the agent with the waiting caller.
+ * \since 12.0.0
+ *
+ * \param bridge_channel Agent channel connecting to the caller.
+ * \param agent Which agent is connecting to the caller.
+ *
+ * \note The agent is locked on entry and not locked on exit.
+ *
+ * \return Nothing
+ */
+static void agent_connect_caller(struct ast_bridge_channel *bridge_channel, struct agent_pvt *agent)
+{
+	struct ast_bridge *caller_bridge;
+	int res;
+
+	caller_bridge = agent->caller_bridge;
+	agent->caller_bridge = NULL;
+	agent->state = AGENT_STATE_ON_CALL;
+	time(&agent->call_start);
+	agent_unlock(agent);
+
+	if (!caller_bridge) {
+		/* Reset agent. */
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+		return;
+	}
+	res = ast_bridge_move(caller_bridge, bridge_channel->bridge, bridge_channel->chan,
+		NULL, 0);
+	if (res) {
+		/* Reset agent. */
+		ast_bridge_destroy(caller_bridge);
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+		return;
+	}
+	ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_ANSWER, NULL, 0);
+}
+
 static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
-//	struct agent_pvt *agent = hook_pvt;
+	struct agent_pvt *agent = hook_pvt;
 
-	/* Connect to caller now. */
-	/*! \todo BUGBUG bridge_agent_hold_ack() not written */
+	agent_lock(agent);
+	switch (agent->state) {
+	case AGENT_STATE_CALL_WAIT_ACK:
+		/* Connect to caller now. */
+		ast_debug(1, "Agent %s: Acked call.\n", agent->username);
+		agent_connect_caller(bridge_channel, agent);
+		return 0;
+	default:
+		break;
+	}
+	agent_unlock(agent);
 	return 0;
 }
 
@@ -1523,17 +1572,17 @@ static void agent_alert(struct ast_bridge_channel *bridge_channel, const void *p
 			? agent->override_ack_call : agent->cfg->ack_call) {
 			agent->state = AGENT_STATE_CALL_WAIT_ACK;
 			agent->ack_time = ast_tvnow();
-		} else {
-			/* Connect to caller now. */
-/* BUGBUG need to finish here. */
+			break;
 		}
-		break;
+
+		/* Connect to caller now. */
+		ast_debug(1, "Agent %s: Immediately connecting to call.\n", agent->username);
+		agent_connect_caller(bridge_channel, agent);
+		return;
 	default:
 		break;
 	}
 	agent_unlock(agent);
-
-	/*! \todo BUGBUG agent_alert() not written */
 }
 
 static int send_alert_to_agent(struct ast_bridge_channel *bridge_channel, const char *agent_id)
@@ -1666,6 +1715,7 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 		ast_bridge_features_cleanup(&caller_features);
 		ast_verb(3, "Agent '%s' not logged in.\n", agent->username);
 		pbx_builtin_setvar_helper(chan, "AGENT_STATUS", "NOT_LOGGED_IN");
+		caller_abort_agent(agent);
 		return 0;
 	}
 
@@ -1684,7 +1734,7 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 		return 0;
 	}
 
-	ast_queue_control(chan, AST_CONTROL_RINGING);
+	ast_indicate(chan, AST_CONTROL_RINGING);
 	ast_bridge_join(caller_bridge, chan, NULL, &caller_features, NULL, 1);
 	ast_bridge_features_cleanup(&caller_features);
 
