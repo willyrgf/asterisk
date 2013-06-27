@@ -444,30 +444,6 @@ static int agent_savecallsin_handler(const struct aco_option *opt, struct ast_va
 	return 0;
 }
 
-/*!
- * \internal
- * \brief Handle the agent custom_beep option.
- * \since 12.0.0
- *
- * \param opt The option being configured
- * \param var The config variable to use to configure \a obj
- * \param obj The object to be configured
- *
- * \retval 0 on success.
- * \retval -1 on error.
- */
-static int agent_custom_beep_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
-{
-	struct agent_cfg *cfg = obj;
-
-	if (ast_strlen_zero(var->value)) {
-		return -1;
-	}
-
-	ast_string_field_set(cfg, beep_sound, var->value);
-	return 0;
-}
-
 static void destroy_config(void)
 {
 	ao2_global_obj_release(cfg_handle);
@@ -483,13 +459,13 @@ static int load_config(void)
 	/* Agent options */
 	aco_option_register(&cfg_info, "autologoff", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, auto_logoff));
 	aco_option_register(&cfg_info, "ackcall", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, ack_call));
-	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, dtmf_accept));
+	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 1, STRFLDSET(struct agent_cfg, dtmf_accept));
 	aco_option_register(&cfg_info, "wrapuptime", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, wrapup_time));
 	aco_option_register(&cfg_info, "musiconhold", ACO_EXACT, agent_types, "default", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, moh));
 	aco_option_register(&cfg_info, "recordagentcalls", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, record_agent_calls));
-	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, record_format));
+	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 1, STRFLDSET(struct agent_cfg, record_format));
 	aco_option_register_custom(&cfg_info, "savecallsin", ACO_EXACT, agent_types, "", agent_savecallsin_handler, 0);
-	aco_option_register_custom(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", agent_custom_beep_handler, 0);
+	aco_option_register(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", OPT_STRINGFIELD_T, 1, STRFLDSET(struct agent_cfg, beep_sound));
 	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, NULL, OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
 
 	if (aco_process_config(&cfg_info, 0) == ACO_PROCESS_ERROR) {
@@ -971,7 +947,7 @@ static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_ch
 	case AGENT_STATE_CALL_WAIT_ACK:
 		/* Connect to caller now. */
 		ast_debug(1, "Agent %s: Acked call.\n", agent->username);
-		agent_connect_caller(bridge_channel, agent);
+		agent_connect_caller(bridge_channel, agent);/* Will unlock agent. */
 		return 0;
 	default:
 		break;
@@ -1578,7 +1554,7 @@ static void agent_alert(struct ast_bridge_channel *bridge_channel, const void *p
 
 		/* Connect to caller now. */
 		ast_debug(1, "Agent %s: Immediately connecting to call.\n", agent->username);
-		agent_connect_caller(bridge_channel, agent);
+		agent_connect_caller(bridge_channel, agent);/* Will unlock agent. */
 		return;
 	default:
 		break;
