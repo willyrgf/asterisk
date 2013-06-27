@@ -72,6 +72,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			and will hear a configurable <literal>beep</literal> sound when a new call
 			comes in for the agent.  Login failures will continue in the dialplan
 			with AGENT_STATUS set.</para>
+			<para>Before logging in, you can setup on the real agent channel the
+			CHANNEL(dtmf-features) an agent will have when talking to a caller
+			and you can setup on the channel running this application the
+			CONNECTEDLINE() information the agent will see while waiting for a
+			caller.</para>
 			<para>AGENT_STATUS enumeration values:</para>
 			<enumlist>
 				<enum name = "INVALID"><para>The specified agent is invalid.</para></enum>
@@ -87,6 +92,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">UnpauseQueueMember</ref>
 			<ref type="function">AGENT</ref>
 			<ref type="function">CHANNEL(dtmf-features)</ref>
+			<ref type="function">CONNECTEDLINE()</ref>
 			<ref type="filename">agents.conf</ref>
 			<ref type="filename">queues.conf</ref>
 		</see-also>
@@ -236,7 +242,6 @@ struct agent_cfg {
 		AST_STRING_FIELD(save_calls_in);
 		/*! Recording format filename extension. */
 		AST_STRING_FIELD(record_format);
-/* BUGBUG Add an agent waiting COLP to differentiate between an incomming caller's COLP and so the caller's COLP does not hang around after the call. */
 	);
 	/*!
 	 * \brief Number of seconds for agent to ack a call before being logged off.
@@ -512,6 +517,8 @@ struct agent_pvt {
 		/*! Login override DTMF string for an agent to accept a call. */
 		AST_STRING_FIELD(override_dtmf_accept);
 	);
+	/*! Connected line information to send when reentering the holding bridge. */
+	struct ast_party_connected_line waiting_colp;
 	/*! Flags show if settings were overridden by channel vars. */
 	unsigned int flags;
 	/*! Login override number of seconds for agent to ack a call before being logged off. */
@@ -671,6 +678,11 @@ static void agent_pvt_destructor(void *vdoomed)
 		agent_devstate_changed(doomed->username);
 	}
 
+	ast_party_connected_line_free(&doomed->waiting_colp);
+	if (doomed->caller_bridge) {
+		ast_bridge_destroy(doomed->caller_bridge);
+		doomed->caller_bridge = NULL;
+	}
 	if (doomed->logged) {
 		doomed->logged = ast_channel_unref(doomed->logged);
 	}
@@ -692,6 +704,7 @@ static struct agent_pvt *agent_pvt_new(struct agent_cfg *cfg)
 		return NULL;
 	}
 	ast_string_field_set(agent, username, cfg->username);
+	ast_party_connected_line_init(&agent->waiting_colp);
 	ao2_ref(cfg, +1);
 	agent->cfg = cfg;
 	agent->devstate = AST_DEVICE_UNAVAILABLE;
@@ -1432,6 +1445,12 @@ static void agent_run(struct agent_pvt *agent)
 				|| ast_check_hangup_locked(logged)) {
 				break;
 			}
+
+			/*
+			 * It is safe to access agent->waiting_colp without a lock.  It
+			 * is only setup on agent login and not changed.
+			 */
+			ast_channel_update_connected_line(logged, &agent->waiting_colp, NULL);
 		}
 		ast_channel_unref(logged);
 		ast_bridge_features_cleanup(&features);
@@ -1720,25 +1739,30 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 
 /*!
  * \internal
- * \brief Setup agent override config values.
+ * \brief Get agent config values from the login channel.
  * \since 12.0.0
  *
- * \param agent What to setup override config values on.
+ * \param agent What to setup channel config values on.
  * \param chan Channel logging in as an agent.
  *
  * \return Nothing
  */
-static void agent_login_override_config(struct agent_pvt *agent, struct ast_channel *chan)
+static void agent_login_channel_config(struct agent_pvt *agent, struct ast_channel *chan)
 {
 	struct ast_flags opts = { 0 };
+	struct ast_party_connected_line connected;
 	unsigned int override_ack_call = 0;
 	unsigned int override_auto_logoff = 0;
 	unsigned int override_wrapup_time = 0;
 	const char *override_dtmf_accept = NULL;
 	const char *var;
 
-	/* Get override values from channel. */
+	ast_party_connected_line_init(&connected);
+
+	/* Get config values from channel. */
 	ast_channel_lock(chan);
+	ast_party_connected_line_copy(&connected, ast_channel_connected(chan));
+
 	var = pbx_builtin_getvar_helper(chan, "AGENTACKCALL");
 	if (!ast_strlen_zero(var)) {
 		override_ack_call = ast_true(var) ? 1 : 0;
@@ -1766,8 +1790,11 @@ static void agent_login_override_config(struct agent_pvt *agent, struct ast_chan
 	}
 	ast_channel_unlock(chan);
 
-	/* Set override values on agent. */
+	/* Set config values on agent. */
 	agent_lock(agent);
+	ast_party_connected_line_free(&agent->waiting_colp);
+	agent->waiting_colp = connected;
+
 	ast_string_field_set(agent, override_dtmf_accept, override_dtmf_accept);
 	ast_copy_flags(agent, &opts, AST_FLAGS_ALL);
 	agent->override_auto_logoff = override_auto_logoff;
@@ -1846,7 +1873,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 	time(&agent->login_start);
 	agent_unlock(agent);
 
-	agent_login_override_config(agent, chan);
+	agent_login_channel_config(agent, chan);
 
 	if (!ast_test_flag(&opts, OPT_SILENT)
 		&& !ast_streamfile(chan, "agent-loginok", ast_channel_language(chan))) {
