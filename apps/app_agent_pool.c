@@ -1190,6 +1190,7 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 static void bridge_agent_hold_pull(struct ast_bridge *self, struct ast_bridge_channel *bridge_channel)
 {
 	ast_channel_remove_bridge_role(bridge_channel->chan, "holding_participant");
+	ast_bridge_base_v_table.pull(self, bridge_channel);
 }
 
 /*!
@@ -1884,6 +1885,15 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		ast_getformatname(ast_channel_readformat(chan)),
 		ast_getformatname(ast_channel_writeformat(chan)));
 	send_agent_login(chan, agent->username);
+
+/* BUGBUG Debug force setting of dtmf features datastore options until CHANNEL(dtmf-featurs) is available. */
+	{
+		struct ast_flags flags = { AST_FEATURE_DTMF_MASK };
+
+		ast_channel_lock(chan);
+		ast_bridge_features_ds_set(chan, &flags);
+		ast_channel_unlock(chan);
+	}
 
 	agent_run(agent);
 	return -1;
