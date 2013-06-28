@@ -32,7 +32,7 @@ To check
 ========
 1. Blind transfers in SIP	- works ok
 2. Attended transfers in SIP	- works ok
-3. Transfers to a queue
+3. Transfers to a queue 	- doesn't work
 
 ---
 BLIND Transfer
@@ -71,3 +71,18 @@ Other channel drivers
 - chan_mgcp:
 - chan_?
 - chan_local 		No changes needed
+
+Transfer to a queue
+===================
+
+When doing attended transfer to a queue we have
+
+A calls or answers B
+A puts B on hold, B gets music
+A calls the queue - no bridge, music provided by app_queue
+A transfers B to queue
+
+B now doesn't get any music
+
+As this is not a hold case we need to find a way to restart MOH on a channel
+with the previous settings.
