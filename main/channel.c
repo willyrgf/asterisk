@@ -7939,14 +7939,17 @@ ast_group_t ast_get_group(const char *s)
 
 static int (*ast_moh_start_ptr)(struct ast_channel *, const char *, const char *) = NULL;
 static void (*ast_moh_stop_ptr)(struct ast_channel *) = NULL;
+static char * (*ast_moh_query_ptr)(struct ast_channel *) = NULL;
 static void (*ast_moh_cleanup_ptr)(struct ast_channel *) = NULL;
 
 void ast_install_music_functions(int (*start_ptr)(struct ast_channel *, const char *, const char *),
 				 void (*stop_ptr)(struct ast_channel *),
+				 char * (*query_ptr)(struct ast_channel *),
 				 void (*cleanup_ptr)(struct ast_channel *))
 {
 	ast_moh_start_ptr = start_ptr;
 	ast_moh_stop_ptr = stop_ptr;
+	ast_moh_query_ptr = query_ptr;
 	ast_moh_cleanup_ptr = cleanup_ptr;
 }
 
@@ -7954,6 +7957,7 @@ void ast_uninstall_music_functions(void)
 {
 	ast_moh_start_ptr = NULL;
 	ast_moh_stop_ptr = NULL;
+	ast_moh_query_ptr = NULL;
 	ast_moh_cleanup_ptr = NULL;
 }
 
@@ -7973,6 +7977,15 @@ void ast_moh_stop(struct ast_channel *chan)
 {
 	if (ast_moh_stop_ptr)
 		ast_moh_stop_ptr(chan);
+}
+
+/*! \brief Ask for the musicclass if there's moh active on this channel */
+char *ast_moh_query(struct ast_channel *chan)
+{
+	if (ast_moh_query_ptr) {
+		return ast_moh_query_ptr(chan);
+	}
+	return NULL;
 }
 
 void ast_moh_cleanup(struct ast_channel *chan)

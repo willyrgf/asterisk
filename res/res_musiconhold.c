@@ -1540,6 +1540,24 @@ static int local_ast_moh_start(struct ast_channel *chan, const char *mclass, con
 	return res;
 }
 
+static char *local_ast_moh_query(struct ast_channel *chan)
+{
+	struct moh_files_state *state;
+
+	if (!chan) {
+		return NULL;
+	}
+	ast_channel_lock(chan);
+	ast_channel_unlock(chan);
+	if (chan->music_state) {
+		state = chan->music_state;
+		if (state->class) {
+			return state->class->name;
+		}
+	}
+	return NULL;
+}
+
 static void local_ast_moh_stop(struct ast_channel *chan)
 {
 	ast_clear_flag(chan, AST_FLAG_MOH);
@@ -1917,6 +1935,7 @@ static int load_module(void)
 				"disabling music on hold.\n");
 	} else {
 		ast_install_music_functions(local_ast_moh_start, local_ast_moh_stop,
+				local_ast_moh_query,
 				local_ast_moh_cleanup);
 	}
 
@@ -1938,7 +1957,8 @@ static int load_module(void)
 static int reload(void)
 {
 	if (load_moh_classes(1)) {
-		ast_install_music_functions(local_ast_moh_start, local_ast_moh_stop,
+		ast_install_music_functions(local_ast_moh_start, local_ast_moh_stop, 
+				local_ast_moh_query,
 				local_ast_moh_cleanup);
 	}
 
