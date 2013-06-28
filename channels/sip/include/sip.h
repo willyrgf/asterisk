@@ -789,6 +789,8 @@ struct sip_dual {
 	uint32_t seqno;              /*!< Sequence number */
 	char *park_exten;
 	char *park_context;
+	char chan1_musicclass[MAX_MUSICCLASS];	/* Music class if chan2 is one-legged and getting
+						   serviced by MOH */
 };
 
 /*! \brief Parameters to the transmit_invite function */

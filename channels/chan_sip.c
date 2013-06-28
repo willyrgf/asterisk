@@ -23882,7 +23882,12 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	target.chan2 = ast_bridged_channel(targetcall_pvt->owner);	/* Asterisk to target */
 	if (target.chan2) {
 		ast_channel_ref(target.chan2);
-	}
+	} else {
+		/* Target chan1 is running a one-legged call, maybe queue or IVR */
+		/* If this channel is serviced by music, we need to make sure that it 
+		   continues */
+		ast_copy_string(target.chan1_musicclass, ast_moh_query(target.chan1), sizeof (target.chan1_musicclass));
+	}  
 
 	if (!target.chan2 || !(target.chan2->_state == AST_STATE_UP || target.chan2->_state == AST_STATE_RINGING) ) {
 		/* Wrong state of new channel */
@@ -23979,6 +23984,9 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 
 		if (current->chan2 && current->chan2->_state == AST_STATE_RING) {
 			ast_indicate(target.chan1, AST_CONTROL_RINGING);
+		}
+		if (!ast_strlen_zero(target.chan1_musicclass)) {
+			ast_moh_start(target.chan1, target.chan1_musicclass, target.chan1_musicclass);
 		}
 
 		if (target.chan2) {

@@ -1547,11 +1547,16 @@ static char *local_ast_moh_query(struct ast_channel *chan)
 	if (!chan) {
 		return NULL;
 	}
+	if (!ast_test_flag(chan, AST_FLAG_MOH)) {
+		ast_debug(2, "===> Not currently playing music \n");
+		return NULL;
+	}
 	ast_channel_lock(chan);
 	ast_channel_unlock(chan);
 	if (chan->music_state) {
 		state = chan->music_state;
 		if (state->class) {
+			ast_debug(2, "===> Playing music - class %s \n", state->class->name);
 			return state->class->name;
 		}
 	}
