@@ -217,6 +217,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*! Maximum wait time (in ms) for the custom_beep file to play announcing the caller. */
 #define CALLER_SAFETY_TIMEOUT_TIME	(2 * 60 * 1000)
 
+/*! Number of seconds to wait for local channel optimizations to complete. */
+#define LOGIN_WAIT_TIMEOUT_TIME		5
+
 static const char app_agent_login[] = "AgentLogin";
 static const char app_agent_request[] = "AgentRequest";
 
@@ -487,6 +490,15 @@ error:
 enum agent_state {
 	/*! The agent is defined but an agent is not present. */
 	AGENT_STATE_LOGGED_OUT,
+/*
+ * BUGBUG the login probation time should be only if it is needed.
+ *
+ * Need to determine if there are any local channels that can
+ * optimize and wait until they actually do before leaving the
+ * state.
+ */
+	/*! Forced initial login wait to allow any local channel optimizations to happen. */
+	AGENT_STATE_PROBATION_WAIT,
 	/*! The agent is ready for a call. */
 	AGENT_STATE_READY_FOR_CALL,
 	/*! The agent has a call waiting to connect. */
@@ -547,6 +559,8 @@ struct agent_pvt {
 
 	/*! When agent first logged in */
 	time_t login_start;
+	/*! When agent login probation started. */
+	time_t probation_start;
 	/*! When call started */
 	time_t call_start;
 	/*! When ack timer started */
@@ -972,6 +986,7 @@ static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_ch
 static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
 {
 	struct agent_pvt *agent = hook_pvt;
+	int probation_timedout = 0;
 	int ack_timedout = 0;
 	int wrapup_timedout = 0;
 	int deferred_logoff;
@@ -985,6 +1000,15 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 	}
 
 	switch (agent->state) {
+	case AGENT_STATE_PROBATION_WAIT:
+		probation_timedout =
+			LOGIN_WAIT_TIMEOUT_TIME <= (time(NULL) - agent->probation_start);
+		if (probation_timedout) {
+			/* Now ready for a caller. */
+			agent->state = AGENT_STATE_READY_FOR_CALL;
+			agent->devstate = AST_DEVICE_NOT_INUSE;
+		}
+		break;
 	case AGENT_STATE_CALL_WAIT_ACK:
 		/* Check ack call time. */
 		auto_logoff = agent->cfg->auto_logoff;
@@ -1019,6 +1043,9 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 	if (deferred_logoff) {
 		ast_debug(1, "Agent %s: Deferred logoff.\n", agent->username);
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+	} else if (probation_timedout) {
+		ast_debug(1, "Agent %s: Login complete.\n", agent->username);
+		agent_devstate_changed(agent->username);
 	} else if (ack_timedout) {
 		ast_debug(1, "Agent %s: Ack call timeout.\n", agent->username);
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
@@ -1029,6 +1056,10 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 
 	return 0;
 }
+
+static void agent_logout(struct agent_pvt *agent);
+static void agent_after_bridge_cb(struct ast_channel *chan, void *data);
+static void agent_after_bridge_cb_failed(struct ast_channel *chan, void *data, enum ast_after_bridge_cb_reason reason);
 
 /*!
  * \internal
@@ -1098,35 +1129,52 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		res = -1;
 	}
 
-	if (res) {
-		ast_channel_remove_bridge_role(chan, "holding_participant");
-		return -1;
-	}
-
-	res = ast_bridge_base_v_table.push(self, bridge_channel, swap);
+	res |= ast_bridge_base_v_table.push(self, bridge_channel, swap);
 	if (res) {
 		ast_channel_remove_bridge_role(chan, "holding_participant");
 		return -1;
 	}
 
 	if (swap) {
-/*! \todo BUGBUG bridge_agent_hold_push() needs swap after bridge callback added.  */
 		agent_lock(agent);
 		ast_channel_unref(agent->logged);
 		agent->logged = ast_channel_ref(chan);
 		agent_unlock(agent);
+
+		/*
+		 * Kick the channel out so it can come back in fully controlled.
+		 * Otherwise, the after bridge callback will linger and the
+		 * agent will have some slightly different behavior in corner
+		 * cases.
+		 */
+		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
+
+/* BUGBUG this failure condition as well as other threads potentially trying to add their own after bridge callbacks has issues. */
+		ao2_ref(agent, +1);
+		res = ast_after_bridge_callback_set(chan, agent_after_bridge_cb,
+			agent_after_bridge_cb_failed, agent);
+		if (res) {
+			ao2_ref(agent, -1);
+			agent_lock(agent);
+			agent_logout(agent);
+			ast_channel_remove_bridge_role(chan, "holding_participant");
+			return -1;
+		}
 		return 0;
 	}
 
 	agent_lock(agent);
 	switch (agent->state) {
 	case AGENT_STATE_LOGGED_OUT:
-		/* Now ready for a caller. */
-		agent->state = AGENT_STATE_READY_FOR_CALL;
-		agent->devstate = AST_DEVICE_NOT_INUSE;
+		/* Start the login probation timer.*/
+		time(&agent->probation_start);
+		agent->state = AGENT_STATE_PROBATION_WAIT;
 		agent_unlock(agent);
-		ast_debug(1, "Agent %s: Login complete.\n", agent->username);
-		agent_devstate_changed(agent->username);
+		break;
+	case AGENT_STATE_PROBATION_WAIT:
+		/* Restart the probation timer. */
+		time(&agent->probation_start);
+		agent_unlock(agent);
 		break;
 	case AGENT_STATE_READY_FOR_CALL:
 		/*
@@ -1340,6 +1388,8 @@ static void send_agent_logoff(struct ast_channel *chan, const char *agent, long 
  *
  * \param agent Which agent logging out.
  *
+ * \note On entry agent is already locked.  On exit it is no longer locked.
+ *
  * \return Nothing
  */
 static void agent_logout(struct agent_pvt *agent)
@@ -1348,7 +1398,6 @@ static void agent_logout(struct agent_pvt *agent)
 	struct ast_bridge *caller_bridge;
 	long time_logged_in;
 
-	agent_lock(agent);
 	time_logged_in = time(NULL) - agent->login_start;
 	logged = agent->logged;
 	agent->logged = NULL;
@@ -1376,19 +1425,15 @@ static void agent_logout(struct agent_pvt *agent)
  * \since 12.0.0
  *
  * \param agent Which agent.
+ * \param logged The logged in channel.
  *
  * \return Nothing
  */
-static void agent_run(struct agent_pvt *agent)
+static void agent_run(struct agent_pvt *agent, struct ast_channel *logged)
 {
-	struct ast_channel *logged;
 	struct ast_bridge_features features;
 
 	if (!ast_bridge_features_init(&features)) {
-		agent_lock(agent);
-		logged = ast_channel_ref(agent->logged);
-		agent_unlock(agent);
-
 		for (;;) {
 			struct agents_cfg *cfgs;
 			struct agent_cfg *cfg_new;
@@ -1403,13 +1448,7 @@ static void agent_run(struct agent_pvt *agent)
 
 			ast_bridge_join(holding, logged, NULL, &features, NULL, 1);
 			if (logged != agent->logged) {
-				/*
-				 * We are no longer the agent channel because of local channel
-				 * optimization.
-				 */
-				ast_channel_unref(logged);
-				ast_bridge_features_cleanup(&features);
-				return;
+				break;
 			}
 
 			if (agent->dead) {
@@ -1453,11 +1492,80 @@ static void agent_run(struct agent_pvt *agent)
 			 */
 			ast_channel_update_connected_line(logged, &agent->waiting_colp, NULL);
 		}
-		ast_channel_unref(logged);
 		ast_bridge_features_cleanup(&features);
 	}
 
+	agent_lock(agent);
+	if (logged != agent->logged) {
+		/*
+		 * We are no longer the agent channel because of local channel
+		 * optimization.
+		 */
+		agent_unlock(agent);
+		ast_debug(1, "Agent %s: Channel %s is no longer the agent.\n",
+			agent->username, ast_channel_name(logged));
+		return;
+	}
 	agent_logout(agent);
+}
+
+static void agent_after_bridge_cb(struct ast_channel *chan, void *data)
+{
+	struct agent_pvt *agent = data;
+
+	ast_debug(1, "Agent %s: New agent channel %s.\n",
+		agent->username, ast_channel_name(chan));
+	agent_run(agent, chan);
+	ao2_ref(agent, -1);
+}
+
+/*
+ * BUGBUG must change after bridge callback failed to also be called when the channel leaves the bridge system.
+ *
+ * The after bridge callbacks will become a list of callbacks.
+ * Only the last callback added to the list may be active if it
+ * was not explicitly removed.  When the channel leaves the
+ * bridging system it will call all the failed callbacks in
+ * order of when they were added.  This will prevent rapid fire
+ * local optimizations from causing locking issues with the
+ * bridge lock.
+ *
+ * The failed callback will always run in a known thread
+ * context.  A big plus.
+ */
+static void agent_after_bridge_cb_failed(struct ast_channel *chan, void *data, enum ast_after_bridge_cb_reason reason)
+{
+	struct ast_bridge *holding;
+	struct ast_channel *logged;
+	RAII_VAR(struct agent_pvt *, agent, data, ao2_cleanup);
+
+	ast_assert(chan != NULL);
+
+	agent_lock(agent);
+	if (chan != agent->logged) {
+		/*
+		 * We are no longer the agent channel because of local channel
+		 * optimization.
+		 */
+		agent_unlock(agent);
+		ast_debug(1, "Agent %s: Channel %s is no longer the agent.\n",
+			agent->username, ast_channel_name(chan));
+		return;
+	}
+	logged = ast_channel_ref(agent->logged);
+	ast_log(LOG_WARNING, "Agent %s: Forced logout.  Lost control of %s because: %s\n",
+		agent->username, ast_channel_name(chan),
+		ast_after_bridge_cb_reason_string(reason));
+	agent_logout(agent);
+
+	holding = ao2_global_obj_ref(agent_holding);
+	if (!holding) {
+		ast_channel_unref(logged);
+		return;
+	}
+	ast_bridge_remove(holding, logged);
+	ao2_ref(holding, -1);
+	ast_channel_unref(logged);
 }
 
 /*!
@@ -1895,7 +2003,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		ast_channel_unlock(chan);
 	}
 
-	agent_run(agent);
+	agent_run(agent, chan);
 	return -1;
 }
 
@@ -2431,7 +2539,6 @@ static int load_module(void)
 	res |= ast_register_application_xml(app_agent_request, agent_request_exec);
 
 /* BUGBUG agent call recording not written. */
-/* BUGBUG bridge channel swap hook not written. */
 
 	if (res) {
 		unload_module();

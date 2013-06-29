@@ -2548,7 +2548,7 @@ static void after_bridge_move_channel(struct ast_channel *chan_bridged, void *da
 	}
 }
 
-static void after_bridge_move_channel_fail(enum ast_after_bridge_cb_reason reason, void *data)
+static void after_bridge_move_channel_fail(struct ast_channel *chan_bridged, void *data, enum ast_after_bridge_cb_reason reason)
 {
 	RAII_VAR(struct ast_channel *, chan_target, data, ao2_cleanup);
 
@@ -3167,8 +3167,11 @@ static void after_bridge_cb_destroy(void *data)
 {
 	struct after_bridge_cb_ds *after_bridge = data;
 
+	/* The datastore should never be destroyed with a failed callback still active. */
+	ast_assert(after_bridge->failed == NULL);
+
 	if (after_bridge->failed) {
-		after_bridge->failed(AST_AFTER_BRIDGE_CB_REASON_DESTROY, after_bridge->data);
+		after_bridge->failed(NULL, after_bridge->data, AST_AFTER_BRIDGE_CB_REASON_DESTROY);
 		after_bridge->failed = NULL;
 	}
 	ast_free(after_bridge);
@@ -3211,35 +3214,43 @@ static struct ast_datastore *after_bridge_cb_remove(struct ast_channel *chan)
 {
 	struct ast_datastore *datastore;
 
-	ast_channel_lock(chan);
 	datastore = ast_channel_datastore_find(chan, &after_bridge_cb_info, NULL);
 	if (datastore && ast_channel_datastore_remove(chan, datastore)) {
 		datastore = NULL;
 	}
-	ast_channel_unlock(chan);
 
 	return datastore;
 }
 
-void ast_after_bridge_callback_discard(struct ast_channel *chan, enum ast_after_bridge_cb_reason reason)
+static void ast_after_bridge_callback_replace(struct ast_channel *chan, enum ast_after_bridge_cb_reason reason, struct ast_datastore *new_datastore)
 {
-	struct ast_datastore *datastore;
+	struct ast_datastore *old_datastore;
 
-	datastore = after_bridge_cb_remove(chan);
-	if (datastore) {
-		struct after_bridge_cb_ds *after_bridge = datastore->data;
+	ast_channel_lock(chan);
+	old_datastore = after_bridge_cb_remove(chan);
+	if (new_datastore) {
+		ast_channel_datastore_add(chan, new_datastore);
+	}
+	ast_channel_unlock(chan);
+	if (old_datastore) {
+		struct after_bridge_cb_ds *after_bridge = old_datastore->data;
 
-		if (after_bridge && after_bridge->failed) {
-			after_bridge->failed(reason, after_bridge->data);
+		if (after_bridge->failed) {
+			after_bridge->failed(chan, after_bridge->data, reason);
 			after_bridge->failed = NULL;
 		}
-		ast_datastore_free(datastore);
+		ast_datastore_free(old_datastore);
 	}
+}
+
+void ast_after_bridge_callback_discard(struct ast_channel *chan, enum ast_after_bridge_cb_reason reason)
+{
+	ast_after_bridge_callback_replace(chan, reason, NULL);
 }
 
 /*!
  * \internal
- * \brief Run any after bridge callback if possible.
+ * \brief Run any after bridge callback.
  * \since 12.0.0
  *
  * \param chan Channel to run after bridge callback.
@@ -3251,21 +3262,17 @@ static void after_bridge_callback_run(struct ast_channel *chan)
 	struct ast_datastore *datastore;
 	struct after_bridge_cb_ds *after_bridge;
 
-	if (ast_check_hangup(chan)) {
-		return;
-	}
-
 	/* Get after bridge goto datastore. */
+	ast_channel_lock(chan);
 	datastore = after_bridge_cb_remove(chan);
+	ast_channel_unlock(chan);
 	if (!datastore) {
 		return;
 	}
 
 	after_bridge = datastore->data;
-	if (after_bridge) {
-		after_bridge->failed = NULL;
-		after_bridge->callback(chan, after_bridge->data);
-	}
+	after_bridge->failed = NULL;
+	after_bridge->callback(chan, after_bridge->data);
 
 	/* Discard after bridge callback datastore. */
 	ast_datastore_free(datastore);
@@ -3300,11 +3307,8 @@ int ast_after_bridge_callback_set(struct ast_channel *chan, ast_after_bridge_cb 
 	datastore->data = after_bridge;
 
 	/* Put it on the channel replacing any existing one. */
-	ast_channel_lock(chan);
-	ast_after_bridge_callback_discard(chan, AST_AFTER_BRIDGE_CB_REASON_REPLACED);
-	ast_channel_datastore_add(chan, datastore);
-	ast_channel_unlock(chan);
-
+	ast_after_bridge_callback_replace(chan, AST_AFTER_BRIDGE_CB_REASON_REPLACED,
+		datastore);
 	return 0;
 }
 

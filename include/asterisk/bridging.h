@@ -1663,12 +1663,13 @@ enum ast_after_bridge_cb_reason {
  * \brief After bridge callback failed.
  * \since 12.0.0
  *
- * \param reason Reason callback is failing.
+ * \param chan Channel failing the callback.
  * \param data Extra data what setup the callback wanted to pass.
+ * \param reason Reason callback is failing.
  *
  * \return Nothing
  */
-typedef void (*ast_after_bridge_cb_failed)(enum ast_after_bridge_cb_reason reason, void *data);
+typedef void (*ast_after_bridge_cb_failed)(struct ast_channel *chan, void *data, enum ast_after_bridge_cb_reason reason);
 
 /*!
  * \brief After bridge callback function.
