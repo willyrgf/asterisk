@@ -212,10 +212,6 @@ struct agent_cfg {
 		AST_STRING_FIELD(beep_sound);
 		/*! MOH class to use while agent waiting for call. */
 		AST_STRING_FIELD(moh);
-		/*! Absolute recording filename directory. (Made to start and end with '/') */
-		AST_STRING_FIELD(save_calls_in);
-		/*! Recording format filename extension. */
-		AST_STRING_FIELD(record_format);
 	);
 	/*!
 	 * \brief Number of seconds for agent to ack a call before being logged off.
@@ -236,7 +232,7 @@ struct agent_cfg {
 	 * \note The channel variable AGENTACKCALL overrides on login.
 	 */
 	int ack_call;
-	/*! TRUE if agent calls are recorded. */
+	/*! TRUE if agent calls are automatically recorded. */
 	int record_agent_calls;
 };
 
@@ -390,39 +386,6 @@ CONFIG_INFO_STANDARD(cfg_info, cfg_handle, agents_cfg_alloc,
 	.post_apply_config = agents_post_apply_config,
 );
 
-/*!
- * \internal
- * \brief Handle the agent savecallsin option.
- * \since 12.0.0
- *
- * \param opt The option being configured
- * \param var The config variable to use to configure \a obj
- * \param obj The object to be configured
- *
- * \retval 0 on success.
- * \retval -1 on error.
- */
-static int agent_savecallsin_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
-{
-	struct agent_cfg *cfg = obj;
-	size_t len;
-	int need_leading;
-	int need_trailing;
-
-	if (ast_strlen_zero(var->value)) {
-		ast_string_field_set(cfg, save_calls_in, "");
-		return 0;
-	}
-
-	/* Add a leading and/or trailing '/' if needed. */
-	len = strlen(var->value);
-	need_leading = var->value[0] != '/';
-	need_trailing = var->value[len - 1] != '/';
-	ast_string_field_build(cfg, save_calls_in, "%s%s%s",
-		need_leading ? "/" : "", var->value, need_trailing ? "/" : "");
-	return 0;
-}
-
 static void destroy_config(void)
 {
 	ao2_global_obj_release(cfg_handle);
@@ -442,8 +405,6 @@ static int load_config(void)
 	aco_option_register(&cfg_info, "wrapuptime", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, wrapup_time));
 	aco_option_register(&cfg_info, "musiconhold", ACO_EXACT, agent_types, "default", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, moh));
 	aco_option_register(&cfg_info, "recordagentcalls", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, record_agent_calls));
-	aco_option_register(&cfg_info, "recordformat", ACO_EXACT, agent_types, "wav", OPT_STRINGFIELD_T, 1, STRFLDSET(struct agent_cfg, record_format));
-	aco_option_register_custom(&cfg_info, "savecallsin", ACO_EXACT, agent_types, "", agent_savecallsin_handler, 0);
 	aco_option_register(&cfg_info, "custom_beep", ACO_EXACT, agent_types, "beep", OPT_STRINGFIELD_T, 1, STRFLDSET(struct agent_cfg, beep_sound));
 	aco_option_register(&cfg_info, "fullname", ACO_EXACT, agent_types, NULL, OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, full_name));
 
@@ -905,8 +866,10 @@ AST_MUTEX_DEFINE_STATIC(agent_holding_lock);
 static void agent_connect_caller(struct ast_bridge_channel *bridge_channel, struct agent_pvt *agent)
 {
 	struct ast_bridge *caller_bridge;
+	int record_agent_calls;
 	int res;
 
+	record_agent_calls = agent->cfg->record_agent_calls;
 	caller_bridge = agent->caller_bridge;
 	agent->caller_bridge = NULL;
 	agent->state = AGENT_STATE_ON_CALL;
@@ -927,6 +890,12 @@ static void agent_connect_caller(struct ast_bridge_channel *bridge_channel, stru
 		return;
 	}
 	ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_ANSWER, NULL, 0);
+
+	if (record_agent_calls) {
+		/* The agent is in the new bridge so we can invoke the mixmonitor hook. */
+		ast_bridge_features_do(AST_BRIDGE_BUILTIN_AUTOMIXMON, caller_bridge,
+			bridge_channel, NULL);
+	}
 }
 
 static int bridge_agent_hold_ack(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt)
@@ -2188,7 +2157,6 @@ static char *agent_handle_show_specific(struct ast_cli_entry *e, int cmd, struct
 	ast_str_append(&out, 0, "Beep: %s\n", agent->cfg->beep_sound);
 	ast_str_append(&out, 0, "MOH: %s\n", agent->cfg->moh);
 	ast_str_append(&out, 0, "RecordCalls: %s\n", AST_CLI_YESNO(agent->cfg->record_agent_calls));
-	ast_str_append(&out, 0, "SaveCallsIn: %s\n", agent->cfg->save_calls_in);
 	ast_str_append(&out, 0, "State: %s\n", ast_devstate_str(agent->devstate));
 	if (logged) {
 		const char *talking_with;
@@ -2422,8 +2390,6 @@ static int load_module(void)
 	/* Dialplan applications */
 	res |= ast_register_application_xml(app_agent_login, agent_login_exec);
 	res |= ast_register_application_xml(app_agent_request, agent_request_exec);
-
-/* BUGBUG agent call recording not written. */
 
 	if (res) {
 		unload_module();

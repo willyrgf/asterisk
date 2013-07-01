@@ -23,7 +23,7 @@
 ; Set what DTMF key sequence the agent should use to acknowledge a call.
 ; The channel variable AGENTACCEPTDTMF overrides on login.
 ; Default is "#".
-;acceptdtmf=#
+;acceptdtmf=##
 ;
 ; Set the minimum amount of time after disconnecting a call before
 ; the agent can receive a new call in milliseconds.
@@ -35,19 +35,11 @@
 ; Default is "default".
 ;musiconhold=default
 ;
-; Enable recording calls the agent takes.
+; Enable recording calls the agent takes automatically by invoking the
+; DTMF automixmon feature when the agent connects to a caller.
+; See features.conf.sample for information about the automixmon feature.
 ; Default is "no".
 ;recordagentcalls=yes
-;
-; The format used to record the calls: wav, gsm, wav49.
-; Default is "wav".
-;recordformat=gsm
-;
-; Set the absolute directory to save the agent's conversations in.
-; Default is "".
-; An empty string becomes asterisk.conf's astspooldir/monitor
-; which resolves to /var/spool/asterisk/monitor by default.
-;savecallsin=/var/calls
 ;
 ; A custom beep sound file to play to the agent.
 ; Default is "beep".

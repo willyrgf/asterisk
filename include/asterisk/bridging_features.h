@@ -330,6 +330,26 @@ int ast_bridge_features_register(enum ast_bridge_builtin_feature feature, ast_br
 int ast_bridge_features_unregister(enum ast_bridge_builtin_feature feature);
 
 /*!
+ * \brief Invoke a built in feature hook now.
+ *
+ * \param feature The feature to invoke
+ *
+ * \note This API call is only meant to be used by bridge
+ * subclasses and hook callbacks to request a builtin feature
+ * hook to be executed.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ *
+ * Example usage:
+ *
+ * \code
+ * ast_bridge_features_do(AST_BRIDGE_BUILTIN_ATTENDED_TRANSFER, bridge, bridge_channel, hook_pvt);
+ * \endcode
+ */
+int ast_bridge_features_do(enum ast_bridge_builtin_feature feature, struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, void *hook_pvt);
+
+/*!
  * \brief Attach interval hooks to a bridge features structure
  *
  * \param features Bridge features structure
