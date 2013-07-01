@@ -34,6 +34,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/file.h"
 #include "asterisk/pbx.h"
+#include "asterisk/dial.h"
+#include "asterisk/bridging.h"
 #include "asterisk/callerid.h"
 #include "asterisk/stasis_app.h"
 #include "asterisk/stasis_app_playback.h"
@@ -80,7 +82,19 @@ static struct stasis_app_control *find_control(
 
 void stasis_http_dial(struct ast_variable *headers, struct ast_dial_args *args, struct stasis_http_response *response)
 {
-	ast_log(LOG_ERROR, "TODO: stasis_http_dial\n");
+	struct stasis_app_control *control;
+
+	control = find_control(response, args->channel_id);
+	if (control == NULL) {
+		return;
+	}
+
+	if (stasis_app_control_dial(control, args->endpoint, args->timeout)) {
+		stasis_http_response_alloc_failed(response);
+		return;
+	}
+
+	stasis_http_response_no_content(response);
 }
 
 void stasis_http_continue_in_dialplan(
@@ -136,11 +150,32 @@ void stasis_http_unmute_channel(struct ast_variable *headers, struct ast_unmute_
 }
 void stasis_http_hold_channel(struct ast_variable *headers, struct ast_hold_channel_args *args, struct stasis_http_response *response)
 {
-	ast_log(LOG_ERROR, "TODO: stasis_http_hold_channel\n");
+	RAII_VAR(struct stasis_app_control *, control, NULL, ao2_cleanup);
+
+	control = find_control(response, args->channel_id);
+	if (control == NULL) {
+		/* Response filled in by find_control */
+		return;
+	}
+
+	stasis_app_control_hold(control);
+
+	stasis_http_response_no_content(response);
 }
+
 void stasis_http_unhold_channel(struct ast_variable *headers, struct ast_unhold_channel_args *args, struct stasis_http_response *response)
 {
-	ast_log(LOG_ERROR, "TODO: stasis_http_unhold_channel\n");
+	RAII_VAR(struct stasis_app_control *, control, NULL, ao2_cleanup);
+
+	control = find_control(response, args->channel_id);
+	if (control == NULL) {
+		/* Response filled in by find_control */
+		return;
+	}
+
+	stasis_app_control_unhold(control);
+
+	stasis_http_response_no_content(response);
 }
 
 void stasis_http_play_on_channel(struct ast_variable *headers,
