@@ -490,13 +490,6 @@ error:
 enum agent_state {
 	/*! The agent is defined but an agent is not present. */
 	AGENT_STATE_LOGGED_OUT,
-/*
- * BUGBUG the login probation time should be only if it is needed.
- *
- * Need to determine if there are any local channels that can
- * optimize and wait until they actually do before leaving the
- * state.
- */
 	/*! Forced initial login wait to allow any local channel optimizations to happen. */
 	AGENT_STATE_PROBATION_WAIT,
 	/*! The agent is ready for a call. */
@@ -1160,6 +1153,14 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	agent_lock(agent);
 	switch (agent->state) {
 	case AGENT_STATE_LOGGED_OUT:
+		/*!
+		 * \todo XXX the login probation time should be only if it is needed.
+		 *
+		 * Need to determine if there are any local channels that can
+		 * optimize and wait until they actually do before leaving the
+		 * AGENT_STATE_PROBATION_WAIT state.  For now, the blind
+		 * timer of LOGIN_WAIT_TIMEOUT_TIME will do.
+		 */
 		/*
 		 * Start the login probation timer.
 		 *
