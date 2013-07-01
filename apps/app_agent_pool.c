@@ -1057,9 +1057,8 @@ static int bridge_agent_hold_heartbeat(struct ast_bridge *bridge, struct ast_bri
 	return 0;
 }
 
-static void agent_logout(struct agent_pvt *agent);
 static void agent_after_bridge_cb(struct ast_channel *chan, void *data);
-static void agent_after_bridge_cb_failed(struct ast_channel *chan, void *data, enum ast_after_bridge_cb_reason reason);
+static void agent_after_bridge_cb_failed(enum ast_after_bridge_cb_reason reason, void *data);
 
 /*!
  * \internal
@@ -1136,6 +1135,13 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 	}
 
 	if (swap) {
+		res = ast_after_bridge_callback_set(chan, agent_after_bridge_cb,
+			agent_after_bridge_cb_failed, chan);
+		if (res) {
+			ast_channel_remove_bridge_role(chan, "holding_participant");
+			return -1;
+		}
+
 		agent_lock(agent);
 		ast_channel_unref(agent->logged);
 		agent->logged = ast_channel_ref(chan);
@@ -1148,25 +1154,22 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		 * cases.
 		 */
 		ast_bridge_change_state(bridge_channel, AST_BRIDGE_CHANNEL_STATE_END);
-
-/* BUGBUG this failure condition as well as other threads potentially trying to add their own after bridge callbacks has issues. */
-		ao2_ref(agent, +1);
-		res = ast_after_bridge_callback_set(chan, agent_after_bridge_cb,
-			agent_after_bridge_cb_failed, agent);
-		if (res) {
-			ao2_ref(agent, -1);
-			agent_lock(agent);
-			agent_logout(agent);
-			ast_channel_remove_bridge_role(chan, "holding_participant");
-			return -1;
-		}
 		return 0;
 	}
 
 	agent_lock(agent);
 	switch (agent->state) {
 	case AGENT_STATE_LOGGED_OUT:
-		/* Start the login probation timer.*/
+		/*
+		 * Start the login probation timer.
+		 *
+		 * We cannot handle an agent local channel optimization when the
+		 * agent is on a call.  The optimization may kick the agent
+		 * channel we know about out of the call without our being able
+		 * to switch to the replacement channel.  Get any agent local
+		 * channel optimization out of the way while the agent is in the
+		 * holding bridge.
+		 */
 		time(&agent->probation_start);
 		agent->state = AGENT_STATE_PROBATION_WAIT;
 		agent_unlock(agent);
@@ -1511,7 +1514,12 @@ static void agent_run(struct agent_pvt *agent, struct ast_channel *logged)
 
 static void agent_after_bridge_cb(struct ast_channel *chan, void *data)
 {
-	struct agent_pvt *agent = data;
+	struct agent_pvt *agent;
+
+	agent = ao2_find(agents, chan, 0);
+	if (!agent) {
+		return;
+	}
 
 	ast_debug(1, "Agent %s: New agent channel %s.\n",
 		agent->username, ast_channel_name(chan));
@@ -1533,39 +1541,21 @@ static void agent_after_bridge_cb(struct ast_channel *chan, void *data)
  * The failed callback will always run in a known thread
  * context.  A big plus.
  */
-static void agent_after_bridge_cb_failed(struct ast_channel *chan, void *data, enum ast_after_bridge_cb_reason reason)
+static void agent_after_bridge_cb_failed(enum ast_after_bridge_cb_reason reason, void *data)
 {
-	struct ast_bridge *holding;
-	struct ast_channel *logged;
-	RAII_VAR(struct agent_pvt *, agent, data, ao2_cleanup);
+	struct ast_channel *chan = data;
+	struct agent_pvt *agent;
 
-	ast_assert(chan != NULL);
-
-	agent_lock(agent);
-	if (chan != agent->logged) {
-		/*
-		 * We are no longer the agent channel because of local channel
-		 * optimization.
-		 */
-		agent_unlock(agent);
-		ast_debug(1, "Agent %s: Channel %s is no longer the agent.\n",
-			agent->username, ast_channel_name(chan));
+	agent = ao2_find(agents, chan, 0);
+	if (!agent) {
 		return;
 	}
-	logged = ast_channel_ref(agent->logged);
 	ast_log(LOG_WARNING, "Agent %s: Forced logout.  Lost control of %s because: %s\n",
 		agent->username, ast_channel_name(chan),
 		ast_after_bridge_cb_reason_string(reason));
+	agent_lock(agent);
 	agent_logout(agent);
-
-	holding = ao2_global_obj_ref(agent_holding);
-	if (!holding) {
-		ast_channel_unref(logged);
-		return;
-	}
-	ast_bridge_remove(holding, logged);
-	ao2_ref(holding, -1);
-	ast_channel_unref(logged);
+	ao2_ref(agent, -1);
 }
 
 /*!

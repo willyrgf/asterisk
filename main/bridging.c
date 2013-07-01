@@ -2548,7 +2548,7 @@ static void after_bridge_move_channel(struct ast_channel *chan_bridged, void *da
 	}
 }
 
-static void after_bridge_move_channel_fail(struct ast_channel *chan_bridged, void *data, enum ast_after_bridge_cb_reason reason)
+static void after_bridge_move_channel_fail(enum ast_after_bridge_cb_reason reason, void *data)
 {
 	RAII_VAR(struct ast_channel *, chan_target, data, ao2_cleanup);
 
@@ -3167,11 +3167,8 @@ static void after_bridge_cb_destroy(void *data)
 {
 	struct after_bridge_cb_ds *after_bridge = data;
 
-	/* The datastore should never be destroyed with a failed callback still active. */
-	ast_assert(after_bridge->failed == NULL);
-
 	if (after_bridge->failed) {
-		after_bridge->failed(NULL, after_bridge->data, AST_AFTER_BRIDGE_CB_REASON_DESTROY);
+		after_bridge->failed(AST_AFTER_BRIDGE_CB_REASON_DESTROY, after_bridge->data);
 		after_bridge->failed = NULL;
 	}
 	ast_free(after_bridge);
@@ -3236,7 +3233,7 @@ static void ast_after_bridge_callback_replace(struct ast_channel *chan, enum ast
 		struct after_bridge_cb_ds *after_bridge = old_datastore->data;
 
 		if (after_bridge->failed) {
-			after_bridge->failed(chan, after_bridge->data, reason);
+			after_bridge->failed(reason, after_bridge->data);
 			after_bridge->failed = NULL;
 		}
 		ast_datastore_free(old_datastore);
