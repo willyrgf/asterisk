@@ -1527,20 +1527,6 @@ static void agent_after_bridge_cb(struct ast_channel *chan, void *data)
 	ao2_ref(agent, -1);
 }
 
-/*
- * BUGBUG must change after bridge callback failed to also be called when the channel leaves the bridge system.
- *
- * The after bridge callbacks will become a list of callbacks.
- * Only the last callback added to the list may be active if it
- * was not explicitly removed.  When the channel leaves the
- * bridging system it will call all the failed callbacks in
- * order of when they were added.  This will prevent rapid fire
- * local optimizations from causing locking issues with the
- * bridge lock.
- *
- * The failed callback will always run in a known thread
- * context.  A big plus.
- */
 static void agent_after_bridge_cb_failed(enum ast_after_bridge_cb_reason reason, void *data)
 {
 	struct ast_channel *chan = data;

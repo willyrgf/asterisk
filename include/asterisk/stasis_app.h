@@ -137,6 +137,20 @@ const char *stasis_app_control_get_channel_id(
 	const struct stasis_app_control *control);
 
 /*!
+ * \brief Dial an endpoint and bridge it to a channel in \c res_stasis
+ *
+ * If the channel is no longer in \c res_stasis, this function does nothing.
+ *
+ * \param control Control for \c res_stasis
+ * \param endpoint The endpoint to dial.
+ * \param timeout The amount of time to wait for answer, before giving up.
+ *
+ * \return 0 for success
+ * \return -1 for error.
+ */
+int stasis_app_control_dial(struct stasis_app_control *control, const char *endpoint, int timeout);
+
+/*!
  * \brief Exit \c res_stasis and continue execution in the dialplan.
  *
  * If the channel is no longer in \c res_stasis, this function does nothing.
@@ -158,6 +172,18 @@ int stasis_app_control_continue(struct stasis_app_control *control, const char *
  * \return Non-zero for error.
  */
 int stasis_app_control_answer(struct stasis_app_control *control);
+
+/*!
+ * \brief Place the channel associated with the control on hold.
+ * \param control Control for \c res_stasis.
+ */
+void stasis_app_control_hold(struct stasis_app_control *control);
+
+/*!
+ * \brief Remove the channel associated with the control from hold.
+ * \param control Control for \c res_stasis.
+ */
+void stasis_app_control_unhold(struct stasis_app_control *control);
 
 /*!
  * \brief Returns the most recent snapshot for the associated channel.
