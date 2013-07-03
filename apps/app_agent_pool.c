@@ -27,7 +27,6 @@
  * \arg \ref Config_agent
  */
 /*** MODULEINFO
-	<depend>res_monitor</depend>
 	<support_level>core</support_level>
  ***/
 
@@ -49,7 +48,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stringfields.h"
 #include "asterisk/stasis_channels.h"
 
-/* BUGBUG Need config framework option documentation. */
 /*** DOCUMENTATION
 	<application name="AgentLogin" language="en_US">
 		<synopsis>
@@ -71,17 +69,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			already be done by dialplan.  While logged in, the agent can receive calls
 			and will hear a configurable <literal>beep</literal> sound when a new call
 			comes in for the agent.  Login failures will continue in the dialplan
-			with AGENT_STATUS set.</para>
+			with <variable>AGENT_STATUS</variable> set.</para>
 			<para>Before logging in, you can setup on the real agent channel the
 			CHANNEL(dtmf-features) an agent will have when talking to a caller
 			and you can setup on the channel running this application the
 			CONNECTEDLINE() information the agent will see while waiting for a
 			caller.</para>
-			<para>AGENT_STATUS enumeration values:</para>
+			<para><variable>AGENT_STATUS</variable> enumeration values:</para>
 			<enumlist>
 				<enum name = "INVALID"><para>The specified agent is invalid.</para></enum>
 				<enum name = "ALREADY_LOGGED_IN"><para>The agent is already logged in.</para></enum>
 			</enumlist>
+			<note><para>The Agents:<replaceable>AgentId</replaceable> device state is
+			available to monitor the status of the agent.</para></note>
 		</description>
 		<see-also>
 			<ref type="application">Authenticate</ref>
@@ -106,8 +106,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Request an agent to connect with the channel.  Failure to find and
-			alert an agent will continue in the dialplan with AGENT_STATUS set.</para>
-			<para>AGENT_STATUS enumeration values:</para>
+			alert an agent will continue in the dialplan with <variable>AGENT_STATUS</variable> set.</para>
+			<para><variable>AGENT_STATUS</variable> enumeration values:</para>
 			<enumlist>
 				<enum name = "INVALID"><para>The specified agent is invalid.</para></enum>
 				<enum name = "NOT_LOGGED_IN"><para>The agent is not available.</para></enum>
@@ -179,6 +179,88 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Sets an agent as no longer logged in.</para>
 		</description>
 	</manager>
+	<configInfo name="app_agent_pool" language="en_US">
+		<synopsis>Agent pool applications</synopsis>
+		<description>
+			<note><para>Option changes take effect on agent login or after an agent
+			disconnects from a call.</para></note>
+		</description>
+		<configFile name="agents.conf">
+			<configObject name="global">
+				<synopsis>Unused, but reserved.</synopsis>
+			</configObject>
+			<configObject name="agent-id">
+				<synopsis>Configure an agent for the pool.</synopsis>
+				<description>
+					<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+				</description>
+				<configOption name="ackcall">
+					<synopsis>Enable to require the agent to acknowledge a call.</synopsis>
+					<description>
+						<para>Enable to require the agent to give a DTMF acknowledgement
+						when the agent receives a call.</para>
+						<note><para>The option is overridden by <variable>AGENTACKCALL</variable> on agent login.</para></note>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="acceptdtmf">
+					<synopsis>DTMF key sequence the agent uses to acknowledge a call.</synopsis>
+					<description>
+						<note><para>The option is overridden by <variable>AGENTACCEPTDTMF</variable> on agent login.</para></note>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="autologoff">
+					<synopsis>Time the agent has to acknowledge a call before being logged off.</synopsis>
+					<description>
+						<para>Set how many seconds a call for the agent has to wait for the
+						agent to acknowledge the call before the agent is automatically
+						logged off.  If set to zero then the call will wait forever for
+						the agent to acknowledge.</para>
+						<note><para>The option is overridden by <variable>AGENTAUTOLOGOFF</variable> on agent login.</para></note>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="wrapuptime">
+					<synopsis>Minimum time the agent has between calls.</synopsis>
+					<description>
+						<para>Set the minimum amount of time in milliseconds after
+						disconnecting a call before the agent can receive a new call.</para>
+						<note><para>The option is overridden by <variable>AGENTWRAPUPTIME</variable> on agent login.</para></note>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="musiconhold">
+					<synopsis>Music on hold class the agent listens to between calls.</synopsis>
+					<description>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="recordagentcalls">
+					<synopsis>Enable to automatically record calls the agent takes.</synopsis>
+					<description>
+						<para>Enable recording calls the agent takes automatically by
+						invoking the automixmon DTMF feature when the agent connects
+						to a caller.  See <filename>features.conf.sample</filename> for information about
+						the automixmon feature.</para>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="custom_beep">
+					<synopsis>Sound file played to alert the agent when a call is present.</synopsis>
+					<description>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+				<configOption name="fullname">
+					<synopsis>A friendly name for the agent used in log messages.</synopsis>
+					<description>
+						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
+					</description>
+				</configOption>
+			</configObject>
+		</configFile>
+	</configInfo>
  ***/
 
 /* ------------------------------------------------------------------- */
@@ -330,15 +412,6 @@ static struct aco_file agents_conf = {
 	.types = ACO_TYPES(&general_type, &agent_type),
 };
 
-/*
- * Move this note into config framework and create an issue.
- *
- * BUGBUG must fix config framework loading of multiple files.
- *
- * A reload with multiple files must reload all files if any
- * file has been touched.
- */
-
 static AO2_GLOBAL_OBJ_STATIC(cfg_handle);
 
 static void agents_cfg_destructor(void *vdoomed)
@@ -399,9 +472,9 @@ static int load_config(void)
 	}
 
 	/* Agent options */
-	aco_option_register(&cfg_info, "autologoff", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, auto_logoff));
 	aco_option_register(&cfg_info, "ackcall", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, ack_call));
 	aco_option_register(&cfg_info, "acceptdtmf", ACO_EXACT, agent_types, "#", OPT_STRINGFIELD_T, 1, STRFLDSET(struct agent_cfg, dtmf_accept));
+	aco_option_register(&cfg_info, "autologoff", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, auto_logoff));
 	aco_option_register(&cfg_info, "wrapuptime", ACO_EXACT, agent_types, "0", OPT_UINT_T, 0, FLDSET(struct agent_cfg, wrapup_time));
 	aco_option_register(&cfg_info, "musiconhold", ACO_EXACT, agent_types, "default", OPT_STRINGFIELD_T, 0, STRFLDSET(struct agent_cfg, moh));
 	aco_option_register(&cfg_info, "recordagentcalls", ACO_EXACT, agent_types, "no", OPT_BOOL_T, 1, FLDSET(struct agent_cfg, record_agent_calls));
@@ -1871,15 +1944,6 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		ast_getformatname(ast_channel_readformat(chan)),
 		ast_getformatname(ast_channel_writeformat(chan)));
 	send_agent_login(chan, agent->username);
-
-/* BUGBUG Debug force setting of dtmf features datastore options until CHANNEL(dtmf-featurs) is available. */
-	{
-		struct ast_flags flags = { AST_FEATURE_DTMF_MASK };
-
-		ast_channel_lock(chan);
-		ast_bridge_features_ds_set(chan, &flags);
-		ast_channel_unlock(chan);
-	}
 
 	agent_run(agent, chan);
 	return -1;
