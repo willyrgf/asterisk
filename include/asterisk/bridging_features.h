@@ -267,6 +267,25 @@ struct ast_bridge_features_attended_transfer {
 	char complete[MAXIMUM_DTMF_FEATURE_STRING];
 };
 
+enum ast_bridge_features_monitor {
+	/*! Toggle start/stop of Monitor/MixMonitor. */
+	AUTO_MONITOR_TOGGLE,
+	/*! Start Monitor/MixMonitor if not already started. */
+	AUTO_MONITOR_START,
+	/*! Stop Monitor/MixMonitor if not already stopped. */
+	AUTO_MONITOR_STOP,
+};
+
+struct ast_bridge_features_automonitor {
+	/*! Start/Stop behavior. */
+	enum ast_bridge_features_monitor start_stop;
+};
+
+struct ast_bridge_features_automixmonitor {
+	/*! Start/Stop behavior. */
+	enum ast_bridge_features_monitor start_stop;
+};
+
 /*!
  * \brief Structure that contains configuration information for the limits feature
  */

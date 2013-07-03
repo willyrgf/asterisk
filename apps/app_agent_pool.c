@@ -892,9 +892,16 @@ static void agent_connect_caller(struct ast_bridge_channel *bridge_channel, stru
 	ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_ANSWER, NULL, 0);
 
 	if (record_agent_calls) {
-		/* The agent is in the new bridge so we can invoke the mixmonitor hook. */
+		struct ast_bridge_features_automixmonitor options = {
+			.start_stop = AUTO_MONITOR_START,
+			};
+
+		/*
+		 * The agent is in the new bridge so we can invoke the
+		 * mixmonitor hook to only start recording.
+		 */
 		ast_bridge_features_do(AST_BRIDGE_BUILTIN_AUTOMIXMON, caller_bridge,
-			bridge_channel, NULL);
+			bridge_channel, &options);
 	}
 }
 
