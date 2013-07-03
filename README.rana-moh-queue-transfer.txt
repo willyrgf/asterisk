@@ -2,7 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project initiated: 2013-06-24
-
+Update: 2013-07-03
 
 
 
@@ -28,23 +28,19 @@ Chan_sip turns off all generators before doing a masquerade, but has
 no known status to reset. There's a flag in the channel indicating that
 MOH is active, but there's no saved music class to reset it.
 
-Possible Solution:
+Solution:
 ==================
 
-When setting the AST_MOH flag on the channel, also set the music class.
-In the SIP channel, store the music class and reset MOH after transfer
-succeeded, much like hold states.
+Implement a new function in the Asterisk MOH interface to query
+the musicclass. This is ONLY returned if MOH is active.
 
-This requires changes to at least the music on hold system and the
-SIP channel driver, and the ast_channel structure.
+Chan_sip reads this before masquerading channels and resets
+MOH after masquerade, since the transfer code resets all generators.
 
-Todo:
-=====
-1. Figure out what to do.
-2. Do it.
-3. Test it.
-4. Commit it1. Figure out what to do.
-2. Do it.
-3. Test it.
-4. Commit it.
+This only applies to attended transfers where one leg of the call
+is not bridged. Like transfer to queue, IVR, or simply parking.
 
+Testing:
+========
+This has been tested with a number of SIP phones and proved
+to work.
