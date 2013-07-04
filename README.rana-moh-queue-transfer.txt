@@ -2,7 +2,8 @@ Edvina AB
 Olle E. Johansson
 
 Project initiated: 2013-06-24
-Update: 2013-07-03
+Update: 2013-07-04
+Note: This branch is now merged into rana-moh-sip-transfer-1.8
 
 
 
