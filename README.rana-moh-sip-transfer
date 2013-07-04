@@ -1,7 +1,8 @@
 Edvina AB
 Olle E. Johansson
 
-2013-05-30
+Project initiated: 2013-05-30
+Update: 2013-07-04
 
 
 
@@ -13,6 +14,17 @@ Olle E. Johansson
 
 Rana-moh-SIP-transfer: Getting music on hold back
 =================================================
+This branch focuses on two different but related issues with call transfers:
+
+1. Attended transfer when one call leg is on hold
+2. Attended transfer when one call leg is one-legged, i.e. on queue or ivr
+
+In both of these scenarious, music-on-hold will disappear in Asterisk after transfer
+is complete. The code in this branch is tested and will solve both issues.
+
+
+SIP transfer with one call leg on hold
+======================================
 When the caller puts the callee on hold and the callee transfers the call while hearing music-on-hold,
 the music disappears and the new callee gets a silent call. Originally we thought it was a SIP transfer
 problem, but it turned out to be a core PBX issue.
@@ -27,12 +39,6 @@ C answers call.
 C doesn't get music on hold - just silence.
 
 The moh status is not following the transfer.
-
-To check
-========
-1. Blind transfers in SIP	- works ok
-2. Attended transfers in SIP	- works ok
-3. Transfers to a queue 	- doesn't work
 
 ---
 BLIND Transfer
@@ -64,14 +70,6 @@ Implementation notes
 
 (After brainstorm with Matt Jordan 2013-05-28)
 
-Other channel drivers
-=====================
-- chan_dahdi:		Don't understand the hold functions...
-- chan_iax2:
-- chan_mgcp:
-- chan_?
-- chan_local 		No changes needed
-
 Transfer to a queue
 ===================
 
@@ -86,3 +84,17 @@ B now doesn't get any music
 
 As this is not a hold case we need to find a way to restart MOH on a channel
 with the previous settings.
+
+Transfer to a queue: Solution:
+==============================
+
+Implement a new function in the Asterisk MOH interface to query
+the musicclass. This is ONLY returned if MOH is active.
+
+Chan_sip reads this before masquerading channels and resets
+MOH after masquerade, since the transfer code resets all generators.
+
+This only applies to attended transfers where one leg of the call
+is not bridged. Like transfer to queue, IVR, or simply parking.
+
+
