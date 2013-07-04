@@ -23886,7 +23886,12 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 		/* Target chan1 is running a one-legged call, maybe queue or IVR */
 		/* If this channel is serviced by music, we need to make sure that it 
 		   continues */
-		ast_copy_string(target.chan1_musicclass, ast_moh_query(target.chan1), sizeof (target.chan1_musicclass));
+		if (target.chan1) {
+			char *musicclass = ast_moh_query(target.chan1);
+			if (musicclass != NULL) {
+				ast_copy_string(target.chan1_musicclass, musicclass, sizeof (target.chan1_musicclass));
+			}
+		}
 	}  
 
 	if (!target.chan2 || !(target.chan2->_state == AST_STATE_UP || target.chan2->_state == AST_STATE_RINGING) ) {
