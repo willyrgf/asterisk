@@ -44,8 +44,12 @@ int ast_moh_start(struct ast_channel *chan, const char *mclass, const char *inte
 /*! Turn off music on hold on a given channel */
 void ast_moh_stop(struct ast_channel *chan);
 
+/*! Query for the musicclass if MOH is active on a given channel */
+char * ast_moh_query(struct ast_channel *chan);
+
 void ast_install_music_functions(int (*start_ptr)(struct ast_channel *, const char *, const char *),
 				 void (*stop_ptr)(struct ast_channel *),
+				 char * (*query_ptr)(struct ast_channel *),
 				 void (*cleanup_ptr)(struct ast_channel *));
 
 void ast_uninstall_music_functions(void);

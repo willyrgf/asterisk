@@ -23858,7 +23858,6 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 	struct ast_party_connected_line connected_to_target;
 	char transferer_linkedid[32];
 	struct ast_channel *chans[2];
-	int target_chan1_mohstate = FALSE;
 
 	/* Check if the call ID of the replaces header does exist locally */
 	if (!(targetcall_pvt = get_sip_pvt_byid_locked(transferer->refer->replaces_callid, transferer->refer->replaces_callid_totag,
@@ -23902,8 +23901,13 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 		/* Target chan1 is running a one-legged call, maybe queue or IVR */
 		/* If this channel is serviced by music, we need to make sure that it 
 		   continues */
-		target_chan1_mohstate = ast_test_flag(target.chan1, AST_FLAG_MOH);
-	}
+ 		if (target.chan1) {
+ 			char *musicclass = ast_moh_query(target.chan1);
+ 			if (musicclass != NULL) {
+ 				ast_copy_string(target.chan1_musicclass, musicclass, sizeof (target.chan1_musicclass));
+ 			}
+ 		}
+ 	}  
 
 	if (!target.chan2 || !(target.chan2->_state == AST_STATE_UP || target.chan2->_state == AST_STATE_RINGING) ) {
 		/* Wrong state of new channel */
@@ -24010,9 +24014,8 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 		if (current->chan2 && current->chan2->_state == AST_STATE_RING) {
 			ast_indicate(target.chan1, AST_CONTROL_RINGING);
 		}
-		if (target_chan1_mohstate) {
-			ast_debug(4, "====> Turning on music on hold again. Trying to at least \n");
-			ast_moh_start(target.chan1, NULL, NULL);
+		if (!ast_strlen_zero(target.chan1_musicclass)) {
+			ast_moh_start(target.chan1, target.chan1_musicclass, target.chan1_musicclass);
 		}
 
 		if (target.chan2) {
