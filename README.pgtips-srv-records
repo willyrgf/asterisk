@@ -2,6 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: 2013-04-18
+Update:        2013-07-05
 
 
 
@@ -12,7 +13,6 @@ Project start: 2013-04-18
 
 SRV Support in the SIP channel of Asterisk
 ==========================================
-
 
 The Asterisk SIP channel lacks full support of RFC 3263, Locating SIP services. This project
 aims at fixing that.
@@ -35,8 +35,8 @@ This project is funded by Inteno Broadband Solutions AB, Sweden. http://www.inte
 
 Happy Earballs
 ==============
-Dual stack hosts needs to contact both address families at the same time to minimize timeout effects on caller's
-call setup time.
+Dual stack hosts needs to contact both address families at the same time to minimize 
+timeout effects on caller's call setup time.
 
 This is not in scope for this project. Work is in progress in the SIP Forum IPv6 wg
 to define a process for this situation.

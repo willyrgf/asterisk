@@ -6033,7 +6033,6 @@ static int sip_call(struct ast_channel *ast, char *dest, int timeout)
 		}
 	}
 
-	res = 0;
 	ast_set_flag(&p->flags[0], SIP_OUTGOING);
 
 	/* T.38 re-INVITE FAX detection should never be done for outgoing calls,
