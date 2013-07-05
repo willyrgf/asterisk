@@ -161,7 +161,68 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Will list info about all defined agents.</para>
 		</description>
+		<see-also>
+			<ref type="managerEvent">Agent</ref>
+			<ref type="managerEvent">AgentsComplete</ref>
+		</see-also>
 	</manager>
+	<managerEvent language="en_US" name="Agent">
+		<managerEventInstance class="EVENT_FLAG_AGENT">
+			<synopsis>
+				Response event in a series to the Agents AMI action containing
+				information about a defined agent.
+			</synopsis>
+			<syntax>
+				<parameter name="Agent">
+					<para>Agent ID of the agent.</para>
+				</parameter>
+				<parameter name="Name">
+					<para>User friendly name of the agent.</para>
+				</parameter>
+				<parameter name="Status">
+					<para>Current status of the agent.</para>
+					<para>The valid values are:</para>
+					<enumlist>
+						<enum name="AGENT_LOGGEDOFF" />
+						<enum name="AGENT_IDLE" />
+						<enum name="AGENT_ONCALL" />
+					</enumlist>
+				</parameter>
+				<parameter name="LoggedInChan">
+					<para>Name of the agent channel logged in or n/a.</para>
+				</parameter>
+				<parameter name="LoggedInUniqueid">
+					<para>Uniqueid of the agent channel logged in or n/a.</para>
+				</parameter>
+				<parameter name="LoggedInTime">
+					<para>Epoch time when the agent logged in or 0.</para>
+				</parameter>
+				<parameter name="TalkingTo">
+					<para>Connected line number talking with the agent or n/a.</para>
+				</parameter>
+				<parameter name="TalkingToChan">
+					<para><variable>BRIDGEPEER</variable> value on agent channel or n/a.</para>
+				</parameter>
+				<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			</syntax>
+			<see-also>
+				<ref type="manager">Agents</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="AgentsComplete">
+		<managerEventInstance class="EVENT_FLAG_AGENT">
+			<synopsis>
+				Final response event in a series of events to the Agents AMI action.
+			</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			</syntax>
+			<see-also>
+				<ref type="manager">Agents</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
 	<manager name="AgentLogoff" language="en_US">
 		<synopsis>
 			Sets an agent as no longer logged in.
@@ -611,6 +672,8 @@ static inline void _agent_unlock(struct agent_pvt *agent, const char *file, cons
  * \param agent Pointer to the LOCKED agent_pvt.
  *
  * \note Assumes the agent lock is already obtained.
+ *
+ * \note Defined locking order is channel lock then agent lock.
  *
  * \return Nothing
  */
@@ -1411,68 +1474,82 @@ static void agent_run(struct agent_pvt *agent, struct ast_channel *logged)
 {
 	struct ast_bridge_features features;
 
-	if (!ast_bridge_features_init(&features)) {
-		for (;;) {
-			struct agents_cfg *cfgs;
-			struct agent_cfg *cfg_new;
-			struct agent_cfg *cfg_old;
-			struct ast_bridge *holding;
-			struct ast_bridge *caller_bridge;
-
-			holding = ao2_global_obj_ref(agent_holding);
-			if (!holding) {
-				break;
-			}
-
-			ast_bridge_join(holding, logged, NULL, &features, NULL, 1);
-			if (logged != agent->logged) {
-				break;
-			}
-
-			if (agent->dead) {
-				break;
-			}
-
-			/* Update the agent's config before rejoining the holding bridge. */
-			cfgs = ao2_global_obj_ref(cfg_handle);
-			if (!cfgs) {
-				break;
-			}
-			cfg_new = ao2_find(cfgs->agents, agent->username, OBJ_KEY);
-			ao2_ref(cfgs, -1);
-			if (!cfg_new) {
-				break;
-			}
-			agent_lock(agent);
-			cfg_old = agent->cfg;
-			agent->cfg = cfg_new;
-
-			agent->last_disconnect = ast_tvnow();
-
-			/* Clear out any caller bridge before rejoining the holding bridge. */
-			caller_bridge = agent->caller_bridge;
-			agent->caller_bridge = NULL;
-			agent_unlock(agent);
-			ao2_ref(cfg_old, -1);
-			if (caller_bridge) {
-				ast_bridge_destroy(caller_bridge);
-			}
-
-			if (agent->state == AGENT_STATE_LOGGING_OUT
-				|| agent->deferred_logoff
-				|| ast_check_hangup_locked(logged)) {
-				break;
-			}
-
-			/*
-			 * It is safe to access agent->waiting_colp without a lock.  It
-			 * is only setup on agent login and not changed.
-			 */
-			ast_channel_update_connected_line(logged, &agent->waiting_colp, NULL);
-		}
-		ast_bridge_features_cleanup(&features);
+	if (ast_bridge_features_init(&features)) {
+		goto agent_run_cleanup;
 	}
+	for (;;) {
+		struct agents_cfg *cfgs;
+		struct agent_cfg *cfg_new;
+		struct agent_cfg *cfg_old;
+		struct ast_bridge *holding;
+		struct ast_bridge *caller_bridge;
 
+		holding = ao2_global_obj_ref(agent_holding);
+		if (!holding) {
+			ast_debug(1, "Agent %s: Someone destroyed the agent holding bridge.\n",
+				agent->username);
+			break;
+		}
+
+		/*
+		 * When the agent channel leaves the bridging system we usually
+		 * want to put the agent back into the holding bridge for the
+		 * next caller.
+		 */
+		ast_bridge_join(holding, logged, NULL, &features, NULL, 1);
+		if (logged != agent->logged) {
+			/* This channel is no longer the logged in agent. */
+			break;
+		}
+
+		if (agent->dead) {
+			/* The agent is no longer configured. */
+			break;
+		}
+
+		/* Update the agent's config before rejoining the holding bridge. */
+		cfgs = ao2_global_obj_ref(cfg_handle);
+		if (!cfgs) {
+			/* There is no agent configuration.  All agents were destroyed. */
+			break;
+		}
+		cfg_new = ao2_find(cfgs->agents, agent->username, OBJ_KEY);
+		ao2_ref(cfgs, -1);
+		if (!cfg_new) {
+			/* The agent is no longer configured. */
+			break;
+		}
+		agent_lock(agent);
+		cfg_old = agent->cfg;
+		agent->cfg = cfg_new;
+
+		agent->last_disconnect = ast_tvnow();
+
+		/* Clear out any caller bridge before rejoining the holding bridge. */
+		caller_bridge = agent->caller_bridge;
+		agent->caller_bridge = NULL;
+		agent_unlock(agent);
+		ao2_ref(cfg_old, -1);
+		if (caller_bridge) {
+			ast_bridge_destroy(caller_bridge);
+		}
+
+		if (agent->state == AGENT_STATE_LOGGING_OUT
+			|| agent->deferred_logoff
+			|| ast_check_hangup_locked(logged)) {
+			/* The agent was requested to logout or hungup. */
+			break;
+		}
+
+		/*
+		 * It is safe to access agent->waiting_colp without a lock.  It
+		 * is only setup on agent login and not changed.
+		 */
+		ast_channel_update_connected_line(logged, &agent->waiting_colp, NULL);
+	}
+	ast_bridge_features_cleanup(&features);
+
+agent_run_cleanup:
 	agent_lock(agent);
 	if (logged != agent->logged) {
 		/*
@@ -2312,6 +2389,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 		struct ast_party_id party_id;
 		struct ast_channel *logged;
 		const char *login_chan;
+		const char *login_uniqueid;
 		const char *talking_to;
 		const char *talking_to_chan;
 		const char *status;
@@ -2330,6 +2408,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 
 		if (logged) {
 			login_chan = ast_channel_name(logged);
+			login_uniqueid = ast_channel_uniqueid(logged);
 			login_start = agent->login_start;
 			talking_to_chan = pbx_builtin_getvar_helper(logged, "BRIDGEPEER");
 			if (!ast_strlen_zero(talking_to_chan)) {
@@ -2343,6 +2422,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 			}
 		} else {
 			login_chan = "n/a";
+			login_uniqueid = "n/a";
 			login_start = 0;
 			talking_to = "n/a";
 			talking_to_chan = "n/a";
@@ -2353,6 +2433,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 		ast_str_append(&out, 0, "Name: %s\r\n", S_OR(agent->cfg->full_name, "None"));
 		ast_str_append(&out, 0, "Status: %s\r\n", status);
 		ast_str_append(&out, 0, "LoggedInChan: %s\r\n", login_chan);
+		ast_str_append(&out, 0, "LoggedInUniqueid: %s\r\n", login_uniqueid);
 		ast_str_append(&out, 0, "LoggedInTime: %ld\r\n", (long) login_start);
 		ast_str_append(&out, 0, "TalkingTo: %s\r\n", talking_to);
 		ast_str_append(&out, 0, "TalkingToChan: %s\r\n", talking_to_chan);

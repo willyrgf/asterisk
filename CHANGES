@@ -23,8 +23,6 @@ AgentLogin
 
 AgentMonitorOutgoing
 ------------------
- * The 'c' option has been removed. It is not possible to modify the name of a
-   channel involved in a CDR.
  * Application removed.  It was a holdover from when AgentCallbackLogin was
    removed.
 

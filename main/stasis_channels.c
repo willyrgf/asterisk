@@ -59,12 +59,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<syntax>
 				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
 				<parameter name="Agent">
-					<para>The name of the agent.</para>
+					<para>Agent ID of the agent.</para>
 				</parameter>
 			</syntax>
 			<see-also>
 				<ref type="application">AgentLogin</ref>
-				<ref type="managerEvent">Agentlogoff</ref>
+				<ref type="managerEvent">AgentLogoff</ref>
 			</see-also>
 		</managerEventInstance>
 	</managerEvent>
