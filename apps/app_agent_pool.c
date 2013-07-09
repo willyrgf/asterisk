@@ -67,9 +67,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Login an agent to the system.  Any agent authentication is assumed to
 			already be done by dialplan.  While logged in, the agent can receive calls
-			and will hear a configurable <literal>beep</literal> sound when a new call
-			comes in for the agent.  Login failures will continue in the dialplan
-			with <variable>AGENT_STATUS</variable> set.</para>
+			and will hear the sound file specified by the config option custom_beep
+			when a new call comes in for the agent.  Login failures will continue in
+			the dialplan with <variable>AGENT_STATUS</variable> set.</para>
 			<para>Before logging in, you can setup on the real agent channel the
 			CHANNEL(dtmf-features) an agent will have when talking to a caller
 			and you can setup on the channel running this application the
@@ -195,9 +195,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<para>Uniqueid of the agent channel logged in or n/a.</para>
 				</parameter>
 				<parameter name="LoggedInTime">
-					<para>Epoch time when the agent logged in or 0.</para>
+					<para>Epoche time when the agent logged in or 0.</para>
 				</parameter>
-				<parameter name="TalkingTo">
+				<parameter name="TalkingToName">
+					<para>Connected line name talking with the agent or n/a.</para>
+				</parameter>
+				<parameter name="TalkingToNumber">
 					<para>Connected line number talking with the agent or n/a.</para>
 				</parameter>
 				<parameter name="TalkingToChan">
@@ -268,6 +271,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<synopsis>DTMF key sequence the agent uses to acknowledge a call.</synopsis>
 					<description>
 						<note><para>The option is overridden by <variable>AGENTACCEPTDTMF</variable> on agent login.</para></note>
+						<note><para>The option is ignored unless the ackcall option is enabled.</para></note>
 						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
 					</description>
 				</configOption>
@@ -279,6 +283,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						logged off.  If set to zero then the call will wait forever for
 						the agent to acknowledge.</para>
 						<note><para>The option is overridden by <variable>AGENTAUTOLOGOFF</variable> on agent login.</para></note>
+						<note><para>The option is ignored unless the ackcall option is enabled.</para></note>
 						<xi:include xpointer="xpointer(/docs/configInfo[@name='app_agent_pool']/description/note)" />
 					</description>
 				</configOption>
@@ -1265,7 +1270,7 @@ static int bridge_agent_hold_push(struct ast_bridge *self, struct ast_bridge_cha
 		break;
 	case AGENT_STATE_READY_FOR_CALL:
 		/*
-		 * Likely someone manally kicked us out of the holding bridge
+		 * Likely someone manually kicked us out of the holding bridge
 		 * and we came right back in.
 		 */
 		agent_unlock(agent);
@@ -1443,7 +1448,7 @@ static void agent_logout(struct agent_pvt *agent)
 	logged = agent->logged;
 	agent->logged = NULL;
 	caller_bridge = agent->caller_bridge;
-	caller_bridge = NULL;
+	agent->caller_bridge = NULL;
 	agent->state = AGENT_STATE_LOGGED_OUT;
 	agent->devstate = AST_DEVICE_UNAVAILABLE;
 	ast_clear_flag(agent, AST_FLAGS_ALL);
@@ -1601,7 +1606,7 @@ static void agent_after_bridge_cb_failed(enum ast_after_bridge_cb_reason reason,
  * \brief Get the lock on the agent bridge_channel and return it.
  * \since 12.0.0
  *
- * \param agent Whose bridge_chanel to get.
+ * \param agent Whose bridge_channel to get.
  *
  * \retval bridge_channel on success (Reffed and locked).
  * \retval NULL on error.
@@ -1771,7 +1776,7 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 
-	parse = ast_strdupa(data ?: "");
+	parse = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	if (ast_strlen_zero(args.agent_id)) {
@@ -1976,7 +1981,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 		return -1;
 	}
 
-	parse = ast_strdupa(data ?: "");
+	parse = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, parse);
 
 	if (ast_strlen_zero(args.agent_id)) {
@@ -2390,7 +2395,8 @@ static int action_agents(struct mansession *s, const struct message *m)
 		struct ast_channel *logged;
 		const char *login_chan;
 		const char *login_uniqueid;
-		const char *talking_to;
+		const char *talking_to_name;
+		const char *talking_to_num;
 		const char *talking_to_chan;
 		const char *status;
 		time_t login_start;
@@ -2413,10 +2419,12 @@ static int action_agents(struct mansession *s, const struct message *m)
 			talking_to_chan = pbx_builtin_getvar_helper(logged, "BRIDGEPEER");
 			if (!ast_strlen_zero(talking_to_chan)) {
 				party_id = ast_channel_connected_effective_id(logged);
-				talking_to = S_COR(party_id.number.valid, party_id.number.str, "n/a");
+				talking_to_name = S_COR(party_id.name.valid, party_id.name.str, "n/a");
+				talking_to_num = S_COR(party_id.number.valid, party_id.number.str, "n/a");
 				status = "AGENT_ONCALL";
 			} else {
-				talking_to = "n/a";
+				talking_to_name = "n/a";
+				talking_to_num = "n/a";
 				talking_to_chan = "n/a";
 				status = "AGENT_IDLE";
 			}
@@ -2424,7 +2432,8 @@ static int action_agents(struct mansession *s, const struct message *m)
 			login_chan = "n/a";
 			login_uniqueid = "n/a";
 			login_start = 0;
-			talking_to = "n/a";
+			talking_to_name = "n/a";
+			talking_to_num = "n/a";
 			talking_to_chan = "n/a";
 			status = "AGENT_LOGGEDOFF";
 		}
@@ -2435,7 +2444,8 @@ static int action_agents(struct mansession *s, const struct message *m)
 		ast_str_append(&out, 0, "LoggedInChan: %s\r\n", login_chan);
 		ast_str_append(&out, 0, "LoggedInUniqueid: %s\r\n", login_uniqueid);
 		ast_str_append(&out, 0, "LoggedInTime: %ld\r\n", (long) login_start);
-		ast_str_append(&out, 0, "TalkingTo: %s\r\n", talking_to);
+		ast_str_append(&out, 0, "TalkingToName: %s\r\n", talking_to_name);
+		ast_str_append(&out, 0, "TalkingToNumber: %s\r\n", talking_to_num);
 		ast_str_append(&out, 0, "TalkingToChan: %s\r\n", talking_to_chan);
 
 		if (logged) {

@@ -15,6 +15,7 @@
 ;
 ; Set what DTMF key sequence the agent should use to acknowledge a call.
 ; The channel variable AGENTACCEPTDTMF overrides on agent login.
+; This option is ignored unless ackcall is enabled.
 ; Default is "#".
 ;acceptdtmf=##
 ;
@@ -22,6 +23,7 @@
 ; acknowledge the call before the agent is automatically logged off.  If
 ; set to zero then the call will wait forever for the agent to acknowledge.
 ; The channel variable AGENTAUTOLOGOFF overrides on agent login.
+; This option is ignored unless ackcall is enabled.
 ; Default is 0.
 ;autologoff=15
 ;
