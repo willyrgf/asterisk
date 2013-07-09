@@ -162,11 +162,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Will list info about all defined agents.</para>
 		</description>
 		<see-also>
-			<ref type="managerEvent">Agent</ref>
+			<ref type="managerEvent">Agents</ref>
 			<ref type="managerEvent">AgentsComplete</ref>
 		</see-also>
 	</manager>
-	<managerEvent language="en_US" name="Agent">
+	<managerEvent language="en_US" name="Agents">
 		<managerEventInstance class="EVENT_FLAG_AGENT">
 			<synopsis>
 				Response event in a series to the Agents AMI action containing
@@ -188,23 +188,58 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<enum name="AGENT_ONCALL" />
 					</enumlist>
 				</parameter>
-				<parameter name="LoggedInChan">
-					<para>Name of the agent channel logged in or n/a.</para>
+				<parameter name="TalkingToChan">
+					<para><variable>BRIDGEPEER</variable> value on agent channel.</para>
+					<para>Present if Status value is <literal>AGENT_ONCALL</literal>.</para>
 				</parameter>
-				<parameter name="LoggedInUniqueid">
-					<para>Uniqueid of the agent channel logged in or n/a.</para>
+				<parameter name="CallStarted">
+					<para>Epoche time when the agent started talking with the caller.</para>
+					<para>Present if Status value is <literal>AGENT_ONCALL</literal>.</para>
 				</parameter>
 				<parameter name="LoggedInTime">
-					<para>Epoche time when the agent logged in or 0.</para>
+					<para>Epoche time when the agent logged in.</para>
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
 				</parameter>
-				<parameter name="TalkingToName">
-					<para>Connected line name talking with the agent or n/a.</para>
+				<parameter name="Channel">
+					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter[@name='Channel']/para)" />
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
 				</parameter>
-				<parameter name="TalkingToNumber">
-					<para>Connected line number talking with the agent or n/a.</para>
+				<parameter name="ChannelState">
+					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter[@name='ChannelState']/para)" />
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
 				</parameter>
-				<parameter name="TalkingToChan">
-					<para><variable>BRIDGEPEER</variable> value on agent channel or n/a.</para>
+				<parameter name="ChannelStateDesc">
+					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter[@name='ChannelStateDesc']/para)" />
+					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter[@name='ChannelStateDesc']/enumlist)" />
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="CallerIDNum">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="CallerIDName">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="ConnectedLineNum">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="ConnectedLineName">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="AccountCode">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="Context">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="Exten">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="Priority">
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
+				</parameter>
+				<parameter name="Uniqueid">
+					<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter[@name='Uniqueid']/para)" />
+					<para>Present if Status value is <literal>AGENT_IDLE</literal> or <literal>AGENT_ONCALL</literal>.</para>
 				</parameter>
 				<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			</syntax>
@@ -2391,15 +2426,7 @@ static int action_agents(struct mansession *s, const struct message *m)
 
 	iter = ao2_iterator_init(agents, 0);
 	for (; (agent = ao2_iterator_next(&iter)); ao2_ref(agent, -1)) {
-		struct ast_party_id party_id;
 		struct ast_channel *logged;
-		const char *login_chan;
-		const char *login_uniqueid;
-		const char *talking_to_name;
-		const char *talking_to_num;
-		const char *talking_to_chan;
-		const char *status;
-		time_t login_start;
 
 		agent_lock(agent);
 		logged = agent_lock_logged(agent);
@@ -2411,47 +2438,40 @@ static int action_agents(struct mansession *s, const struct message *m)
 		 * AGENT_ONCALL    - Agent is logged in, and on a call
 		 * AGENT_UNKNOWN   - Don't know anything about agent. Shouldn't ever get this.
 		 */
+		ast_str_set(&out, 0, "Agent: %s\r\n", agent->username);
+		ast_str_append(&out, 0, "Name: %s\r\n", agent->cfg->full_name);
 
 		if (logged) {
-			login_chan = ast_channel_name(logged);
-			login_uniqueid = ast_channel_uniqueid(logged);
-			login_start = agent->login_start;
+			const char *talking_to_chan;
+			struct ast_str *logged_headers;
+			RAII_VAR(struct ast_channel_snapshot *, logged_snapshot, ast_channel_snapshot_create(logged), ao2_cleanup);
+
+			if (!logged_snapshot
+				|| !(logged_headers =
+					 ast_manager_build_channel_state_string(logged_snapshot))) {
+				ast_channel_unlock(logged);
+				ast_channel_unref(logged);
+				agent_unlock(agent);
+				continue;
+			}
+
 			talking_to_chan = pbx_builtin_getvar_helper(logged, "BRIDGEPEER");
 			if (!ast_strlen_zero(talking_to_chan)) {
-				party_id = ast_channel_connected_effective_id(logged);
-				talking_to_name = S_COR(party_id.name.valid, party_id.name.str, "n/a");
-				talking_to_num = S_COR(party_id.number.valid, party_id.number.str, "n/a");
-				status = "AGENT_ONCALL";
+				ast_str_append(&out, 0, "Status: %s\r\n", "AGENT_ONCALL");
+				ast_str_append(&out, 0, "TalkingToChan: %s\r\n", talking_to_chan);
+				ast_str_append(&out, 0, "CallStarted: %ld\n", (long) agent->call_start);
 			} else {
-				talking_to_name = "n/a";
-				talking_to_num = "n/a";
-				talking_to_chan = "n/a";
-				status = "AGENT_IDLE";
+				ast_str_append(&out, 0, "Status: %s\r\n", "AGENT_IDLE");
 			}
-		} else {
-			login_chan = "n/a";
-			login_uniqueid = "n/a";
-			login_start = 0;
-			talking_to_name = "n/a";
-			talking_to_num = "n/a";
-			talking_to_chan = "n/a";
-			status = "AGENT_LOGGEDOFF";
-		}
-
-		ast_str_set(&out, 0, "Agent: %s\r\n", agent->username);
-		ast_str_append(&out, 0, "Name: %s\r\n", S_OR(agent->cfg->full_name, "None"));
-		ast_str_append(&out, 0, "Status: %s\r\n", status);
-		ast_str_append(&out, 0, "LoggedInChan: %s\r\n", login_chan);
-		ast_str_append(&out, 0, "LoggedInUniqueid: %s\r\n", login_uniqueid);
-		ast_str_append(&out, 0, "LoggedInTime: %ld\r\n", (long) login_start);
-		ast_str_append(&out, 0, "TalkingToName: %s\r\n", talking_to_name);
-		ast_str_append(&out, 0, "TalkingToNumber: %s\r\n", talking_to_num);
-		ast_str_append(&out, 0, "TalkingToChan: %s\r\n", talking_to_chan);
-
-		if (logged) {
+			ast_str_append(&out, 0, "LoggedInTime: %ld\r\n", (long) agent->login_start);
+			ast_str_append(&out, 0, "%s", ast_str_buffer(logged_headers));
 			ast_channel_unlock(logged);
 			ast_channel_unref(logged);
+			ast_free(logged_headers);
+		} else {
+			ast_str_append(&out, 0, "Status: %s\r\n", "AGENT_LOGGEDOFF");
 		}
+
 		agent_unlock(agent);
 
 		astman_append(s, "Event: Agents\r\n"
