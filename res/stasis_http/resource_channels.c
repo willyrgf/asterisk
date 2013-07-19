@@ -229,6 +229,34 @@ void stasis_http_unhold_channel(struct ast_variable *headers, struct ast_unhold_
 	stasis_http_response_no_content(response);
 }
 
+void stasis_http_moh_start_channel(struct ast_variable *headers, struct ast_moh_start_channel_args *args, struct stasis_http_response *response)
+{
+	RAII_VAR(struct stasis_app_control *, control, NULL, ao2_cleanup);
+
+	control = find_control(response, args->channel_id);
+	if (control == NULL) {
+		/* Response filled in by find_control */
+		return;
+	}
+
+	stasis_app_control_moh_start(control, args->moh_class);
+	stasis_http_response_no_content(response);
+}
+
+void stasis_http_moh_stop_channel(struct ast_variable *headers, struct ast_moh_stop_channel_args *args, struct stasis_http_response *response)
+{
+	RAII_VAR(struct stasis_app_control *, control, NULL, ao2_cleanup);
+
+	control = find_control(response, args->channel_id);
+	if (control == NULL) {
+		/* Response filled in by find_control */
+		return;
+	}
+
+	stasis_app_control_moh_stop(control);
+	stasis_http_response_no_content(response);
+}
+
 void stasis_http_play_on_channel(struct ast_variable *headers,
 	struct ast_play_on_channel_args *args,
 	struct stasis_http_response *response)
@@ -273,7 +301,7 @@ void stasis_http_play_on_channel(struct ast_variable *headers,
 	language = S_OR(args->lang, snapshot->language);
 
 	playback = stasis_app_control_play_uri(control, args->media, language,
-		args->skipms, args->offsetms);
+		args->channel_id, STASIS_PLAYBACK_TARGET_CHANNEL, args->skipms, args->offsetms);
 	if (!playback) {
 		stasis_http_response_error(
 			response, 500, "Internal Server Error",

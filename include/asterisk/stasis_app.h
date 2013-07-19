@@ -127,6 +127,29 @@ struct stasis_app_control *stasis_app_control_find_by_channel_id(
 	const char *channel_id);
 
 /*!
+ * \brief Creates a control handler for a channel that isn't in a stasis app.
+ * \since 12.0.0
+ *
+ * \param chan Channel to create controller handle for
+ *
+ * \return NULL on failure to create the handle
+ * \return Pointer to \c res_stasis handler.
+ */
+struct stasis_app_control *stasis_app_control_create(
+	struct ast_channel *chan);
+
+/*!
+ * \brief Act on a stasis app control queue until it is empty
+ * \since 12.0.0
+ *
+ * \param chan Channel to handle
+ * \param control Control object to execute
+ */
+void stasis_app_control_execute_until_exhausted(
+	struct ast_channel *chan,
+	struct stasis_app_control *control);
+
+/*!
  * \brief Returns the uniqueid of the channel associated with this control
  *
  * \param control Control object.
@@ -227,6 +250,19 @@ void stasis_app_control_hold(struct stasis_app_control *control);
  * \param control Control for \c res_stasis.
  */
 void stasis_app_control_unhold(struct stasis_app_control *control);
+
+/*!
+ * \brief Play music on hold to a channel (does not affect hold status)
+ * \param control Control for \c res_stasis.
+ * \param moh_class class of music on hold to play (NULL allowed)
+ */
+void stasis_app_control_moh_start(struct stasis_app_control *control, const char *moh_class);
+
+/*!
+ * \brief Stop playing music on hold to a channel (does not affect hold status)
+ * \param control Control for \c res_stasis.
+ */
+void stasis_app_control_moh_stop(struct stasis_app_control *control);
 
 /*!
  * \brief Returns the most recent snapshot for the associated channel.
