@@ -84,7 +84,7 @@ static struct ast_frame *native_rtp_framehook(struct ast_channel *chan, struct a
 /*! \brief Internal helper function which checks whether the channels are compatible with our native bridging */
 static int native_rtp_bridge_capable(struct ast_channel *chan)
 {
-	return ast_channel_has_audio_frame_or_monitor(chan);
+	return !ast_channel_has_audio_frame_or_monitor(chan);
 }
 
 /*! \brief Internal helper function which gets all RTP information (glue and instances) relating to the given channels */
@@ -323,11 +323,15 @@ static int native_rtp_bridge_join(struct ast_bridge *bridge, struct ast_bridge_c
 		}
 		ast_rtp_instance_set_bridged(instance0, instance1);
 		ast_rtp_instance_set_bridged(instance1, instance0);
+		ast_debug(2, "Locally RTP bridged '%s' and '%s' in stack",
+			ast_channel_name(c0->chan), ast_channel_name(c1->chan));
 		break;
 
 	case AST_RTP_GLUE_RESULT_REMOTE:
 		glue0->update_peer(c0->chan, instance1, vinstance1, tinstance1, cap1, 0);
 		glue1->update_peer(c1->chan, instance0, vinstance0, tinstance0, cap0, 0);
+		ast_debug(2, "Remotely bridged '%s' and '%s' - media will flow directly between them\n",
+			ast_channel_name(c0->chan), ast_channel_name(c1->chan));
 		break;
 	case AST_RTP_GLUE_RESULT_FORBID:
 		break;
@@ -378,6 +382,9 @@ static void native_rtp_bridge_leave(struct ast_bridge *bridge, struct ast_bridge
 	case AST_RTP_GLUE_RESULT_FORBID:
 		break;
 	}
+
+	ast_debug(2, "Discontinued RTP bridging of '%s' and '%s' - media will flow through Asterisk core\n",
+		ast_channel_name(c0->chan), ast_channel_name(c1->chan));
 }
 
 static int native_rtp_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)

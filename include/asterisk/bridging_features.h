@@ -187,6 +187,16 @@ enum ast_bridge_hook_remove_flags {
 	AST_BRIDGE_HOOK_REMOVE_ON_PERSONALITY_CHANGE = (1 << 1),
 };
 
+enum ast_bridge_hook_type {
+	/*! The hook type has not been specified. */
+	AST_BRIDGE_HOOK_TYPE_NONE,
+	AST_BRIDGE_HOOK_TYPE_DTMF,
+	AST_BRIDGE_HOOK_TYPE_TIMER,
+	AST_BRIDGE_HOOK_TYPE_HANGUP,
+	AST_BRIDGE_HOOK_TYPE_JOIN,
+	AST_BRIDGE_HOOK_TYPE_LEAVE,
+};
+
 /* BUGBUG Need to be able to selectively remove DTMF, hangup, and interval hooks. */
 /*! \brief Structure that is the essence of a feature hook. */
 struct ast_bridge_hook {
@@ -198,6 +208,8 @@ struct ast_bridge_hook {
 	void *hook_pvt;
 	/*! Flags determining when hooks should be removed from a bridge channel */
 	struct ast_flags remove_flags;
+	/*! What kind of hook this is. */
+	enum ast_bridge_hook_type type;
 	/*! Extra hook parameters. */
 	union {
 		/*! Extra parameters for a DTMF feature hook. */
@@ -224,12 +236,8 @@ struct talker_detection_hook {
 struct ast_bridge_features {
 	/*! Attached DTMF feature hooks */
 	struct ao2_container *dtmf_hooks;
-	/*! Attached hangup interception hooks container */
-	struct ao2_container *hangup_hooks;
-	/*! Attached bridge channel join interception hooks container */
-	struct ao2_container *join_hooks;
-	/*! Attached bridge channel leave interception hooks container */
-	struct ao2_container *leave_hooks;
+	/*! Attached miscellaneous other hooks. */
+	struct ao2_container *other_hooks;
 	/*! Attached interval hooks */
 	struct ast_heap *interval_hooks;
 	/*! Used to determine when interval based features should be checked */
