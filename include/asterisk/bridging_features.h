@@ -154,31 +154,7 @@ typedef void (*ast_bridge_hook_pvt_destructor)(void *hook_pvt);
  */
 typedef void (*ast_bridge_talking_indicate_callback)(struct ast_bridge_channel *bridge_channel, void *pvt_data, int talking);
 
-
 typedef void (*ast_bridge_talking_indicate_destructor)(void *pvt_data);
-
-/*!
- * \brief Maximum length of a DTMF feature string
- */
-#define MAXIMUM_DTMF_FEATURE_STRING (11 + 1)
-
-/*! Extra parameters for a DTMF feature hook. */
-struct ast_bridge_hook_dtmf {
-	/*! DTMF String that is examined during a feature hook lookup */
-	char code[MAXIMUM_DTMF_FEATURE_STRING];
-};
-
-/*! Extra parameters for an interval timer hook. */
-struct ast_bridge_hook_timer {
-	/*! Time at which the hook should actually trip */
-	struct timeval trip_time;
-	/*! Heap index for interval hook */
-	ssize_t heap_index;
-	/*! Interval that the hook should execute at in milliseconds */
-	unsigned int interval;
-	/*! Sequence number for the hook to ensure expiration ordering */
-	unsigned int seqno;
-};
 
 enum ast_bridge_hook_remove_flags {
 	/*! The hook is removed when the channel is pulled from the bridge. */
@@ -210,13 +186,45 @@ struct ast_bridge_hook {
 	struct ast_flags remove_flags;
 	/*! What kind of hook this is. */
 	enum ast_bridge_hook_type type;
-	/*! Extra hook parameters. */
-	union {
-		/*! Extra parameters for a DTMF feature hook. */
-		struct ast_bridge_hook_dtmf dtmf;
-		/*! Extra parameters for an interval timer hook. */
-		struct ast_bridge_hook_timer timer;
-	} parms;
+};
+
+/*!
+ * \brief Maximum length of a DTMF feature string
+ */
+#define MAXIMUM_DTMF_FEATURE_STRING (11 + 1)
+
+/*! Extra parameters for a DTMF feature hook. */
+struct ast_bridge_hook_dtmf_parms {
+	/*! DTMF String that is examined during a feature hook lookup */
+	char code[MAXIMUM_DTMF_FEATURE_STRING];
+};
+
+/*! DTMF specific hook. */
+struct ast_bridge_hook_dtmf {
+	/*! Generic feature hook information. */
+	struct ast_bridge_hook generic;
+	/*! Extra parameters for a DTMF feature hook. */
+	struct ast_bridge_hook_dtmf_parms dtmf;
+};
+
+/*! Extra parameters for an interval timer hook. */
+struct ast_bridge_hook_timer_parms {
+	/*! Time at which the hook should actually trip */
+	struct timeval trip_time;
+	/*! Heap index for interval hook */
+	ssize_t heap_index;
+	/*! Interval that the hook should execute at in milliseconds */
+	unsigned int interval;
+	/*! Sequence number for the hook to ensure expiration ordering */
+	unsigned int seqno;
+};
+
+/*! Timer specific hook. */
+struct ast_bridge_hook_timer {
+	/*! Generic feature hook information. */
+	struct ast_bridge_hook generic;
+	/*! Extra parameters for an interval timer hook. */
+	struct ast_bridge_hook_timer_parms timer;
 };
 
 #define BRIDGE_FEATURES_INTERVAL_RATE 10
