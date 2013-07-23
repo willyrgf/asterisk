@@ -2577,8 +2577,8 @@ static void bridge_channel_talking(struct ast_bridge_channel *bridge_channel, in
 {
 	struct ast_bridge_features *features = bridge_channel->features;
 
-	if (features->talker_cb) {
-		features->talker_cb(bridge_channel, features->talker_pvt_data, talking);
+	if (features->talker_hook.callback) {
+		features->talker_hook.callback(bridge_channel, features->talker_hook.pvt_data, talking);
 	}
 }
 
@@ -5412,9 +5412,9 @@ void ast_bridge_features_set_talk_detector(struct ast_bridge_features *features,
 	ast_bridge_talking_indicate_destructor talker_destructor,
 	void *pvt_data)
 {
-	features->talker_cb = talker_cb;
-	features->talker_destructor_cb = talker_destructor;
-	features->talker_pvt_data = pvt_data;
+	features->talker_hook.callback = talker_cb;
+	features->talker_hook.destructor = talker_destructor;
+	features->talker_hook.pvt_data = pvt_data;
 }
 
 int ast_bridge_interval_hook(struct ast_bridge_features *features,
@@ -5739,9 +5739,9 @@ void ast_bridge_features_cleanup(struct ast_bridge_features *features)
 		features->limits = NULL;
 	}
 
-	if (features->talker_destructor_cb && features->talker_pvt_data) {
-		features->talker_destructor_cb(features->talker_pvt_data);
-		features->talker_pvt_data = NULL;
+	if (features->talker_hook.destructor && features->talker_hook.pvt_data) {
+		features->talker_hook.destructor(features->talker_hook.pvt_data);
+		features->talker_hook.pvt_data = NULL;
 	}
 
 	/* Destroy the leave hooks container. */

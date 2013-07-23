@@ -190,8 +190,6 @@ enum ast_bridge_hook_remove_flags {
 /* BUGBUG Need to be able to selectively remove DTMF, hangup, and interval hooks. */
 /*! \brief Structure that is the essence of a feature hook. */
 struct ast_bridge_hook {
-	/*! Linked list information */
-	AST_LIST_ENTRY(ast_bridge_hook) entry;
 	/*! Callback that is called when hook is tripped */
 	ast_bridge_hook_callback callback;
 	/*! Callback to destroy hook_pvt data right before destruction. */
@@ -211,6 +209,15 @@ struct ast_bridge_hook {
 
 #define BRIDGE_FEATURES_INTERVAL_RATE 10
 
+struct talker_detection_hook {
+	/*! Callback to indicate when a bridge channel has started and stopped talking */
+	ast_bridge_talking_indicate_callback callback;
+	/*! Callback to destroy any pvt data stored for the talker. */
+	ast_bridge_talking_indicate_destructor destructor;
+	/*! Talker callback pvt data */
+	void *pvt_data;
+};
+
 /*!
  * \brief Structure that contains features information
  */
@@ -229,12 +236,8 @@ struct ast_bridge_features {
 	struct ast_timer *interval_timer;
 	/*! Limits feature data */
 	struct ast_bridge_features_limits *limits;
-	/*! Callback to indicate when a bridge channel has started and stopped talking */
-	ast_bridge_talking_indicate_callback talker_cb;
-	/*! Callback to destroy any pvt data stored for the talker. */
-	ast_bridge_talking_indicate_destructor talker_destructor_cb;
-	/*! Talker callback pvt data */
-	void *talker_pvt_data;
+	/*! Start/stop talking detection hook. */
+	struct talker_detection_hook talker_hook;
 	/*! Feature flags that are enabled */
 	struct ast_flags feature_flags;
 	/*! Used to assign the sequence number to the next interval hook added. */
