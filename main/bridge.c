@@ -29,7 +29,7 @@
 
 #include "asterisk.h"
 
-ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+ASTERISK_FILE_VERSION(__FILE__, "$Revision: 395432 $")
 
 #include "asterisk/logger.h"
 #include "asterisk/channel.h"
@@ -3512,6 +3512,33 @@ struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channe
 	ast_bridge_unlock(bridge);
 
 	return peer;
+}
+
+int ast_bridge_mute_set(struct ast_bridge *bridge, struct ast_channel *chan, int mute_setting)
+{
+	struct ast_bridge_channel *bridge_channel;
+
+	ast_bridge_lock(bridge);
+	bridge_channel = bridge_find_channel(bridge, chan);
+	if (bridge_channel) {
+		bridge_channel->features->mute = mute_setting ? 1 : 0;
+	}
+	ast_bridge_unlock(bridge);
+	return bridge_channel ? 0 : -1;
+}
+
+int ast_bridge_mute_get(struct ast_bridge *bridge, struct ast_channel *chan)
+{
+	struct ast_bridge_channel *bridge_channel;
+	int mute = -1;
+
+	ast_bridge_lock(bridge);
+	bridge_channel = bridge_find_channel(bridge, chan);
+	if (bridge_channel) {
+		mute = bridge_channel->features->mute;
+	}
+	ast_bridge_unlock(bridge);
+	return mute;
 }
 
 /*!
