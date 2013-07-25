@@ -69,9 +69,9 @@
 extern "C" {
 #endif
 
-#include "asterisk/bridging_features.h"
-#include "asterisk/bridging_channel.h"
-#include "asterisk/bridging_roles.h"
+#include "asterisk/bridge_features.h"
+#include "asterisk/bridge_channel.h"
+#include "asterisk/bridge_roles.h"
 #include "asterisk/dsp.h"
 #include "asterisk/uuid.h"
 
@@ -950,32 +950,6 @@ struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channe
  * \return Nothing
  */
 void ast_bridge_features_remove(struct ast_bridge_features *features, enum ast_bridge_hook_remove_flags flags);
-
-/*!
- * \brief Set the mute setting of a channel in the bridge.
- * \since 12.0.0
- *
- * \param brige Bridge channel is in.
- * \param chan Channel to set mute.
- * \param mute_setting TRUE to enable mute
- *
- * \retval 0 on success.
- * \retval -1 on error.
- */
-int ast_bridge_mute_set(struct ast_bridge *bridge, struct ast_channel *chan, int mute_setting);
-
-/*!
- * \brief Get the mute setting of a channel in the bridge.
- * \since 12.0.0
- *
- * \param brige Bridge channel is in.
- * \param chan Channel to get mute.
- *
- * \retval 0 Channel is not muted.
- * \retval 1 Channel is muted.
- * \retval -1 on error.
- */
-int ast_bridge_mute_get(struct ast_bridge *bridge, struct ast_channel *chan);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

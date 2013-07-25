@@ -37,14 +37,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/utils.h"
 #include "asterisk/lock.h"
 #include "asterisk/linkedlists.h"
-#include "asterisk/bridging.h"
-#include "asterisk/bridging_internal.h"
-#include "asterisk/bridging_channel_internal.h"
-#include "asterisk/bridging_basic.h"
-#include "asterisk/bridging_technology.h"
-#include "asterisk/bridging_channel.h"
-#include "asterisk/bridging_after.h"
-#include "asterisk/stasis_bridging.h"
+#include "asterisk/bridge.h"
+#include "asterisk/bridge_internal.h"
+#include "asterisk/bridge_channel_internal.h"
+#include "asterisk/bridge_basic.h"
+#include "asterisk/bridge_technology.h"
+#include "asterisk/bridge_channel.h"
+#include "asterisk/bridge_after.h"
+#include "asterisk/stasis_bridges.h"
 #include "asterisk/stasis_channels.h"
 #include "asterisk/app.h"
 #include "asterisk/file.h"
@@ -3512,33 +3512,6 @@ struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channe
 	ast_bridge_unlock(bridge);
 
 	return peer;
-}
-
-int ast_bridge_mute_set(struct ast_bridge *bridge, struct ast_channel *chan, int mute_setting)
-{
-	struct ast_bridge_channel *bridge_channel;
-
-	ast_bridge_lock(bridge);
-	bridge_channel = bridge_find_channel(bridge, chan);
-	if (bridge_channel) {
-		bridge_channel->features->mute = mute_setting ? 1 : 0;
-	}
-	ast_bridge_unlock(bridge);
-	return bridge_channel ? 0 : -1;
-}
-
-int ast_bridge_mute_get(struct ast_bridge *bridge, struct ast_channel *chan)
-{
-	struct ast_bridge_channel *bridge_channel;
-	int mute = -1;
-
-	ast_bridge_lock(bridge);
-	bridge_channel = bridge_find_channel(bridge, chan);
-	if (bridge_channel) {
-		mute = bridge_channel->features->mute;
-	}
-	ast_bridge_unlock(bridge);
-	return mute;
 }
 
 /*!
