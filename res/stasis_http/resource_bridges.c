@@ -33,14 +33,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "resource_bridges.h"
 #include "asterisk/stasis.h"
-#include "asterisk/stasis_bridging.h"
+#include "asterisk/stasis_bridges.h"
 #include "asterisk/stasis_app.h"
 #include "asterisk/stasis_app_playback.h"
 #include "asterisk/stasis_app_recording.h"
 #include "asterisk/stasis_channels.h"
 #include "asterisk/core_unreal.h"
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
+#include "asterisk/bridge.h"
 #include "asterisk/format_cap.h"
 #include "asterisk/file.h"
 
