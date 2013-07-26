@@ -306,7 +306,6 @@ struct ast_bridge_features_limits {
 	);
 	/*! Time when the bridge will be terminated by the limits feature */
 	struct timeval quitting_time;
-
 	/*! Maximum duration that the channel is allowed to be in the bridge (specified in milliseconds) */
 	unsigned int duration;
 	/*! Duration into the call when warnings should begin (specified in milliseconds or 0 to disable) */
