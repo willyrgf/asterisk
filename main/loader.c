@@ -50,7 +50,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/enum.h"
 #include "asterisk/http.h"
 #include "asterisk/lock.h"
-#include "asterisk/features.h"
+#include "asterisk/features_config.h"
 #include "asterisk/dsp.h"
 #include "asterisk/udptl.h"
 #include "asterisk/heap.h"
@@ -313,7 +313,7 @@ static struct reload_classes {
 	{ "manager",	reload_manager },
 	{ "http",	ast_http_reload },
 	{ "logger",	logger_reload },
-	{ "features",	ast_features_reload },
+	{ "features",	ast_features_config_reload },
 	{ "dsp",	ast_dsp_reload},
 	{ "udptl",	ast_udptl_reload },
 	{ "indications", ast_indications_reload },
