@@ -13842,6 +13842,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			append_history(p, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
 		}
 
+		p->socket.type = r->transport;
+
 		/* Use port number specified if no SRV record was found */
 		if (!ast_sockaddr_isnull(&r->us)) {
 			if (!ast_sockaddr_port(&r->us) && r->portno) {
@@ -17554,7 +17556,7 @@ static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct
 		"TextSupport: %s\r\n"
 		"ACL: %s\r\n"
 		"Status: %s\r\n"
-		"RealtimeDevice: %s\r\n",
+		"RealtimeDevice: %s\r\n\r\n",
 		cont->idtext,
 		peer->name,
 		ast_sockaddr_isnull(&peer->addr) ? "-none-" : tmp_host,
