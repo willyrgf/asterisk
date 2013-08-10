@@ -317,6 +317,24 @@ static int bridge_channel_write_frame(struct ast_bridge_channel *bridge_channel,
  * simple_bridge/native_bridge are likely the only techs that will do this.
  */
 	bridge_channel->bridge->technology->write(bridge_channel->bridge, bridge_channel, frame);
+
+	/* Remember any owed events to the bridge. */
+	switch (frame->frametype) {
+	case AST_FRAME_DTMF_BEGIN:
+		bridge_channel->owed.dtmf_tv = ast_tvnow();
+		bridge_channel->owed.dtmf_digit = frame->subclass.integer;
+		break;
+	case AST_FRAME_DTMF_END:
+		bridge_channel->owed.dtmf_digit = '\0';
+		break;
+	case AST_FRAME_CONTROL:
+		/*
+		 * We explicitly will not remember HOLD/UNHOLD frames because
+		 * things like attended transfers will handle them.
+		 */
+	default:
+		break;
+	}
 	ast_bridge_unlock(bridge_channel->bridge);
 
 	/*
@@ -324,6 +342,27 @@ static int bridge_channel_write_frame(struct ast_bridge_channel *bridge_channel,
 	 * support is added, claim successfully deferred.
 	 */
 	return 0;
+}
+
+void bridge_channel_settle_owed_events(struct ast_bridge *orig_bridge, struct ast_bridge_channel *bridge_channel)
+{
+	if (bridge_channel->owed.dtmf_digit) {
+		struct ast_frame frame = {
+			.frametype = AST_FRAME_DTMF_END,
+			.subclass.integer = bridge_channel->owed.dtmf_digit,
+			.src = "Bridge channel owed DTMF",
+		};
+
+		frame.len = ast_tvdiff_ms(ast_tvnow(), bridge_channel->owed.dtmf_tv);
+		if (frame.len < option_dtmfminduration) {
+			frame.len = option_dtmfminduration;
+		}
+		ast_log(LOG_DTMF, "DTMF end '%c' simulated to bridge %s because %s left.  Duration %ld ms.\n",
+			bridge_channel->owed.dtmf_digit, orig_bridge->uniqueid,
+			ast_channel_name(bridge_channel->chan), frame.len);
+		bridge_channel->owed.dtmf_digit = '\0';
+		orig_bridge->technology->write(orig_bridge, NULL, &frame);
+	}
 }
 
 /*!
@@ -1350,8 +1389,6 @@ void bridge_channel_internal_pull(struct ast_bridge_channel *bridge_channel)
 		bridge->v_table->name,
 		bridge->uniqueid);
 
-/* BUGBUG This is where incoming HOLD/UNHOLD memory should write UNHOLD into bridge. (if not local optimizing) */
-/* BUGBUG This is where incoming DTMF begin/end memory should write DTMF end into bridge. (if not local optimizing) */
 	if (!bridge_channel->just_joined) {
 		/* Tell the bridge technology we are leaving so they tear us down */
 		ast_debug(1, "Bridge %s: %p(%s) is leaving %s technology\n",
@@ -1649,7 +1686,6 @@ static void bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 			bridge_channel_handle_hangup(bridge_channel);
 			ast_frfree(frame);
 			return;
-/* BUGBUG This is where incoming HOLD/UNHOLD memory should register.  Write UNHOLD into bridge when this channel is pulled. */
 		default:
 			break;
 		}
@@ -1665,7 +1701,6 @@ static void bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 			ast_frfree(frame);
 			return;
 		}
-/* BUGBUG This is where incoming DTMF begin/end memory should register.  Write DTMF end into bridge when this channel is pulled. */
 		break;
 	default:
 		break;
@@ -1819,6 +1854,7 @@ static void bridge_channel_event_join_leave(struct ast_bridge_channel *bridge_ch
 int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 {
 	int res = 0;
+
 	ast_format_copy(&bridge_channel->read_format, ast_channel_readformat(bridge_channel->chan));
 	ast_format_copy(&bridge_channel->write_format, ast_channel_writeformat(bridge_channel->chan));
 
@@ -1875,6 +1911,7 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 	}
 
 	bridge_channel_internal_pull(bridge_channel);
+	bridge_channel_settle_owed_events(bridge_channel->bridge, bridge_channel);
 	bridge_reconfigured(bridge_channel->bridge, 1);
 
 	ast_bridge_unlock(bridge_channel->bridge);

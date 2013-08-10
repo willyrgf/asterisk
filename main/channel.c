@@ -10394,6 +10394,9 @@ void ast_channel_end_dtmf(struct ast_channel *chan, char digit, struct timeval s
 	}
 
 	duration = ast_tvdiff_ms(ast_tvnow(), start);
+	if (duration < option_dtmfminduration) {
+		duration = option_dtmfminduration;
+	}
 	ast_senddigit_end(chan, digit, duration);
 	ast_log(LOG_DTMF, "DTMF end '%c' simulated on %s due to %s, duration %ld ms\n",
 		digit, ast_channel_name(chan), why, duration);
