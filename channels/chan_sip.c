@@ -14666,7 +14666,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	if (ast_apply_ha(sip_cfg.contact_ha, &peer->addr) != AST_SENSE_ALLOW ||
 			ast_apply_ha(peer->contactha, &peer->addr) != AST_SENSE_ALLOW) {
 		ast_log(LOG_WARNING, "Domain '%s' disallowed by contact ACL (violating IP %s)\n", hostport,
-			ast_sockaddr_stringify_addr(&testsa));
+				ast_sockaddr_stringify_addr(&peer->addr));
 		ast_string_field_set(peer, fullcontact, "");
 		ast_string_field_set(pvt, our_contact, "");
 		return PARSE_REGISTER_DENIED;
@@ -21148,8 +21148,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 					wait = ast_random() % 2000;
 				}
 				p->waitid = ast_sched_add(sched, wait, sip_reinvite_retry, dialog_ref(p, "passing dialog ptr into sched structure based on waitid for sip_reinvite_retry."));
-				ast_log(LOG_WARNING, "just did sched_add waitid(%d) for sip_reinvite_retry for dialog %s in handle_response_invite\n", p->waitid, p->callid);
-				ast_debug(2, "Reinvite race. Waiting %d secs before retry\n", wait);
+				ast_debug(2, "Reinvite race. Scheduled sip_reinvite_retry in %d secs in handle_response_invite (waitid %d, dialog '%s')\n",
+						wait, p->waitid, p->callid);
 			}
 		}
 		break;
