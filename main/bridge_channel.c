@@ -1724,8 +1724,6 @@ static void bridge_handle_trip(struct ast_bridge_channel *bridge_channel)
 	}
 
 	/* Simply write the frame out to the bridge technology. */
-/* BUGBUG The tech is where AST_CONTROL_ANSWER hook should go. (early bridge) */
-/* BUGBUG The tech is where incoming BUSY/CONGESTION hangup should happen? (early bridge) */
 	bridge_channel_write_frame(bridge_channel, frame);
 	ast_frfree(frame);
 }
@@ -1784,7 +1782,7 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 	ast_bridge_channel_lock(bridge_channel);
 	if (bridge_channel->state != BRIDGE_CHANNEL_STATE_WAIT) {
 	} else if (bridge_channel->suspended) {
-/* BUGBUG the external party use of suspended will go away as will these references because this is the bridge channel thread */
+/* XXX ASTERISK-21271 the external party use of suspended will go away as will these references because this is the bridge channel thread */
 		ast_debug(1, "Bridge %s: %p(%s) is going into a signal wait\n",
 			bridge_channel->bridge->uniqueid, bridge_channel,
 			ast_channel_name(bridge_channel->chan));
