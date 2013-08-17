@@ -30,7 +30,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "res_parking.h"
 #include "asterisk/config.h"
 #include "asterisk/config_options.h"
-#include "asterisk/event.h"
 #include "asterisk/utils.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/features.h"
@@ -194,6 +193,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</see-also>
 	</application>
  ***/
+
+#define PARK_AND_ANNOUNCE_APPLICATION "ParkAndAnnounce"
 
 /* Park a call */
 
@@ -489,7 +490,7 @@ struct ast_bridge *park_application_setup(struct ast_channel *parkee, struct ast
 
 }
 
-int park_app_exec(struct ast_channel *chan, const char *data)
+static int park_app_exec(struct ast_channel *chan, const char *data)
 {
 	RAII_VAR(struct ast_bridge *, parking_bridge, NULL, ao2_cleanup);
 
@@ -548,7 +549,7 @@ int park_app_exec(struct ast_channel *chan, const char *data)
 
 /* Retrieve a parked call */
 
-int parked_call_app_exec(struct ast_channel *chan, const char *data)
+static int parked_call_app_exec(struct ast_channel *chan, const char *data)
 {
 	RAII_VAR(struct parking_lot *, lot, NULL, ao2_cleanup);
 	RAII_VAR(struct parked_user *, pu, NULL, ao2_cleanup); /* Parked user being retrieved */
@@ -766,7 +767,7 @@ static void park_announce_update_cb(void *data, struct stasis_subscription *sub,
 	*dial_string = '\0'; /* If we observe this dial string on a second pass, we don't want to do anything with it. */
 }
 
-int park_and_announce_app_exec(struct ast_channel *chan, const char *data)
+static int park_and_announce_app_exec(struct ast_channel *chan, const char *data)
 {
 	struct ast_bridge_features chan_features;
 	char *parse;
@@ -857,4 +858,30 @@ int park_and_announce_app_exec(struct ast_channel *chan, const char *data)
 	ast_bridge_features_cleanup(&chan_features);
 
 	return res;
+}
+
+int load_parking_applications(void)
+{
+	const struct ast_module_info *ast_module_info = parking_get_module_info();
+
+	if (ast_register_application_xml(PARK_APPLICATION, park_app_exec)) {
+		return -1;
+	}
+
+	if (ast_register_application_xml(PARKED_CALL_APPLICATION, parked_call_app_exec)) {
+		return -1;
+	}
+
+	if (ast_register_application_xml(PARK_AND_ANNOUNCE_APPLICATION, park_and_announce_app_exec)) {
+		return -1;
+	}
+
+	return 0;
+}
+
+void unload_parking_applications(void)
+{
+	ast_unregister_application(PARK_APPLICATION);
+	ast_unregister_application(PARKED_CALL_APPLICATION);
+	ast_unregister_application(PARK_AND_ANNOUNCE_APPLICATION);
 }
