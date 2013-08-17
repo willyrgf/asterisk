@@ -623,16 +623,18 @@
 			<configObject name="auth">
 				<synopsis>Authentication type</synopsis>
 				<description><para>
-					Authentication objects hold the authenitcation information for use
-					by <literal>endpoints</literal>. This also allows for multiple <literal>
-					endpoints</literal> to use the same information. Choice of MD5/plaintext
-					and setting of username.
+					Authentication objects hold the authentication information for use
+					by other objects such as <literal>endpoints</literal> or <literal>registrations</literal>.
+					This also allows for multiple objects to use a single auth object. See
+					the <literal>auth_type</literal> config option for password style choices.
 				</para></description>
 				<configOption name="auth_type" default="userpass">
 					<synopsis>Authentication type</synopsis>
 					<description><para>
-						This option specifies which of the password style config options should be read,
-						either 'password' or 'md5_cred' when trying to authenticate an endpoint inbound request.
+						This option specifies which of the password style config options should be read
+						when trying to authenticate an endpoint inbound request. If set to <literal>userpass</literal>
+						then we'll read from the 'password' option. For <literal>md5</literal> we'll read
+						from 'md5_cred'.
 						</para>
 						<enumlist>
 							<enum name="md5"/>
@@ -673,8 +675,11 @@
 			<configObject name="domain_alias">
 				<synopsis>Domain Alias</synopsis>
 				<description><para>
-					Signifies that a domain is an alias. Used for checking the domain of
-					the AoR to which the endpoint is binding.
+					Signifies that a domain is an alias. If the domain on a session is
+					not found to match an AoR then this object is used to see if we have
+					an alias for the AoR to which the endpoint is binding. This objects
+					name as defined in configuration should be the domain alias and a 
+					config option is provided to specify the domain to be aliased.
 				</para></description>
 				<configOption name="type">
 					<synopsis>Must be of type 'domain_alias'.</synopsis>
@@ -691,10 +696,9 @@
 					<para>There are different transports and protocol derivatives
 						supported by <literal>res_pjsip</literal>. They are in order of
 						preference: UDP, TCP, and WebSocket (WS).</para>
-					<warning><para>
-						Multiple endpoints using the same connection is	<emphasis>NOT</emphasis>
-						supported. Doing so may	result in broken calls.
-					</para></warning>
+					<note><para>Changes to transport configuration in pjsip.conf will only be
+						effected on a complete restart of Asterisk. A module reload
+						will not suffice.</para></note>
 				</description>
 				<configOption name="async_operations" default="1">
 					<synopsis>Number of simultaneous Asynchronous Operations</synopsis>
@@ -828,7 +832,8 @@
 				<description><para>
 					An AoR is what allows Asterisk to contact an endpoint via res_pjsip. If no
 					AoRs are specified, an endpoint will not be reachable by Asterisk.
-					Beyond that, an AoR has other uses within Asterisk.
+					Beyond that, an AoR has other uses within Asterisk, such as inbound
+					registration.
 					</para><para>
 					An <literal>AoR</literal> is a way to allow dialing a group
 					of <literal>Contacts</literal> that all use the same
@@ -837,12 +842,20 @@
 					This can be used as another way of grouping a list of contacts to dial
 					rather than specifing them each directly when dialing via the dialplan.
 					This must be used in conjuction with the <literal>PJSIP_DIAL_CONTACTS</literal>.
+					</para><para>
+					Registrations: For Asterisk to match an inbound registration to an endpoint,
+					the AoR object name must match the user portion of the SIP URI in the "To:" 
+					header of the inbound SIP registration. That will usually be equivalent
+					to the "user name" set in your hard or soft phones configuration.
 				</para></description>
 				<configOption name="contact">
 					<synopsis>Permanent contacts assigned to AoR</synopsis>
 					<description><para>
-						Contacts included in this list will be called whenever referenced
+						Contacts specified will be called whenever referenced
 						by <literal>chan_pjsip</literal>.
+						</para><para>
+						Use a separate "contact=" entry for each contact required. Contacts
+						are specified using a SIP URI.
 					</para></description>
 				</configOption>
 				<configOption name="default_expiration" default="3600">
@@ -851,8 +864,8 @@
 				<configOption name="mailboxes">
 					<synopsis>Mailbox(es) to be associated with</synopsis>
 					<description><para>This option applies when an external entity subscribes to an AoR
-					for message waiting indications. The mailboxes specified here will be
-					subscribed to.</para></description>
+					for message waiting indications. The mailboxes specified will be subscribed to.
+					More than one mailbox can be specified with a comma-delimited string.</para></description>
 				</configOption>
 				<configOption name="maximum_expiration" default="7200">
 					<synopsis>Maximum time to keep an AoR</synopsis>
@@ -863,7 +876,10 @@
 				<configOption name="max_contacts" default="0">
 					<synopsis>Maximum number of contacts that can bind to an AoR</synopsis>
 					<description><para>
-						Maximum number of contacts that can associate with this AoR.
+						Maximum number of contacts that can associate with this AoR. This value does
+						not affect the number of contacts that can be added with the "contact" option.
+						It only limits contacts added through external interaction, such as
+						registration.
 						</para>
 						<note><para>This should be set to <literal>1</literal> and
 						<replaceable>remove_existing</replaceable> set to <literal>yes</literal> if you
