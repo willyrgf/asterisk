@@ -939,6 +939,7 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 
 	/* Initial state */
 	ast_channel_state_set(tmp, state);
+	ast_channel_hold_state_set(tmp, AST_CONTROL_UNHOLD);
 
 	ast_channel_streamid_set(tmp, -1);
 
@@ -1069,6 +1070,8 @@ struct ast_channel *ast_dummy_channel_alloc(void)
 #ifdef HAVE_EPOLL
 	ast_channel_epfd_set(tmp, -1);
 #endif
+
+	ast_channel_hold_state_set(tmp, AST_CONTROL_UNHOLD);
 
 	ast_channel_internal_setup_topics(tmp);
 
@@ -4451,7 +4454,6 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 				ast_channel_connected(chan));
 		}
 		break;
-
 	case AST_CONTROL_REDIRECTING:
 		{
 			struct ast_party_redirecting redirecting;
@@ -4464,7 +4466,10 @@ int ast_indicate_data(struct ast_channel *chan, int _condition,
 			ast_party_redirecting_free(&redirecting);
 		}
 		break;
-
+	case AST_CONTROL_HOLD:
+	case AST_CONTROL_UNHOLD:
+		ast_channel_hold_state_set(chan, condition);
+		break;
 	default:
 		break;
 	}
@@ -6374,6 +6379,7 @@ void ast_do_masquerade(struct ast_channel *original)
 	int origstate;
 	int visible_indication;
 	int clone_was_zombie = 0;/*!< TRUE if the clonechan was a zombie before the masquerade. */
+	int clone_hold_state;
 	struct ast_frame *current;
 	const struct ast_channel_tech *t;
 	void *t_pvt;
@@ -6475,6 +6481,8 @@ void ast_do_masquerade(struct ast_channel *original)
 	ast_format_copy(&wformat, ast_channel_writeformat(original));
 	free_translation(clonechan);
 	free_translation(original);
+
+	clone_hold_state = ast_channel_hold_state(clonechan);
 
 	/* Save the current DTMF digit being sent if any. */
 	clone_sending_dtmf_digit = ast_channel_sending_dtmf_digit(clonechan);
@@ -6710,6 +6718,11 @@ void ast_do_masquerade(struct ast_channel *original)
 
 	ast_bridge_notify_masquerade(original);
 
+	if (clone_hold_state == AST_CONTROL_HOLD) {
+		ast_debug(1, "Channel %s simulating UNHOLD for masquerade.\n",
+			ast_channel_name(original));
+		ast_indicate(original, AST_CONTROL_UNHOLD);
+	}
 	if (clone_sending_dtmf_digit) {
 		/*
 		 * The clonechan was sending a DTMF digit that was not completed
@@ -6729,7 +6742,23 @@ void ast_do_masquerade(struct ast_channel *original)
 	 * (RINGING, CONGESTION, etc.)
 	 */
 	if (visible_indication) {
-		ast_indicate(original, visible_indication);
+		if (visible_indication == AST_CONTROL_HOLD) {
+			const char *latest_musicclass;
+			int len;
+
+			ast_channel_lock(original);
+			latest_musicclass = ast_strdupa(ast_channel_latest_musicclass(original));
+			ast_channel_unlock(original);
+			if (ast_strlen_zero(latest_musicclass)) {
+				latest_musicclass = NULL;
+				len = 0;
+			} else {
+				len = strlen(latest_musicclass) + 1;
+			}
+			ast_indicate_data(original, visible_indication, latest_musicclass, len);
+		} else {
+			ast_indicate(original, visible_indication);
+		}
 	}
 
 	ast_channel_lock(original);
