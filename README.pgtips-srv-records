@@ -82,6 +82,13 @@ records. We can't hide this list.
 DNSmanager can still maintain A/AAAA records if enabled, but not SRV
 lists.
 
+At IETF 87 in Berlin I had a meeting with two members of the IETF DNS directorate
+to discuss SRV records. We discovered that SRV requires you to test ALL ip addresses
+found (in families you support) for a host before moving to the next host. 
+This means that if a host has multiple A or AAAA records, all of them should be
+tested. This is not supported in Asterisk currently and this patch will not
+fix that.
+
 Todo:
 =====
 1. Expose SRV records to the SIP channel. Remove when response is received (1xx or higher).
