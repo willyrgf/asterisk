@@ -2,7 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: 2013-04-18
-Update:        2013-07-05
+Update:        2013-08-26
 
 
 
@@ -63,8 +63,8 @@ type=peer
 host=serviceproviderdomain.tld
 context=bazinga
 
-Yyou expect to be able to receive calls from the service provider
-in that peer. Now the service provider has a list of servers using IPv4
+You expect to be able to receive calls from the service provider
+using that peer. The service provider has a list of servers using IPv4
 and IPv6 in the SRV records for that name. Should the Asterisk SIP channel
 match the full list? I think it should.
 
@@ -91,17 +91,18 @@ Todo:
 	- Not done for calling a DNS name in the dial string (some code is there though)
 3. Provide hooks for happy earballs if server is dual stack and we're dual stack
 4. Implement failover to next server in list if transaction fails.
-5. Add multiple IPs to the peer in an ACL list
+5. Make sure we use the DNS TTL properly
+6. Add multiple IPs to the peer in an ACL list
 	- Have added some code that fails to work. Is it me or the code?
-6. Add the same IPs to the AO2object for IP matching
-7. Make sure the ACL list is updated by DNS manager
-8. Change peer match by ip/port to use ACL list if available
-9. Fix outbound proxy SRV support (proxy_update)
-10. Avoid testing. Real developers don't test.
-11. Don't open a bug tracker issue on this project.
-12. De-install GDB. GDB is for weak developers.
-13. Do not write any documentation, regardless of what people say. It's a SEP.
-14. Stay calm and carry on.
+7. Add the same IPs to the AO2object for IP matching
+8. Make sure the ACL list is updated by DNS manager
+9. Change peer match by ip/port to use ACL list if available
+10. Fix outbound proxy SRV support (proxy_update)
+11. Avoid testing. Real developers don't test.
+12. Don't open a bug tracker issue on this project.
+13. De-install GDB. GDB is for weak developers.
+14. Do not write any documentation, regardless of what people say. It's a SEP.
+15. Stay calm and carry on.
 
 
 Query on AO2 object stuff:
