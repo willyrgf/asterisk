@@ -1361,6 +1361,7 @@ static int sip_notify_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
 static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target);
 static int do_magic_pickup(struct ast_channel *channel, const char *extension, const char *context);
+static void free_sip_host_ip(struct sip_host_ip *hostlist);
 
 /*--- Device monitoring and Device/extension state/event handling */
 static int cb_extensionstate(char *context, char* exten, int state, void *data);
@@ -4963,6 +4964,46 @@ static void destroy_mailbox(struct sip_mailbox *mailbox)
 	ast_free(mailbox);
 }
 
+static void host_ip_list_debug(struct sip_host_ip *hostip)
+{
+	struct sip_host_ip *hip = hostip;
+	int count = 0;
+
+	while (hip) {
+		count++;
+		ast_debug(3, "    %-2.2d. %s %u\n", count, ast_sockaddr_stringify_addr(&hip->ip), hip->port);
+		hip = hip->next;
+	}
+	
+}
+
+static struct sip_host_ip *add_sip_host_ip(struct sip_host_ip *hostip, struct ast_sockaddr *ip, int port, const char *hostname)
+{
+	struct sip_host_ip *new;
+	new = ast_calloc(1, sizeof(struct sip_host_ip));
+	if (!new) {
+		return NULL;
+	}
+	ast_sockaddr_copy(&new->ip, ip);
+	ast_copy_string(new->hostname, hostname, sizeof(new->hostname));
+	new->port = port;
+	new->next = hostip;
+
+	return new;
+}
+
+/*! Release srv host entries */
+static void free_sip_host_ip(struct sip_host_ip *hostlist) 
+{
+	struct sip_host_ip *hup, *hip = hostlist;
+
+	while (hip) {
+		hup = hip->next;
+		ast_free(hip);
+		hip = hup;
+	}
+}
+
 /*! Destroy all peer-related mailbox subscriptions */
 static void clear_peer_mailboxes(struct sip_peer *peer)
 {
@@ -5019,7 +5060,9 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	register_peer_exten(peer, FALSE);
 	ast_free_ha(peer->ha);
 	ast_free_ha(peer->directmediaha);
-	ast_free_ha(peer->srventries);		/* ACL based on IP addresses in SRV list for domain */
+
+	free_sip_host_ip(peer->srventries);
+
 	if (peer->selfdestruct)
 		ast_atomic_fetchadd_int(&apeerobjs, -1);
 	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && peer->is_realtime) {
@@ -5796,7 +5839,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 	char host[MAXHOSTNAMELEN];
 	char service[MAXHOSTNAMELEN];
 	int srv_ret = 0;
-	int tportno;
+	unsigned short tportno;
 
 	AST_DECLARE_APP_ARGS(hostport,
 		AST_APP_ARG(host);
@@ -5882,6 +5925,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 					hostn = host;
 					tportno = (int) port;
 					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostn);
+					/* We need to try all IP addresses if there are multiple A / AAAA records*/
 					if (!ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
 						/* We found a host to try on */
 						break;
@@ -28615,7 +28659,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		char _srvlookup[MAXHOSTNAMELEN];
 		char host[MAXHOSTNAMELEN];
 		char *params;
-		int tportno;
+		unsigned short tportno;
 		int gotsrv = FALSE;
 
 		ast_copy_string(_srvlookup, srvlookup, sizeof(_srvlookup));
@@ -28666,6 +28710,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostname);
 				} while (ast_sockaddr_resolve_first_transport(&peer->addr, hostname, 0, peer->socket.type));
 
+
 				/* Set the port number */
 				ast_sockaddr_set_port(&peer->addr, tportno);
 
@@ -28674,7 +28719,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				/* Now loop again and fill the ACL 
 				 */
 				if (peer->srventries) {
-					ast_free_ha(peer->srventries);
+					free_sip_host_ip(peer->srventries);
+					peer->srventries = NULL;
 				}
 				for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
 					int res;
@@ -28682,18 +28728,20 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					/* Get host name */
 					res = ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight);
 					if (!res) {
+						/* We need to test every address in the SRV record set. */
 						res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
 						if (ast_sockaddr_isnull(&ip) || res ) {
 							ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
 						} else {
-							peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
+							peer->srventries = add_sip_host_ip(peer->srventries, &ip, tportno, hostname);
+							//peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
 							ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
 						}
 					}
 				}
 				if (option_debug > 3) {
 					ast_debug(3, "======> List of IP matching entries for %s <============\n", name);
-					ha_list_debug(peer->srventries);
+					host_ip_list_debug(peer->srventries);
 				}
 
 		} else {
@@ -30763,7 +30811,6 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 			ast_debug(0, "           => %d: %s resolves into  %s\n", i, name, ast_sockaddr_stringify(&addrs[i]));
 		}
 	}
-	
 
 	ast_sockaddr_copy(addr, &addrs[0]);
 

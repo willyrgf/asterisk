@@ -656,13 +656,22 @@ enum sip_tcptls_alert {
 struct sip_proxy {
 	char name[MAXHOSTNAMELEN];      /*!< DNS name of domain/host or IP */
 	struct ast_sockaddr ip;          /*!< Currently used IP address and port */
-	int port;
+	unsigned short port;
 	time_t last_dnsupdate;          /*!< When this was resolved */
 	enum sip_transport transport;	/*!< TCP, UDP or TCP/TLS - possibly WS in the future */
 	int force;                      /*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
 	/* Room for a SRV record chain based on the name */
 	struct sip_proxy *next;
 	struct srv_context *srvlist;	/*!< List of DNs entries */
+};
+
+/*! \brief A stupid simple linked list for storing host IPs and ports 
+ */
+struct sip_host_ip {
+	char hostname[MAXHOSTNAMELEN];	/* DNS NAME of host */
+	struct ast_sockaddr ip;		
+	unsigned short port;
+	struct sip_host_ip *next;
 };
 
 
@@ -1270,7 +1279,7 @@ struct sip_peer {
 	struct ast_ha *ha;              /*!<  Access control list */
 	struct ast_ha *contactha;       /*!<  Restrict what IPs are allowed in the Contact header (for registration) */
 	struct ast_ha *directmediaha;   /*!<  Restrict what IPs are allowed to interchange direct media with */
-	struct ast_ha *srventries;      /*!<  DNS Srv entries at time of peer creation  */
+	struct sip_host_ip *srventries; /*!<  DNS Srv entries at time of peer creation  */
 	struct ast_variable *chanvars;  /*!<  Variables to set for channel created by user */
 	struct sip_pvt *mwipvt;         /*!<  Subscription for MWI */
 	struct sip_st_cfg stimer;       /*!<  SIP Session-Timers */

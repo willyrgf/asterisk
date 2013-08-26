@@ -27,7 +27,9 @@
  * \arg See also \ref AstENUM
  *
  * \note Funding provided by nic.at
+ * 
  */
+
 
 /*** MODULEINFO
 	<support_level>core</support_level>
@@ -65,8 +67,9 @@ struct srv_entry {
 	unsigned short port;
 	unsigned int weight_sum;
 	struct timeval ttl_expire;		/* Expiry time */
+	struct srv_ip *ip;			/* List of multiple IP addresses - A and AAAA (or future families ) */
 	AST_LIST_ENTRY(srv_entry) list;
-	char host[1];
+	char host[1];				/* Last entry */
 };
 
 struct srv_context {
@@ -261,7 +264,7 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 		(*context)->prev = AST_LIST_FIRST(&(*context)->entries);
 		*host = (*context)->prev->host;
 		*port = (*context)->prev->port;
-		(*context)-> current = (*context)->prev;
+		(*context)->current = (*context)->prev;
 		return 0;
 	}
 
@@ -269,7 +272,7 @@ int ast_srv_lookup(struct srv_context **context, const char *service, const char
 		/* Retrieve next item in result */
 		*host = (*context)->prev->host;
 		*port = (*context)->prev->port;
-		(*context)-> current = (*context)->prev;
+		(*context)->current = (*context)->prev;
 		return 0;
 	} else {
 		/* No more results */
