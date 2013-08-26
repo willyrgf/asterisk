@@ -236,8 +236,8 @@ static int dns_parse_answer(void *context,
 
 		if (ntohs(ans->class) == class && ntohs(ans->rtype) == type) {
 			if (callback) {
-				ast_debug(3, "     ==> Using callback for DNS answer \n");
-				if ((res = callback(context, answer, ntohs(ans->size), fullanswer, ans->ttl)) < 0) {
+				ast_debug(3, "     ==> Using callback for DNS answer TTL %u\n", ntohl(ans->ttl));
+				if ((res = callback(context, answer, ntohs(ans->size), fullanswer, ntohl(ans->ttl))) < 0) {
 					ast_log(LOG_WARNING, "Failed to parse result\n");
 					return -1;
 				}

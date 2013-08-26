@@ -141,7 +141,7 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 	struct srv_entry *current = NULL;
 	struct timeval expiry  = {0,};
 
-	ast_debug(3, " ==> Callback received \n");
+	ast_debug(3, " ==> Callback received ttl= %u\n", ttl);
 
 	expiry.tv_sec =  (long) ttl;
 	expiry = ast_tvadd(expiry, ast_tvnow());
