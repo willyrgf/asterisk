@@ -28692,58 +28692,56 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		 * We don't use the DNSmanager for SRV records.
 		 */
 		if (gotsrv > 0) {
-				int rec = 0;
-				unsigned short prio, weight;
-				const char *hostname;
+			int rec = 0;
+			unsigned short prio, weight;
+			const char *hostname;
 
-				ast_debug(3, "   ==> DNS SRV lookup of %s returned %d entries. \n", transport, ast_srv_get_record_count(peer->srvcontext));
-				/* Try all candidates until we find one that fits our address family 
-  				 * Note that the SRV code lists the candidates in order of weight and priority.
-				 */
-				do {
-					rec++;
-					if(ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight)) {
-						ast_log(LOG_WARNING, "No more hosts: %s\n", peer->srvdomain);
-						unref_peer(peer, "SRV lookup failed, getting rid of peer ref");
-						return NULL;
-					}
-					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostname);
-				} while (ast_sockaddr_resolve_first_transport(&peer->addr, hostname, 0, peer->socket.type));
-
-
-				/* Set the port number */
-				ast_sockaddr_set_port(&peer->addr, tportno);
-
-				ast_debug(3, "   ==> Settling on SRV entry %d (prio %d weight %d): %s\n", rec - 1, prio, weight, hostname);
-
-				/* Now loop again and fill the ACL 
-				 */
-				if (peer->srventries) {
-					free_sip_host_ip(peer->srventries);
-					peer->srventries = NULL;
+			ast_debug(3, "   ==> DNS SRV lookup of %s returned %d entries. \n", transport, ast_srv_get_record_count(peer->srvcontext));
+			/* Try all candidates until we find one that fits our address family 
+  			 * Note that the SRV code lists the candidates in order of weight and priority.
+			 */
+			do {
+				rec++;
+				if(ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight)) {
+					ast_log(LOG_WARNING, "No more hosts: %s\n", peer->srvdomain);
+					unref_peer(peer, "SRV lookup failed, getting rid of peer ref");
+					return NULL;
 				}
-				for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
-					int res;
-					struct ast_sockaddr ip;
-					/* Get host name */
-					res = ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight);
-					if (!res) {
-						/* We need to test every address in the SRV record set. */
-						res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
-						if (ast_sockaddr_isnull(&ip) || res ) {
-							ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
-						} else {
-							peer->srventries = add_sip_host_ip(peer->srventries, &ip, tportno, hostname);
-							//peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
-							ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
-						}
+				ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostname);
+			} while (ast_sockaddr_resolve_first_transport(&peer->addr, hostname, 0, peer->socket.type));
+
+
+			/* Set the port number */
+			ast_sockaddr_set_port(&peer->addr, tportno);
+
+			ast_debug(3, "   ==> Settling on SRV entry %d (prio %d weight %d): %s\n", rec - 1, prio, weight, hostname);
+
+			/* Now loop again and fill the ACL */
+			if (peer->srventries) {
+				free_sip_host_ip(peer->srventries);
+				peer->srventries = NULL;
+			}
+			for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
+				int res;
+				struct ast_sockaddr ip;
+				/* Get host name */
+				res = ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight);
+				if (!res) {
+					/* We need to test every address in the SRV record set. */
+					res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
+					if (ast_sockaddr_isnull(&ip) || res ) {
+						ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
+					} else {
+						peer->srventries = add_sip_host_ip(peer->srventries, &ip, tportno, hostname);
+						//peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
+						ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
 					}
 				}
-				if (option_debug > 3) {
-					ast_debug(3, "======> List of IP matching entries for %s <============\n", name);
-					host_ip_list_debug(peer->srventries);
-				}
-
+			}
+			if (option_debug > 3) {
+				ast_debug(3, "======> List of IP matching entries for %s <============\n", name);
+				host_ip_list_debug(peer->srventries);
+			}
 		} else {
 			int res;
 			/* Lookup A/AAAA records - possibly with DNSmanager */
@@ -28773,14 +28771,28 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 		ast_string_field_set(peer, tohost, srvlookup);
 
-		if (global_dynamic_exclude_static && !ast_sockaddr_isnull(&peer->addr)) {
-			int ha_error = 0;
-			sip_cfg.contact_ha = ast_append_ha("deny", ast_sockaddr_stringify_addr(&peer->addr), 
+		if (global_dynamic_exclude_static) {
+			if (!ast_sockaddr_isnull(&peer->addr)) {
+				int ha_error = 0;
+				sip_cfg.contact_ha = ast_append_ha("deny", ast_sockaddr_stringify_addr(&peer->addr), 
 							sip_cfg.contact_ha, &ha_error);
-			if (ha_error) {
-				ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
+				if (ha_error) {
+					ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
+				}
+			}
+			if (peer->srventries != NULL) {
+				int ha_error = 0;
+				struct sip_host_ip *he = peer->srventries;
+				while(he && !ha_error) {
+					sip_cfg.contact_ha = ast_append_ha("deny", ast_sockaddr_stringify_addr(&he->ip), sip_cfg.contact_ha, &ha_error);
+					he = he->next;
+				}
+				if (ha_error) {
+					ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
+				}
 			}
 		}
+	
 	} else if (peer->dnsmgr && !peer->host_dynamic) {
 		/* force a refresh here on reload if dnsmgr already exists and host is set. */
 		ast_dnsmgr_refresh(peer->dnsmgr);
