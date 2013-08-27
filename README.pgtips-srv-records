@@ -2,7 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: 2013-04-18
-Update:        2013-08-26
+Update:        2013-08-27
 
 
 
@@ -72,6 +72,21 @@ Currently Asterisk will resolve to one IP address and use that for matching
 of incoming calls, possibly deny calls from servers that does not match.
 This is NOT the expected solution.
 
+Failover
+========
+I see two situation for failover to the next host/ip in the SRV list:
+- sip_xmit fails (no destination, icmp unreachable etc)
+- timeout on Timer B
+
+The Timeout case is handled by the retransmit engine. We need to
+restart the timers and retransmissions with the same request.
+
+The SIP_xmit can be handled in send_request(). This function doesn't
+bother with failures at this time, strangely enough. What fails, fails,
+and currently there's nothing to do about it.
+
+We do need a function in main/srv.c to switch to the next entry and
+move the "current" pointer.
 
 Development Notes
 =================
@@ -82,12 +97,15 @@ records. We can't hide this list.
 DNSmanager can still maintain A/AAAA records if enabled, but not SRV
 lists.
 
+Not fixed here
+==============
 At IETF 87 in Berlin I had a meeting with two members of the IETF DNS directorate
 to discuss SRV records. We discovered that SRV requires you to test ALL ip addresses
 found (in families you support) for a host before moving to the next host. 
 This means that if a host has multiple A or AAAA records, all of them should be
 tested. This is not supported in Asterisk currently and this patch will not
 fix that.
+
 
 Todo:
 =====
@@ -99,17 +117,19 @@ Todo:
 3. Provide hooks for happy earballs if server is dual stack and we're dual stack
 4. Implement failover to next server in list if transaction fails.
 5. Make sure we use the DNS TTL properly
-6. Add multiple IPs to the peer in an ACL list
-	- Have added some code that fails to work. Is it me or the code?
-7. Add the same IPs to the AO2object for IP matching
-8. Make sure the ACL list is updated by DNS manager
-9. Change peer match by ip/port to use ACL list if available
-10. Fix outbound proxy SRV support (proxy_update)
-11. Avoid testing. Real developers don't test.
-12. Don't open a bug tracker issue on this project.
-13. De-install GDB. GDB is for weak developers.
-14. Do not write any documentation, regardless of what people say. It's a SEP.
-15. Stay calm and carry on.
+6. Use SRV for outbound proxys too, with failover
+7. Add multiple IPs to the peer in an ACL list
+	- Added a linked list
+	- Needs to be added to peers by ip list for matching. Not done yet.
+8. Add the same IPs to the AO2object for IP matching
+9. Make sure the ACL list is updated by DNS manager
+10. Change peer match by ip/port to use ACL list if available
+11. Fix outbound proxy SRV support (proxy_update)
+12. Avoid testing. Real developers don't test.
+13. Don't open a bug tracker issue on this project.
+14. De-install GDB. GDB is for weak developers.
+15. Do not write any documentation, regardless of what people say. It's a SEP.
+16. Stay calm and carry on.
 
 
 Query on AO2 object stuff:

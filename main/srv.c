@@ -439,11 +439,11 @@ int ast_srv_get_nth_record(struct srv_context *context, int record_num, const ch
 	int res = -1;
 	struct srv_entry *entry;
 
-	if (record_num < 1 || record_num > context->num_records) {
+	if (context == NULL) {
 		return res;
 	}
 
-	if (context == NULL) {
+	if (record_num < 1 || record_num > context->num_records) {
 		return res;
 	}
 

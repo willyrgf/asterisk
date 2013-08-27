@@ -4571,6 +4571,7 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 /*!
  * \internal
  * \brief Send SIP Request to the other part of the dialogue
+ * 	If the xmit returns a network error (XMIT_ERROR or -1) then try with another SRV record if it exists. 
  * \return see \ref __sip_xmit
  */
 static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
@@ -4599,9 +4600,20 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", ast_str_buffer(tmp.data), get_header(&tmp, "CSeq"), sip_methods[tmp.method].text);
 		deinit_req(&tmp);
 	}
-	res = (reliable) ?
-		__sip_reliable_xmit(p, seqno, 0, req->data, (reliable == XMIT_CRITICAL), req->method) :
-		__sip_xmit(p, req->data);
+	if (p->srvcon) {
+		/* We have an SRV record set. If we get transmit errors, retry on the next directly. */
+		res = (reliable) ?
+			__sip_reliable_xmit(p, seqno, 0, req->data, (reliable == XMIT_CRITICAL), req->method) :
+			__sip_xmit(p, req->data);
+		if (res == -1 || res == XMIT_ERROR) {
+			ast_debug(3, "====>> SRV failover. Changing to next SRV record in the list\n");
+			XXX SRV FAILOVER HERE XXX
+		}
+	} else {
+		res = (reliable) ?
+			__sip_reliable_xmit(p, seqno, 0, req->data, (reliable == XMIT_CRITICAL), req->method) :
+			__sip_xmit(p, req->data);
+	}
 	deinit_req(req);
 	return res;
 }
@@ -5677,6 +5689,7 @@ static int dialog_initialize_rtp(struct sip_pvt *dialog)
  *
  * \return -1 on error, 0 on success.
  *
+ *    XXX SHould copy or create new SRV list (depending on the TTL) in the dialog structure.
  */
 static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 {
@@ -5902,22 +5915,25 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 		 * an A record lookup should be used instead of SRV.
 		 */
 		if (!hostport.port && sip_cfg.srvlookup) {
-			struct srv_context *srvcon = ast_srv_context_new();
+			if (dialog->srvcon) {
+				ast_srv_context_free_list(dialog->srvcon);
+				dialog->srvcon = ast_srv_context_new();
+			}
 
 			snprintf(service, sizeof(service), "_%s._%s.%s", 
 				 get_srv_service(dialog->socket.type),
 				 get_srv_protocol(dialog->socket.type), peername);
 
 			/* Get the srv list */
-			if ((srv_ret = ast_get_srv_list(srvcon, NULL, service)) > 0) {
+			if ((srv_ret = ast_get_srv_list(dialog->srvcon, NULL, service)) > 0) {
 				int rec = 1;
 				unsigned short port, prio, weight;
 				const char *srvhost;
 
 				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(srvcon), hostn);
 				hostn = host;
-				for (rec = 0; rec < ast_srv_get_record_count(srvcon); rec++) {
-					if(ast_srv_get_nth_record(srvcon, rec, &srvhost, &port, &prio, &weight)) {
+				for (rec = 0; rec < ast_srv_get_record_count(dialog->srvcon); rec++) {
+					if(ast_srv_get_nth_record(dialog->srvcon, rec, &srvhost, &port, &prio, &weight)) {
 						ast_log(LOG_WARNING, "No more SRV records for: %s\n", peername);
 						return -1;
 					}
@@ -5925,7 +5941,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 					hostn = host;
 					tportno = (int) port;
 					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostn);
-					/* We need to try all IP addresses if there are multiple A / AAAA records*/
+					/* XXX We need to try all IP addresses if there are multiple A / AAAA records*/
 					if (!ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
 						/* We found a host to try on */
 						break;
@@ -5934,10 +5950,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 				}
 
 				ast_debug(3, "   ==> Settling with SRV entry %d:   %s\n", rec, hostn);
-
 			}
-			ast_srv_context_free_list(srvcon);
-			ast_free(srvcon);
 		} else {
 
 			if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
@@ -6248,6 +6261,10 @@ void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 	if (p->mwi) {
 		p->mwi->call = NULL;
 		p->mwi = NULL;
+	}
+	if (p->srvcon) {		/* Free the list of SRV entries used by this dialog */
+		ast_srv_context_free_list(p->srvcon);
+		ast_free(p->srvcon);
 	}
 
 	if (dumphistory)
@@ -28096,6 +28113,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	struct sip_peer *peer = NULL;
 	struct ast_ha *oldha = NULL;
 	struct ast_ha *olddirectmediaha = NULL;
+	struct sip_host_ip *old_host_ip = NULL;
 	int found = 0;
 	int firstpass = 1;
 	uint16_t port = 0;
@@ -28718,7 +28736,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 			/* Now loop again and fill the ACL */
 			if (peer->srventries) {
-				free_sip_host_ip(peer->srventries);
+				old_sip_host_ip = peer->srventries;
 				peer->srventries = NULL;
 			}
 			for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
@@ -28862,6 +28880,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 	ast_free_ha(oldha);
 	ast_free_ha(olddirectmediaha);
+	free_sip_host_ip(old_sip_host_ip);
 	if (!ast_strlen_zero(callback)) { /* build string from peer info */
 		char *reg_string;
 		if (ast_asprintf(&reg_string, "%s?%s:%s@%s/%s", peer->name, peer->username, !ast_strlen_zero(peer->remotesecret) ? peer->remotesecret : peer->secret, peer->tohost, callback) >= 0) {

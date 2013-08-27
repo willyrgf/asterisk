@@ -1149,6 +1149,7 @@ struct sip_pvt {
 	struct ast_cc_config_params *cc_params;
 	struct sip_epa_entry *epa_entry;
 	int fromdomainport;                 /*!< Domain port to show in from field */
+	struct srv_context *srvcon;		/*!< SRV record list */
 };
 
 /*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
