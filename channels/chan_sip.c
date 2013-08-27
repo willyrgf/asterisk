@@ -4607,7 +4607,7 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 			__sip_xmit(p, req->data);
 		if (res == -1 || res == XMIT_ERROR) {
 			ast_debug(3, "====>> SRV failover. Changing to next SRV record in the list\n");
-			XXX SRV FAILOVER HERE XXX
+			/* XXX SRV FAILOVER HERE XXX */
 		}
 	} else {
 		res = (reliable) ?
@@ -5930,7 +5930,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 				unsigned short port, prio, weight;
 				const char *srvhost;
 
-				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(srvcon), hostn);
+				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(dialog->srvcon), hostn);
 				hostn = host;
 				for (rec = 0; rec < ast_srv_get_record_count(dialog->srvcon); rec++) {
 					if(ast_srv_get_nth_record(dialog->srvcon, rec, &srvhost, &port, &prio, &weight)) {
@@ -28113,7 +28113,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	struct sip_peer *peer = NULL;
 	struct ast_ha *oldha = NULL;
 	struct ast_ha *olddirectmediaha = NULL;
-	struct sip_host_ip *old_host_ip = NULL;
+	struct sip_host_ip *old_sip_host_ip = NULL;
 	int found = 0;
 	int firstpass = 1;
 	uint16_t port = 0;
