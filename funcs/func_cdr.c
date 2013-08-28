@@ -204,7 +204,6 @@ AST_APP_OPTIONS(cdr_func_options, {
 static int cdr_read(struct ast_channel *chan, const char *cmd, char *parse,
 		    char *buf, size_t len)
 {
-	char format_buf[128];
 	char *value = NULL;
 	struct ast_flags flags = { 0 };
 	char tempbuf[512];
@@ -213,6 +212,8 @@ static int cdr_read(struct ast_channel *chan, const char *cmd, char *parse,
 		AST_APP_ARG(variable);
 		AST_APP_ARG(options);
 	);
+
+	buf[0] = '\0';/* Ensure the buffer is initialized. */
 
 	if (!chan) {
 		return -1;
@@ -252,7 +253,7 @@ static int cdr_read(struct ast_channel *chan, const char *cmd, char *parse,
 			return 0;
 		}
 		dtime = (double)(ms / 1000.0);
-		sprintf(tempbuf, "%lf", dtime);
+		snprintf(tempbuf, sizeof(tempbuf), "%lf", dtime);
 	} else if (!ast_test_flag(&flags, OPT_UNPARSED)) {
 		if (!strcasecmp("start", args.variable)
 			|| !strcasecmp("end", args.variable)
@@ -278,8 +279,7 @@ static int cdr_read(struct ast_channel *chan, const char *cmd, char *parse,
 					args.variable, tempbuf, ast_channel_name(chan));
 				return 0;
 			}
-			sprintf(format_buf, "%s", ast_cdr_disp2str(disposition));
-			strcpy(tempbuf, format_buf);
+			snprintf(tempbuf, sizeof(tempbuf), "%s", ast_cdr_disp2str(disposition));
 		} else if (!strcasecmp("amaflags", args.variable)) {
 			int amaflags;
 
@@ -288,8 +288,7 @@ static int cdr_read(struct ast_channel *chan, const char *cmd, char *parse,
 					args.variable, tempbuf, ast_channel_name(chan));
 				return 0;
 			}
-			sprintf(format_buf, "%s", ast_channel_amaflags2string(amaflags));
-			strcpy(tempbuf, format_buf);
+			snprintf(tempbuf, sizeof(tempbuf), "%s", ast_channel_amaflags2string(amaflags));
 		}
 	}
 
