@@ -811,10 +811,6 @@ static void cdr_object_dtor(void *obj)
 	struct cdr_object *cdr = obj;
 	struct ast_var_t *it_var;
 
-	if (!cdr) {
-		return;
-	}
-
 	ao2_cleanup(cdr->party_a.snapshot);
 	ao2_cleanup(cdr->party_b.snapshot);
 	while ((it_var = AST_LIST_REMOVE_HEAD(&cdr->party_a.variables, entries))) {
@@ -825,9 +821,7 @@ static void cdr_object_dtor(void *obj)
 	}
 	ast_string_field_free_memory(cdr);
 
-	if (cdr->next) {
-		ao2_cleanup(cdr->next);
-	}
+	ao2_cleanup(cdr->next);
 }
 
 /*!
@@ -850,6 +844,7 @@ static struct cdr_object *cdr_object_alloc(struct ast_channel_snapshot *chan)
 	}
 	cdr->last = cdr;
 	if (ast_string_field_init(cdr, 64)) {
+		ao2_cleanup(cdr);
 		return NULL;
 	}
 	ast_string_field_set(cdr, name, chan->name);
@@ -3949,7 +3944,7 @@ static int process_config(int reload)
 		 */
 		if (!reload && !(aco_set_defaults(&general_option, "general", mod_cfg->general))) {
 			ast_log(LOG_NOTICE, "Failed to process CDR configuration; using defaults\n");
-			ao2_global_obj_replace(module_configs, mod_cfg);
+			ao2_global_obj_replace_unref(module_configs, mod_cfg);
 			return 0;
 		}
 		return 1;
@@ -3985,7 +3980,9 @@ static void cdr_engine_shutdown(void)
 	aco_info_destroy(&cfg_info);
 	ao2_global_obj_release(module_configs);
 
+	ao2_container_unregister("cdrs_by_channel");
 	ao2_ref(active_cdrs_by_channel, -1);
+	active_cdrs_by_channel = NULL;
 }
 
 static void cdr_enable_batch_mode(struct ast_cdr_config *config)
