@@ -1468,6 +1468,7 @@ int ast_bridge_join(struct ast_bridge *bridge,
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
+	bridge_channel->inhibit_colp = !!(flags & AST_BRIDGE_JOIN_INHIBIT_JOIN_COLP);
 
 	if (!res) {
 		res = bridge_channel_internal_join(bridge_channel);
@@ -1589,7 +1590,8 @@ int ast_bridge_impart(struct ast_bridge *bridge,
 	bridge_channel->chan = chan;
 	bridge_channel->swap = swap;
 	bridge_channel->features = features;
-	bridge_channel->depart_wait = (flags & AST_BRIDGE_IMPART_INDEPENDENT) ? 0 : 1;
+	bridge_channel->inhibit_colp = !!(flags & AST_BRIDGE_IMPART_INHIBIT_JOIN_COLP);
+	bridge_channel->depart_wait = !(flags & AST_BRIDGE_IMPART_INDEPENDENT);
 	bridge_channel->callid = ast_read_threadstorage_callid();
 
 	/* Actually create the thread that will handle the channel */
