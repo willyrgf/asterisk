@@ -55,6 +55,7 @@ void * attribute_malloc _ast_calloc(size_t num, size_t len, const char *file, in
 }
 #endif
 
+#ifdef DEBUG_THREADS
 #if !defined(LOW_MEMORY)
 #ifdef HAVE_BKTR
 void ast_store_lock_info(enum ast_lock_type type, const char *filename,
@@ -105,12 +106,20 @@ void ast_remove_lock_info(void *lock_addr)
 }
 #endif /* HAVE_BKTR */
 
+void ast_suspend_lock_info(void *lock_addr)
+{
+}
+void ast_restore_lock_info(void *lock_addr)
+{
+}
 void ast_mark_lock_acquired(void *);
 void ast_mark_lock_acquired(void *foo)
 {
     /* not a lot to do in a standalone w/o threading! */
 }
 #endif
+#endif /* DEBUG_THREADS */
+
 
 static int global_lineno = 1;
 static int global_expr_count=0;
