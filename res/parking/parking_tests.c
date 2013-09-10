@@ -245,9 +245,10 @@ AST_TEST_DEFINE(park_call)
 		return AST_TEST_FAIL;
 	}
 
-	ast_bridge_impart(parking_bridge, chan_alice, NULL, NULL, 0);
+	ast_bridge_impart(parking_bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
+	}
 
 	ast_bridge_depart(chan_alice);
 
@@ -400,9 +401,10 @@ AST_TEST_DEFINE(retrieve_call)
 		return AST_TEST_FAIL;
 	}
 
-	ast_bridge_impart(parking_bridge, chan_alice, NULL, NULL, 0);
+	ast_bridge_impart(parking_bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
+	}
 
 	retrieved_user = parking_lot_retrieve_parked_user(test_lot, 701);
 	if (!retrieved_user) {

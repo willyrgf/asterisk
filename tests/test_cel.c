@@ -129,7 +129,7 @@ static void do_sleep(void)
 	} while (0)
 
 #define BRIDGE_ENTER(channel, bridge) do { \
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, channel, NULL, NULL, 0)); \
+	ast_test_validate(test, 0 == ast_bridge_impart(bridge, channel, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE)); \
 	do_sleep(); \
 	BRIDGE_ENTER_EVENT(channel, bridge); \
 	mid_test_sync(); \

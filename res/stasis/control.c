@@ -176,7 +176,7 @@ static void *app_control_dial(struct stasis_app_control *control,
 		return NULL;
 	}
 
-	ast_bridge_impart(bridge, new_chan, NULL, NULL, 1);
+	ast_bridge_impart(bridge, new_chan, NULL, NULL, AST_BRIDGE_IMPART_INDEPENDENT);
 	stasis_app_control_add_channel_to_bridge(control, bridge);
 
 	return NULL;
@@ -566,7 +566,7 @@ static void *app_control_add_channel_to_bridge(
 			chan,
 			NULL, /* swap channel */
 			NULL, /* features */
-			0); /* independent - false allows us to ast_bridge_depart() */
+			AST_BRIDGE_IMPART_DEPARTABLE);
 
 		if (res != 0) {
 			ast_log(LOG_ERROR, "Error adding channel to bridge\n");
