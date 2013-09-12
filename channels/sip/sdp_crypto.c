@@ -276,13 +276,15 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 
 			/* The next one can be either lifetime or MKI */
 			lifetime = strsep(&info, "|");
-			/* Is this MKI? */
-			mki = strchr(lifetime, ':');
-			if (mki != NULL) {
-				mki = lifetime;
-				lifetime = NULL;
-			} else {
-				mki = strsep(&info, "|");
+			if (lifetime) {
+				/* Is this MKI? */
+				mki = strchr(lifetime, ':');
+				if (mki != NULL) {
+					mki = lifetime;
+					lifetime = NULL;
+				} else {
+					mki = strsep(&info, "|");
+				}
 			}
 			
 			ast_debug(3, "==> SRTP SDES lifetime %s MKI %s \n", lifetime ? lifetime : "-", mki?mki : "-");
