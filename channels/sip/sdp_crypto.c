@@ -197,12 +197,14 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	char *key_params = NULL;
 	char *key_param = NULL;
 	char *session_params = NULL;
-	char *key_salt = NULL;
-	char *lifetime = NULL;
+	char *key_salt = NULL;		/* The actual master key and key salt */
+	char *lifetime = NULL;		/* Key lifetime (# of RTP packets) */
+	char *mki = NULL;		/* Master Key Index */
 	int found = 0;
 	int key_len = 0;
 	int suite_val = 0;
 	unsigned char remote_key[SRTP_MASTER_LEN];
+	unsigned int sdeslifetime = 0;
 
 	/* Syntax: from RFC 4568
 	 a=crypto:<tag> <crypto-suite> <key-params> [<session-params>]
@@ -224,6 +226,8 @@ a=crypto:2 F8_128_HMAC_SHA1_80
        inline:QUJjZGVmMTIzNDU2Nzg5QUJDREUwMTIzNDU2Nzg5|2^20|2:4
        FEC_ORDER=FEC_SRTP
 
+SNOM sends without lifetime or MKI:
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3vZ
 
 	*/
 
@@ -258,6 +262,7 @@ a=crypto:2 F8_128_HMAC_SHA1_80
 		return -1;
 	}
 
+	/* Separate multiple key parameters and find one that works. */
 	while ((key_param = strsep(&key_params, ";"))) {
 		char *method = NULL;
 		char *info = NULL;
@@ -266,11 +271,35 @@ a=crypto:2 F8_128_HMAC_SHA1_80
 		info = strsep(&key_param, ";");
 
 		if (!strcmp(method, "inline")) {
+			/* This is a SDES key parameter. */
 			key_salt = strsep(&info, "|");
+
+			/* The next one can be either lifetime or MKI */
 			lifetime = strsep(&info, "|");
+			/* Is this MKI? */
+			mki = strchr(lifetime, ':');
+			if (mki != NULL) {
+				mki = lifetime;
+				lifetime = NULL;
+			} else {
+				mki = strsep(&info, "|");
+			}
+			
+			ast_debug(3, "==> SRTP SDES lifetime %s MKI %s \n", lifetime ? lifetime : "-", mki?mki : "-");
 
 			if (lifetime) {
-				ast_log(LOG_NOTICE, "Crypto life time unsupported: %s\n", attr);
+				if (strlen(lifetime) > 2) {
+					if (lifetime[0] == '2' && lifetime[1] == '^') {
+						lifetime+=2;
+						sdeslifetime = 2 ^ atoi(lifetime);
+					} else {
+						sdeslifetime = (unsigned int) atoi(lifetime);
+					}
+				} else {
+					/* Decimal lifetime */
+					sdeslifetime = (unsigned int) atoi(lifetime);
+				}
+				ast_log(LOG_NOTICE, "Crypto life time (unsupported): %s Lifetime %hu\n", attr, sdeslifetime);
 				continue;
 			}
 
