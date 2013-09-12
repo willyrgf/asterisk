@@ -204,6 +204,29 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	int suite_val = 0;
 	unsigned char remote_key[SRTP_MASTER_LEN];
 
+	/* Syntax: from RFC 4568
+	 a=crypto:<tag> <crypto-suite> <key-params> [<session-params>]
+
+	for SDES the key-params starts with "inline:"
+
+Example of a=crypto headers:
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:PS1uQCVeeCFCanVmcjkpPywjNWhcYD0mXXtxaVBR|2^20|1:32
+
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:PS1uQCVeeCFCanVmcjkpPywjNWhcYD0mXXtxaVBR|2^20|1:32
+
+THe lifetime can be ignored as this example (also from RFC 4568)
+	inline:YUJDZGVmZ2hpSktMbW9QUXJzVHVWd3l6MTIzNDU2|1066:4
+
+There can be multiple keys with different MKI values:
+
+a=crypto:2 F8_128_HMAC_SHA1_80
+       inline:MTIzNDU2Nzg5QUJDREUwMTIzNDU2Nzg5QUJjZGVm|2^20|1:4;
+       inline:QUJjZGVmMTIzNDU2Nzg5QUJDREUwMTIzNDU2Nzg5|2^20|2:4
+       FEC_ORDER=FEC_SRTP
+
+
+	*/
+
 	if (!ast_rtp_engine_srtp_is_registered()) {
 		return -1;
 	}
