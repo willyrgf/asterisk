@@ -4501,7 +4501,42 @@ static int bridge_sort_cmp(const void *obj_left, const void *obj_right, int flag
 	return cmp;
 }
 
-static char *complete_bridge(const char *word, int state)
+struct bridge_complete {
+	/*! Nth match to return. */
+	int state;
+	/*! Which match currently on. */
+	int which;
+};
+
+static int complete_bridge_live_search(void *obj, void *arg, void *data, int flags)
+{
+	struct bridge_complete *search = data;
+
+	if (++search->which > search->state) {
+		return CMP_MATCH;
+	}
+	return 0;
+}
+
+static char *complete_bridge_live(const char *word, int state)
+{
+	char *ret;
+	struct ast_bridge *bridge;
+	struct bridge_complete search = {
+		.state = state,
+		};
+
+	bridge = ao2_callback_data(bridges, ast_strlen_zero(word) ? 0 : OBJ_PARTIAL_KEY,
+		complete_bridge_live_search, (char *) word, &search);
+	if (!bridge) {
+		return NULL;
+	}
+	ret = ast_strdup(bridge->uniqueid);
+	ao2_ref(bridge, -1);
+	return ret;
+}
+
+static char *complete_bridge_stasis(const char *word, int state)
 {
 	char *ret = NULL;
 	int wordlen = strlen(word), which = 0;
@@ -4509,7 +4544,8 @@ static char *complete_bridge(const char *word, int state)
 	struct ao2_iterator iter;
 	struct stasis_message *msg;
 
-	if (!(cached_bridges = stasis_cache_dump(ast_bridge_cache(), ast_bridge_snapshot_type()))) {
+	cached_bridges = stasis_cache_dump(ast_bridge_cache(), ast_bridge_snapshot_type());
+	if (!cached_bridges) {
 		return NULL;
 	}
 
@@ -4547,7 +4583,8 @@ static char *handle_bridge_show_all(struct ast_cli_entry *e, int cmd, struct ast
 		return NULL;
 	}
 
-	if (!(cached_bridges = stasis_cache_dump(ast_bridge_cache(), ast_bridge_snapshot_type()))) {
+	cached_bridges = stasis_cache_dump(ast_bridge_cache(), ast_bridge_snapshot_type());
+	if (!cached_bridges) {
 		ast_cli(a->fd, "Failed to retrieve cached bridges\n");
 		return CLI_SUCCESS;
 	}
@@ -4579,7 +4616,8 @@ static int bridge_show_specific_print_channel(void *obj, void *arg, int flags)
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 	struct ast_channel_snapshot *snapshot;
 
-	if (!(msg = stasis_cache_get(ast_channel_cache(), ast_channel_snapshot_type(), uniqueid))) {
+	msg = stasis_cache_get(ast_channel_cache(), ast_channel_snapshot_type(), uniqueid);
+	if (!msg) {
 		return 0;
 	}
 	snapshot = stasis_message_data(msg);
@@ -4603,7 +4641,7 @@ static char *handle_bridge_show_specific(struct ast_cli_entry *e, int cmd, struc
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
-			return complete_bridge(a->word, a->n);
+			return complete_bridge_stasis(a->word, a->n);
 		}
 		return NULL;
 	}
@@ -4641,7 +4679,7 @@ static char *handle_bridge_destroy_specific(struct ast_cli_entry *e, int cmd, st
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
-			return complete_bridge(a->word, a->n);
+			return complete_bridge_live(a->word, a->n);
 		}
 		return NULL;
 	}
@@ -4704,7 +4742,7 @@ static char *handle_bridge_kick_channel(struct ast_cli_entry *e, int cmd, struct
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
-			return complete_bridge(a->word, a->n);
+			return complete_bridge_live(a->word, a->n);
 		}
 		if (a->pos == 3) {
 			return complete_bridge_participant(a->argv[2], a->line, a->word, a->pos, a->n);
@@ -4877,6 +4915,28 @@ static struct ast_cli_entry bridge_cli[] = {
 
 /*!
  * \internal
+ * \brief Print bridge object key (name).
+ * \since 12.0.0
+ *
+ * \param v_obj A pointer to the object we want the key printed.
+ * \param where User data needed by prnt to determine where to put output.
+ * \param prnt Print output callback function to use.
+ *
+ * \return Nothing
+ */
+static void bridge_prnt_obj(void *v_obj, void *where, ao2_prnt_fn *prnt)
+{
+	struct ast_bridge *bridge = v_obj;
+
+	if (!bridge) {
+		return;
+	}
+	prnt(where, "%s %s chans:%d",
+		bridge->uniqueid, bridge->v_table->name, bridge->num_channels);
+}
+
+/*!
+ * \internal
  * \brief Shutdown the bridging system.
  * \since 12.0.0
  *
@@ -4885,6 +4945,7 @@ static struct ast_cli_entry bridge_cli[] = {
 static void bridge_shutdown(void)
 {
 	ast_cli_unregister_multiple(bridge_cli, ARRAY_LEN(bridge_cli));
+	ao2_container_unregister("bridges");
 	ao2_cleanup(bridges);
 	bridges = NULL;
 	ao2_cleanup(bridge_manager);
@@ -4909,6 +4970,7 @@ int ast_bridging_init(void)
 	if (!bridges) {
 		return -1;
 	}
+	ao2_container_register("bridges", bridges, bridge_prnt_obj);
 
 	ast_bridging_init_basic();
 
