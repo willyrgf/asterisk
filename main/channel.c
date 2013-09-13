@@ -4424,7 +4424,7 @@ static int indicate_connected_line(struct ast_channel *chan, const void *data, s
 	}
 
 	if (current_size == proposed_size && !memcmp(current, proposed, current_size)) {
-		ast_verb(3, "%s: Dropping redundant connected line update \"%s\" <%s>.\n",
+		ast_debug(1, "%s: Dropping redundant connected line update \"%s\" <%s>.\n",
 			ast_channel_name(chan),
 			S_COR(chan_connected->id.name.valid, chan_connected->id.name.str, ""),
 			S_COR(chan_connected->id.number.valid, chan_connected->id.number.str, ""));

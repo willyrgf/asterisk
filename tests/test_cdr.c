@@ -353,6 +353,20 @@ static void safe_channel_release(struct ast_channel *chan)
 	ast_channel_release(chan);
 }
 
+static void safe_bridge_destroy(struct ast_bridge *bridge)
+{
+	if (!bridge) {
+		return;
+	}
+	ast_bridge_destroy(bridge, 0);
+}
+
+static void do_sleep(struct timespec *to_sleep)
+{
+	while ((nanosleep(to_sleep, to_sleep) == -1) && (errno == EINTR)) {
+	}
+}
+
 AST_TEST_DEFINE(test_cdr_channel_creation)
 {
 	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_release);
@@ -499,7 +513,7 @@ AST_TEST_DEFINE(test_cdr_outbound_bridged_call)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -557,10 +571,9 @@ AST_TEST_DEFINE(test_cdr_outbound_bridged_call)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
 	chan_bob = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_alice), 0, CHANNEL_TECH_NAME "/Bob");
 	ast_copy_string(bob_expected.linkedid, ast_channel_linkedid(chan_bob), sizeof(bob_expected.linkedid));
@@ -575,13 +588,11 @@ AST_TEST_DEFINE(test_cdr_outbound_bridged_call)
 
 	ast_channel_state_set(chan_bob, AST_STATE_UP);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_bob);
 	ast_bridge_depart(chan_alice);
@@ -646,7 +657,7 @@ AST_TEST_DEFINE(test_cdr_single_party)
 AST_TEST_DEFINE(test_cdr_single_bridge)
 {
 	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -688,12 +699,10 @@ AST_TEST_DEFINE(test_cdr_single_bridge)
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan);
 
@@ -707,8 +716,7 @@ AST_TEST_DEFINE(test_cdr_single_bridge)
 AST_TEST_DEFINE(test_cdr_single_bridge_continue)
 {
 	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge_one, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_bridge *, bridge_two, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -762,15 +770,13 @@ AST_TEST_DEFINE(test_cdr_single_bridge_continue)
 	ast_setstate(chan, AST_STATE_UP);
 	EMULATE_APP_DATA(chan, 2, "Bridge", "");
 
-	bridge_one = ast_bridge_basic_new();
-	ast_test_validate(test, bridge_one != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	bridge = ast_bridge_basic_new();
+	ast_test_validate(test, bridge != NULL);
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge_one, chan, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan);
 
@@ -788,7 +794,7 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_a)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -851,17 +857,15 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_a)
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
 	EMULATE_APP_DATA(chan_bob, 1, "Answer", "");
 	ast_setstate(chan_bob, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_bob, 2, "Bridge", "");
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
@@ -878,7 +882,7 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_b)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -944,16 +948,13 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_b)
 	EMULATE_APP_DATA(chan_bob, 1, "Answer", "");
 	ast_setstate(chan_bob, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_bob, 2, "Bridge", "");
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
@@ -971,7 +972,7 @@ AST_TEST_DEFINE(test_cdr_single_multiparty_bridge)
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_charlie, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1066,29 +1067,25 @@ AST_TEST_DEFINE(test_cdr_single_multiparty_bridge)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
 	EMULATE_APP_DATA(chan_bob, 1, "Answer", "");
 	ast_setstate(chan_bob, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_bob, 2, "Bridge", "");
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	EMULATE_APP_DATA(chan_charlie, 1, "Answer", "");
 	ast_setstate(chan_charlie, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_charlie, 2, "Bridge", "");
-	ast_bridge_impart(bridge, chan_charlie, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_charlie, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
@@ -1629,7 +1626,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_a)
 {
 	RAII_VAR(struct ast_channel *, chan_caller, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_callee, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1683,14 +1680,12 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_a)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_caller, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	ast_bridge_impart(bridge, chan_callee, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_caller, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_callee, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_caller);
 	ast_bridge_depart(chan_callee);
@@ -1706,7 +1701,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_b)
 {
 	RAII_VAR(struct ast_channel *, chan_caller, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_callee, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1760,14 +1755,11 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_b)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_bridge_impart(bridge, chan_callee, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_bridge_impart(bridge, chan_caller, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_callee, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_caller, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 	ast_bridge_depart(chan_caller);
 	ast_bridge_depart(chan_callee);
 
@@ -1784,7 +1776,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_charlie, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_david, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1922,24 +1914,19 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_charlie, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_david, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_alice));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_bob));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_charlie));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_david));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_charlie, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_david, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_depart(chan_alice));
+	ast_test_validate(test, !ast_bridge_depart(chan_bob));
+	ast_test_validate(test, !ast_bridge_depart(chan_charlie));
+	ast_test_validate(test, !ast_bridge_depart(chan_david));
 
 	HANGUP_CHANNEL(chan_alice, AST_CAUSE_NORMAL);
 	HANGUP_CHANNEL(chan_bob, AST_CAUSE_NORMAL);
@@ -1955,7 +1942,7 @@ AST_TEST_DEFINE(test_cdr_park)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -2017,14 +2004,11 @@ AST_TEST_DEFINE(test_cdr_park)
 			| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED);
 	ast_test_validate(test, bridge != NULL);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_DEPARTABLE);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
 
@@ -2128,8 +2112,7 @@ AST_TEST_DEFINE(test_cdr_fields)
 	ast_channel_accountcode_set(chan, "XXX");
 
 	/* Wait one second so we get a duration. */
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	ast_cdr_setuserfield(ast_channel_name(chan), "foobar");
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_1") == 0);
@@ -2277,8 +2260,7 @@ AST_TEST_DEFINE(test_cdr_no_reset_cdr)
 
 	CREATE_ALICE_CHANNEL(chan, &caller, &expected);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	/* Disable the CDR */
 	ast_test_validate(test, ast_cdr_set_property(ast_channel_name(chan), AST_CDR_FLAG_DISABLE) == 0);
@@ -2380,8 +2362,7 @@ AST_TEST_DEFINE(test_cdr_fork_cdr)
 	ast_copy_string(fork_expected_two.uniqueid, ast_channel_uniqueid(chan), sizeof(fork_expected_two.uniqueid));
 	ast_copy_string(fork_expected_two.linkedid, ast_channel_linkedid(chan), sizeof(fork_expected_two.linkedid));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 
 	/* Test blowing away variables */
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_1") == 0);
@@ -2399,8 +2380,7 @@ AST_TEST_DEFINE(test_cdr_fork_cdr)
 
 	/* Test keep variables; setting a new answer time */
 	ast_setstate(chan, AST_STATE_UP);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR)) {
-	}
+	do_sleep(&to_sleep);
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_2") == 0);
 	ast_test_validate(test, ast_cdr_getvar(ast_channel_name(chan), "test_variable", varbuffer, sizeof(varbuffer)) == 0);
 	ast_test_validate(test, strcmp(varbuffer, "record_2") == 0);

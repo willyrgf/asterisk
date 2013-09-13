@@ -470,14 +470,12 @@ int ast_bridge_join(struct ast_bridge *bridge,
 	enum ast_bridge_join_flags flags);
 
 enum ast_bridge_impart_flags {
-	/*!
-	 * \brief The caller wants to reclaim the channel using ast_bridge_depart().
-	 *
-	 * \note Defined for caller documentation purposes.
-	 */
-	AST_BRIDGE_IMPART_DEPARTABLE = (0 << 0),
+	/*! Field describing what the caller can do with the channel after it is imparted. */
+	AST_BRIDGE_IMPART_CHAN_MASK = (1 << 0),
+	/*! The caller wants to reclaim the channel using ast_bridge_depart(). */
+	AST_BRIDGE_IMPART_CHAN_DEPARTABLE = (0 << 0),
 	/*! The caller is passing channel control entirely to the bridging system. */
-	AST_BRIDGE_IMPART_INDEPENDENT = (1 << 0),
+	AST_BRIDGE_IMPART_CHAN_INDEPENDENT = (1 << 0),
 	/*! The initial bridge join does not cause a COLP exchange. */
 	AST_BRIDGE_IMPART_INHIBIT_JOIN_COLP = (1 << 1),
 };
@@ -498,12 +496,12 @@ enum ast_bridge_impart_flags {
  * \note chan is locked by this function.
  *
  * \retval 0 on success
- * \retval -1 on failure
+ * \retval -1 on failure (Caller still has ownership of chan)
  *
  * Example usage:
  *
  * \code
- * ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_INDEPENDENT);
+ * ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_CHAN_INDEPENDENT);
  * \endcode
  *
  * \details
@@ -522,13 +520,14 @@ enum ast_bridge_impart_flags {
  * parameter.
  *
  * \note If you impart a channel with
- * AST_BRIDGE_IMPART_DEPARTABLE you MUST ast_bridge_depart() the
- * channel if this call succeeds.  The bridge channel thread is
- * created join-able.  The implication is that the channel is
- * special and will not behave like a normal channel.
+ * AST_BRIDGE_IMPART_CHAN_DEPARTABLE you MUST
+ * ast_bridge_depart() the channel if this call succeeds.  The
+ * bridge channel thread is created join-able.  The implication
+ * is that the channel is special and will not behave like a
+ * normal channel.
  *
  * \note If you impart a channel with
- * AST_BRIDGE_IMPART_INDEPENDENT you must not
+ * AST_BRIDGE_IMPART_CHAN_INDEPENDENT you must not
  * ast_bridge_depart() the channel.  The bridge channel thread
  * is created non-join-able.  The channel must be treated as if
  * it were placed into the bridge by ast_bridge_join().
@@ -539,7 +538,7 @@ int ast_bridge_impart(struct ast_bridge *bridge,
 	struct ast_channel *chan,
 	struct ast_channel *swap,
 	struct ast_bridge_features *features,
-	enum ast_bridge_impart_flags flags);
+	enum ast_bridge_impart_flags flags) attribute_warn_unused_result;
 
 /*!
  * \brief Depart a channel from a bridge

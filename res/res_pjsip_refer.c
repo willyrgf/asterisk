@@ -769,7 +769,7 @@ static int refer_incoming_invite_request(struct ast_sip_session *session, struct
 		}
 	} else {
 		if (ast_bridge_impart(invite.bridge, session->channel, invite.channel, NULL,
-			AST_BRIDGE_IMPART_INDEPENDENT)) {
+			AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 			response = 500;
 		}
 	}
