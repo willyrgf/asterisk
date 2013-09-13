@@ -569,7 +569,6 @@ static void *app_control_add_channel_to_bridge(
 			NULL, /* swap channel */
 			NULL, /* features */
 			AST_BRIDGE_IMPART_CHAN_DEPARTABLE);
-
 		if (res != 0) {
 			ast_log(LOG_ERROR, "Error adding channel to bridge\n");
 			ast_channel_pbx_set(chan, control->pbx);
