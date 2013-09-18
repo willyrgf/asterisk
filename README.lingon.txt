@@ -18,6 +18,16 @@ nor does it support multiple keys in the SDP. When receiving any attribute,
 chan_sip hangs up the call. This is obviously not a behaviour anyone wants.
 Generally, hanging up a call is considered bad behaviour.
 
+Current status:
+===============
+- We do accept lifetimes over 10 hours (hard coded, could be setting)
+- We only accept MKI number 1. Nothing else.
+- We handle no lifetime, only MKI or only lifetime too
+- We check that the lifetime is not too big
+- We check that the crypto tag is up to 9 characters only (should be checked for digits only at some point)
+- We reject everything with an option like FEC_ORDER
+
+tested with a few different a=crypto syntaxes below.
 
 SDES crypto attribute examples:
 ==============================
