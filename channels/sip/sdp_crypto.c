@@ -36,6 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "include/sdp_crypto.h"
+#include "math.h"
 
 #define SRTP_MASTER_LEN 30
 #define SRTP_MASTERKEY_LEN 16
@@ -204,7 +205,7 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	int key_len = 0;
 	int suite_val = 0;
 	unsigned char remote_key[SRTP_MASTER_LEN];
-	unsigned int sdeslifetime = 0;
+	unsigned long sdeslifetime = 0;
 
 	/* Syntax: from RFC 4568
 	 a=crypto:<tag> <crypto-suite> <key-params> [<session-params>]
@@ -244,12 +245,18 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 	session_params = strsep(&str, " ");
 
 	if (!tag || !suite) {
-		ast_log(LOG_WARNING, "Unrecognized a=%s", attr);
+		ast_log(LOG_WARNING, "Unrecognized a=%s\n", attr);
+		return -1;
+	}
+
+	/* Tags can be maxmimum 9 digits  and not start with 0 */
+	if( strlen(tag) > 9 || tag[0] == '0') {
+		ast_log(LOG_WARNING, "Unacceptable a=crypto tag: %s\n ", tag);
 		return -1;
 	}
 
 	if (session_params) {
-		ast_log(LOG_WARNING, "Unsupported crypto parameters: %s", session_params);
+		ast_log(LOG_WARNING, "Unsupported crypto parameters: %s\n", session_params);
 		return -1;
 	}
 
@@ -269,6 +276,8 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 
 		method = strsep(&key_param, ":");
 		info = strsep(&key_param, ";");
+		sdeslifetime = 0;
+
 
 		if (!strcmp(method, "inline")) {
 			/* This is a SDES key parameter. */
@@ -285,6 +294,13 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 				} else {
 					mki = strsep(&info, "|");
 				}
+				/* At this point we do not support multiple keys, sorry */
+				if (*mki != '1') {
+					ast_log(LOG_ERROR, "Crypto mki handling not implemented. MKI = %s \n", mki);
+					continue;
+				}
+				
+
 			}
 			
 			ast_debug(3, "==> SRTP SDES lifetime %s MKI %s \n", lifetime ? lifetime : "-", mki?mki : "-");
@@ -292,19 +308,25 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 			if (lifetime) {
 				if (strlen(lifetime) > 2) {
 					if (lifetime[0] == '2' && lifetime[1] == '^') {
-						lifetime+=2;
-						sdeslifetime = 2 ^ atoi(lifetime);
+						sdeslifetime = (unsigned long) pow(2, atoi(&lifetime[2]));
 					} else {
-						sdeslifetime = (unsigned int) atoi(lifetime);
+						sdeslifetime = (unsigned long) atoi(lifetime);
 					}
 				} else {
 					/* Decimal lifetime */
 					sdeslifetime = (unsigned int) atoi(lifetime);
 				}
-				ast_log(LOG_NOTICE, "Crypto life time (unsupported): %s Lifetime %hu\n", attr, sdeslifetime);
-				continue;
+				if (sdeslifetime > pow(2, 48)) {	/* Maximum lifetime for the crypto algorithms we do support */
+					ast_log(LOG_ERROR, "Crypto life time to big: %s Lifetime %lu \n", attr,  sdeslifetime);
+					continue;
+				}
+				/* 1,800,000 in lifetime is 10 hours. Anything above that is acceptable. */
+				if (sdeslifetime < 1800000) {
+					ast_log(LOG_ERROR, "Crypto life time to short: %s Lifetime %lu \n", attr,  sdeslifetime);
+					continue;
+				}
+				ast_debug(2, "Crypto life time accepted: %s Lifetime %lu \n", attr,  sdeslifetime);
 			}
-
 			found = 1;
 			break;
 		}
@@ -334,7 +356,7 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 	}
 
 	if (!p->tag) {
-		ast_log(LOG_DEBUG, "Accepting crypto tag %s\n", tag);
+		ast_debug(2, "Accepting crypto tag %s\n", tag);
 		p->tag = ast_strdup(tag);
 		if (!p->tag) {
 			ast_log(LOG_ERROR, "Could not allocate memory for tag\n");
@@ -364,7 +386,7 @@ int sdp_crypto_offer(struct sdp_crypto *p)
 		return -1;
 	}
 
-	ast_log(LOG_DEBUG, "Crypto line: %s", p->a_crypto);
+	ast_debug(2, "Crypto line: %s", p->a_crypto);
 
 	return 0;
 }
