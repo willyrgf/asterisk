@@ -36,6 +36,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/utils.h"
 #include "include/sdp_crypto.h"
+#include "math.h"
 
 #define SRTP_MASTER_LEN 30
 #define SRTP_MASTERKEY_LEN 16
@@ -197,12 +198,39 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	char *key_params = NULL;
 	char *key_param = NULL;
 	char *session_params = NULL;
-	char *key_salt = NULL;
-	char *lifetime = NULL;
+	char *key_salt = NULL;		/* The actual master key and key salt */
+	char *lifetime = NULL;		/* Key lifetime (# of RTP packets) */
+	char *mki = NULL;		/* Master Key Index */
 	int found = 0;
 	int key_len = 0;
 	int suite_val = 0;
 	unsigned char remote_key[SRTP_MASTER_LEN];
+	unsigned long sdeslifetime = 0;
+
+	/* Syntax: from RFC 4568
+	 a=crypto:<tag> <crypto-suite> <key-params> [<session-params>]
+
+	for SDES the key-params starts with "inline:"
+
+Example of a=crypto headers:
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:PS1uQCVeeCFCanVmcjkpPywjNWhcYD0mXXtxaVBR|2^20|1:32
+
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:PS1uQCVeeCFCanVmcjkpPywjNWhcYD0mXXtxaVBR|2^20|1:32
+
+THe lifetime can be ignored as this example (also from RFC 4568)
+	inline:YUJDZGVmZ2hpSktMbW9QUXJzVHVWd3l6MTIzNDU2|1066:4
+
+There can be multiple keys with different MKI values:
+
+a=crypto:2 F8_128_HMAC_SHA1_80
+       inline:MTIzNDU2Nzg5QUJDREUwMTIzNDU2Nzg5QUJjZGVm|2^20|1:4;
+       inline:QUJjZGVmMTIzNDU2Nzg5QUJDREUwMTIzNDU2Nzg5|2^20|2:4
+       FEC_ORDER=FEC_SRTP
+
+SNOM sends without lifetime or MKI:
+a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3vZ
+
+	*/
 
 	if (!ast_rtp_engine_srtp_is_registered()) {
 		return -1;
@@ -217,12 +245,18 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	session_params = strsep(&str, " ");
 
 	if (!tag || !suite) {
-		ast_log(LOG_WARNING, "Unrecognized a=%s", attr);
+		ast_log(LOG_WARNING, "Unrecognized a=%s\n", attr);
+		return -1;
+	}
+
+	/* Tags can be maxmimum 9 digits  and not start with 0 */
+	if( strlen(tag) > 9 || tag[0] == '0') {
+		ast_log(LOG_WARNING, "Unacceptable a=crypto tag: %s\n ", tag);
 		return -1;
 	}
 
 	if (session_params) {
-		ast_log(LOG_WARNING, "Unsupported crypto parameters: %s", session_params);
+		ast_log(LOG_WARNING, "Unsupported crypto parameters: %s\n", session_params);
 		return -1;
 	}
 
@@ -235,22 +269,64 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 		return -1;
 	}
 
+	/* Separate multiple key parameters and find one that works. */
 	while ((key_param = strsep(&key_params, ";"))) {
 		char *method = NULL;
 		char *info = NULL;
 
 		method = strsep(&key_param, ":");
 		info = strsep(&key_param, ";");
+		sdeslifetime = 0;
+
 
 		if (!strcmp(method, "inline")) {
+			/* This is a SDES key parameter. */
 			key_salt = strsep(&info, "|");
+
+			/* The next one can be either lifetime or MKI */
 			lifetime = strsep(&info, "|");
+			if (lifetime) {
+				/* Is this MKI? */
+				mki = strchr(lifetime, ':');
+				if (mki != NULL) {
+					mki = lifetime;
+					lifetime = NULL;
+				} else {
+					mki = strsep(&info, "|");
+				}
+				/* At this point we do not support multiple keys, sorry */
+				if (*mki != '1') {
+					ast_log(LOG_ERROR, "Crypto mki handling not implemented. MKI = %s \n", mki);
+					continue;
+				}
+				
+
+			}
+			
+			ast_debug(3, "==> SRTP SDES lifetime %s MKI %s \n", lifetime ? lifetime : "-", mki?mki : "-");
 
 			if (lifetime) {
-				ast_log(LOG_NOTICE, "Crypto life time unsupported: %s\n", attr);
-				continue;
+				if (strlen(lifetime) > 2) {
+					if (lifetime[0] == '2' && lifetime[1] == '^') {
+						sdeslifetime = (unsigned long) pow(2, atoi(&lifetime[2]));
+					} else {
+						sdeslifetime = (unsigned long) atoi(lifetime);
+					}
+				} else {
+					/* Decimal lifetime */
+					sdeslifetime = (unsigned int) atoi(lifetime);
+				}
+				if (sdeslifetime > pow(2, 48)) {	/* Maximum lifetime for the crypto algorithms we do support */
+					ast_log(LOG_ERROR, "Crypto life time to big: %s Lifetime %lu \n", attr,  sdeslifetime);
+					continue;
+				}
+				/* 1,800,000 in lifetime is 10 hours. Anything above that is acceptable. */
+				if (sdeslifetime < 1800000) {
+					ast_log(LOG_ERROR, "Crypto life time to short: %s Lifetime %lu \n", attr,  sdeslifetime);
+					continue;
+				}
+				ast_debug(2, "Crypto life time accepted: %s Lifetime %lu \n", attr,  sdeslifetime);
 			}
-
 			found = 1;
 			break;
 		}
@@ -280,7 +356,7 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	}
 
 	if (!p->tag) {
-		ast_log(LOG_DEBUG, "Accepting crypto tag %s\n", tag);
+		ast_debug(2, "Accepting crypto tag %s\n", tag);
 		p->tag = ast_strdup(tag);
 		if (!p->tag) {
 			ast_log(LOG_ERROR, "Could not allocate memory for tag\n");
@@ -310,7 +386,7 @@ int sdp_crypto_offer(struct sdp_crypto *p)
 		return -1;
 	}
 
-	ast_log(LOG_DEBUG, "Crypto line: %s", p->a_crypto);
+	ast_debug(2, "Crypto line: %s", p->a_crypto);
 
 	return 0;
 }
