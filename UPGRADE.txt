@@ -17,10 +17,25 @@
 === UPGRADE-1.6.txt -- Upgrade info for 1.4 to 1.6
 ===
 ===========================================================
+from 1.8.23.0 to 1.8.24.0:
+* res_agi will now properly indicate if there was an error in streaming an
+  audio file.  The result code will be -1 and the result returned from the
+  the function will be RESULT_FAILURE instead of the prior behavior of always
+  returning RESULT_SUCCESS even if there was an error. 
+
+* The option "register_retry_403" has been added to chan_sip to work around
+  servers that are known to erroneously send 403 in response to valid
+  REGISTER requests and allows Asterisk to continue attepmting to connect.
 
 from 1.8.22.0 to 1.8.23.0:
 * The default settings for chan_sip are now overriden properly by the general
   settings in sip.conf.  Please look over your settings upon upgrading.
+
+* It is now possible to play the Queue prompts to the first user waiting in a call queue.
+  Note that this may impact the ability for agents to talk with users, as a prompt may
+  still be playing when an agent connects to the user. This ability is disabled by
+  default but can be enabled on an individual queue using the 'announce-to-first-user'
+  option.
 
 from 1.8.21.0 to 1.8.22.0:
 * Added the 'n' option to MeetMe to prevent application of the DENOISE function

@@ -147,6 +147,10 @@ AST_THREADSTORAGE(tmp_buf);
 			<para>Literally returns the given <replaceable>string</replaceable>.  The intent is to permit
 			other dialplan functions which take a variable name as an argument to be able to take a literal
 			string, instead.</para>
+			<note><para>The functions which take a variable name need to be passed var and not
+			${var}.  Similarly, use PASSTHRU() and not ${PASSTHRU()}.</para></note>
+			<para>Example: ${CHANNEL} contains SIP/321-1</para>
+			<para>         ${CUT(PASSTHRU(${CUT(CHANNEL,-,1)}),/,2)}) will return 321</para>
 		</description>
 	</function>
 	<function name="REGEX" language="en_US">
@@ -1587,6 +1591,12 @@ AST_TEST_DEFINE(test_FIELDNUM)
 
 	for (i = 0; i < ARRAY_LEN(test_args); i++) {
 		struct ast_var_t *var = ast_var_assign("FIELDS", test_args[i].fields);
+		if (!var) {
+			ast_test_status_update(test, "Out of memory\n");
+			res = AST_TEST_FAIL;
+			break;
+		}
+
 		AST_LIST_INSERT_HEAD(&chan->varshead, var, entries);
 
 		snprintf(expression, sizeof(expression), "${FIELDNUM(%s,%s,%s)}", var->name, test_args[i].delim, test_args[i].field);

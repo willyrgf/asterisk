@@ -551,14 +551,6 @@ static int cur_defaultdpc = -1;
 #endif	/* defined(HAVE_SS7) */
 
 #ifdef HAVE_OPENR2
-struct dahdi_mfcr2 {
-	pthread_t r2master;		       /*!< Thread of master */
-	openr2_context_t *protocol_context;    /*!< OpenR2 context handle */
-	struct dahdi_pvt *pvts[SIG_MFCR2_MAX_CHANNELS];     /*!< Member channel pvt structs */
-	int numchans;                          /*!< Number of channels in this R2 block */
-	int monitored_count;                   /*!< Number of channels being monitored */
-};
-
 struct dahdi_mfcr2_conf {
 	openr2_variant_t variant;
 	int mfback_timeout;
@@ -580,6 +572,15 @@ struct dahdi_mfcr2_conf {
 	char r2proto_file[OR2_MAX_PATH];
 	openr2_log_level_t loglevel;
 	openr2_calling_party_category_t category;
+};
+
+/* MFC-R2 pseudo-link structure */
+struct dahdi_mfcr2 {
+	pthread_t r2master;		       /*!< Thread of master */
+	openr2_context_t *protocol_context;    /*!< OpenR2 context handle */
+	struct dahdi_pvt *pvts[SIG_MFCR2_MAX_CHANNELS];     /*!< Member channel pvt structs */
+	int numchans;                          /*!< Number of channels in this R2 block */
+	struct dahdi_mfcr2_conf conf;         /*!< Configuration used to setup this pseudo-link */
 };
 
 /* malloc'd array of malloc'd r2links */
@@ -5015,9 +5016,12 @@ static void fill_txgain(struct dahdi_gains *g, float gain, float drc, int law)
 				if (drc) {
 					k = drc_sample(k, drc);
 				}
-				k = (float)k*linear_gain;
-				if (k > 32767) k = 32767;
-				if (k < -32767) k = -32767;
+				k = (float)k * linear_gain;
+				if (k > 32767) {
+					k = 32767;
+				} else if (k < -32768) {
+					k = -32768;
+				}
 				g->txgain[j] = AST_LIN2A(k);
 			} else {
 				g->txgain[j] = j;
@@ -5031,9 +5035,12 @@ static void fill_txgain(struct dahdi_gains *g, float gain, float drc, int law)
 				if (drc) {
 					k = drc_sample(k, drc);
 				}
-				k = (float)k*linear_gain;
-				if (k > 32767) k = 32767;
-				if (k < -32767) k = -32767;
+				k = (float)k * linear_gain;
+				if (k > 32767) {
+					k = 32767;
+				} else if (k < -32768) {
+					k = -32768;
+				}
 				g->txgain[j] = AST_LIN2MU(k);
 
 			} else {
@@ -5058,9 +5065,12 @@ static void fill_rxgain(struct dahdi_gains *g, float gain, float drc, int law)
 				if (drc) {
 					k = drc_sample(k, drc);
 				}
-				k = (float)k*linear_gain;
-				if (k > 32767) k = 32767;
-				if (k < -32767) k = -32767;
+				k = (float)k * linear_gain;
+				if (k > 32767) {
+					k = 32767;
+				} else if (k < -32768) {
+					k = -32768;
+				}
 				g->rxgain[j] = AST_LIN2A(k);
 			} else {
 				g->rxgain[j] = j;
@@ -5074,9 +5084,12 @@ static void fill_rxgain(struct dahdi_gains *g, float gain, float drc, int law)
 				if (drc) {
 					k = drc_sample(k, drc);
 				}
-				k = (float)k*linear_gain;
-				if (k > 32767) k = 32767;
-				if (k < -32767) k = -32767;
+				k = (float)k * linear_gain;
+				if (k > 32767) {
+					k = 32767;
+				} else if (k < -32768) {
+					k = -32768;
+				}
 				g->rxgain[j] = AST_LIN2MU(k);
 			} else {
 				g->rxgain[j] = j;
@@ -12173,14 +12186,20 @@ static void dahdi_r2_destroy_links(void)
 	r2links_count = 0;
 }
 
-#define R2_LINK_CAPACITY 10
-static struct dahdi_mfcr2 *dahdi_r2_get_link(void)
+/* This is an artificial convenient capacity, to keep at most a full E1 of channels in a single thread */
+#define R2_LINK_CAPACITY 30
+static struct dahdi_mfcr2 *dahdi_r2_get_link(const struct dahdi_chan_conf *conf)
 {
 	struct dahdi_mfcr2 *new_r2link = NULL;
 	struct dahdi_mfcr2 **new_r2links = NULL;
-	/* this function is called just when starting up and no monitor threads have been launched,
-	   no need to lock monitored_count member */
-	if (!r2links_count || (r2links[r2links_count - 1]->monitored_count == R2_LINK_CAPACITY)) {
+
+	/* Only create a new R2 link if 
+	   1. This is the first link requested
+	   2. Configuration changed 
+	   3. We got more channels than supported per link */
+	if (!r2links_count ||
+	    memcmp(&conf->mfcr2, &r2links[r2links_count - 1]->conf, sizeof(conf->mfcr2)) ||
+	   (r2links[r2links_count - 1]->numchans == R2_LINK_CAPACITY)) {
 		new_r2link = ast_calloc(1, sizeof(**r2links));
 		if (!new_r2link) {
 			ast_log(LOG_ERROR, "Cannot allocate R2 link!\n");
@@ -12245,7 +12264,8 @@ static int dahdi_r2_set_context(struct dahdi_mfcr2 *r2_link, const struct dahdi_
 			ast_log(LOG_ERROR, "Failed to configure r2context from advanced configuration file %s\n", conf->mfcr2.r2proto_file);
 		}
 	}
-	r2_link->monitored_count = 0;
+	/* Save the configuration used to setup this link */
+	memcpy(&r2_link->conf, conf, sizeof(r2_link->conf));
 	return 0;
 }
 #endif
@@ -12477,7 +12497,7 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 #ifdef HAVE_OPENR2
 			if (chan_sig == SIG_MFCR2) {
 				struct dahdi_mfcr2 *r2_link;
-				r2_link = dahdi_r2_get_link();
+				r2_link = dahdi_r2_get_link(conf);
 				if (!r2_link) {
 					ast_log(LOG_WARNING, "Cannot get another R2 DAHDI context!\n");
 					destroy_dahdi_pvt(tmp);
@@ -12519,7 +12539,6 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 				tmp->mfcr2call = 0;
 				tmp->mfcr2_dnis_index = 0;
 				tmp->mfcr2_ani_index = 0;
-				r2_link->monitored_count++;
 			}
 #endif
 #ifdef HAVE_PRI
@@ -15161,6 +15180,7 @@ static int dahdi_restart(void)
 	dahdi_softhangup_all();
 	ast_verb(4, "Final softhangup of all DAHDI channels complete.\n");
 	destroy_all_channels();
+	memset(round_robin, 0, sizeof(round_robin));
 	ast_debug(1, "Channels destroyed. Now re-reading config. %d active channels remaining.\n", ast_active_channels());
 
 	ast_mutex_unlock(&monlock);
@@ -16702,8 +16722,10 @@ static int __unload_module(void)
 
 #ifdef HAVE_PRI
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (pris[i].pri.master != AST_PTHREADT_NULL)
+		if (pris[i].pri.master != AST_PTHREADT_NULL) {
 			pthread_cancel(pris[i].pri.master);
+			pthread_kill(pris[i].pri.master, SIGURG);
+		}
 	}
 	ast_cli_unregister_multiple(dahdi_pri_cli, ARRAY_LEN(dahdi_pri_cli));
 	ast_unregister_application(dahdi_send_keypad_facility_app);
@@ -16713,9 +16735,11 @@ static int __unload_module(void)
 #endif
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (linksets[i].ss7.master != AST_PTHREADT_NULL)
+		if (linksets[i].ss7.master != AST_PTHREADT_NULL) {
 			pthread_cancel(linksets[i].ss7.master);
+			pthread_kill(linksets[i].ss7.master, SIGURG);
 		}
+	}
 	ast_cli_unregister_multiple(dahdi_ss7_cli, ARRAY_LEN(dahdi_ss7_cli));
 #endif	/* defined(HAVE_SS7) */
 #if defined(HAVE_OPENR2)
@@ -16756,8 +16780,9 @@ static int __unload_module(void)
 
 #if defined(HAVE_PRI)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (pris[i].pri.master && (pris[i].pri.master != AST_PTHREADT_NULL))
+		if (pris[i].pri.master && (pris[i].pri.master != AST_PTHREADT_NULL)) {
 			pthread_join(pris[i].pri.master, NULL);
+		}
 		for (j = 0; j < SIG_PRI_NUM_DCHANS; j++) {
 			dahdi_close_pri_fd(&(pris[i]), j);
 		}
@@ -16772,8 +16797,9 @@ static int __unload_module(void)
 
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (linksets[i].ss7.master && (linksets[i].ss7.master != AST_PTHREADT_NULL))
+		if (linksets[i].ss7.master && (linksets[i].ss7.master != AST_PTHREADT_NULL)) {
 			pthread_join(linksets[i].ss7.master, NULL);
+		}
 		for (j = 0; j < SIG_SS7_NUM_DCHANS; j++) {
 			dahdi_close_ss7_fd(&(linksets[i]), j);
 		}

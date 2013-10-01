@@ -907,7 +907,6 @@ struct sip_st_dlg {
 	int st_interval;                   /*!< Session-Timers negotiated session refresh interval */
 	enum st_refresher st_ref;          /*!< Session-Timers cached refresher */
 	int st_schedid;                    /*!< Session-Timers ast_sched scheduler id */
-	int st_expirys;                    /*!< Session-Timers number of expirys */
 	int st_active_peer_ua;             /*!< Session-Timers on/off in peer UA */
 	int st_cached_min_se;              /*!< Session-Timers cached Min-SE */
 	int st_cached_max_se;              /*!< Session-Timers cached Session-Expires */
@@ -970,6 +969,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(theirprovtag); /*!< Provisional their tag, used when evaluating responses to invites */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */

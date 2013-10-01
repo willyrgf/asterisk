@@ -1493,6 +1493,9 @@ static struct ast_config *config_text_file_load(const char *database, const char
 				AST_LIST_UNLOCK(&cfmtime_head);
 				ast_free(comment_buffer);
 				ast_free(lline_buffer);
+#ifdef AST_INCLUDE_GLOB
+				globfree(&globbuf);
+#endif
 				return CONFIG_STATUS_FILEUNCHANGED;
 			}
 		}
@@ -1503,6 +1506,9 @@ static struct ast_config *config_text_file_load(const char *database, const char
 		if (cfg == NULL) {
 			ast_free(comment_buffer);
 			ast_free(lline_buffer);
+#ifdef AST_INCLUDE_GLOB
+				globfree(&globbuf);
+#endif
 			return NULL;
 		}
 
@@ -2969,6 +2975,10 @@ static void config_shutdown(void)
 
 	AST_LIST_LOCK(&cfmtime_head);
 	while ((cfmtime = AST_LIST_REMOVE_HEAD(&cfmtime_head, list))) {
+		struct cache_file_include *cfinclude;
+		while ((cfinclude = AST_LIST_REMOVE_HEAD(&cfmtime->includes, list))) {
+			ast_free(cfinclude);
+		}
 		ast_free(cfmtime);
 	}
 	AST_LIST_UNLOCK(&cfmtime_head);

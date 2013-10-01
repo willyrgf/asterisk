@@ -715,6 +715,7 @@ static int global_rtpholdtimeout;   /*!< Time out call if no RTP during hold */
 static int global_rtpkeepalive;     /*!< Send RTP keepalives */
 static int global_reg_timeout;      /*!< Global time between attempts for outbound registrations */
 static int global_regattempts_max;  /*!< Registration attempts before giving up */
+static int global_reg_retry_403;    /*!< Treat 403 responses to registrations as 401 responses */
 static int global_shrinkcallerid;   /*!< enable or disable shrinking of caller id  */
 static int global_callcounter;      /*!< Enable call counters for all devices. This is currently enabled by setting the peer
                                      *   call-limit to INT_MAX. When we remove the call-limit from the code, we can make it
@@ -1212,6 +1213,8 @@ static struct ast_config *notify_types = NULL;    /*!< The list of manual NOTIFY
 		(head) = (element)->next;	\
 	} while (0)
 
+struct show_peers_context;
+
 /*---------------------------- Forward declarations of functions in chan_sip.c */
 /* Note: This is added to help splitting up chan_sip.c into several files
 	in coming releases. */
@@ -1378,6 +1381,7 @@ static char *transfermode2str(enum transfermodes mode) attribute_const;
 static int peer_status(struct sip_peer *peer, char *status, int statuslen);
 static char *sip_show_sched(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char * _sip_show_peers(int fd, int *total, struct mansession *s, const struct message *m, int argc, const char *argv[]);
+static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct show_peers_context *cont, struct sip_peer *peer);
 static char *sip_show_peers(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static char *sip_show_objects(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a);
 static void  print_group(int fd, ast_group_t group, int crlf);
@@ -9719,7 +9723,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	/* Setup audio address and port */
 	if (p->rtp) {
-		if (portno > 0) {
+		if (sa && portno > 0) {
 			ast_sockaddr_set_port(sa, portno);
 			ast_rtp_instance_set_remote_address(p->rtp, sa);
 			if (debug) {
@@ -9766,7 +9770,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	/* Setup video address and port */
 	if (p->vrtp) {
-		if (vportno > 0) {
+		if (vsa && vportno > 0) {
 			ast_sockaddr_set_port(vsa, vportno);
 			ast_rtp_instance_set_remote_address(p->vrtp, vsa);
 			if (debug) {
@@ -9783,7 +9787,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	/* Setup text address and port */
 	if (p->trtp) {
-		if (tportno > 0) {
+		if (tsa && tportno > 0) {
 			ast_sockaddr_set_port(tsa, tportno);
 			ast_rtp_instance_set_remote_address(p->trtp, tsa);
 			if (debug) {
@@ -9806,7 +9810,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 
 	/* Setup image address and port */
 	if (p->udptl) {
-		if (udptlportno > 0) {
+		if (isa && udptlportno > 0) {
 			if (ast_test_flag(&p->flags[1], SIP_PAGE2_SYMMETRICRTP) && ast_test_flag(&p->flags[1], SIP_PAGE2_UDPTL_DESTINATION)) {
 				ast_rtp_instance_get_remote_address(p->rtp, isa);
 				if (!ast_sockaddr_isnull(isa) && debug) {
@@ -12015,13 +12019,9 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		/* Our T.38 end is */
 		ast_udptl_get_us(p->udptl, &udptladdr);
 
-		/* Determine T.38 UDPTL destination */
-		if (!ast_sockaddr_isnull(&p->udptlredirip)) {
-			ast_sockaddr_copy(&udptldest, &p->udptlredirip);
-		} else {
-			ast_sockaddr_copy(&udptldest, &p->ourip);
-			ast_sockaddr_set_port(&udptldest, ast_sockaddr_port(&udptladdr));
-		}
+		/* We don't use directmedia for T.38, so keep the destination the same as our IP address. */
+		ast_sockaddr_copy(&udptldest, &p->ourip);
+		ast_sockaddr_set_port(&udptldest, ast_sockaddr_port(&udptladdr));
 
 		if (debug) {
 			ast_debug(1, "T.38 UDPTL is at %s port %d\n", ast_sockaddr_stringify_addr(&p->ourip), ast_sockaddr_port(&udptladdr));
@@ -12032,9 +12032,9 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 
 		ast_str_append(&m_modem, 0, "m=image %d udptl t38\r\n", ast_sockaddr_port(&udptldest));
 
-		if (!ast_sockaddr_cmp(&udptldest, &dest)) {
+		if (ast_sockaddr_cmp(&udptldest, &dest)) {
 			ast_str_append(&m_modem, 0, "c=IN %s %s\r\n",
-					(ast_sockaddr_is_ipv6(&dest) && !ast_sockaddr_is_ipv4_mapped(&dest)) ?
+					(ast_sockaddr_is_ipv6(&udptldest) && !ast_sockaddr_is_ipv4_mapped(&udptldest)) ?
 					"IP6" : "IP4", ast_sockaddr_stringify_addr_remote(&udptldest));
 		}
 
@@ -13377,7 +13377,20 @@ static int transmit_state_notify(struct sip_pvt *p, int state, int full, int tim
 
 	p->pendinginvite = p->ocseq;	/* Remember that we have a pending NOTIFY in order not to confuse the NOTIFY subsystem */
 
-	return send_request(p, &req, XMIT_RELIABLE, p->ocseq);
+	/* Send as XMIT_CRITICAL as we may never receive a 200 OK Response which clears p->pendinginvite.
+	 *
+	 * extensionstate_update() uses p->pendinginvite for queuing control.
+	 * Updates stall if pendinginvite <> 0.
+	 *
+	 * The most appropriate solution is to remove the subscription when the NOTIFY transaction fails.
+	 * The client will re-subscribe after restarting or maxexpiry timeout.
+	 */
+
+	/* RFC6665 4.2.2.  Sending State Information to Subscribers
+	 * If the NOTIFY request fails due to expiration of SIP Timer F (transaction timeout),
+	 * the notifier SHOULD remove the subscription.
+	 */
+	return send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 }
 
 /*! \brief Notify user of messages waiting in voicemail (RFC3842)
@@ -13806,6 +13819,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		if (p->do_history) {
 			append_history(p, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
 		}
+
+		p->socket.type = r->transport;
 
 		/* Use port number specified if no SRV record was found */
 		if (!ast_sockaddr_isnull(&r->us)) {
@@ -14542,6 +14557,14 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		}
 	}
 
+	if (expire > max_expiry) {
+		expire = max_expiry;
+	}
+	if (expire < min_expiry && expire != 0) {
+		expire = min_expiry;
+	}
+	pvt->expiry = expire;
+
 	copy_socket_data(&pvt->socket, &req->socket);
 
 	do {
@@ -14651,7 +14674,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	if (ast_apply_ha(sip_cfg.contact_ha, &peer->addr) != AST_SENSE_ALLOW ||
 			ast_apply_ha(peer->contactha, &peer->addr) != AST_SENSE_ALLOW) {
 		ast_log(LOG_WARNING, "Domain '%s' disallowed by contact ACL (violating IP %s)\n", hostport,
-			ast_sockaddr_stringify_addr(&testsa));
+				ast_sockaddr_stringify_addr(&peer->addr));
 		ast_string_field_set(peer, fullcontact, "");
 		ast_string_field_set(pvt, our_contact, "");
 		return PARSE_REGISTER_DENIED;
@@ -14680,12 +14703,6 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	AST_SCHED_DEL_UNREF(sched, peer->expire,
 			unref_peer(peer, "remove register expire ref"));
 
-	if (expire > max_expiry) {
-		expire = max_expiry;
-	}
-	if (expire < min_expiry) {
-		expire = min_expiry;
-	}
 	if (peer->is_realtime && !ast_test_flag(&peer->flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
 		peer->expire = -1;
 	} else {
@@ -14695,7 +14712,6 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 			unref_peer(peer, "remote registration ref");
 		}
 	}
-	pvt->expiry = expire;
 	snprintf(data, sizeof(data), "%s:%d:%s:%s", ast_sockaddr_stringify(&peer->addr),
 		 expire, peer->username, peer->fullcontact);
 	/* We might not immediately be able to reconnect via TCP, but try caching it anyhow */
@@ -15458,7 +15474,10 @@ static enum check_auth_result register_verify(struct sip_pvt *p, struct ast_sock
 						break;
 					case PARSE_REGISTER_UPDATE:
 						ast_string_field_set(p, fullcontact, peer->fullcontact);
-						update_peer(peer, p->expiry);
+						/* If expiry is 0, peer has been unregistered already */
+						if (p->expiry != 0) {
+							update_peer(peer, p->expiry);
+						}
 						/* Say OK and ask subsystem to retransmit msg counter */
 						transmit_response_with_date(p, "200 OK", req);
 						send_mwi = 1;
@@ -16758,9 +16777,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 					      int sipmethod, const char *uri, enum xmittype reliable,
 					      struct ast_sockaddr *addr, struct sip_peer **authpeer)
 {
-	char from[256] = "", *of, *name, *unused_password, *domain;
+	char from[256], *of, *name, *unused_password, *domain;
 	enum check_auth_result res = AUTH_DONT_KNOW;
-	char calleridname[50];
+	char calleridname[256];
 	char *uri2 = ast_strdupa(uri);
 
 	terminate_uri(uri2);	/* trim extra stuff */
@@ -17324,44 +17343,56 @@ int peercomparefunc(const void *a, const void *b)
 	return strcmp((*ap)->name, (*bp)->name);
 }
 
+/* the last argument is left-aligned, so we don't need a size anyways */
+#define PEERS_FORMAT2 "%-25.25s %-39.39s %-3.3s %-10.10s %-3.3s %-8s %-10s %s\n"
+
+/*! \brief Used in the sip_show_peers functions to pass parameters */
+struct show_peers_context {
+	regex_t regexbuf;
+	int havepattern;
+	char idtext[256];
+	int realtimepeers;
+	int peers_mon_online;
+	int peers_mon_offline;
+	int peers_unmon_offline;
+	int peers_unmon_online;
+};
 
 /*! \brief Execute sip show peers command */
 static char *_sip_show_peers(int fd, int *total, struct mansession *s, const struct message *m, int argc, const char *argv[])
 {
-	regex_t regexbuf;
-	int havepattern = FALSE;
+	struct show_peers_context cont = {
+		.havepattern = FALSE,
+		.idtext = "",
+
+		.peers_mon_online = 0,
+		.peers_mon_offline = 0,
+		.peers_unmon_online = 0,
+		.peers_unmon_offline = 0,
+	};
 	struct sip_peer *peer;
 	struct ao2_iterator* it_peers;
 
-/* the last argument is left-aligned, so we don't need a size anyways */
-#define FORMAT2 "%-25.25s  %-39.39s %-3.3s %-10.10s %-3.3s %-8s %-10s %s\n"
-
-	char name[256];
 	int total_peers = 0;
-	int peers_mon_online = 0;
-	int peers_mon_offline = 0;
-	int peers_unmon_offline = 0;
-	int peers_unmon_online = 0;
 	const char *id;
-	char idtext[256] = "";
-	int realtimepeers;
 	struct sip_peer **peerarray;
 	int k;
 
-	realtimepeers = ast_check_realtime("sippeers");
+	cont.realtimepeers = ast_check_realtime("sippeers");
 
 	if (s) {	/* Manager - get ActionID */
 		id = astman_get_header(m, "ActionID");
-		if (!ast_strlen_zero(id))
-			snprintf(idtext, sizeof(idtext), "ActionID: %s\r\n", id);
+		if (!ast_strlen_zero(id)) {
+			snprintf(cont.idtext, sizeof(cont.idtext), "ActionID: %s\r\n", id);
+		}
 	}
 
 	switch (argc) {
 	case 5:
 		if (!strcasecmp(argv[3], "like")) {
-			if (regcomp(&regexbuf, argv[4], REG_EXTENDED | REG_NOSUB))
+			if (regcomp(&cont.regexbuf, argv[4], REG_EXTENDED | REG_NOSUB))
 				return CLI_SHOWUSAGE;
-			havepattern = TRUE;
+			cont.havepattern = TRUE;
 		} else
 			return CLI_SHOWUSAGE;
 	case 3:
@@ -17372,7 +17403,7 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 
 	if (!s) {
 		/* Normal list */
-		ast_cli(fd, FORMAT2, "Name/username", "Host", "Dyn", "Forcerport", "ACL", "Port", "Status", (realtimepeers ? "Realtime" : ""));
+		ast_cli(fd, PEERS_FORMAT2, "Name/username", "Host", "Dyn", "Forcerport", "ACL", "Port", "Status", (cont.realtimepeers ? "Realtime" : ""));
 	}
 
 	ao2_lock(peers);
@@ -17398,7 +17429,7 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 			continue;
 		}
 
-		if (havepattern && regexec(&regexbuf, peer->name, 0, NULL, 0)) {
+		if (cont.havepattern && regexec(&cont.regexbuf, peer->name, 0, NULL, 0)) {
 			ao2_unlock(peer);
 			unref_peer(peer, "toss iterator peer ptr before continue");
 			continue;
@@ -17411,116 +17442,120 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 
 	qsort(peerarray, total_peers, sizeof(struct sip_peer *), peercomparefunc);
 
-	for(k=0; k < total_peers; k++) {
-		char status[20] = "";
-		char srch[2000];
-		char pstatus;
-
-		/*
-		 * tmp_port and tmp_host store copies of ast_sockaddr_stringify strings since the
-		 * string pointers for that function aren't valid between subsequent calls to
-		 * ast_sockaddr_stringify functions
-		 */
-		char *tmp_port;
-		char *tmp_host;
-
-		peer = peerarray[k];
-
-		tmp_port = ast_sockaddr_isnull(&peer->addr) ?
-			"0" : ast_strdupa(ast_sockaddr_stringify_port(&peer->addr));
-
-		tmp_host = ast_sockaddr_isnull(&peer->addr) ?
-			"(Unspecified)" : ast_strdupa(ast_sockaddr_stringify_addr(&peer->addr));
-
-		ao2_lock(peer);
-		if (havepattern && regexec(&regexbuf, peer->name, 0, NULL, 0)) {
-			ao2_unlock(peer);
-			peer = peerarray[k] = unref_peer(peer, "toss iterator peer ptr before continue");
-			continue;
-		}
-
-		if (!ast_strlen_zero(peer->username) && !s)
-			snprintf(name, sizeof(name), "%s/%s", peer->name, peer->username);
-		else
-			ast_copy_string(name, peer->name, sizeof(name));
-
-		pstatus = peer_status(peer, status, sizeof(status));
-		if (pstatus == 1)
-			peers_mon_online++;
-		else if (pstatus == 0)
-			peers_mon_offline++;
-		else {
-			if (ast_sockaddr_isnull(&peer->addr) ||
-			    !ast_sockaddr_port(&peer->addr)) {
-				peers_unmon_offline++;
-			} else {
-				peers_unmon_online++;
-			}
-		}
-
-		snprintf(srch, sizeof(srch), FORMAT2, name,
-			tmp_host,
-			peer->host_dynamic ? " D " : "   ",	/* Dynamic or not? */
-			ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT) ? " N " : "   ",	/* NAT=yes? */
-			peer->ha ? " A " : "   ",	/* permit/deny */
-			tmp_port, status,
-			realtimepeers ? (peer->is_realtime ? "Cached RT":"") : "");
-
-		if (!s)  {/* Normal CLI list */
-			ast_cli(fd, FORMAT2, name,
-			tmp_host,
-			peer->host_dynamic ? " D " : "   ",	/* Dynamic or not? */
-			ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT) ? " N " : "   ",	/* NAT=yes? */
-			peer->ha ? " A " : "   ",       /* permit/deny */
-			tmp_port, status,
-			realtimepeers ? (peer->is_realtime ? "Cached RT":"") : "");
-		} else {	/* Manager format */
-			/* The names here need to be the same as other channels */
-			astman_append(s,
-			"Event: PeerEntry\r\n%s"
-			"Channeltype: SIP\r\n"
-			"ObjectName: %s\r\n"
-			"ChanObjectType: peer\r\n"	/* "peer" or "user" */
-			"IPaddress: %s\r\n"
-			"IPport: %s\r\n"
-			"Dynamic: %s\r\n"
-			"Forcerport: %s\r\n"
-			"VideoSupport: %s\r\n"
-			"TextSupport: %s\r\n"
-			"ACL: %s\r\n"
-			"Status: %s\r\n"
-			"RealtimeDevice: %s\r\n\r\n",
-			idtext,
-			peer->name,
-			ast_sockaddr_isnull(&peer->addr) ? "-none-" : tmp_host,
-			ast_sockaddr_isnull(&peer->addr) ? "0" : tmp_port,
-			peer->host_dynamic ? "yes" : "no",	/* Dynamic or not? */
-			ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT) ? "yes" : "no",	/* NAT=yes? */
-			ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) ? "yes" : "no",	/* VIDEOSUPPORT=yes? */
-			ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT) ? "yes" : "no",	/* TEXTSUPPORT=yes? */
-			peer->ha ? "yes" : "no",       /* permit/deny */
-			status,
-			realtimepeers ? (peer->is_realtime ? "yes":"no") : "no");
-		}
-		ao2_unlock(peer);
-		peer = peerarray[k] = unref_peer(peer, "toss iterator peer ptr");
+	for(k = 0; k < total_peers; k++) {
+		peerarray[k] = _sip_show_peers_one(fd, s, &cont, peerarray[k]);
 	}
 
-	if (!s)
+	if (!s) {
 		ast_cli(fd, "%d sip peers [Monitored: %d online, %d offline Unmonitored: %d online, %d offline]\n",
-		        total_peers, peers_mon_online, peers_mon_offline, peers_unmon_online, peers_unmon_offline);
+		        total_peers, cont.peers_mon_online, cont.peers_mon_offline, cont.peers_unmon_online, cont.peers_unmon_offline);
+	}
 
-	if (havepattern)
-		regfree(&regexbuf);
+	if (cont.havepattern) {
+		regfree(&cont.regexbuf);
+	}
 
-	if (total)
+	if (total) {
 		*total = total_peers;
+	}
 
 	ast_free(peerarray);
 
 	return CLI_SUCCESS;
-#undef FORMAT2
 }
+
+/*! \brief Emit informations for one peer during sip show peers command */
+static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct show_peers_context *cont, struct sip_peer *peer)
+{
+	/* _sip_show_peers_one() is separated from _sip_show_peers() to properly free the ast_strdupa
+	 * (this is executed in a loop in _sip_show_peers() )
+	 */
+
+	char name[256];
+	char status[20] = "";
+	char pstatus;
+
+	/*
+	 * tmp_port and tmp_host store copies of ast_sockaddr_stringify strings since the
+	 * string pointers for that function aren't valid between subsequent calls to
+	 * ast_sockaddr_stringify functions
+	 */
+	char *tmp_port;
+	char *tmp_host;
+
+	tmp_port = ast_sockaddr_isnull(&peer->addr) ?
+		"0" : ast_strdupa(ast_sockaddr_stringify_port(&peer->addr));
+
+	tmp_host = ast_sockaddr_isnull(&peer->addr) ?
+		"(Unspecified)" : ast_strdupa(ast_sockaddr_stringify_addr(&peer->addr));
+
+	ao2_lock(peer);
+	if (cont->havepattern && regexec(&cont->regexbuf, peer->name, 0, NULL, 0)) {
+		ao2_unlock(peer);
+		return unref_peer(peer, "toss iterator peer ptr no match");
+	}
+
+	if (!ast_strlen_zero(peer->username) && !s) {
+		snprintf(name, sizeof(name), "%s/%s", peer->name, peer->username);
+	} else {
+		ast_copy_string(name, peer->name, sizeof(name));
+	}
+
+	pstatus = peer_status(peer, status, sizeof(status));
+	if (pstatus == 1) {
+		cont->peers_mon_online++;
+	} else if (pstatus == 0) {
+		cont->peers_mon_offline++;
+	} else {
+		if (ast_sockaddr_isnull(&peer->addr) ||
+		    !ast_sockaddr_port(&peer->addr)) {
+			cont->peers_unmon_offline++;
+		} else {
+			cont->peers_unmon_online++;
+		}
+	}
+
+	if (!s) { /* Normal CLI list */
+		ast_cli(fd, PEERS_FORMAT2, name,
+		tmp_host,
+		peer->host_dynamic ? " D " : "   ",	/* Dynamic or not? */
+		ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT) ? " N " : "   ",	/* NAT=yes? */
+		peer->ha ? " A " : "   ",       /* permit/deny */
+		tmp_port, status,
+		cont->realtimepeers ? (peer->is_realtime ? "Cached RT":"") : "");
+	} else {	/* Manager format */
+		/* The names here need to be the same as other channels */
+		astman_append(s,
+		"Event: PeerEntry\r\n%s"
+		"Channeltype: SIP\r\n"
+		"ObjectName: %s\r\n"
+		"ChanObjectType: peer\r\n"	/* "peer" or "user" */
+		"IPaddress: %s\r\n"
+		"IPport: %s\r\n"
+		"Dynamic: %s\r\n"
+		"Forcerport: %s\r\n"
+		"VideoSupport: %s\r\n"
+		"TextSupport: %s\r\n"
+		"ACL: %s\r\n"
+		"Status: %s\r\n"
+		"RealtimeDevice: %s\r\n\r\n",
+		cont->idtext,
+		peer->name,
+		ast_sockaddr_isnull(&peer->addr) ? "-none-" : tmp_host,
+		ast_sockaddr_isnull(&peer->addr) ? "0" : tmp_port,
+		peer->host_dynamic ? "yes" : "no",	/* Dynamic or not? */
+		ast_test_flag(&peer->flags[0], SIP_NAT_FORCE_RPORT) ? "yes" : "no",	/* NAT=yes? */
+		ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) ? "yes" : "no",	/* VIDEOSUPPORT=yes? */
+		ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT) ? "yes" : "no",	/* TEXTSUPPORT=yes? */
+		peer->ha ? "yes" : "no",       /* permit/deny */
+		status,
+		cont->realtimepeers ? (peer->is_realtime ? "yes":"no") : "no");
+	}
+	ao2_unlock(peer);
+
+	return unref_peer(peer, "toss iterator peer ptr");
+}
+#undef PEERS_FORMAT2
 
 static int peer_dump_func(void *userobj, void *arg, int flags)
 {
@@ -18883,6 +18918,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Reg. default duration:  %d secs\n", default_expiry);
 	ast_cli(a->fd, "  Outbound reg. timeout:  %d secs\n", global_reg_timeout);
 	ast_cli(a->fd, "  Outbound reg. attempts: %d\n", global_regattempts_max);
+	ast_cli(a->fd, "  Outbound reg. retry 403:%d\n", global_reg_retry_403);
 	ast_cli(a->fd, "  Notify ringing state:   %s\n", AST_CLI_YESNO(sip_cfg.notifyringing));
 	if (sip_cfg.notifyringing) {
 		ast_cli(a->fd, "    Include CID:          %s%s\n",
@@ -19327,7 +19363,6 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
  				if (cur->stimer->st_active == TRUE) {
  					ast_cli(a->fd, "  S-Timer Interval:       %d\n", cur->stimer->st_interval);
  					ast_cli(a->fd, "  S-Timer Refresher:      %s\n", strefresher2str(cur->stimer->st_ref));
- 					ast_cli(a->fd, "  S-Timer Expirys:        %d\n", cur->stimer->st_expirys);
  					ast_cli(a->fd, "  S-Timer Sched Id:       %d\n", cur->stimer->st_schedid);
  					ast_cli(a->fd, "  S-Timer Peer Sts:       %s\n", cur->stimer->st_active_peer_ua ? "Active" : "Inactive");
  					ast_cli(a->fd, "  S-Timer Cached Min-SE:  %d\n", cur->stimer->st_cached_min_se);
@@ -20896,6 +20931,15 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);
 				}
 			ast_rtp_instance_activate(p->rtp);
+		} else if (!reinvite) {
+			struct ast_sockaddr remote_address = {{0,}};
+
+			ast_rtp_instance_get_remote_address(p->rtp, &remote_address);
+			if (ast_sockaddr_isnull(&remote_address) || (!ast_strlen_zero(p->theirprovtag) && strcmp(p->theirtag, p->theirprovtag))) {
+				ast_log(LOG_WARNING, "Received response: \"200 OK\" from '%s' without SDP\n", p->relatedpeer->name);
+				ast_set_flag(&p->flags[0], SIP_PENDINGBYE);
+				ast_rtp_instance_activate(p->rtp);
+			}
 		}
 
 		if (!req->ignore && p->owner) {
@@ -20973,7 +21017,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 
 		/* Check for Session-Timers related headers */
-		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE && p->outgoing_call == TRUE && !reinvite) {
+		if (st_get_mode(p, 0) != SESSION_TIMER_MODE_REFUSE) {
 			p_hdrval = (char*)get_header(req, "Session-Expires");
 			if (!ast_strlen_zero(p_hdrval)) {
 				/* UAS supports Session-Timers */
@@ -21130,8 +21174,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 					wait = ast_random() % 2000;
 				}
 				p->waitid = ast_sched_add(sched, wait, sip_reinvite_retry, dialog_ref(p, "passing dialog ptr into sched structure based on waitid for sip_reinvite_retry."));
-				ast_log(LOG_WARNING, "just did sched_add waitid(%d) for sip_reinvite_retry for dialog %s in handle_response_invite\n", p->waitid, p->callid);
-				ast_debug(2, "Reinvite race. Waiting %d secs before retry\n", wait);
+				ast_debug(2, "Reinvite race. Scheduled sip_reinvite_retry in %d secs in handle_response_invite (waitid %d, dialog '%s')\n",
+						wait, p->waitid, p->callid);
 			}
 		}
 		break;
@@ -21751,7 +21795,11 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 
 		gettag(req, "To", tag, sizeof(tag));
 		ast_string_field_set(p, theirtag, tag);
+	} else {
+		/* Store theirtag to track for changes when 200 responses to invites are received without SDP */
+		ast_string_field_set(p, theirprovtag, p->theirtag);
 	}
+
 	/* This needs to be configurable on a channel/peer level,
 	   not mandatory for all communication. Sadly enough, NAT implementations
 	   are not so stable so we can always rely on these headers.
@@ -23622,9 +23670,6 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			}
 
 			restart_session_timer(p);
-			if (p->stimer->st_expirys > 0) {
-				p->stimer->st_expirys--;
-			}
 		}
 	}
 
@@ -25996,7 +26041,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 			p->invitestate = INV_TERMINATED;
 			p->pendinginvite = 0;
 			acked = __sip_ack(p, seqno, 1 /* response */, 0);
-			if (find_sdp(req)) {
+			if (p->owner && find_sdp(req)) {
 				if (process_sdp(p, req, SDP_T38_NONE)) {
 					return -1;
 				}
@@ -26129,9 +26174,7 @@ static int handle_request_do(struct sip_request *req, struct ast_sockaddr *addr)
 
 	copy_socket_data(&p->socket, &req->socket);
 
-	if (ast_sockaddr_isnull(&p->recv)) { /* This may already be set before getting here */
-		ast_sockaddr_copy(&p->recv, addr);
-	}
+	ast_sockaddr_copy(&p->recv, addr);
 
 	/* if we have an owner, then this request has been authenticated */
 	if (p->owner) {
@@ -26708,6 +26751,8 @@ static void stop_session_timer(struct sip_pvt *p)
 /*! \brief Session-Timers: Start session timer */
 static void start_session_timer(struct sip_pvt *p)
 {
+	unsigned int timeout_ms;
+
 	if (!p->stimer) {
 		ast_log(LOG_WARNING, "Null stimer in start_session_timer - %s\n", p->callid);
 		return;
@@ -26720,14 +26765,31 @@ static void start_session_timer(struct sip_pvt *p)
 			dialog_unref(p, "unref stimer->st_schedid from dialog"));
 	}
 
-	p->stimer->st_schedid  = ast_sched_add(sched, p->stimer->st_interval * 1000 / 2, proc_session_timer, 
+	/*
+	 * RFC 4028 Section 10
+	 * If the side not performing refreshes does not receive a
+	 * session refresh request before the session expiration, it SHOULD send
+	 * a BYE to terminate the session, slightly before the session
+	 * expiration.  The minimum of 32 seconds and one third of the session
+	 * interval is RECOMMENDED.
+	 */
+
+	timeout_ms = (1000 * p->stimer->st_interval);
+	if (p->stimer->st_ref == SESSION_TIMER_REFRESHER_US) {
+		timeout_ms /= 2;
+	} else {
+		timeout_ms -= MIN(timeout_ms / 3, 32000);
+	}
+
+	p->stimer->st_schedid = ast_sched_add(sched, timeout_ms, proc_session_timer,
 			dialog_ref(p, "adding session timer ref"));
+
 	if (p->stimer->st_schedid < 0) {
 		dialog_unref(p, "removing session timer ref");
 		ast_log(LOG_ERROR, "ast_sched_add failed - %s\n", p->callid);
 	} else {
 		p->stimer->st_active = TRUE;
-		ast_debug(2, "Session timer started: %d - %s\n", p->stimer->st_schedid, p->callid);
+		ast_debug(2, "Session timer started: %d - %s %ums\n", p->stimer->st_schedid, p->callid, timeout_ms);
 	}
 }
 
@@ -26761,28 +26823,23 @@ static int proc_session_timer(const void *vp)
 			transmit_reinvite_with_sdp(p, FALSE, TRUE);
 		}
 	} else {
-		p->stimer->st_expirys++;
-		if (p->stimer->st_expirys >= 2) {
-			if (p->stimer->quit_flag) {
+		if (p->stimer->quit_flag) {
+			goto return_unref;
+		}
+		ast_log(LOG_WARNING, "Session-Timer expired - %s\n", p->callid);
+		sip_pvt_lock(p);
+		while (p->owner && ast_channel_trylock(p->owner)) {
+			sip_pvt_unlock(p);
+			usleep(1);
+			if (p->stimer && p->stimer->quit_flag) {
 				goto return_unref;
 			}
-			ast_log(LOG_WARNING, "Session-Timer expired - %s\n", p->callid);
 			sip_pvt_lock(p);
-			while (p->owner && ast_channel_trylock(p->owner)) {
-				sip_pvt_unlock(p);
-				usleep(1);
-				if (p->stimer && p->stimer->quit_flag) {
-					goto return_unref;
-				}
-				sip_pvt_lock(p);
-			}
-
-			ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
-			ast_channel_unlock(p->owner);
-			sip_pvt_unlock(p);
-		} else {
-			res = 1;
 		}
+
+		ast_softhangup_nolock(p->owner, AST_SOFTHANGUP_DEV);
+		ast_channel_unlock(p->owner);
+		sip_pvt_unlock(p);
 	}
 
 return_unref:
@@ -28869,6 +28926,7 @@ static int reload_config(enum channelreloadreason reason)
 	sip_cfg.compactheaders = DEFAULT_COMPACTHEADERS;
 	global_reg_timeout = DEFAULT_REGISTRATION_TIMEOUT;
 	global_regattempts_max = 0;
+	global_reg_retry_403 = 0;
 	sip_cfg.pedanticsipchecking = DEFAULT_PEDANTIC;
 	sip_cfg.autocreatepeer = DEFAULT_AUTOCREATEPEER;
 	global_autoframing = 0;
@@ -29212,6 +29270,8 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		} else if (!strcasecmp(v->name, "registerattempts")) {
 			global_regattempts_max = atoi(v->value);
+		} else if (!strcasecmp(v->name, "register_retry_403")) {
+			global_reg_retry_403 = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "bindaddr") || !strcasecmp(v->name, "udpbindaddr")) {
 			if (ast_parse_arg(v->value, PARSE_ADDR, &bindaddr)) {
 				ast_log(LOG_WARNING, "Invalid address: %s\n", v->value);
@@ -32028,7 +32088,12 @@ static int unload_module(void)
 
 	clear_sip_domains();
 	ast_free_ha(sip_cfg.contact_ha);
+	if (sipsock_read_id) {
+		ast_io_remove(io, sipsock_read_id);
+		sipsock_read_id = NULL;
+	}
 	close(sipsock);
+	io_context_destroy(io);
 	sched_context_destroy(sched);
 	con = ast_context_find(used_context);
 	if (con) {
@@ -32041,6 +32106,11 @@ static int unload_module(void)
 
 	sip_reqresp_parser_exit();
 	sip_unregister_tests();
+
+	if (notify_types) {
+		ast_config_destroy(notify_types);
+		notify_types = NULL;
+	}
 
 	return 0;
 }

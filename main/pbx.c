@@ -9383,6 +9383,7 @@ static void __ast_internal_context_destroy( struct ast_context *con)
 	}
 	tmp->root = NULL;
 	ast_rwlock_destroy(&tmp->lock);
+	ast_mutex_destroy(&tmp->macrolock);
 	ast_free(tmp);
 }
 
@@ -10204,10 +10205,9 @@ void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, cons
 		headp = &globals;
 	}
 
-	if (value) {
+	if (value && (newvariable = ast_var_assign(name, value))) {
 		if (headp == &globals)
 			ast_verb(2, "Setting global variable '%s' to '%s'\n", name, value);
-		newvariable = ast_var_assign(name, value);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 	}
 
@@ -10254,10 +10254,9 @@ int pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const 
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 
-	if (value) {
+	if (value && (newvariable = ast_var_assign(name, value))) {
 		if (headp == &globals)
 			ast_verb(2, "Setting global variable '%s' to '%s'\n", name, value);
-		newvariable = ast_var_assign(name, value);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 		manager_event(EVENT_FLAG_DIALPLAN, "VarSet",
 			"Channel: %s\r\n"
@@ -10978,6 +10977,10 @@ static void pbx_shutdown(void)
 		ao2_ref(statecbs, -1);
 		statecbs = NULL;
 	}
+	if (contexts_table) {
+		ast_hashtab_destroy(contexts_table, NULL);
+	}
+	pbx_builtin_clear_globals();
 }
 
 int ast_pbx_init(void)

@@ -232,8 +232,9 @@ static int reload(void);
 #define mohclass_unref(class,string) _mohclass_unref(class, string, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 static struct mohclass *_mohclass_unref(struct mohclass *class, const char *tag, const char *file, int line, const char *funcname)
 {
-	struct mohclass *dup;
-	if ((dup = ao2_find(mohclasses, class, OBJ_POINTER))) {
+	struct mohclass *dup = ao2_callback(mohclasses, OBJ_POINTER, ao2_match_by_addr, class);
+
+	if (dup) {
 		if (__ao2_ref_debug(dup, -1, (char *) tag, (char *) file, line, funcname) == 2) {
 			FILE *ref = fopen("/tmp/refs", "a");
 			if (ref) {
@@ -246,7 +247,7 @@ static struct mohclass *_mohclass_unref(struct mohclass *class, const char *tag,
 			ao2_ref(class, -1);
 		}
 	} else {
-		ao2_t_ref(class, -1, (char *) tag);
+		__ao2_ref_debug(class, -1, (char *) tag, (char *) file, line, funcname);
 	}
 	return NULL;
 }
@@ -1007,20 +1008,26 @@ static struct ast_generator mohgen = {
 static int moh_add_file(struct mohclass *class, const char *filepath)
 {
 	if (!class->allowed_files) {
-		if (!(class->filearray = ast_calloc(1, INITIAL_NUM_FILES * sizeof(*class->filearray))))
-			return -1;
-		class->allowed_files = INITIAL_NUM_FILES;
-	} else if (class->total_files == class->allowed_files) {
-		if (!(class->filearray = ast_realloc(class->filearray, class->allowed_files * sizeof(*class->filearray) * 2))) {
-			class->allowed_files = 0;
-			class->total_files = 0;
+		class->filearray = ast_calloc(1, INITIAL_NUM_FILES * sizeof(*class->filearray));
+		if (!class->filearray) {
 			return -1;
 		}
+		class->allowed_files = INITIAL_NUM_FILES;
+	} else if (class->total_files == class->allowed_files) {
+		char **new_array;
+
+		new_array = ast_realloc(class->filearray, class->allowed_files * sizeof(*class->filearray) * 2);
+		if (!new_array) {
+			return -1;
+		}
+		class->filearray = new_array;
 		class->allowed_files *= 2;
 	}
 
-	if (!(class->filearray[class->total_files] = ast_strdup(filepath)))
+	class->filearray[class->total_files] = ast_strdup(filepath);
+	if (!class->filearray[class->total_files]) {
 		return -1;
+	}
 
 	class->total_files++;
 
