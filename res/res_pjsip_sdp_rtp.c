@@ -205,8 +205,8 @@ static int set_caps(struct ast_sip_session *session, struct ast_sip_session_medi
 	int direct_media_enabled = !ast_sockaddr_isnull(&session_media->direct_media_addr) &&
 		!ast_format_cap_is_empty(session->direct_media_cap);
 
-	if (!(caps = ast_format_cap_alloc_nolock()) ||
-	    !(peer = ast_format_cap_alloc_nolock())) {
+	if (!(caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
+	    !(peer = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		ast_log(LOG_ERROR, "Failed to allocate %s capabilities\n", session_media->stream_type);
 		return -1;
 	}
@@ -910,7 +910,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	/* Add ICE attributes and candidates */
 	add_ice_to_stream(session, session_media, pool, media);
 
-	if (!(caps = ast_format_cap_alloc_nolock())) {
+	if (!(caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		ast_log(LOG_ERROR, "Failed to allocate %s capabilities\n", session_media->stream_type);
 		return -1;
 	}
@@ -1096,6 +1096,11 @@ static void change_outgoing_sdp_stream_media_address(pjsip_tx_data *tdata, struc
 {
 	char host[NI_MAXHOST];
 	struct ast_sockaddr addr = { { 0, } };
+
+	/* If the stream has been rejected there will be no connection line */
+	if (!stream->conn) {
+		return;
+	}
 
 	ast_copy_pj_str(host, &stream->conn->addr, sizeof(host));
 	ast_sockaddr_parse(&addr, host, PARSE_PORT_FORBID);
