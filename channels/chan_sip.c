@@ -21023,7 +21023,11 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 					/* This 200 OK's SDP is not acceptable, so we need to ack, then hangup */
 					/* For re-invites, we try to recover */
 					ast_set_flag(&p->flags[0], SIP_PENDINGBYE);
+					p->owner->hangupcause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+					p->hangupcause = AST_CAUSE_BEARERCAPABILITY_NOTAVAIL;
+					sip_queue_hangup_cause(p, AST_CAUSE_BEARERCAPABILITY_NOTAVAIL);
 				}
+			}
 			ast_rtp_instance_activate(p->rtp);
 		} else if (!reinvite) {
 			struct ast_sockaddr remote_address = {{0,}};
@@ -21089,7 +21093,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 
 		if (!req->ignore && p->owner) {
-			if (!reinvite) {
+			if (!reinvite && !res) {
 				ast_queue_control(p->owner, AST_CONTROL_ANSWER);
 				if (sip_cfg.callevents)
 					manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
