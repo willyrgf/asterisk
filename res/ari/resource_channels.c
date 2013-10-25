@@ -407,6 +407,13 @@ void ast_ari_record_channel(struct ast_variable *headers,
 		return;
 	}
 
+	if (!ast_get_format_for_file_ext(options->format)) {
+		ast_ari_response_error(
+			response, 422, "Unprocessable Entity",
+			"specified format is unknown on this system");
+		return;
+	}
+
 	recording = stasis_app_control_record(control, options);
 	if (recording == NULL) {
 		switch(errno) {
@@ -420,7 +427,7 @@ void ast_ari_record_channel(struct ast_variable *headers,
 			break;
 		case EEXIST:
 			ast_ari_response_error(response, 409, "Conflict",
-				"Recording '%s' already in progress",
+				"Recording '%s' already exists and can not be overwritten",
 				args->name);
 			break;
 		case ENOMEM:
