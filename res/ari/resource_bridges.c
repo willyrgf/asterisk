@@ -439,6 +439,27 @@ void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridg
 		stasis_app_recording_if_exists_parse(args->if_exists);
 	options->beep = args->beep;
 
+	if (options->terminate_on == STASIS_APP_RECORDING_TERMINATE_INVALID) {
+		ast_ari_response_error(
+			response, 400, "Bad Request",
+			"terminateOn invalid");
+		return;
+	}
+
+	if (options->if_exists == -1) {
+		ast_ari_response_error(
+			response, 400, "Bad Request",
+			"ifExists invalid");
+		return;
+	}
+
+	if (!ast_get_format_for_file_ext(options->format)) {
+		ast_ari_response_error(
+			response, 422, "Unprocessable Entity",
+			"specified format is unknown on this system");
+		return;
+	}
+
 	recording = stasis_app_control_record(control, options);
 	if (recording == NULL) {
 		switch(errno) {
@@ -452,7 +473,7 @@ void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridg
 			break;
 		case EEXIST:
 			ast_ari_response_error(response, 409, "Conflict",
-				"Recording '%s' already in progress",
+				"Recording '%s' already exists and can not be overwritten",
 				args->name);
 			break;
 		case ENOMEM:
