@@ -44,5 +44,10 @@
 [sip2cause]
 ; 404 => USER_BUSY
 
+; To convert a SIP2SIP call with a private error code, use CUSTOM1 - CUSTOM5 cause codes
+;497 => CUSTOM1
+
 [cause2sip]
 ; USER_BUSY => 403 Forbidden
+
+;CUSTOM1 => 497 IAX2 not suppoSTOM1 => 497 IAX2 not supported.
