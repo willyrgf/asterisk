@@ -90,6 +90,10 @@ specification:
 	- AST_CAUSE_CUSTOM5                        119
 	- AST_CAUSE_INTERWORKING                   127
 
+The custom codes (115-119) are for sip2cause translations outside of the normal translation path.
+Only use these in sip2sip situations as ISDN equipment or other channel drivers will not understand
+them at all.
+
 For more information:
 - \ref app_dial.c
 */
