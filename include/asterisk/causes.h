@@ -83,6 +83,11 @@ specification:
 	- AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE       102
 	- AST_CAUSE_MANDATORY_IE_LENGTH_ERROR      103
 	- AST_CAUSE_PROTOCOL_ERROR                 111
+	- AST_CAUSE_CUSTOM1                        115
+	- AST_CAUSE_CUSTOM2                        116
+	- AST_CAUSE_CUSTOM3                        117
+	- AST_CAUSE_CUSTOM4                        118
+	- AST_CAUSE_CUSTOM5                        119
 	- AST_CAUSE_INTERWORKING                   127
 
 For more information:
@@ -142,6 +147,11 @@ For more information:
 #define AST_CAUSE_RECOVERY_ON_TIMER_EXPIRE     102
 #define AST_CAUSE_MANDATORY_IE_LENGTH_ERROR    103
 #define AST_CAUSE_PROTOCOL_ERROR               111
+#define AST_CAUSE_CUSTOM1                      115
+#define AST_CAUSE_CUSTOM2                      116
+#define AST_CAUSE_CUSTOM3                      117
+#define AST_CAUSE_CUSTOM4                      118
+#define AST_CAUSE_CUSTOM5                      119
 #define AST_CAUSE_INTERWORKING                 127
 
 /* Special Asterisk aliases */
