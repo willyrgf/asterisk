@@ -981,6 +981,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
 		AST_STRING_FIELD(theirtag_prack);  /*!< Current tag focus for PRACK handling */
 		AST_STRING_FIELD(theirtag_early);  /*!< Current tag focus for early media handling */
+		AST_STRING_FIELD(theirprovtag); /*!< Provisional their tag, used when evaluating responses to invites */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */

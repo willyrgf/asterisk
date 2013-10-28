@@ -5593,31 +5593,42 @@ static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_cha
 			res = AST_BRIDGE_COMPLETE;
 			break;
 		}
-		if ((f->frametype == AST_FRAME_CONTROL) && !(flags & AST_BRIDGE_IGNORE_SIGS) && (f->subclass.integer != AST_CONTROL_SRCUPDATE)) {
-			*fo = f;
-			*rc = who;
-			res =  AST_BRIDGE_COMPLETE;
-			break;
-		}
 		other = (who == c0) ? c1 : c0;  /* the 'other' channel */
-		if ((f->frametype == AST_FRAME_VOICE) ||
-			(f->frametype == AST_FRAME_TEXT) ||
-			(f->frametype == AST_FRAME_VIDEO) || 
-			(f->frametype == AST_FRAME_IMAGE) ||
-			(f->frametype == AST_FRAME_DTMF) ||
-			(f->frametype == AST_FRAME_CONTROL)) {
+		if (f->frametype == AST_FRAME_CONTROL && !(flags & AST_BRIDGE_IGNORE_SIGS)) {
+			switch (f->subclass.integer) {
+			case AST_CONTROL_VIDUPDATE:
+			case AST_CONTROL_SRCUPDATE:
+			case AST_CONTROL_SRCCHANGE:
+			case AST_CONTROL_T38_PARAMETERS:
+				ast_write(other, f);
+				break;
+			default:
+				*fo = f;
+				*rc = who;
+				res = AST_BRIDGE_COMPLETE;
+				break;
+			}
+			if (res == AST_BRIDGE_COMPLETE) {
+				break;
+			}
+		} else if (f->frametype == AST_FRAME_VOICE
+			|| f->frametype == AST_FRAME_TEXT
+			|| f->frametype == AST_FRAME_VIDEO
+			|| f->frametype == AST_FRAME_IMAGE) {
+			ast_write(other, f);
+		} else if (f->frametype == AST_FRAME_DTMF) {
 			/* monitored dtmf take out of the bridge.
 			 * check if we monitor the specific source.
 			 */
 			int monitored_source = (who == c0) ? AST_BRIDGE_DTMF_CHANNEL_0 : AST_BRIDGE_DTMF_CHANNEL_1;
-			if (f->frametype == AST_FRAME_DTMF && (flags & monitored_source)) {
+
+			if (flags & monitored_source) {
 				*rc = who;
 				*fo = f;
 				res = AST_BRIDGE_COMPLETE;
 				/* Remove from native mode */
 				break;
 			}
-			/* everything else goes to the other side */
 			ast_write(other, f);
 		}
 		ast_frfree(f);
@@ -8761,6 +8772,22 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 		}
 	}
 
+	/* treat an unspecified refresh interval as the minimum */
+	if (!refresh) {
+		refresh = min_reg_expire;
+	}
+	if (refresh > max_reg_expire) {
+		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
+			p->name, max_reg_expire, refresh);
+		p->expiry = max_reg_expire;
+	} else if (refresh < min_reg_expire) {
+		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
+			p->name, min_reg_expire, refresh);
+		p->expiry = min_reg_expire;
+	} else {
+		p->expiry = refresh;
+	}
+
 	if (ast_sockaddr_cmp(&p->addr, &sockaddr)) {
 		if (iax2_regfunk) {
 			iax2_regfunk(p->name, 1);
@@ -8813,20 +8840,7 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 			peer_unref(p);
 		}
 	}
-	/* treat an unspecified refresh interval as the minimum */
-	if (!refresh)
-		refresh = min_reg_expire;
-	if (refresh > max_reg_expire) {
-		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
-			p->name, max_reg_expire, refresh);
-		p->expiry = max_reg_expire;
-	} else if (refresh < min_reg_expire) {
-		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
-			p->name, min_reg_expire, refresh);
-		p->expiry = min_reg_expire;
-	} else {
-		p->expiry = refresh;
-	}
+
 	if (p->expiry && sin->sin_addr.s_addr) {
 		p->expire = iax2_sched_add(sched, (p->expiry + 10) * 1000, expire_registry, peer_ref(p));
 		if (p->expire == -1)

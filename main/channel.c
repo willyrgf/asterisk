@@ -256,6 +256,11 @@ static const struct causes_map causes[] = {
 	{ AST_CAUSE_MANDATORY_IE_LENGTH_ERROR, "MANDATORY_IE_LENGTH_ERROR", "Mandatory IE length error" },
 	{ AST_CAUSE_PROTOCOL_ERROR, "PROTOCOL_ERROR", "Protocol error, unspecified" },
 	{ AST_CAUSE_INTERWORKING, "INTERWORKING", "Interworking, unspecified" },
+	{ AST_CAUSE_CUSTOM1, "CUSTOM1", "Custom cause code 1" },
+	{ AST_CAUSE_CUSTOM2, "CUSTOM2", "Custom cause code 2" },
+	{ AST_CAUSE_CUSTOM3, "CUSTOM3", "Custom cause code 3" },
+	{ AST_CAUSE_CUSTOM4, "CUSTOM4", "Custom cause code 4" },
+	{ AST_CAUSE_CUSTOM5, "CUSTOM5", "Custom cause code 5" },
 };
 
 struct ast_variable *ast_channeltype_list(void)
