@@ -1,0 +1,32 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(revision 402098)
++++ channels/chan_sip.c	(working copy)
+@@ -21070,6 +21070,7 @@
+ 		}
+ 		break;
+ 
++	case 603: /* Declined */
+ 	case 403: /* Forbidden */
+ 		/* First we ACK */
+ 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
+@@ -21077,6 +21078,9 @@
+ 		if (!req->ignore && p->owner) {
+ 			sip_queue_hangup_cause(p, hangup_sip2cause(resp));
+ 		}
++		if (p->owner) {
++	 		sip_handle_cc(p, req, AST_CC_CCBS);
++		}
+ 		break;
+ 
+ 	case 404: /* Not found */
+@@ -21881,7 +21885,8 @@
+ 				pvt_set_needdestroy(p, "received 407 response");
+ 			}
+ 			break;
+-		case 403: /* Forbidden - we failed authentication */
++		case 403: /* Forbidden - maybe we failed authentication */
++		case 603: /* Decline */
+ 			if (sipmethod == SIP_INVITE)
+ 				handle_response_invite(p, resp, rest, req, seqno);
+ 			else if (sipmethod == SIP_SUBSCRIBE)

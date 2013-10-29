@@ -21130,12 +21130,16 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 		break;
 
+	case 603: /* Declined */
 	case 403: /* Forbidden */
 		/* First we ACK */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		ast_log(LOG_WARNING, "Received response: \"Forbidden\" from '%s'\n", get_header(&p->initreq, "From"));
 		if (!req->ignore && p->owner) {
 			sip_queue_hangup_cause(p, hangup_sip2cause(resp));
+		}
+		if (p->owner) {
+	 		sip_handle_cc(p, req, AST_CC_CCBS);
 		}
 		break;
 
@@ -21994,7 +21998,8 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				pvt_set_needdestroy(p, "received 407 response");
 			}
 			break;
-		case 403: /* Forbidden - we failed authentication */
+		case 403: /* Forbidden - maybe we failed authentication */
+		case 603: /* Decline */
 			if (sipmethod == SIP_INVITE)
 				handle_response_invite(p, resp, rest, req, seqno);
 			else if (sipmethod == SIP_SUBSCRIBE)
