@@ -3,6 +3,10 @@
 ;
 [general]
 ;
+; Set to off to always disable p2pbridge
+;
+p2pbridge = TRUE
+
 ; RTP start and RTP end configure start and end addresses
 ;
 ; Defaults are rtpstart=5000 and rtpend=31000

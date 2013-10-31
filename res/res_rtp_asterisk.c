@@ -100,6 +100,7 @@ static int rtcpdebugport;		/*< Debug only RTCP packets from IP or IP+Port if por
 static int nochecksums;
 #endif
 static int strictrtp;			/*< Only accept RTP frames from a defined source. If we receive an indication of a changing source, enter learning mode. */
+static int p2pbridge;			/*< Enable/disable P2P briding */
 static int learning_min_sequential;	/*< Number of sequential RTP frames needed from a single source during learning mode to accept new source. */
 
 enum strict_rtp_state {
@@ -107,6 +108,8 @@ enum strict_rtp_state {
 	STRICT_RTP_LEARN,    /*! Accept next packet as source */
 	STRICT_RTP_CLOSED,   /*! Drop all RTP packets not coming from source that was learned */
 };
+
+#define P2PBRIDGE_OPEN 1
 
 #define FLAG_3389_WARNING               (1 << 0)
 #define FLAG_NAT_ACTIVE                 (3 << 1)
@@ -2253,10 +2256,12 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 					  ast_sockaddr_stringify(&remote_address));
 		}
 	}
-
-	/* If we are directly bridged to another instance send the audio directly out */
-	if (ast_rtp_instance_get_bridged(instance) && !bridge_p2p_rtp_write(instance, rtpheader, res, hdrlen)) {
-		return &ast_null_frame;
+	
+	if(p2pbridge){
+		/* If we are directly bridged to another instance send the audio directly out */
+		if (ast_rtp_instance_get_bridged(instance) && !bridge_p2p_rtp_write(instance, rtpheader, res, hdrlen)) {
+			return &ast_null_frame;
+		}
 	}
 
 	/* If the version is not what we expected by this point then just drop the packet */
@@ -3024,6 +3029,7 @@ static int rtp_reload(int reload)
 	rtpend = DEFAULT_RTP_END;
 	dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 	strictrtp = STRICT_RTP_OPEN;
+	p2pbridge = P2PBRIDGE_OPEN;
 	learning_min_sequential = DEFAULT_LEARNING_MIN_SEQUENTIAL;
 	if (cfg) {
 		if ((s = ast_variable_retrieve(cfg, "general", "rtpstart"))) {
@@ -3067,6 +3073,9 @@ static int rtp_reload(int reload)
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "strictrtp"))) {
 			strictrtp = ast_true(s);
+		}
+		if ((s = ast_variable_retrieve(cfg, "general", "p2pbridge"))) {
+			p2pbridge = ast_true(s);
 		}
 		if ((s = ast_variable_retrieve(cfg, "general", "probation"))) {
 			if ((sscanf(s, "%d", &learning_min_sequential) <= 0) || learning_min_sequential <= 0) {
