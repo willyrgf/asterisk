@@ -1046,6 +1046,17 @@ int ast_bridge_mute_set(struct ast_bridge *bridge, struct ast_channel *chan, int
  */
 int ast_bridge_mute_get(struct ast_bridge *bridge, struct ast_channel *chan);
 
+/*!
+ * \brief Find bridge by id
+ * \since 12.0.0
+ *
+ * \param bridge_id Bridge identifier
+ *
+ * \return NULL bridge not found
+ * \return non-NULL reference to bridge
+ */
+struct ast_bridge *ast_bridge_find_by_id(const char *bridge_id);
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
