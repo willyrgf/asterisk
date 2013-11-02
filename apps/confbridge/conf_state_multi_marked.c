@@ -99,10 +99,8 @@ static void leave_marked(struct confbridge_user *user)
 			if (ast_test_flag(&user_iter->u_profile, USER_OPT_ENDMARKED)) {
 				if (ast_test_flag(&user_iter->u_profile, USER_OPT_WAITMARKED)
 					&& !ast_test_flag(&user_iter->u_profile, USER_OPT_MARKEDUSER)) {
-					AST_LIST_REMOVE_CURRENT(list);
-					user_iter->conference->activeusers--;
-					AST_LIST_INSERT_TAIL(&user_iter->conference->waiting_list, user_iter, list);
-					user_iter->conference->waitingusers++;
+					conf_remove_user_active(user_iter->conference, user_iter);
+					conf_add_user_waiting(user_iter->conference, user_iter);
 				}
 				user_iter->kicked = 1;
 				ast_bridge_remove(user_iter->conference->bridge, user_iter->chan);
