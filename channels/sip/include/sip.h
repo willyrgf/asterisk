@@ -58,6 +58,7 @@
 #define DEFAULT_MWI_EXPIRY           3600
 #define DEFAULT_REGISTRATION_TIMEOUT 20
 #define DEFAULT_MAX_FORWARDS         70
+#define DEFAULT_IMS_REGCALL	     FALSE
 
 #define DEFAULT_AUTHLIMIT            100
 #define DEFAULT_AUTHTIMEOUT          30
@@ -359,9 +360,10 @@
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
 #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
+#define SIP_PAGE3_REG_BEFORE_CALL  	(1 << 2)  /*!< PG: Only call peers we're registred with */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
+	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_REG_BEFORE_CALL)
 
 /*@}*/
 
@@ -626,8 +628,9 @@ enum referstatus {
 };
 
 enum sip_peer_type {
-	SIP_TYPE_PEER = (1 << 0),
-	SIP_TYPE_USER = (1 << 1),
+	SIP_TYPE_PEER = (1 << 0),		/*!< device used for incoming and outgoing calls */
+	SIP_TYPE_USER = (1 << 1),		/*!< device used for incoming only. Match on From: username */
+	SIP_TYPE_PEERSHADOW = (1 << 2),		/*!< A copy of a peer. Only trust IP/port in this structure */
 };
 
 enum t38_action_flag {
@@ -662,7 +665,7 @@ struct sip_proxy {
 	int force;                      /*!< If it's an outbound proxy, Force use of this outbound proxy for all outbound requests */
 	/* Room for a SRV record chain based on the name */
 	struct sip_proxy *next;
-	struct srv_context *srvlist;	/*!< List of DNs entries */
+	struct srv_context *srvlist;	/*!< List of DNS entries */
 };
 
 /*! \brief A stupid simple linked list for storing host IPs and ports 
@@ -999,6 +1002,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(parkinglot);   /*!< Parkinglot */
 		AST_STRING_FIELD(engine);       /*!< RTP engine to use */
 		AST_STRING_FIELD(dialstring);   /*!< The dialstring used to call this SIP endpoint */
+		AST_STRING_FIELD(srvdomain);    /*!< The domain name used for SRV lookups. Kept for refreshes */
 	);
 	char via[128];                          /*!< Via: header */
 	int maxforwards;                        /*!< SIP Loop prevention */
@@ -1150,7 +1154,7 @@ struct sip_pvt {
 	struct ast_cc_config_params *cc_params;
 	struct sip_epa_entry *epa_entry;
 	int fromdomainport;                 /*!< Domain port to show in from field */
-	struct srv_context *srvcon;		/*!< SRV record list */
+	struct srv_context *srvcontext;		/*!< SRV record list */
 };
 
 /*! \brief sip packet - raw format for outbound packets that are sent or scheduled for transmission
@@ -1190,6 +1194,16 @@ struct sip_mailbox {
 	unsigned int delme:1;
 	char *context;
 	char mailbox[2];
+};
+
+/*!
+ *\brief  A lof shadow peers
+ */
+struct sip_shadow_peer {
+	AST_LIST_ENTRY(sip_shadow_peer) entry;
+	char hostname[MAXHOSTNAMELEN];
+	unsigned int delme:1;
+	struct sip_peer *peer;
 };
 
 /*! \brief Structure for SIP peer data, we place calls to peers if registered  or fixed IP address (host)
@@ -1281,7 +1295,6 @@ struct sip_peer {
 	struct ast_ha *ha;              /*!<  Access control list */
 	struct ast_ha *contactha;       /*!<  Restrict what IPs are allowed in the Contact header (for registration) */
 	struct ast_ha *directmediaha;   /*!<  Restrict what IPs are allowed to interchange direct media with */
-	struct sip_host_ip *srventries; /*!<  DNS Srv entries at time of peer creation  */
 	struct ast_variable *chanvars;  /*!<  Variables to set for channel created by user */
 	struct sip_pvt *mwipvt;         /*!<  Subscription for MWI */
 	struct sip_st_cfg stimer;       /*!<  SIP Session-Timers */
@@ -1291,6 +1304,9 @@ struct sip_peer {
 
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
+	struct sip_peer *masterpeer;       /*!< If this peer is a SHADOWPEER this is the master */
+	AST_LIST_HEAD_NOLOCK(,sip_shadow_peer) peer_shadows; /*! If we are the master, this is our shadows */
+
 	unsigned int disallowed_methods;
 	struct ast_cc_config_params *cc_params;
 };

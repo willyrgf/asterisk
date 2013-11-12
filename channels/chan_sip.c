@@ -1440,6 +1440,10 @@ static void sip_dump_history(struct sip_pvt *dialog);
 
 /*--- Device object handling */
 static struct sip_peer *build_peer(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime, int devstate_only);
+static struct sip_peer *copy_peer(struct sip_peer *destpeer, const struct sip_peer *origpeer);
+static void shadow_peer_delete_all(struct sip_peer *masterpeer);
+static struct sip_peer *create_shadow_peer(struct sip_peer *peer, struct ast_sockaddr *addr, unsigned short tportno, const char *hostname);
+static void link_shadow_peer(struct sip_peer *masterpeer, struct sip_peer *shadowpeer, const char *hostname);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static void sip_destroy_peer(struct sip_peer *peer);
 static void sip_destroy_peer_fn(void *peer);
@@ -4573,18 +4577,20 @@ static int send_response(struct sip_pvt *p, struct sip_request *req, enum xmitty
 /*!
  * \internal
  * \brief Send SIP Request to the other part of the dialogue
- * 	If the xmit returns a network error (XMIT_ERROR or -1) then try with another SRV record if it exists. 
+ *	For out of dialog messages only:
+ * 	 - If the xmit returns a network error (XMIT_ERROR or -1) then try with another SRV record if it exists. 
  * \return see \ref __sip_xmit
  */
 static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittype reliable, uint32_t seqno)
 {
-	int res;
+	int res = 0;
 
 	/* If we have an outbound proxy, reset peer address
 		Only do this once.
 	*/
 	if (p->outboundproxy) {
 		p->sa = p->outboundproxy->ip;
+		/* We need the SRV context as well */
 	}
 
 	finalize_content(req);
@@ -4602,14 +4608,27 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 		append_history(p, reliable ? "TxReqRel" : "TxReq", "%s / %s - %s", ast_str_buffer(tmp.data), get_header(&tmp, "CSeq"), sip_methods[tmp.method].text);
 		deinit_req(&tmp);
 	}
-	if (p->srvcon) {
+	if (p->srvcontext) {
 		/* We have an SRV record set. If we get transmit errors, retry on the next directly. */
-		res = (reliable) ?
-			__sip_reliable_xmit(p, seqno, 0, req->data, (reliable == XMIT_CRITICAL), req->method) :
-			__sip_xmit(p, req->data);
-		if (res == -1 || res == XMIT_ERROR) {
-			ast_debug(3, "====>> SRV failover. Changing to next SRV record in the list\n");
-			/* XXX SRV FAILOVER HERE XXX */
+		while (res != -1 && res != XMIT_ERROR) {
+			res = (reliable) ?
+				__sip_reliable_xmit(p, seqno, 0, req->data, (reliable == XMIT_CRITICAL), req->method) :
+				__sip_xmit(p, req->data);
+			if (res == -1 || res == XMIT_ERROR) {
+				char hostname[MAXHOSTNAMELEN];
+				unsigned short port, prio, weight;
+				ast_debug(3, "====>> SRV failover. Changing to next SRV record in the list\n");
+				/* XXX SRV FAILOVER HERE XXX */
+				/* Hmm. If this is a peer - should we use the peer srvcontext? */
+				if(ast_srv_get_next_record(p->srvcontext, &hostname, &port, &prio, &weight)) {
+					ast_log(LOG_WARNING, "No more hosts: %s\n", p->srvdomain);
+					res = -1;
+				} else  {
+					ast_debug(3, "====>> SRV failover. Changing to host %s port %d\n", hostname, port);
+					/* Select IP address */
+					/* Change IP in p */
+				}
+			}
 		}
 	} else {
 		res = (reliable) ?
@@ -5036,6 +5055,9 @@ static void sip_destroy_peer_fn(void *peer)
 static void sip_destroy_peer(struct sip_peer *peer)
 {
 	ast_debug(3, "Destroying SIP peer %s\n", peer->name);
+	
+	/* Remove any shadows to this peer first */
+	shadow_peer_delete_all(peer);
 
 	/*
 	 * Remove any mailbox event subscriptions for this peer before
@@ -5074,8 +5096,6 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	register_peer_exten(peer, FALSE);
 	ast_free_ha(peer->ha);
 	ast_free_ha(peer->directmediaha);
-
-	free_sip_host_ip(peer->srventries);
 
 	if (peer->selfdestruct)
 		ast_atomic_fetchadd_int(&apeerobjs, -1);
@@ -5493,10 +5513,18 @@ static struct sip_peer *find_peer(const char *peer, struct ast_sockaddr *addr, i
 		tmp_peer.flags[0].flags = 0;
 		tmp_peer.transports = transport;
 		p = ao2_t_find(peers_by_ip, &tmp_peer, OBJ_POINTER, "ao2_find in peers_by_ip table"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
+		if (p->masterpeer && p->type == SIP_TYPE_PEERSHADOW) {
+			ast_debug(2, "Found shadow peer %s, replacing with master peer %s\n", p->name, p->masterpeer->name);
+			p = p->masterpeer;
+		}
 		if (!p) {
 			ast_set_flag(&tmp_peer.flags[0], SIP_INSECURE_PORT);
 			p = ao2_t_find(peers_by_ip, &tmp_peer, OBJ_POINTER, "ao2_find in peers_by_ip table 2"); /* WAS:  p = ASTOBJ_CONTAINER_FIND_FULL(&peerl, sin, name, sip_addr_hashfunc, 1, sip_addrcmp); */
 			if (p) {
+				if (p->masterpeer) {
+					ast_debug(2, "Found shadow peer %s, replacing with master peer %s\n", p->name, p->masterpeer->name);
+					p = p->masterpeer;
+				}
 				return p;
 			}
 		}
@@ -5918,25 +5946,25 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 		 * an A record lookup should be used instead of SRV.
 		 */
 		if (!hostport.port && sip_cfg.srvlookup) {
-			if (dialog->srvcon) {
-				ast_srv_context_free_list(dialog->srvcon);
-				dialog->srvcon = ast_srv_context_new();
+			if (dialog->srvcontext) {
+				ast_srv_context_free_list(dialog->srvcontext);
 			}
+			dialog->srvcontext = ast_srv_context_new();
 
 			snprintf(service, sizeof(service), "_%s._%s.%s", 
 				 get_srv_service(dialog->socket.type),
 				 get_srv_protocol(dialog->socket.type), peername);
 
 			/* Get the srv list */
-			if ((srv_ret = ast_get_srv_list(dialog->srvcon, NULL, service)) > 0) {
+			if ((srv_ret = ast_get_srv_list(dialog->srvcontext, NULL, service)) > 0) {
 				int rec = 1;
 				unsigned short port, prio, weight;
 				const char *srvhost;
 
-				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(dialog->srvcon), hostn);
+				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(dialog->srvcontext), hostn);
 				hostn = host;
-				for (rec = 0; rec < ast_srv_get_record_count(dialog->srvcon); rec++) {
-					if(ast_srv_get_nth_record(dialog->srvcon, rec, &srvhost, &port, &prio, &weight)) {
+				for (rec = 0; rec < ast_srv_get_record_count(dialog->srvcontext); rec++) {
+					if(ast_srv_get_nth_record(dialog->srvcontext, rec, &srvhost, &port, &prio, &weight)) {
 						ast_log(LOG_WARNING, "No more SRV records for: %s\n", peername);
 						return -1;
 					}
@@ -6265,9 +6293,9 @@ void __sip_destroy(struct sip_pvt *p, int lockowner, int lockdialoglist)
 		p->mwi->call = NULL;
 		p->mwi = NULL;
 	}
-	if (p->srvcon) {		/* Free the list of SRV entries used by this dialog */
-		ast_srv_context_free_list(p->srvcon);
-		ast_free(p->srvcon);
+	if (p->srvcontext) {		/* Free the list of SRV entries used by this dialog */
+		ast_srv_context_free_list(p->srvcontext);
+		ast_free(p->srvcontext);
 	}
 
 	if (dumphistory)
@@ -27711,6 +27739,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "useclientcode")) {
 		ast_set_flag(&mask[0], SIP_USECLIENTCODE);
 		ast_set2_flag(&flags[0], ast_true(v->value), SIP_USECLIENTCODE);
+	} else if (!strcasecmp(v->name, "regbeforecall")) {
+		ast_set_flag(&mask[2], SIP_PAGE3_REG_BEFORE_CALL);
+		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_REG_BEFORE_CALL);
 	} else if (!strcasecmp(v->name, "dtmfmode")) {
 		ast_set_flag(&mask[0], SIP_DTMF);
 		ast_clear_flag(&flags[0], SIP_DTMF);
@@ -28166,6 +28197,299 @@ static void add_peer_mailboxes(struct sip_peer *peer, const char *value)
 	}
 }
 
+static void link_shadow_peer(struct sip_peer *masterpeer, struct sip_peer *shadowpeer, const char *hostname)
+{
+	struct sip_shadow_peer *shadow;
+
+	if (!(shadow = (struct sip_shadow_peer * ) ast_calloc(1, sizeof(*shadow)))) {
+		ast_log(LOG_ERROR,"Can't allocate memory for peer shadow. \n");
+		return;
+	}
+	shadow->delme = 0;
+	shadow->peer = shadowpeer;
+	ast_copy_string(shadow->hostname, hostname, sizeof(shadow->hostname));
+	AST_LIST_INSERT_TAIL(&masterpeer->peer_shadows, shadow, entry);
+	return;
+}
+
+/*! \brief Delete list of shadow peers */
+static void shadow_peer_delete_all(struct sip_peer *masterpeer)
+{
+	struct sip_shadow_peer *shadow;
+
+	if (AST_LIST_EMPTY(&masterpeer->peer_shadows)) {
+		return;
+	}
+
+	AST_LIST_TRAVERSE_SAFE_BEGIN(&masterpeer->peer_shadows, shadow, entry) {
+		/* remove shadow peer from IP list */
+		unlink_peer_from_tables(shadow->peer);
+		ao2_t_ref(shadow->peer, -1, "Removing all shadow peers");
+		AST_LIST_REMOVE_CURRENT(entry);
+		ast_free(shadow);
+	}
+	AST_LIST_TRAVERSE_SAFE_END;
+}
+
+/*! \brief Copy a peer into a new peer 
+
+ \note IMPORTANT: Not all data is copied. This is written with DNS shadow peers in mind. If you use this
+ function for anything else, make sure all data that you need is copied. 
+
+ Data not copied:
+	- struct sip_auth_container *auth;// Realm authentication credentials 
+	- masterpeer and shadow peers
+	- struct sip_pvt *call;           // Call pointer - runtime, not config
+	- socket.fd and socket.tcptls_session is not copied.  - runtime, not config
+	- int lastmsgssent; - runtime, not config
+	- mailbox list
+	-	struct sip_proxy *outboundproxy;// proxy for this peer
+	-	struct ast_dnsmgr_entry *dnsmgr;// refresh manager for peer - runtime, not config
+	-	struct srv_context *srvcontext;	// SRV lookup chain for failover - runtime, not config
+	-	struct timeval ps;              //: Time for sending SIP OPTION in sip_pke_peer() - runtime, not config
+	-	struct sip_pvt *mwipvt;         // for MWI - runtime, not config
+
+ Note: This was coded on a Norwegian Boeing 737-800 that was too new for Wifi... Wifi is not installed
+	by Boeing so I was offline and coding instead of being social with my nerd friends. OEJ.
+ */
+static struct sip_peer *copy_peer(struct sip_peer *destpeer, const struct sip_peer *origpeer)
+{
+	ast_debug(2, "==> Starting to copy peer  %s \n", origpeer->name);
+        /*! the unique name of this object */
+	ast_copy_string(destpeer->name, origpeer->name, sizeof(origpeer->name));
+	/*! Password for inbound auth */
+	ast_string_field_set(destpeer, secret, origpeer->md5secret);
+	/*! Remote secret (trunks, remote devices) */
+	ast_string_field_set(destpeer, md5secret, origpeer->secret);
+	/*! Default context for incoming calls */
+	ast_string_field_set(destpeer, context, origpeer->context);
+	/*! Default context for subscriptions */
+	ast_string_field_set(destpeer, subscribecontext, origpeer->subscribecontext);
+	/*! Temporary username until registration and auth username */
+	ast_string_field_set(destpeer, username, origpeer->username);
+	/*! Account code */
+	ast_string_field_set(destpeer, accountcode, origpeer->accountcode);
+	/*! If not dynamic, IP address */
+	ast_string_field_set(destpeer, tohost, origpeer->tohost);
+	/*! Extension to register (if regcontext is used) */
+	ast_string_field_set(destpeer, regexten, origpeer->regexten);
+	/*! From: user when calling this peer */
+	ast_string_field_set(destpeer, fromuser, origpeer->fromuser);
+	/*! From: domain when calling this peer */
+	ast_string_field_set(destpeer, fromdomain, origpeer->fromdomain);
+	/*! Contact registered with us (not in sip.conf) */
+	ast_string_field_set(destpeer, fullcontact, origpeer->fullcontact);
+	/*! Caller ID num */
+	ast_string_field_set(destpeer, cid_num, origpeer->cid_num);
+	/*! Caller ID name */
+	ast_string_field_set(destpeer, cid_name, origpeer->cid_name);
+	/*! Caller ID tag */
+	ast_string_field_set(destpeer, cid_tag, origpeer->cid_tag);
+	/*! Dialplan extension for MWI notify message*/
+	ast_string_field_set(destpeer, vmexten, origpeer->vmexten);
+	/*!  Default language for prompts */
+	ast_string_field_set(destpeer, language, origpeer->language);
+	/*!  Music on Hold class */
+	ast_string_field_set(destpeer, mohinterpret, origpeer->mohinterpret);
+	/*!  Music on Hold class */
+	ast_string_field_set(destpeer, mohsuggest, origpeer->mohsuggest);
+	/*!  Parkinglot */
+	ast_string_field_set(destpeer, parkinglot, origpeer->parkinglot);
+	/*!  User agent in SIP request (saved from registration) */
+	ast_string_field_set(destpeer, useragent, origpeer->useragent);
+	/*! Name to place in From header for outgoing NOTIFY requests */
+	ast_string_field_set(destpeer, mwi_from, origpeer->mwi_from);
+	/*!  RTP Engine to use */
+	ast_string_field_set(destpeer, engine, origpeer->engine);
+	/*!  SIP Domain for SRV lookups */
+	ast_string_field_set(destpeer, srvdomain, origpeer->srvdomain);
+	/*! Mailbox to store received unsolicited MWI NOTIFY messages information in */
+	ast_string_field_set(destpeer, unsolicited_mailbox, origpeer->unsolicited_mailbox);
+
+	/*! Socket type/port used for this peer */
+	destpeer->socket.type = origpeer->socket.type;
+	destpeer->socket.port = origpeer->socket.port;
+
+	/*! Peer Registration may change the default outbound transport. */
+	destpeer->default_outbound_transport = origpeer->default_outbound_transport;
+	/*! Transports (enum sip_transport) that are acceptable for this peer */
+	destpeer->transports = origpeer->transports;
+	/*! this is a 'realtime' peer */
+	destpeer->is_realtime = origpeer->is_realtime;
+	/*! copy fromcontact from realtime */
+	destpeer->rt_fromcontact = origpeer->rt_fromcontact;
+	/*!< Dynamic Peers register with Asterisk */
+	destpeer->host_dynamic = origpeer->host_dynamic;
+	/*! Automatic peers need to destruct themselves */
+	destpeer->selfdestruct = origpeer->selfdestruct;
+	/*! moved out of ASTOBJ into struct proper; That which bears the_mark should be deleted! */
+	destpeer->the_mark = origpeer->the_mark;
+	/*! Whether to use our local configuration for frame sizes (off) */
+	destpeer->autoframing = origpeer->autoframing;
+	/*! If it's a realtime peer, are they using the deprecated "username" instead of "defaultuser" */
+	destpeer->deprecated_username = origpeer->deprecated_username;
+	/*! AMA Flags (for billing) */
+	destpeer->amaflags = origpeer->amaflags;
+	/*! Calling id presentation */
+	destpeer->callingpres = origpeer->callingpres;
+	/*! Number of calls in use */
+	destpeer->inUse = origpeer->inUse;
+	/*! Number of calls ringing */
+	destpeer->inRinging = origpeer->inRinging;
+	/*! Peer has someone on hold */
+	destpeer->onHold = origpeer->onHold;
+	/*! Limit of concurrent calls */
+	destpeer->call_limit = origpeer->call_limit;
+	/*! T.38 FaxMaxDatagram override */
+	destpeer->t38_maxdatagram = origpeer->t38_maxdatagram;
+	/*!< Level of active channels where we signal busy */
+	destpeer->busy_level = origpeer->busy_level;
+	/*! SIP Loop prevention */
+	destpeer->maxforwards = origpeer->maxforwards;
+	/*! SIP Refer restriction scheme */
+	destpeer->allowtransfer = origpeer->allowtransfer;
+	destpeer->prefs = origpeer->prefs;
+	destpeer->lastmsgssent = origpeer->lastmsgssent;
+	/*!  Supported SIP options */
+	destpeer->sipoptions = origpeer->sipoptions;
+	/*!  SIP_ flags */
+	destpeer->flags[0] = origpeer->flags[0];
+	destpeer->flags[1] = origpeer->flags[1];
+	destpeer->flags[2] = origpeer->flags[2];
+	/*!  Maximum Bitrate for a video call */
+	destpeer->maxcallbitrate = origpeer->maxcallbitrate;
+	/*!<  When to expire this peer registration */
+	destpeer->expire = origpeer->expire;
+	/*!<  Codec capability */
+	destpeer->capability = origpeer->capability;
+	/*!<  RTP timeout */
+	destpeer->rtptimeout = origpeer->rtptimeout;
+	/*!<  RTP Hold Timeout */
+	destpeer->rtpholdtimeout = origpeer->rtpholdtimeout;
+	/*!<  Send RTP packets for keepalive */
+	destpeer->rtpkeepalive = origpeer->rtpkeepalive;
+	/*!  Call group */
+	destpeer->callgroup = origpeer->callgroup;
+	/*!  Pickup group */
+	destpeer->pickupgroup = origpeer->pickupgroup;
+	/*!  IP address of peer */
+	ast_sockaddr_copy(&destpeer->addr, &origpeer->addr);
+	/*! Whether the port should be included in the URI */
+	destpeer->portinuri = origpeer->portinuri;
+	/*!  Qualification: When to expire poke (qualify= checking) */
+	destpeer->pokeexpire = origpeer->pokeexpire;
+	/*!  Qualification: How long last response took (in ms), or -1 for no response */
+	destpeer->lastms = origpeer->lastms;
+	/*!  Qualification: Max ms we will accept for the host to be up, 0 to not monitor */
+	destpeer->maxms = origpeer->maxms;
+	/*!  Qualification: Qualification: How often to check for the host to be up */
+	destpeer->qualifyfreq = origpeer->qualifyfreq;
+	/*!  Default IP address, used until registration */
+	ast_sockaddr_copy(&destpeer->defaddr, &origpeer->defaddr);
+	/*!  Access control list */
+	ast_copy_ha(destpeer->ha, origpeer->ha);
+	/*!  Restrict what IPs are allowed in the Contact header (for registration) */
+	ast_copy_ha(destpeer->contactha, origpeer->contactha);
+	/*!  Restrict what IPs are allowed to interchange direct media with */
+	ast_copy_ha(destpeer->directmediaha, origpeer->directmediaha);
+	/*!  Variables to set for channel created by user */
+	destpeer->chanvars = ast_variables_dup(origpeer->chanvars);
+	/*!  The maximum T1 value for the peer */
+	destpeer->timer_t1 = origpeer->timer_t1;
+	/*!  The maximum timer B (transaction timeouts) */
+	destpeer->timer_b = origpeer->timer_b;
+	/*!  The From: domain port */
+	destpeer->fromdomainport = origpeer->fromdomainport;
+	/*! Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
+	destpeer->type = origpeer->type;
+	destpeer->disallowed_methods = origpeer->disallowed_methods;
+	/* Session-Timers */
+	destpeer->stimer.st_mode_oper = origpeer->stimer.st_mode_oper;
+	destpeer->stimer.st_ref = origpeer->stimer.st_ref;
+	destpeer->stimer.st_min_se = origpeer->stimer.st_min_se;
+	destpeer->stimer.st_max_se = origpeer->stimer.st_max_se;
+	ast_cc_copy_config_params(destpeer->cc_params, origpeer->cc_params);
+
+	ast_debug(2, "==> Done copying peer  %s \n", origpeer->name);
+	return destpeer;
+}
+
+static struct sip_peer *create_new_peer(int realtime)
+{
+	struct sip_peer *peer = NULL;
+
+	if (!(peer = ao2_t_alloc(sizeof(*peer), sip_destroy_peer_fn, "allocate a peer struct"))) {
+		return NULL;
+	}
+
+	if (ast_string_field_init(peer, 512)) {
+		ao2_t_ref(peer, -1, "failed to string_field_init, drop peer");
+		return NULL;
+	}
+
+	if (!(peer->cc_params = ast_cc_config_params_init())) {
+		ao2_t_ref(peer, -1, "failed to allocate cc_params for peer");
+		return NULL;
+	}
+
+	if (realtime && !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
+		ast_atomic_fetchadd_int(&rpeerobjs, 1);
+	} else {
+		ast_atomic_fetchadd_int(&speerobjs, 1);
+	}
+	return peer;
+}
+
+
+/* Create a shadow copy of a peer and link it in the list of shadows to the peer
+	The shadows are used only for IP/port matching on incoming calls,
+	based on multiple DNS entries
+ */
+static struct sip_peer *create_shadow_peer(struct sip_peer *peer, struct ast_sockaddr *addr, unsigned short tportno, const char *hostname)
+{
+	struct sip_peer *shadowpeer = create_new_peer(FALSE);
+	char peername[80];
+
+	if (!shadowpeer) {
+		return NULL;
+	}
+	ast_copy_string(peername, peer->name, sizeof(peername));
+	if (strlen(peername) > 60) {
+		/* Cut the long name to get room for random string */
+		peername[60] = '\0';
+	}
+	ast_string_field_build(shadowpeer, name, "%s-%08lx", peername, ast_random());
+	ast_debug(2, "Created shadow DNS peer %s for %s - based on peer %s\n", shadowpeer->name, hostname, peer->name);
+
+	shadowpeer->lastmsgssent = -1;
+	shadowpeer->ha = NULL;
+	shadowpeer->directmediaha = NULL;
+	set_peer_defaults(shadowpeer);	/* Set peer defaults */
+	copy_peer(shadowpeer, peer);	/* Copy the peer */
+	ast_sockaddr_copy(&shadowpeer->addr, addr);	/* Set the address and family */
+	ast_sockaddr_set_port(&shadowpeer->addr, tportno); /* Set the port number */
+	shadowpeer->type = SIP_TYPE_PEERSHADOW;
+
+	/* Adding the IP to the global contact ACL */
+	if (global_dynamic_exclude_static) {
+		int ha_error = 0;
+		sip_cfg.contact_ha = ast_append_ha("deny", ast_sockaddr_stringify_addr(&addr), sip_cfg.contact_ha, &ha_error);
+	}
+	/* Add a reference to the master */
+	/* Note: Adding a ref to the master stops the master from being deleted which
+	   means a catch 22. Do not add a ref here. If the master dies, the shadows will die too. */
+	shadowpeer->masterpeer = peer;
+
+	/* Link to the original peer */
+	link_shadow_link(shadowpeer, peer, hostname);
+
+	/* Add shadow peer to peer list */
+	ao2_t_link(peers_by_ip, shadowpeer, "link shadow peer into peers_by_ip table");
+
+	/* Live long and prosper */
+	return shadowpeer;
+}
+
 /*! \brief Build peer from configuration (file or realtime static/dynamic) */
 static struct sip_peer *build_peer(const char *name, struct ast_variable *v, struct ast_variable *alt, int realtime, int devstate_only)
 {
@@ -28211,24 +28535,12 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		if (!(peer->the_mark))
 			firstpass = 0;
 	} else {
-		if (!(peer = ao2_t_alloc(sizeof(*peer), sip_destroy_peer_fn, "allocate a peer struct")))
-			return NULL;
-
-		if (ast_string_field_init(peer, 512)) {
-			ao2_t_ref(peer, -1, "failed to string_field_init, drop peer");
+		if (!(peer = create_new_peer(realtime))) {
 			return NULL;
 		}
-
-		if (!(peer->cc_params = ast_cc_config_params_init())) {
-			ao2_t_ref(peer, -1, "failed to allocate cc_params for peer");
-			return NULL;
-		}
-
-		if (realtime && !ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS)) {
-			ast_atomic_fetchadd_int(&rpeerobjs, 1);
+		if (realtime) {
 			ast_debug(3, "-REALTIME- peer built. Name: %s. Peer objects: %d\n", name, rpeerobjs);
-		} else
-			ast_atomic_fetchadd_int(&speerobjs, 1);
+		}
 	}
 
 	/* Note that our peer HAS had its reference count increased */
@@ -28793,11 +29105,8 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 			ast_debug(3, "   ==> Settling on SRV entry %d (prio %d weight %d): %s\n", rec - 1, prio, weight, hostname);
 
-			/* Now loop again and fill the ACL */
-			if (peer->srventries) {
-				old_sip_host_ip = peer->srventries;
-				peer->srventries = NULL;
-			}
+			/* Remove any shadows to this peer first */
+			shadow_peer_delete_all(peer);
 			for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
 				int res;
 				struct ast_sockaddr ip;
@@ -28809,15 +29118,10 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					if (ast_sockaddr_isnull(&ip) || res ) {
 						ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
 					} else {
-						peer->srventries = add_sip_host_ip(peer->srventries, &ip, tportno, hostname);
-						//peer->srventries = ast_append_ha("p", ast_sockaddr_stringify_addr(&ip), peer->srventries, &res);
-						ast_debug(3, " ==> Adding IP to peer %s srv list: %s \n", name, ast_sockaddr_stringify_addr(&ip));
+						create_shadow_peer(peer, &ip, tportno, hostname);
+						ast_debug(4, " ==> Created shadow peer for %s (%s)\n", peer->name, hostname);
 					}
 				}
-			}
-			if (option_debug > 3) {
-				ast_debug(3, "======> List of IP matching entries for %s <============\n", name);
-				host_ip_list_debug(peer->srventries);
 			}
 		} else {
 			int res;
@@ -28857,6 +29161,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
 				}
 			}
+
+#ifdef SKREP
+// We need to loop through the shadow peers and add them here
 			if (peer->srventries != NULL) {
 				int ha_error = 0;
 				struct sip_host_ip *he = peer->srventries;
@@ -28868,6 +29175,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_ERROR, "Bad or unresolved host/IP entry in configuration for peer %s, cannot add to contact ACL\n", peer->name);
 				}
 			}
+#endif
 		}
 	
 	} else if (peer->dnsmgr && !peer->host_dynamic) {
@@ -29184,6 +29492,7 @@ static int reload_config(enum channelreloadreason reason)
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWSUBSCRIBE);	/* Default for all devices: TRUE */
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP_YES);	/* Default for all devices: Yes */
 	sip_cfg.peer_rtupdate = TRUE;
+	sip_cfg.ims_regcall = DEFAULT_IMS_REGCALL;			/*!< Register before a call */
 	global_dynamic_exclude_static = 0;	/* Exclude static peers */
 	sip_cfg.tcp_enabled = FALSE;
 

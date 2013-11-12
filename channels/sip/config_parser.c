@@ -641,7 +641,7 @@ alloc_fail:
 	return res;
 }
 
-int sip_parse_host(char *line, int lineno, char **hostname, int *portnum, enum sip_transport *transport)
+int sip_parse_host(char *line, int lineno, char **hostname, unsigned short *portnum, enum sip_transport *transport)
 {
 	char *port;
 

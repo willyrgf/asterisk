@@ -2,7 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: 2013-04-18
-Update:        2013-08-27
+Update:        2013-11-02
 
 
 
@@ -72,6 +72,24 @@ Currently Asterisk will resolve to one IP address and use that for matching
 of incoming calls, possibly deny calls from servers that does not match.
 This is NOT the expected solution.
 
+Solution to peer matching for inbound calls
+--------------------------------------------
+We are going to add "shadow peers" that has a special flag that forces
+the code, after matching, to use the "main peer". This is to get call limits
+and other functions to work properly. These peers will be created every
+time we do an SRV lookup and deleted and recreated when a new SRV lookup is happening
+for a peer (after TTL expired). They will only be used for matching on
+inbound calls and can not be used for outbound calls in the dialplan.
+
+The "main" peer needs to have the active IP used for calls and registrations.
+There will therefore be a shadow peer with the same IP. At failover
+the working peer's IP/port is moved to the main peer.
+
+The peer will have these as a chain of "subpeers" to make sure they are 
+deleted when a peer is deleted.
+
+How this works in combination with realtime is still to be explored.
+
 Failover
 ========
 I see two situation for failover to the next host/ip in the SRV list:
@@ -88,6 +106,14 @@ and currently there's nothing to do about it.
 We do need a function in main/srv.c to switch to the next entry and
 move the "current" pointer.
 
+Realtime out of scope
+=====================
+For this project, realtime is out of scope. Peer match by IP
+based on SRV will not work in realtime. Sorry. Just not doable.
+You will have to create records for each SRV host and maintain them.
+Realtime is not built for this. Do NOT use it for outbound SIP 
+trunks.
+
 Development Notes
 =================
 
@@ -96,6 +122,29 @@ records. We can't hide this list.
 
 DNSmanager can still maintain A/AAAA records if enabled, but not SRV
 lists.
+
+SRV records usage
+=================
+- When Outbound proxy is used and can't be reached for initial transaction,
+  fail over to next ob proxy in srv record set (dialog SRV should be set up
+  from outbound proxy name)
+- When Peer is used DNS SRV name should be taken from peer
+- Otherwise dialstring
+
+The dialog should always look up a new DNS SRV set from DNS, not copy from
+peer.
+
+
+Only do failover for initial transactions, not within-dialog transactions,
+unless entries in the route set has a DNS name and not an IP address.
+
+Register before call
+====================
+In IMS you need to be registred before a call. For this
+- We need to set a flag on the dialog for the registration that the peer needs an update
+- When a registration state changes we need a flag on the peer to set registration status.
+- The main peer's IP need to be the one we register with. At failover for registration,
+  this needs to be handled.
 
 Not fixed here
 ==============
@@ -118,10 +167,9 @@ Todo:
 4. Implement failover to next server in list if transaction fails.
 5. Make sure we use the DNS TTL properly
 6. Use SRV for outbound proxys too, with failover
-7. Add multiple IPs to the peer in an ACL list
-	- Added a linked list
-	- Needs to be added to peers by ip list for matching. Not done yet.
-8. Add the same IPs to the AO2object for IP matching
+7. Add multiple peers (shadowpeers), one for each SRv entry/IP address
+	- delete existing ones if needed
+8. Make sure the shadowpeers are deleted when masterpeer is deleted
 9. Make sure the ACL list is updated by DNS manager
 10. Change peer match by ip/port to use ACL list if available
 11. Fix outbound proxy SRV support (proxy_update)
@@ -160,4 +208,5 @@ ao2_iterator with all of the objects that matched.
 There's a good example of doing multi-object matching and returning in
 chan_sip's find_call - we do a multi-object match using an ao2_callback
 to find all dialogs that match a call-id, then iterate over each object.
+
 

@@ -725,6 +725,11 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;register_retry_403=yes         ; Treat 403 responses to registrations as if they were
                                 ; 401 responses and continue retrying according to normal
                                 ; retry rules.
+;regbeforecall=no		; When calling apeer, make sure we have a valid registration
+				; with it first. This relates to outbound registrations only
+				; (with the register => line above)
+				; Settable per peer. Register= line needs to refer to peer,
+				; not to hostname. Defaults to "no".
 
 ;----------------------------------------- OUTBOUND MWI SUBSCRIPTIONS -------------------------
 ; Asterisk can subscribe to receive the MWI from another SIP server and store it locally for retrieval

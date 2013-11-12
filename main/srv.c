@@ -76,6 +76,7 @@ struct srv_context {
 	unsigned int have_weights:1;
 	struct srv_entry *prev;
 	unsigned int num_records;
+	struct timeval min_ttl_expire;		/* The next Expiry time */
 	struct srv_entry *current;		/* Pointer into the list for failover */
 	AST_LIST_HEAD_NOLOCK(srv_entries, srv_entry) entries;
 };
@@ -124,6 +125,9 @@ static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct 
 	entry->weight = ntohs(srv->weight);
 	entry->port = ntohs(srv->port);
 	entry->ttl_expire = *ttl_expire;
+	if (ast_tvcmp(context->min_ttl_expire, entry->ttl_expire) == -1) {
+		context->min_ttl_expire = *ttl_expire;
+	}
 	strcpy(entry->host, repl);
 	if (option_debug > 3) {
 		char exptime[64];
@@ -310,6 +314,7 @@ void ast_srv_context_free_list(struct srv_context *context)
 	context->prev = NULL;
 	context->current = NULL;
 	context->num_records = 0;
+	SKREP context->min_ttl_expire = 0;
 }
 
 int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, const char *service)
@@ -397,37 +402,24 @@ unsigned int ast_srv_get_record_count(struct srv_context *context)
 int ast_srv_get_next_record(struct srv_context *context, const char **host,
 		unsigned short *port, unsigned short *priority, unsigned short *weight)
 {
-	int i = 1;
+	struct srv_entry *entry;
 	int res = -1;
-	struct srv_entry *entry = NULL;
 
 	if (context == NULL) {
-		return res;
+		return -1;
 	}
 
-	AST_LIST_TRAVERSE(&context->entries, entry, list) {
-		int this_is_it = 0;
-		if (context->current == NULL) {
-			/* Pick the first one */
-			this_is_it = 2;
-		}
-		if (this_is_it == 1) {
-			this_is_it = 2;
-		}
-		if (!this_is_it && context->current == entry) {
-			this_is_it = 1;	/* Take the next one */
-		}
-		if (this_is_it == 2) {
-			*host = entry->host;
-			*port = entry->port;
-			*priority = entry->priority;
-			*weight = entry->weight;
-			res = 0;
-			break;
-		}
-		++i;
+	entry = AST_LIST_NEXT(context->current, list);
+	if (entry == NULL) {
+		return -1;
 	}
+	*host = entry->host;
+	*port = entry->port;
+	*priority = entry->priority;
+	*weight = entry->weight;
+	res = 0;
 	context->current = entry;
+	ast_debug(3, "   ==> DNS SRV select next host: %s port %hu \n", *host, (unsigned int) port);
 
 	return res;
 }
