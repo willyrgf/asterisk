@@ -385,6 +385,10 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 		/* Predict next outgoing timestamp from samples in this
 		   frame. */
 		path->nextout = ast_tvadd(path->nextout, ast_samp2tv(out->samples, ast_format_rate(out->subclass.codec)));
+		if (f->samples != out->samples && ast_test_flag(out, AST_FRFLAG_HAS_TIMING_INFO)) {
+			ast_debug(4, "Sample size different %u vs %u\n", f->samples, out->samples);
+			ast_clear_flag(out, AST_FRFLAG_HAS_TIMING_INFO);
+		}
 	} else {
 		out->delivery = ast_tv(0, 0);
 		ast_set2_flag(out, has_timing_info, AST_FRFLAG_HAS_TIMING_INFO);
@@ -609,7 +613,7 @@ static void rebuild_matrix(int samples)
 					 * then this is a up sample down sample conversion scenario. */
 					tr_matrix[x][z].rate_change = tr_matrix[x][y].rate_change + tr_matrix[y][z].rate_change;
 
-					ast_debug(3, "Discovered %d cost path from %s to %s, via %s\n", tr_matrix[x][z].cost,
+					ast_debug(10, "Discovered %d cost path from %s to %s, via %s\n", tr_matrix[x][z].cost,
 						  ast_getformatname(1LL << x), ast_getformatname(1LL << z), ast_getformatname(1LL << y));
 					changed++;
 				}

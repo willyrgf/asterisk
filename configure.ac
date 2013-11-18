@@ -998,6 +998,18 @@ else
 fi
 AC_SUBST(AST_NATIVE_ARCH)
 
+dnl Nested functions required for RAII implementation
+AC_MSG_CHECKING(for -fnested-functions)
+AC_COMPILE_IFELSE(
+        dnl Prototype needed due to http://gcc.gnu.org/bugzilla/show_bug.cgi?id=36774
+        [AC_LANG_PROGRAM([], [auto void foo(void); void foo(void) {}])],
+        AC_MSG_RESULT(no)
+        [AST_NESTED_FUNCTIONS=],
+        AC_MSG_RESULT(required)
+        [AST_NESTED_FUNCTIONS=-fnested-functions]
+)
+AC_SUBST(AST_NESTED_FUNCTIONS)
+
 AC_MSG_CHECKING(for sysinfo)
 AC_LINK_IFELSE(
         [AC_LANG_PROGRAM([#include <sys/sysinfo.h>],
@@ -1127,6 +1139,11 @@ AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_openr], [bfd.h])
 if test "${PBX_BFD}" = "0"; then
   # Fedora/RedHat/CentOS require extra libraries
   AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_check_format], [bfd.h], [-ldl -liberty])
+fi
+
+if test "${PBX_BFD}" = "0"; then
+  # openSUSE requires -lz
+  AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_check_format], [bfd.h], [-ldl -liberty -lz])
 fi
 
 if test "x${OSARCH}" = "xlinux-gnu" ; then
@@ -2311,6 +2328,15 @@ echo "   \$\$\$\$\$\$\$.           .7\$\$\$\$\$\$  \$\$      "
 echo "     \$\$\$\$\$\$\$\$\$\$\$\$7\$\$\$\$\$\$\$\$\$.\$\$\$\$\$\$      "
 echo "       \$\$\$\$\$\$\$\$\$\$\$\$\$\$\$\$.                "
 echo
+fi
+
+if test "x${AST_IODBC_FOUND}" = "xyes"; then
+	echo "WARNING: iodbc libs/headers found!"
+	echo
+	echo "  If you plan to use ODBC functionality, you should consider"
+	echo "  switching to unixodbc instead."
+	echo "  See: https://issues.asterisk.org/jira/browse/ASTERISK-22459"
+	echo
 fi
 
 AC_MSG_NOTICE(Package configured for: )

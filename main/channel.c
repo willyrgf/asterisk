@@ -6218,18 +6218,19 @@ void ast_channel_inherit_variables(const struct ast_channel *parent, struct ast_
 			newvar = ast_var_assign(&varname[1], ast_var_value(current));
 			if (newvar) {
 				AST_LIST_INSERT_TAIL(&child->varshead, newvar, entries);
-				ast_debug(1, "Copying soft-transferable variable %s.\n", ast_var_name(newvar));
+				ast_debug(1, "Inheriting variable %s from %s to %s.\n",
+					ast_var_name(newvar), parent->name, child->name);
 			}
 			break;
 		case 2:
 			newvar = ast_var_assign(varname, ast_var_value(current));
 			if (newvar) {
 				AST_LIST_INSERT_TAIL(&child->varshead, newvar, entries);
-				ast_debug(1, "Copying hard-transferable variable %s.\n", ast_var_name(newvar));
+				ast_debug(1, "Inheriting variable %s from %s to %s.\n",
+					ast_var_name(newvar), parent->name, child->name);
 			}
 			break;
 		default:
-			ast_debug(1, "Not copying variable %s.\n", ast_var_name(current));
 			break;
 		}
 	}
@@ -6504,6 +6505,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	int x;
 	int i;
 	int origstate;
+	unsigned int orig_disablestatecache;
+	unsigned int clone_disablestatecache;
 	int visible_indication;
 	int clone_was_zombie = 0;/*!< TRUE if the clonechan was a zombie before the masquerade. */
 	struct ast_frame *current;
@@ -6727,6 +6730,20 @@ int ast_do_masquerade(struct ast_channel *original)
 	origstate = original->_state;
 	original->_state = clonechan->_state;
 	clonechan->_state = origstate;
+
+	/* And the swap the cachable state too. Otherwise we'd start caching
+	 * Local channels and ignoring real ones. */
+	orig_disablestatecache = ast_test_flag(original, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+	clone_disablestatecache = ast_test_flag(clonechan, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+	if (orig_disablestatecache != clone_disablestatecache) {
+		if (orig_disablestatecache) {
+			ast_clear_flag(original, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+			ast_set_flag(clonechan, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+		} else {
+			ast_set_flag(original, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+			ast_clear_flag(clonechan, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+		}
+	}
 
 	/* Mangle the name of the clone channel */
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
