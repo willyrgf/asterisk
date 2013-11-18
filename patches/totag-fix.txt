@@ -1,0 +1,19 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(revision 402874)
++++ channels/chan_sip.c	(working copy)
+@@ -21811,8 +21811,12 @@
+ 		p->pendinginvite = 0;
+ 	}
+ 
+-	/* Get their tag if we haven't already */
+-	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
++	/* Get their tag if we haven't already 
++	   If the dialog is established, we need to lock on to the to-tag. Before that,
++	   we can change and just use the latest one. Otherwise forking won't really
++	   work. Or, well, it doesn't work, but we are responding to the wrong
++	   fork. */
++	if (! ast_test_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED)) {
+ 		char tag[128];
+ 
+ 		gettag(req, "To", tag, sizeof(tag));

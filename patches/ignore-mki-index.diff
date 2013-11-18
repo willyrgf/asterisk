@@ -1,0 +1,15 @@
+Index: channels/sip/sdp_crypto.c
+===================================================================
+--- channels/sip/sdp_crypto.c	(revision 402877)
++++ channels/sip/sdp_crypto.c	(working copy)
+@@ -295,7 +295,9 @@
+ 					mki = strsep(&info, "|");
+ 				}
+ 				/* At this point we do not support multiple keys, sorry */
+-				if (mki != NULL && *mki != '1') {
++				//if (mki != NULL && *mki != '1') {
++				//If there's an MKI, give up.
++				if (mki != NULL) {
+ 					ast_log(LOG_ERROR, "Crypto mki handling not implemented. MKI = %s \n", mki);
+ 					continue;
+ 				}

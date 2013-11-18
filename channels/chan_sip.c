@@ -21268,14 +21268,23 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 	case 408: /* Request timeout */
 	case 405: /* Not allowed */
 	case 501: /* Not implemented */
+	case 480: /* Temporarily Unavailable */
+	case 482: /* Loop Detected */
+	case 410: /* Gone */
+	case 400: /* Bad Request */
+	case 500: /* Server error */
+	case 502: /* Bad gateway */
+	case 503: /* Service Unavailable */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner) {
 			ast_queue_hangup_with_cause(p->owner, hangup_sip2cause(resp));
 		}
 		break;
+
 	}
-	if (xmitres == XMIT_ERROR)
+	if (xmitres == XMIT_ERROR) {
 		ast_log(LOG_WARNING, "Could not transmit message in dialog %s\n", p->callid);
+	}
 }
 
 /* \brief Handle SIP response in NOTIFY transaction
@@ -22178,8 +22187,12 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				case 502: /* Bad gateway */
 				case 503: /* Service Unavailable */
 				case 504: /* Server Timeout */
-					if (owner)
-						ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+					if (sipmethod == SIP_INVITE) {
+						handle_response_invite(p, resp, rest, req, seqno);
+					} else {
+						if (owner)
+							ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+					}
 					break;
 				case 484: /* Address Incomplete */
 					if (owner && sipmethod != SIP_BYE) {
