@@ -1,7 +1,7 @@
 Index: channels/sip/sdp_crypto.c
 ===================================================================
---- channels/sip/sdp_crypto.c	(.../branches/1.8)	(revision 399443)
-+++ channels/sip/sdp_crypto.c	(.../team/oej/lingon-srtp-key-lifetime-1.8)	(revision 399443)
+--- channels/sip/sdp_crypto.c	(.../branches/1.8)	(revision 402875)
++++ channels/sip/sdp_crypto.c	(.../team/oej/lingon-srtp-key-lifetime-1.8)	(revision 402875)
 @@ -36,6 +36,7 @@
  #include "asterisk/options.h"
  #include "asterisk/utils.h"
@@ -163,7 +163,7 @@ Index: channels/sip/sdp_crypto.c
 Index: README.lingon.txt
 ===================================================================
 --- README.lingon.txt	(.../branches/1.8)	(revision 0)
-+++ README.lingon.txt	(.../team/oej/lingon-srtp-key-lifetime-1.8)	(revision 399443)
++++ README.lingon.txt	(.../team/oej/lingon-srtp-key-lifetime-1.8)	(revision 402875)
 @@ -0,0 +1,57 @@
 +Edvina AB
 +Olle E. Johansson
@@ -225,11 +225,34 @@ Index: README.lingon.txt
 
 Property changes on: README.lingon.txt
 ___________________________________________________________________
-Added: svn:eol-style
-   + native
 Added: svn:mime-type
-   + text/plain
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
 Added: svn:keywords
-   + Author Date Id Revision
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Index: .
+===================================================================
+--- .	(.../branches/1.8)	(revision 402875)
++++ .	(.../team/oej/lingon-srtp-key-lifetime-1.8)	(revision 402875)
 
-
+Property changes on: .
+___________________________________________________________________
+Added: svnmerge-integrated
+## -0,0 +1 ##
++/branches/1.8:1-402730
+\ No newline at end of property
+Added: automerge-email
+## -0,0 +1 ##
++oej@edvina.net
+\ No newline at end of property
+Added: automerge
+## -0,0 +1 ##
++*
+\ No newline at end of property

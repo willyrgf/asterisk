@@ -295,7 +295,7 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 					mki = strsep(&info, "|");
 				}
 				/* At this point we do not support multiple keys, sorry */
-				if (*mki != '1') {
+				if (mki != NULL && *mki != '1') {
 					ast_log(LOG_ERROR, "Crypto mki handling not implemented. MKI = %s \n", mki);
 					continue;
 				}
@@ -303,7 +303,7 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 
 			}
 			
-			ast_debug(3, "==> SRTP SDES lifetime %s MKI %s \n", lifetime ? lifetime : "-", mki?mki : "-");
+			ast_debug(3, "==> SRTP SDES lifetime %s MKI %s \n", lifetime ? lifetime : "-", mki ? mki : "-");
 
 			if (lifetime) {
 				if (strlen(lifetime) > 2) {
