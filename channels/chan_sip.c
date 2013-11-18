@@ -21883,7 +21883,7 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 	   so that we don't update the tag after a 200 or other final response. 
 	   Provided that SIP pedantic checking is turned on of course.
 	*/
-	if (ast_strlen_zero(p->theirtag) || (resp >= 200)) {
+	if (! ast_test_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED)) {
 		char tag[128];
 
 		gettag(req, "To", tag, sizeof(tag));
