@@ -2644,8 +2644,10 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 
 	/* This needs to be after RTCP calculations to get more RTCP data */
 	/* If we are directly bridged to another instance send the audio directly out */
-	if (ast_rtp_instance_get_bridged(instance) && !bridge_p2p_rtp_write(instance, rtpheader, res, hdrlen)) {
-		return &ast_null_frame;
+	if (p2pbridge) {
+		if (ast_rtp_instance_get_bridged(instance) && !bridge_p2p_rtp_write(instance, rtpheader, res, hdrlen)) {
+			return &ast_null_frame;
+		}
 	}
 
 	/* Remove any padding bytes that may be present */
