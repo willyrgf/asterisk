@@ -21215,6 +21215,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 		break;
 
+	case 414: /* Bad request URI */
+	case 493: /* Undecipherable */
 	case 404: /* Not found */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !req->ignore) {
@@ -22179,6 +22181,15 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				handle_response_invite(p, resp, rest, req, seqno);
 			else
 				ast_log(LOG_WARNING, "Host '%s' does not implement '%s'\n", ast_sockaddr_stringify(&p->sa), msg);
+			break;
+		case 400: /* Bad Request */
+		case 414: /* Request URI too long */
+		case 493: /* Undecipherable */
+			if (sipmethod == SIP_INVITE) {
+				handle_response_invite(p, resp, rest, req, seqno);
+			} else {
+				ast_log(LOG_WARNING, "Bad request to '%s': '%s'\n", ast_sockaddr_stringify(&p->sa), msg);
+			}
 			break;
 		default:
 			if ((resp >= 300) && (resp < 700)) {
