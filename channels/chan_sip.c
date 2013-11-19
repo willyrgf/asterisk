@@ -21221,14 +21221,6 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			sip_queue_hangup_cause(p, hangup_sip2cause(resp));
 		}
 		break;
-	case 400: /* Bad request */
-	case 414: /* Bad request URI */
-	case 493: /* Undecipherable */
-		stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
-		if (p->owner && !req->ignore) {
-			sip_queue_hangup_cause(p, hangup_sip2cause(resp));
-		}
-		break;
 
 	case 481: /* Call leg does not exist */
 		/* Could be REFER caused INVITE with replaces */
@@ -22187,15 +22179,6 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				handle_response_invite(p, resp, rest, req, seqno);
 			else
 				ast_log(LOG_WARNING, "Host '%s' does not implement '%s'\n", ast_sockaddr_stringify(&p->sa), msg);
-			break;
-		case 400: /* Bad Request */
-		case 414: /* Request URI too long */
-		case 493: /* Undecipherable */
-			if (sipmethod == SIP_INVITE) {
-				handle_response_invite(p, resp, rest, req, seqno);
-			} else {
-				ast_log(LOG_WARNING, "Bad request to '%s': '%s'\n", ast_sockaddr_stringify(&p->sa), msg);
-			}
 			break;
 		default:
 			if ((resp >= 300) && (resp < 700)) {
