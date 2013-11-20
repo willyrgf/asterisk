@@ -1,0 +1,12 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(revision 402901)
++++ channels/chan_sip.c	(working copy)
+@@ -18839,6 +18839,7 @@
+ 	ast_cli(a->fd, "  URI user is phone no:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_USEREQPHONE)));
+ 	ast_cli(a->fd, "  Always auth rejects:    %s\n", AST_CLI_YESNO(sip_cfg.alwaysauthreject));
+ 	ast_cli(a->fd, "  Direct RTP setup:       %s\n", AST_CLI_YESNO(sip_cfg.directrtpsetup));
++	ast_cli(a->fd, "  Direct Media:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_DIRECT_MEDIA)));
+ 	ast_cli(a->fd, "  User Agent:             %s\n", global_useragent);
+ 	ast_cli(a->fd, "  SDP Session Name:       %s\n", ast_strlen_zero(global_sdpsession) ? "-" : global_sdpsession);
+ 	ast_cli(a->fd, "  SDP Owner Name:         %s\n", ast_strlen_zero(global_sdpowner) ? "-" : global_sdpowner);

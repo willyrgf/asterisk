@@ -7302,6 +7302,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		ast_rtp_instance_update_source(p->rtp);
 		break;
 	case AST_CONTROL_SRCCHANGE:
+		ast_debug(2, "SSRC change requested in %s\n", p->callid);
 		ast_rtp_instance_change_source(p->rtp);
 		break;
 	case AST_CONTROL_CONNECTED_LINE:
@@ -18843,6 +18844,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Videosupport:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
 	ast_cli(a->fd, "  Textsupport:            %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
 	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
+	ast_cli(a->fd, "  Direct Media:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_DIRECT_MEDIA)));
 	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 	ast_cli(a->fd, "  AutoCreate Peer:        %s\n", AST_CLI_YESNO(sip_cfg.autocreatepeer));
 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
@@ -26306,6 +26308,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 					return -1;
 				}
 				if (ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
+					ast_debug(3, "Requesting SSRC change in %s\n", p->callid);
 					ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
 				}
 			}

@@ -769,6 +769,7 @@ void ast_rtp_instance_update_source(struct ast_rtp_instance *instance)
 
 void ast_rtp_instance_change_source(struct ast_rtp_instance *instance)
 {
+	ast_debug(3, "Change source requested \n");
 	if (instance->engine->change_source) {
 		instance->engine->change_source(instance);
 	}
