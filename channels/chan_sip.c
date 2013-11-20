@@ -10062,18 +10062,18 @@ static int process_sdp_a_rtcp(const char *a, unsigned int *rtcpport)
 	char *tmp;
 	unsigned int port = 0;
 
-	if (strncasecmp(a, "rtcp",4)) {
-		return found;
-	}
+	if (!strncasecmp(a, "rtcp", 4)) {
+		ast_debug(2, "-- RTCP attribute found - %s\n", a);
 
-	tmp = strrchr(a, ':');
-	if (tmp) {
-		tmp++;
-		port = (unsigned int) atoi(tmp);
-		if (port > 0) {
-			ast_debug(2, "-- RTCP port set to %d (a=rtcp) \n", port);
-			*rtcpport = port;
-			found = TRUE;
+		tmp = strrchr(a, ':');
+		if (tmp) {
+			tmp++;
+			port = (unsigned int) atoi(tmp);
+			if (port > 0) {
+				ast_debug(2, "-- RTCP port set to %d (a=rtcp) \n", port);
+				*rtcpport = port;
+				found = TRUE;
+			}
 		}
 	}
 	return found;
