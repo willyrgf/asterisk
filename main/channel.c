@@ -7559,8 +7559,10 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	manager_bridge_event(1, 1, c0, c1);
 
 	/* Before we enter in and bridge these two together tell them both the source of audio has changed */
+#ifdef SRCUPDATE_ALWAYS
 	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
 	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
+#endif
 
 	for (/* ever */;;) {
 		struct timeval now = { 0, };
@@ -7733,8 +7735,10 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	ast_clear_flag(c1, AST_FLAG_END_DTMF_ONLY);
 
 	/* Now that we have broken the bridge the source will change yet again */
+#ifdef SRCUPDATE_ALWAYS
 	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
 	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
+#endif
 
 	ast_channel_lock_both(c0, c1);
 	c0->_bridge = NULL;

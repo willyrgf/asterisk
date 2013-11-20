@@ -7300,6 +7300,7 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 		}
 		break;
 	case AST_CONTROL_SRCUPDATE:
+		ast_debug(3, "Got control frame AST_CONTROL_SRCUPDATE on %s\n", p->callid);
 		ast_rtp_instance_update_source(p->rtp);
 		break;
 	case AST_CONTROL_SRCCHANGE:
