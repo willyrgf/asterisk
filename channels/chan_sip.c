@@ -1319,6 +1319,7 @@ static int process_sdp_a_sendonly(const char *a, int *sendonly);
 static int process_sdp_a_audio(const char *a, struct sip_pvt *p, struct ast_rtp_codecs *newaudiortp, int *last_rtpmap_codec);
 static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_codecs *newvideortp, int *last_rtpmap_codec);
 static int process_sdp_a_text(const char *a, struct sip_pvt *p, struct ast_rtp_codecs *newtextrtp, char *red_fmtp, int *red_num_gen, int *red_data_pt, int *last_rtpmap_codec);
+static int process_sdp_a_rtcp(const char *a, unsigned int *rtcpport);
 static int process_sdp_a_image(const char *a, struct sip_pvt *p);
 static void add_codec_to_sdp(const struct sip_pvt *p, format_t codec,
 			     struct ast_str **m_buf, struct ast_str **a_buf,
@@ -9485,6 +9486,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		/* Media stream specific parameters */
 		while ((type = get_sdp_line(&iterator, next - 1, req, &value)) != '\0') {
 			int processed = FALSE;
+			unsigned int rtcpport = 0;
 
 			switch (type) {
 			case 'c':
@@ -9520,6 +9522,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 						processed = TRUE;
 					} else if (process_sdp_a_audio(value, p, &newaudiortp, &last_rtpmap_codec)) {
 						processed = TRUE;
+					} else if (process_sdp_a_rtcp(value, &rtcpport)) {
+						ast_rtp_instance_set_remote_rtcp_port(p->rtp, rtcpport);
+						processed = TRUE;
 					}
 				}
 				/* Video specific scanning */
@@ -9528,6 +9533,9 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 						processed_crypto = TRUE;
 						processed = TRUE;
 					} else if (process_sdp_a_video(value, p, &newvideortp, &last_rtpmap_codec)) {
+						processed = TRUE;
+					} else if (process_sdp_a_rtcp(value, &rtcpport)) {
+						ast_rtp_instance_set_remote_rtcp_port(p->vrtp, rtcpport);
 						processed = TRUE;
 					}
 				}
@@ -9966,6 +9974,30 @@ static int process_sdp_a_sendonly(const char *a, int *sendonly)
 		if (*sendonly == -1)
 			*sendonly = 0;
 		found = TRUE;
+	}
+	return found;
+}
+
+/*! \brief Find rtcp header and change RTCP port for remote party */
+static int process_sdp_a_rtcp(const char *a, unsigned int *rtcpport)
+{
+	int found = FALSE;
+	char *tmp;
+	unsigned int port = 0;
+
+	if (strcasecmp(a, "rtcp")) {
+		return found;
+	}
+
+	tmp = strrchr(a, ':');
+	if (tmp) {
+		tmp++;
+		port = (unsigned int) atoi(tmp);
+		if (port > 0) {
+			ast_debug(2, "-- RTCP port set to %d (a=rtcp) \n", port);
+			*rtcpport = port;
+			found = TRUE;
+		}
 	}
 	return found;
 }

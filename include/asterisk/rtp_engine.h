@@ -381,6 +381,8 @@ struct ast_rtp_engine {
 	void (*packetization_set)(struct ast_rtp_instance *instance, struct ast_codec_pref *pref);
 	/*! Callback for setting the remote address that RTP is to be sent to */
 	void (*remote_address_set)(struct ast_rtp_instance *instance, struct ast_sockaddr *sa);
+	/*! Callback for setting the remote port that RTCP is to be sent to */
+	void (*remote_rtcp_port_set)(struct ast_rtp_instance *instance, unsigned int port);
 	/*! Callback for setting an alternate remote address */
 	void (*alt_remote_address_set)(struct ast_rtp_instance *instance, struct ast_sockaddr *sa);
 	/*! Callback for changing DTMF mode */
@@ -721,6 +723,16 @@ struct ast_frame *ast_rtp_instance_read(struct ast_rtp_instance *instance, int r
  */
 int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, const struct ast_sockaddr *address);
 
+/*!
+ * \brief Change the RTCP port we're sending to the remote instance
+ *
+ * \retval 0 success
+ *
+ * This changes the port we are sending to (for instance when we find a=rtcp in a sdp)
+ * \since 1.8 Edvx
+ */
+int ast_rtp_instance_set_remote_rtcp_port(struct ast_rtp_instance *instance,
+		unsigned int port);
 
 /*!
  * \brief Set the address of an an alternate RTP address to receive from

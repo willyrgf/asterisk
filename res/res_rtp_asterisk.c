@@ -332,6 +332,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 static void ast_rtp_prop_set(struct ast_rtp_instance *instance, enum ast_rtp_property property, int value);
 static int ast_rtp_fd(struct ast_rtp_instance *instance, int rtcp);
 static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct ast_sockaddr *addr);
+static void ast_rtp_remote_rtcp_port_set(struct ast_rtp_instance *instance, unsigned int port);
 static void ast_rtp_alt_remote_address_set(struct ast_rtp_instance *instance, struct ast_sockaddr *addr);
 static int rtp_red_init(struct ast_rtp_instance *instance, int buffer_time, int *payloads, int generations);
 static int rtp_red_buffer(struct ast_rtp_instance *instance, struct ast_frame *frame);
@@ -369,6 +370,7 @@ static struct ast_rtp_engine asterisk_rtp_engine = {
 	.prop_set = ast_rtp_prop_set,
 	.fd = ast_rtp_fd,
 	.remote_address_set = ast_rtp_remote_address_set,
+	.remote_rtcp_port_set = ast_rtp_remote_rtcp_port_set,
 	.alt_remote_address_set = ast_rtp_alt_remote_address_set,
 	.red_init = rtp_red_init,
 	.red_buffer = rtp_red_buffer,
@@ -2983,6 +2985,15 @@ static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct
 	}
 
 	return;
+}
+
+static void ast_rtp_remote_rtcp_port_set(struct ast_rtp_instance *instance, unsigned int port)
+{
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	if (!ast_sockaddr_isnull(&rtp->rtcp->them)) {
+		ast_sockaddr_set_port(&rtp->rtcp->them, port);
+		ast_debug(1, "Setting RTCP port on RTP instance '%p' to %d\n", instance, port);
+	}
 }
 
 static void ast_rtp_alt_remote_address_set(struct ast_rtp_instance *instance, struct ast_sockaddr *addr)
