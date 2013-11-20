@@ -408,6 +408,8 @@ int ast_rtp_instance_set_remote_rtcp_port(struct ast_rtp_instance *instance,
 	if (instance->engine->remote_rtcp_port_set) {
 		instance->engine->remote_rtcp_port_set(instance, port);
 	}
+
+	return 0;
 }
 
 int ast_rtp_instance_set_alt_remote_address(struct ast_rtp_instance *instance,

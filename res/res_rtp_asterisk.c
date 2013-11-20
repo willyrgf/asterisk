@@ -284,6 +284,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 static void ast_rtp_prop_set(struct ast_rtp_instance *instance, enum ast_rtp_property property, int value);
 static int ast_rtp_fd(struct ast_rtp_instance *instance, int rtcp);
 static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct ast_sockaddr *addr);
+static void ast_rtp_remote_rtcp_port_set(struct ast_rtp_instance *instance, unsigned int port);
 static void ast_rtp_alt_remote_address_set(struct ast_rtp_instance *instance, struct ast_sockaddr *addr);
 static int rtp_red_init(struct ast_rtp_instance *instance, int buffer_time, int *payloads, int generations);
 static int rtp_red_buffer(struct ast_rtp_instance *instance, struct ast_frame *frame);

@@ -674,6 +674,16 @@ struct ast_frame *ast_rtp_instance_read(struct ast_rtp_instance *instance, int r
  */
 int ast_rtp_instance_set_remote_address(struct ast_rtp_instance *instance, const struct ast_sockaddr *address);
 
+/*!
+ * \brief Change the RTCP port we're sending to the remote instance
+ *
+ * \retval 0 success
+ *
+ * This changes the port we are sending to (for instance when we find a=rtcp in a sdp)
+ * \since 1.8 Edvx
+ */
+int ast_rtp_instance_set_remote_rtcp_port(struct ast_rtp_instance *instance,
+		unsigned int port);
 
 /*!
  * \brief Set the address of an an alternate RTP address to receive from
