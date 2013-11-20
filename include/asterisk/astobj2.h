@@ -407,6 +407,8 @@ enum ao2_alloc_opts {
 	AO2_ALLOC_OPT_LOCK_NOLOCK = (2 << 0),
 	/*! The ao2 object locking option field mask. */
 	AO2_ALLOC_OPT_LOCK_MASK = (3 << 0),
+    /*! The ao2 object is part of a memory pool. */
+    AO2_ALLOC_OPT_MEMORY_POOL_ITEM = (4 << 0),
 };
 
 /*!
@@ -1932,5 +1934,77 @@ void __ao2_cleanup_debug(void *obj, const char *file, int line, const char *func
 #define ao2_cleanup(obj) __ao2_cleanup(obj)
 #endif
 void ao2_iterator_cleanup(struct ao2_iterator *iter);
+
+/*!
+ * \brief Construction function for memory pool items
+ *
+ * \param newobj The new object being built
+ *
+ * This function is called one time on each item in a memory pool. It should be
+ * used to create objects in an item that only need to be performed once, such
+ * as string fields.
+ *
+ * \retval 0 on success
+ * \retval any other value on error
+ */
+typedef int (*ao2_constructor_fn)(void *newobj);
+
+/*!
+ * \brief Cleanup function for memory pool items
+ *
+ * \param obj The object being cleaned up
+ *
+ * This function is called when the reference count on an item in the pool
+ * reaches 0. The memory comprising the item is not reclaimed, but references
+ * that the item holds should be released.
+ */
+typedef void (*ao2_cleanup_fn)(void *obj);
+
+struct ao2_memory_pool;
+
+
+/*!
+ * \brief Allocate a memory pool
+ *
+ */
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+
+#define ao2_t_memory_pool_alloc(pool_size, obj_size, ctor_fn, cleanup_fn, dtor_fn, tag) __ao2_memory_pool_alloc_debug((pool_size), (obj_size), (ctor_fn), (cleanup_fn), (dtor_fn), (tag), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_memory_pool_alloc(pool_size, obj_size, ctor_fn, cleanup_fn, dtor_fn) __ao2_memory_pool_alloc_debug((pool_size), (obj_size), (ctor_fn), (cleanup_fn), (dtor_fn), "", __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#else
+
+#define ao2_t_memory_pool_alloc(pool_size, obj_size, ctor_fn, cleanup_fn, dtor_fn, tag) __ao2_memory_pool_alloc((pool_size), (obj_size), (ctor_fn), (cleanup_fn), (dtor_fn))
+#define ao2_memory_pool_alloc(pool_size, obj_size, ctor_fn, cleanup_fn, dtor_fn) __ao2_memory_pool_alloc((pool_size), (obj_size), (ctor_fn), (cleanup_fn), (dtor_fn))
+
+#endif
+
+struct ao2_memory_pool *__ao2_memory_pool_alloc_debug(size_t pool_size, size_t obj_size,
+	ao2_constructor_fn ctor_fn, ao2_cleanup_fn cleanup_fn, ao2_destructor_fn dtor_fn,
+	const char *tag, const char *file, int line, const char *func) attribute_warn_unused_result;
+struct ao2_memory_pool *__ao2_memory_pool_alloc(size_t pool_size, size_t obj_size,
+	ao2_constructor_fn ctor_fn, ao2_cleanup_fn cleanup_fn, ao2_destructor_fn dtor_fn) attribute_warn_unused_result;
+
+/*!
+ * \brief Request an item from the memory pool
+ *
+ * NOTE:
+ */
+
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+
+#define ao2_t_memory_pool_request(pool, tag) __ao2_memory_pool_request_debug((pool), (tag), __FILE__, __LINE__, __PRETTY_FUNCTION__)
+#define ao2_memory_pool_request(pool) __ao2_memory_pool_request_debug((pool), "", __FILE__, __LINE__, __PRETTY_FUNCTION__)
+
+#else
+
+#define ao2_t_memory_pool_request(pool, tag) __ao2_memory_pool_request((pool))
+#define ao2_memory_pool_request(pool) __ao2_memory_pool_request((pool))
+
+#endif
+
+void *__ao2_memory_pool_request_debug(struct ao2_memory_pool *pool, const char *tag,
+	const char *file, int line, const char *func) attribute_warn_unused_result;
+void *__ao2_memory_pool_request(struct ao2_memory_pool *pool) attribute_warn_unused_result;
 
 #endif /* _ASTERISK_ASTOBJ2_H */

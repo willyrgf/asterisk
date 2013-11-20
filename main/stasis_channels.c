@@ -161,18 +161,9 @@ static int channel_snapshot_cmp_cb(void *obj, void *arg, int flags)
 	return strcasecmp(left->name, match) ? 0 : (CMP_MATCH | CMP_STOP);
 }
 
-static void channel_snapshot_dtor(void *obj)
-{
-	struct ast_channel_snapshot *snapshot = obj;
-
-	ast_string_field_free_memory(snapshot);
-	ao2_cleanup(snapshot->manager_vars);
-	ao2_cleanup(snapshot->channel_vars);
-}
-
 struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *chan)
 {
-	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
+	struct ast_channel_snapshot *snapshot;
 	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
 	char nativeformats[256];
 	struct ast_str *write_transpath = ast_str_alloca(256);
@@ -185,8 +176,10 @@ struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *cha
 		return NULL;
 	}
 
-	snapshot = ao2_alloc(sizeof(*snapshot), channel_snapshot_dtor);
-	if (!snapshot || ast_string_field_init(snapshot, 1024)) {
+	ao2_lock(ast_channel_snapshot_pool(chan));
+	snapshot = ao2_memory_pool_request(ast_channel_snapshot_pool(chan));
+	ao2_unlock(ast_channel_snapshot_pool(chan));
+	if (!snapshot) {
 		return NULL;
 	}
 
@@ -267,7 +260,6 @@ struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *cha
 	snapshot->channel_vars = ast_channel_get_vars(chan);
 	snapshot->tech_properties = ast_channel_tech(chan)->properties;
 
-	ao2_ref(snapshot, +1);
 	return snapshot;
 }
 

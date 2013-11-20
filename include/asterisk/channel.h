@@ -4048,6 +4048,8 @@ void ast_channel_internal_bridge_channel_set(struct ast_channel *chan, struct as
 struct ast_channel *ast_channel_internal_bridged_channel(const struct ast_channel *chan);
 void ast_channel_internal_bridged_channel_set(struct ast_channel *chan, struct ast_channel *value);
 
+struct ao2_memory_pool *ast_channel_snapshot_pool(struct ast_channel *chan);
+
 /*!
  * \since 11
  * \brief Retreive a comma-separated list of channels for which dialed cause information is available

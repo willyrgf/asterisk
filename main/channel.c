@@ -876,6 +876,10 @@ __ast_channel_alloc_ap(int needqueue, int state, const char *cid_num, const char
 		/* Channel structure allocation failure. */
 		return NULL;
 	}
+	if (ast_channel_internal_setup_memory_pool(tmp)) {
+		ao2_ref(tmp, -1);
+		return NULL;
+	}
 
 	ast_channel_stage_snapshot(tmp);
 

@@ -208,6 +208,7 @@ struct ast_channel {
 	struct timeval sending_dtmf_tv;		/*!< The time this channel started sending the current digit. (Invalid if sending_dtmf_digit is zero.) */
 	struct stasis_cp_single *topics;		/*!< Topic for all channel's events */
 	struct stasis_forward *endpoint_forward;	/*!< Subscription for event forwarding to endpoint's topic */
+	struct ao2_memory_pool *snapshot_pool;	/*!< Pool of snapshots */
 };
 
 /*! \brief The monotonically increasing integer counter for channel uniqueids */
@@ -1313,6 +1314,11 @@ struct ast_flags *ast_channel_flags(struct ast_channel *chan)
 	return &chan->flags;
 }
 
+struct ao2_memory_pool *ast_channel_snapshot_pool(struct ast_channel *chan)
+{
+	return chan->snapshot_pool;
+}
+
 static int collect_names_cb(void *obj, void *arg, int flags) {
 	struct ast_control_pvt_cause_code *cause_code = obj;
 	struct ast_str **str = arg;
@@ -1379,6 +1385,39 @@ static int pvt_cause_cmp_fn(void *obj, void *vstr, int flags)
 
 #define DIALED_CAUSES_BUCKETS 37
 
+static void channel_snapshot_cleanup(void *obj)
+{
+	struct ast_channel_snapshot *snapshot = obj;
+
+	ao2_cleanup(snapshot->manager_vars);
+	snapshot->manager_vars = NULL;
+	ao2_cleanup(snapshot->channel_vars);	
+	snapshot->channel_vars = NULL;
+}
+
+static void channel_snapshot_dtor(void *obj)
+{
+	struct ast_channel_snapshot *snapshot = obj;
+
+	ast_string_field_free_memory(snapshot);	
+}
+
+static int channel_snapshot_ctor(void *obj)
+{
+	struct ast_channel_snapshot *snapshot = obj;
+
+	return ast_string_field_init(snapshot, 1024);
+}
+
+int ast_channel_internal_setup_memory_pool(struct ast_channel *chan)
+{
+	if (!(chan->snapshot_pool = ao2_memory_pool_alloc(16, sizeof(struct ast_channel_snapshot),
+		channel_snapshot_ctor, channel_snapshot_cleanup, channel_snapshot_dtor))) {
+		return -1;
+	}
+	return 0;
+}
+
 struct ast_channel *__ast_channel_internal_alloc(void (*destructor)(void *obj), const char *linkedid, const char *file, int line, const char *function)
 {
 	struct ast_channel *tmp;
@@ -1423,6 +1462,12 @@ void ast_channel_internal_cleanup(struct ast_channel *chan)
 		ao2_t_ref(chan->dialed_causes, -1,
 			"done with dialed causes since the channel is going away");
 		chan->dialed_causes = NULL;
+	}
+
+	if (chan->snapshot_pool) {
+		ao2_t_ref(chan->snapshot_pool, -1,
+			"Dispose of pool during channel destruction");
+		chan->snapshot_pool = NULL;
 	}
 
 	ast_string_field_free_memory(chan);

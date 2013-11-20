@@ -51,6 +51,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  */
 struct __priv_data {
 	int ref_counter;
+	/*! Function called by memory pools when object is reclaimed by pool */
+	ao2_cleanup_fn cleanup_fn;
+	/*! Function called when object is destroyed */
 	ao2_destructor_fn destructor_fn;
 	/*! User data size for stats */
 	size_t data_size;
@@ -142,6 +145,9 @@ void ao2_bt(void)
 
 #define INTERNAL_OBJ_RWLOCK(user_data) \
 	((struct astobj2_rwlock *) (((char *) (user_data)) - sizeof(struct astobj2_rwlock)))
+
+#define INTERNAL_OBJ_MEMORY_POOL(user_data) \
+	(struct ao2_memory_pool_item *) (((char *) (user_data)) - sizeof(struct ao2_memory_pool_item))
 
 /*!
  * \brief convert from a pointer _p to a user-defined object
@@ -431,6 +437,46 @@ void *ao2_object_get_lockaddr(void *user_data)
 	return NULL;
 }
 
+/*! \brief An item in a memory pool */
+struct ao2_memory_pool_item {
+	/*! Pointer to the next free item in the pool. When this item is removed
+	 * from the pool, this pointer will be NULL. */
+	struct ao2_memory_pool_item *next;
+	/*! Pointer/reference to the pool. When the item is removed, the reference
+	 * to the pool is bumped. When not requested, this pointer should not be
+	 * used. */
+	struct ao2_memory_pool *pool;
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+	/*! Debug information populated when this object is requested */
+	struct {
+		const char *tag;
+		const char *file;
+		const char *func;
+		int line;
+	} debug;
+#endif
+	/*! The actual ao2 object, with lock */
+	struct astobj2_lock ao2_obj;
+};
+
+/*! \brief A pool of ao2 objects */
+struct ao2_memory_pool {
+	/*! Constructor function for each item in the pool */
+	ao2_constructor_fn constructor_fn;
+	/*! Size (number of items) in the pool */
+	size_t pool_size;
+	/*! Size of the user data in each item in the pool */
+	size_t obj_size;
+	/*! A memory pool to be used if this one is exhausted. */
+	struct ao2_memory_pool *reserve_pool;
+	/*! Pointer to the next free item in the pool */
+	struct ao2_memory_pool_item *first_free_item;
+	/*! Pointer to the last free item in the pool */
+	struct ao2_memory_pool_item *last_free_item;
+	/*! The actual items in the memory pool */
+	struct ao2_memory_pool_item *items[0];
+};
+
 static int internal_ao2_ref(void *user_data, int delta, const char *file, int line, const char *func)
 {
 	struct astobj2 *obj = INTERNAL_OBJ(user_data);
@@ -469,8 +515,37 @@ static int internal_ao2_ref(void *user_data, int delta, const char *file, int li
 	}
 
 	/* last reference, destroy the object */
-	if (obj->priv_data.destructor_fn != NULL) {
+	if ((obj->priv_data.options & AO2_ALLOC_OPT_MEMORY_POOL_ITEM) == 0
+		&& obj->priv_data.destructor_fn != NULL) {
 		obj->priv_data.destructor_fn(user_data);
+	} else if (obj->priv_data.options & AO2_ALLOC_OPT_MEMORY_POOL_ITEM) {
+		struct ao2_memory_pool_item *item = INTERNAL_OBJ_MEMORY_POOL(user_data);
+
+		if (obj->priv_data.cleanup_fn) {
+			obj->priv_data.cleanup_fn(user_data);
+		}
+
+#if defined(REF_DEBUG) || defined(__AO2_DEBUG_MALLOC)
+		item->debug.tag = NULL;
+		item->debug.file = NULL;
+		item->debug.func = NULL;
+		item->debug.line = 0;
+#endif
+		ast_assert(item->next == NULL);
+		ao2_lock(item->pool);
+		if (item->pool->first_free_item == NULL) {
+			item->pool->first_free_item = item;
+		}
+
+		/* Insert the item at the end of the list */
+		if (item->pool->last_free_item) {
+			item->pool->last_free_item->next = item;
+		}
+		item->pool->last_free_item = item;
+		ao2_unlock(item->pool);
+		ao2_t_ref(item->pool, -1, "Remove pool ref from item");
+
+		return ret;
 	}
 
 #ifdef AO2_DEBUG
@@ -645,6 +720,232 @@ void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned in
 	return internal_ao2_alloc(data_size, destructor_fn, options, __FILE__, __LINE__, __FUNCTION__);
 }
 
+/*! \brief Compute where in a memory pool an item exists, based on its index */
+#define MEMORY_POOL_ITEM(pool, index) \
+	((struct ao2_memory_pool_item *)((char *)((pool)->items) + (index) * ((pool)->obj_size + sizeof(struct ao2_memory_pool_item))))
+
+/*!
+ * \brief Destructor for a memory pool
+ *
+ * \param obj The memory pool to be destroyed
+ *
+ * This will destroy all items in the memory pool and release any reserved pools
+ * off of this pool. Note that this should never be called until all items in
+ * the memory pool are no longer referenced by consumers.
+ */
+static void memory_pool_dtor(void *obj)
+{
+	struct ao2_memory_pool *pool = obj;
+	int i;
+
+	for (i = 0; i < pool->pool_size; i++) {
+		struct ao2_memory_pool_item *item = MEMORY_POOL_ITEM(pool, i);
+		struct astobj2 *item_obj = (struct astobj2 *)&item->ao2_obj.priv_data;
+
+		if (item_obj->priv_data.destructor_fn) {
+			item_obj->priv_data.destructor_fn(&item->ao2_obj.user_data);
+		}
+
+		item_obj->priv_data.magic = 0;
+		ast_mutex_destroy(&item->ao2_obj.mutex.lock);
+	}
+
+	if (pool->reserve_pool) {
+		ao2_t_ref(pool->reserve_pool, -1, "Release reserve pool");
+	}
+}
+
+/*! \brief Compute the size of a memory pool */
+#define POOL_SIZE(pool, obj_size, pool_size) \
+	sizeof(*(pool)) + (sizeof(struct ao2_memory_pool_item) + (obj_size)) * (pool_size)
+
+/*!
+ * \internal
+ * \brief Initialize an allocated pool
+ *
+ * \param pool The pool to initialize
+ * \param pool_size The number of items in the pool
+ * \param obj_size The size of each item in the pool
+ * \param ctor_fn Constructor function for each item
+ * \param cleanup_fn Cleanup function for each item
+ * \param dtor_fn Destructor function for each item
+ *
+ * \retval The pool on success
+ * \retval NULL on error
+ */
+static struct ao2_memory_pool *internal_ao2_memory_pool_init(struct ao2_memory_pool *pool,
+	size_t pool_size, size_t obj_size, ao2_constructor_fn ctor_fn,
+	ao2_cleanup_fn cleanup_fn, ao2_destructor_fn dtor_fn)
+{
+	struct ao2_memory_pool_item *prev = NULL;
+	int i;
+
+	pool->constructor_fn = ctor_fn;
+	pool->pool_size = pool_size;
+	pool->obj_size = obj_size;
+
+	/* Initialize each object in the pool */
+	for (i = 0; i < pool->pool_size; i++) {
+		struct ao2_memory_pool_item *item = MEMORY_POOL_ITEM(pool, i);
+
+		ast_mutex_init(&item->ao2_obj.mutex.lock);
+
+		item->ao2_obj.priv_data.ref_counter = 0;
+		item->ao2_obj.priv_data.cleanup_fn = cleanup_fn;
+		item->ao2_obj.priv_data.destructor_fn = dtor_fn;
+		item->ao2_obj.priv_data.data_size = pool->obj_size;
+		item->ao2_obj.priv_data.options = AO2_ALLOC_OPT_MEMORY_POOL_ITEM | AO2_ALLOC_OPT_LOCK_MUTEX;
+		item->ao2_obj.priv_data.magic = AO2_MAGIC;
+		if (pool->constructor_fn && pool->constructor_fn(item->ao2_obj.user_data)) {
+			ao2_t_ref(pool, -1, "Dispose of pool due to item init failure");
+			return NULL;
+		}
+
+		item->pool = pool;
+		if (prev) {
+			prev->next = item;
+		}
+		prev = item;
+	}
+
+	pool->first_free_item = MEMORY_POOL_ITEM(pool, 0);
+	pool->last_free_item = MEMORY_POOL_ITEM(pool, (pool->pool_size - 1));
+	return pool;
+}
+
+struct ao2_memory_pool *__ao2_memory_pool_alloc_debug(size_t pool_size, size_t obj_size,
+	ao2_constructor_fn ctor_fn, ao2_cleanup_fn cleanup_fn, ao2_destructor_fn dtor_fn,
+	const char *tag, const char *file, int line, const char *func)
+{
+	struct ao2_memory_pool *pool;
+
+#if defined(REF_DEBUG)
+	pool = __ao2_alloc_debug(POOL_SIZE(pool, obj_size, pool_size),
+							   memory_pool_dtor,
+							   AO2_ALLOC_OPT_LOCK_MUTEX,
+							   tag, file, line, func, 1);
+#elif defined(__AST_DEBUG_MALLOC)
+	pool = __ao2_alloc_debug(POOL_SIZE(pool, obj_size, pool_size),
+							   memory_pool_dtor,
+							   AO2_ALLOC_OPT_LOCK_MUTEX,
+							   tag, file, line, func, 0);
+#else
+	/* We shouldn't get here if not compiled with a debug mode */
+	pool = NULL;
+	ast_assert(0);
+#endif
+	if (!pool) {
+		return NULL;
+	}
+
+	return internal_ao2_memory_pool_init(pool, pool_size, obj_size, ctor_fn,
+		cleanup_fn, dtor_fn);
+}
+
+struct ao2_memory_pool *__ao2_memory_pool_alloc(size_t pool_size, size_t obj_size,
+    ao2_constructor_fn ctor_fn, ao2_cleanup_fn cleanup_fn, ao2_destructor_fn dtor_fn)
+{
+	struct ao2_memory_pool *pool;
+
+	pool = __ao2_alloc(POOL_SIZE(pool, obj_size, pool_size),
+					   memory_pool_dtor,
+					   AO2_ALLOC_OPT_LOCK_MUTEX);
+	if (!pool) {
+		return NULL;
+	}
+
+	return internal_ao2_memory_pool_init(pool, pool_size, obj_size, ctor_fn,
+		cleanup_fn, dtor_fn);
+}
+
+static void *internal_ao2_memory_pool_request(struct ao2_memory_pool *pool)
+{
+	struct ao2_memory_pool_item *item;
+
+	item = pool->first_free_item;
+	item->ao2_obj.priv_data.ref_counter = 1;
+	ao2_t_ref(item->pool, +1, "Increase pool ref count from item request");
+
+	/* Set up the next item in the pool and remove ourselves from it */
+	pool->first_free_item = item->next;
+	if (pool->last_free_item == item) {
+		pool->last_free_item = NULL;
+	}
+	item->next = NULL;
+
+	return EXTERNAL_OBJ(&item->ao2_obj);
+}
+
+void *__ao2_memory_pool_request_debug(struct ao2_memory_pool *pool, const char *tag,
+	const char *file, int line, const char *func)
+{
+#if defined(REF_DEBUG)
+	int refo;
+#endif
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+	struct ao2_memory_pool_item *item;
+#endif
+	void *user_data;
+
+	if (!pool) {
+		return NULL;
+	}
+
+	if (pool->first_free_item == NULL) {
+		if (!pool->reserve_pool) {
+			pool->reserve_pool = __ao2_memory_pool_alloc_debug(pool->pool_size * 2,
+				pool->obj_size,
+				pool->constructor_fn,
+				MEMORY_POOL_ITEM(pool, 0)->ao2_obj.priv_data.cleanup_fn,
+				MEMORY_POOL_ITEM(pool, 0)->ao2_obj.priv_data.destructor_fn,
+				tag, file, line, func);
+			if (!pool->reserve_pool) {
+				return NULL;
+			}
+		}
+		return __ao2_memory_pool_request_debug(pool->reserve_pool, tag, file, line, func);
+	}
+
+	user_data = internal_ao2_memory_pool_request(pool);
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+	item = INTERNAL_OBJ_MEMORY_POOL(user_data);
+	item->debug.tag = tag;
+	item->debug.file = file;
+	item->debug.func = func;
+	item->debug.line = line;
+#endif
+#if defined(REF_DEBUG)
+	if ((refo = fopen(REF_FILE, "a"))) {
+		fprintf(refo, "%p =1   %s:%d:%s (%s)\n", item, file, line, func, tag);
+		fclose(refo);
+	}
+#endif
+
+	return user_data;	
+}
+
+void *__ao2_memory_pool_request(struct ao2_memory_pool *pool)
+{
+	if (!pool) {
+		return NULL;
+	}
+
+	if (pool->first_free_item == NULL) {
+		if (!pool->reserve_pool) {
+			pool->reserve_pool = ao2_memory_pool_alloc(pool->pool_size * 2,
+				pool->obj_size,
+				pool->constructor_fn,
+				MEMORY_POOL_ITEM(pool, 0)->ao2_obj.priv_data.cleanup_fn,
+				MEMORY_POOL_ITEM(pool, 0)->ao2_obj.priv_data.destructor_fn);
+			if (!pool->reserve_pool) {
+				return NULL;
+			}
+		}
+		return __ao2_memory_pool_request(pool->reserve_pool);
+	}
+
+	return internal_ao2_memory_pool_request(pool);
+}
 
 void __ao2_global_obj_release(struct ao2_global_obj *holder, const char *tag, const char *file, int line, const char *func, const char *name)
 {

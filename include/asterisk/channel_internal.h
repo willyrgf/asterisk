@@ -24,4 +24,4 @@ void ast_channel_internal_finalize(struct ast_channel *chan);
 int ast_channel_internal_is_finalized(struct ast_channel *chan);
 void ast_channel_internal_cleanup(struct ast_channel *chan);
 int ast_channel_internal_setup_topics(struct ast_channel *chan);
-
+int ast_channel_internal_setup_memory_pool(struct ast_channel *chan);
