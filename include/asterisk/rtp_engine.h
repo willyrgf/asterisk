@@ -341,6 +341,8 @@ struct ast_rtp_engine {
 	void (*packetization_set)(struct ast_rtp_instance *instance, struct ast_codec_pref *pref);
 	/*! Callback for setting the remote address that RTP is to be sent to */
 	void (*remote_address_set)(struct ast_rtp_instance *instance, struct ast_sockaddr *sa);
+	/*! Callback for setting the remote port that RTCP is to be sent to */
+	void (*remote_rtcp_port_set)(struct ast_rtp_instance *instance, unsigned int port);
 	/*! Callback for setting an alternate remote address */
 	void (*alt_remote_address_set)(struct ast_rtp_instance *instance, struct ast_sockaddr *sa);
 	/*! Callback for changing DTMF mode */
