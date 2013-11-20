@@ -4,3 +4,7 @@ It combines
 - Comfort noise
 - SIP2CAuse modifications
 - PRACK support
+
+I've also added a few patches to succeed in testing
+- p2pbridge blocking (a bad patch in my view)
+

@@ -9985,7 +9985,7 @@ static int process_sdp_a_rtcp(const char *a, unsigned int *rtcpport)
 	char *tmp;
 	unsigned int port = 0;
 
-	if (strcasecmp(a, "rtcp")) {
+	if (strncasecmp(a, "rtcp", 4)) {
 		return found;
 	}
 
