@@ -513,9 +513,11 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;timert1=500                    ; Default T1 timer
                                 ; Defaults to 500 ms or the measured round-trip
                                 ; time to a peer (qualify=yes).
-;timerb=32000                   ; Call setup timer. If a provisional response is not received
+;timerb=32000                   ; Call setup timer. If a final response is not received
                                 ; in this amount of time, the call will autocongest
                                 ; Defaults to 64*timert1
+;timerc=420                     ; Call setup timer. If a provisional response is not received
+				; during this time - the call will autocongest
 
 ;--------------------------- RTP timers ----------------------------------------------------
 ; These timers are currently used for both audio and video streams. The RTP timeouts

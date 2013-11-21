@@ -19,4 +19,4 @@ This fires after 3 minutes if there's no provisional response at all received fr
 
 When the timer fires, the call attempt is killed..
 
-The timer is set per channel, not per device, initially.
+The timer is set per channel, or per device.
