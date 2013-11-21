@@ -1,0 +1,22 @@
+Edvina AB
+Olle E. Johansson
+
+Start date: 2013-11-21
+
+
+
+
+
+
+
+
+Grape - implement timer C in Chan_sip
+=====================================
+
+If we call a server and that server just sends 100 trying, we wait forever. This is not good.
+In order to fix this, this branch will implement a timer C that is normally a proxy timer.
+This fires after 3 minutes if there's no provisional response at all received from a device.
+
+When the timer fires, the call attempt is killed..
+
+The timer is set per channel, not per device, initially.

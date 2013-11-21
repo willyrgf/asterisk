@@ -1018,6 +1018,7 @@ struct sip_pvt {
 	unsigned short req_secure_signaling:1;/*!< Whether we are required to have secure signaling or not */
 	int timer_t1;                     /*!< SIP timer T1, ms rtt */
 	int timer_b;                      /*!< SIP timer B, ms */
+	int timer_c;                      /*!< SIP timer B, ms */
 	unsigned int sipoptions;          /*!< Supported SIP options on the other end */
 	unsigned int reqsipoptions;       /*!< Required SIP options on the other end */
 	struct ast_codec_pref prefs;      /*!< codec prefs */
@@ -1078,6 +1079,7 @@ struct sip_pvt {
 
 	int initid;                         /*!< Auto-congest ID if appropriate (scheduler) */
 	int waitid;                         /*!< Wait ID for scheduler after 491 or other delays */
+	int timercid;                       /*!< Scheduler ID for timer C delays */
 	int reinviteid;                     /*!< Reinvite in case of provisional, but no final response */
 	int autokillid;                     /*!< Auto-kill ID (scheduler) */
 	int t38id;                          /*!< T.38 Response ID */
@@ -1271,6 +1273,7 @@ struct sip_peer {
 	struct sip_st_cfg stimer;       /*!<  SIP Session-Timers */
 	int timer_t1;                   /*!<  The maximum T1 value for the peer */
 	int timer_b;                    /*!<  The maximum timer B (transaction timeouts) */
+	int timer_c;                    /*!<  The timer c (transaction timeouts) */
 	int fromdomainport;             /*!<  The From: domain port */
 
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
