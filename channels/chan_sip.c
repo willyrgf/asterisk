@@ -20820,14 +20820,6 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
  	/* Any response between 100 and 199 is PROCEEDING */
  	if (resp >= 100 && resp < 200 && p->invitestate == INV_CALLING) {
  		p->invitestate = INV_PROCEEDING;
-		if (p->timercid == -1) {
-			/* Trigger timer C */
-			AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p,
-						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
-						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
-						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
-			ast_debug(3, "Setting Timer C to %d \n", p->timer_c);
-		}
 	}
 
 	if (resp >= 200) {
@@ -20835,9 +20827,20 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		AST_SCHED_DEL_UNREF(sched, p->timercid, dialog_unref(p, "when you delete the timercid sched, you should dec the refcount for the stored dialog ptr"));
 		ast_debug(3, "Deleting Timer C (response received)\n");
 	} else {
-		/* reset timer C */
-		AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p, 1);
-		ast_debug(3, "Resetting Timer C to %d \n", p->timer_c);
+ 		if (p->invitestate == INV_PROCEEDING) {
+			if (p->timercid == -1) {
+				/* Trigger timer C */
+				AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c * 1000, dialog_proceeding_timeout, p,
+						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
+						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
+						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
+				ast_debug(3, "Setting Timer C to %d s\n", p->timer_c);
+			} else {
+				/* reset timer C */
+				AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c * 1000, dialog_proceeding_timeout, p, 1);
+				ast_debug(3, "Resetting Timer C to %d s \n", p->timer_c);
+			}
+		}
 	}
 
  	/* Final response, not 200 ? */
@@ -28143,7 +28146,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	int firstpass = 1;
 	uint16_t port = 0;
 	int format = 0;		/* Ama flags */
-	int timerb_set = 0, timert1_set = 0, timerc_set = 0;
+	int timerb_set = 0, timert1_set = 0;
 	time_t regseconds = 0;
 	struct ast_flags peerflags[3] = {{(0)}};
 	struct ast_flags mask[3] = {{(0)}};
@@ -28501,7 +28504,6 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_WARNING, "'%s' is not a valid Timer C time at line %d (above 100, default 180 s).  Using configured default %d.\n", v->value, v->lineno, global_timer_c);
 					peer->timer_c = global_timer_c;
 				}
-				timerc_set = 1;
 			} else if (!strcasecmp(v->name, "setvar")) {
 				peer->chanvars = add_var(v->value, peer->chanvars);
 			} else if (!strcasecmp(v->name, "header")) {
