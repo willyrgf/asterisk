@@ -87,6 +87,7 @@
 
 #define DEFAULT_RETRANS           1000        /*!< How frequently to retransmit Default: 2 * 500 ms in RFC 3261 */
 #define DEFAULT_TIMER_T1          500         /*!< SIP timer T1 (according to RFC 3261) */
+#define DEFAULT_TIMER_C           180         /*!< SIP timer C (according to RFC 3261) */
 #define SIP_TRANS_TIMEOUT         64 * DEFAULT_TIMER_T1 /*!< SIP request timeout (rfc 3261) 64*T1
                                                          *  \todo Use known T1 for timeout (peerpoke)
                                                          */

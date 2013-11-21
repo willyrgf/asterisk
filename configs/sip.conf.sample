@@ -517,7 +517,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; in this amount of time, the call will autocongest
                                 ; Defaults to 64*timert1
 ;timerc=420                     ; Call setup timer. If a provisional response is not received
-				; during this time - the call will autocongest
+				; during this time - the call will autocongest. Default 180 secs.
+				; Needs to be higher than 100. RFC says MUST be higher than 
+				; or equal to 180.
 
 ;--------------------------- RTP timers ----------------------------------------------------
 ; These timers are currently used for both audio and video streams. The RTP timeouts

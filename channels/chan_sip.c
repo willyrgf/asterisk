@@ -20832,11 +20832,11 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 
 	if (resp >= 200) {
 		/* Delete timer C - we have a response */
-		AST_SCHED_DEL_UNREF(sched, dialog->timercid, dialog_unref(dialog, "when you delete the timercid sched, you should dec the refcount for the stored dialog ptr"));
+		AST_SCHED_DEL_UNREF(sched, p->timercid, dialog_unref(p, "when you delete the timercid sched, you should dec the refcount for the stored dialog ptr"));
 		ast_debug(3, "Deleting Timer C (response received)\n");
 	} else {
 		/* reset timer C */
-		AST_SCHED_REPLACE_VARIABLE(dialog->timercid, sched, dialog->timer_c, dialog_proceeding_timeout, dialog, 1);
+		AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p, 1);
 		ast_debug(3, "Resetting Timer C to %d \n", p->timer_c);
 	}
 
@@ -28498,7 +28498,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				timerb_set = 1;
 			} else if (!strcasecmp(v->name, "timerc")) {
 				if ((sscanf(v->value, "%30d", &peer->timer_c) != 1) || (peer->timer_c > 100)) {
-					ast_log(LOG_WARNING, "'%s' is not a valid Timer C time at line %d (above 100, default 180 s).  Using configured default %s.\n", v->value, v->lineno, global_timer_c);
+					ast_log(LOG_WARNING, "'%s' is not a valid Timer C time at line %d (above 100, default 180 s).  Using configured default %d.\n", v->value, v->lineno, global_timer_c);
 					peer->timer_c = global_timer_c;
 				}
 				timerc_set = 1;
