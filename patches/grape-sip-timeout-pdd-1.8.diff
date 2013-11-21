@@ -1,7 +1,7 @@
 Index: channels/chan_sip.c
 ===================================================================
---- channels/chan_sip.c	(.../branches/1.8)	(revision 402920)
-+++ channels/chan_sip.c	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402920)
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 402924)
++++ channels/chan_sip.c	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402924)
 @@ -736,6 +736,7 @@
  static int global_t1;           /*!< T1 time */
  static int global_t1min;        /*!< T1 roundtrip time minimum */
@@ -141,21 +141,13 @@ Index: channels/chan_sip.c
  	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
  	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
  
-@@ -20771,9 +20818,28 @@
+@@ -20771,9 +20818,31 @@
  		resp = 183;
  
   	/* Any response between 100 and 199 is PROCEEDING */
 - 	if (resp >= 100 && resp < 200 && p->invitestate == INV_CALLING)
 + 	if (resp >= 100 && resp < 200 && p->invitestate == INV_CALLING) {
   		p->invitestate = INV_PROCEEDING;
-+		if (p->timercid == -1) {
-+			/* Trigger timer C */
-+			AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p,
-+						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
-+						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
-+						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
-+			ast_debug(3, "Setting Timer C to %d \n", p->timer_c);
-+		}
 +	}
  
 +	if (resp >= 200) {
@@ -163,15 +155,26 @@ Index: channels/chan_sip.c
 +		AST_SCHED_DEL_UNREF(sched, p->timercid, dialog_unref(p, "when you delete the timercid sched, you should dec the refcount for the stored dialog ptr"));
 +		ast_debug(3, "Deleting Timer C (response received)\n");
 +	} else {
-+		/* reset timer C */
-+		AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p, 1);
-+		ast_debug(3, "Resetting Timer C to %d \n", p->timer_c);
++ 		if (p->invitestate == INV_PROCEEDING) {
++			if (p->timercid == -1) {
++				/* Trigger timer C */
++				AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c * 1000, dialog_proceeding_timeout, p,
++						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
++						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
++						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
++				ast_debug(3, "Setting Timer C to %d s\n", p->timer_c);
++			} else {
++				/* reset timer C */
++				AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c * 1000, dialog_proceeding_timeout, p, 1);
++				ast_debug(3, "Resetting Timer C to %d s \n", p->timer_c);
++			}
++		}
 +	}
 +
   	/* Final response, not 200 ? */
   	if (resp >= 300 && (p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA ))
   		p->invitestate = INV_COMPLETED;
-@@ -27986,6 +28052,7 @@
+@@ -27986,6 +28055,7 @@
  	peer->stimer.st_max_se = global_max_se;
  	peer->timer_t1 = global_t1;
  	peer->timer_b = global_timer_b;
@@ -179,16 +182,7 @@ Index: channels/chan_sip.c
  	clear_peer_mailboxes(peer);
  	peer->disallowed_methods = sip_cfg.disallowed_methods;
  	peer->transports = default_transports;
-@@ -28076,7 +28143,7 @@
- 	int firstpass = 1;
- 	uint16_t port = 0;
- 	int format = 0;		/* Ama flags */
--	int timerb_set = 0, timert1_set = 0;
-+	int timerb_set = 0, timert1_set = 0, timerc_set = 0;
- 	time_t regseconds = 0;
- 	struct ast_flags peerflags[3] = {{(0)}};
- 	struct ast_flags mask[3] = {{(0)}};
-@@ -28429,6 +28496,12 @@
+@@ -28429,6 +28499,11 @@
  					peer->timer_b = global_timer_b;
  				}
  				timerb_set = 1;
@@ -197,11 +191,10 @@ Index: channels/chan_sip.c
 +					ast_log(LOG_WARNING, "'%s' is not a valid Timer C time at line %d (above 100, default 180 s).  Using configured default %d.\n", v->value, v->lineno, global_timer_c);
 +					peer->timer_c = global_timer_c;
 +				}
-+				timerc_set = 1;
  			} else if (!strcasecmp(v->name, "setvar")) {
  				peer->chanvars = add_var(v->value, peer->chanvars);
  			} else if (!strcasecmp(v->name, "header")) {
-@@ -29002,6 +29075,7 @@
+@@ -29002,6 +29077,7 @@
  	global_authfailureevents = FALSE;
  	global_t1 = DEFAULT_TIMER_T1;
  	global_timer_b = 64 * DEFAULT_TIMER_T1;
@@ -209,7 +202,7 @@ Index: channels/chan_sip.c
  	global_t1min = DEFAULT_T1MIN;
  	global_qualifyfreq = DEFAULT_QUALIFYFREQ;
  	global_t38_maxdatagram = -1;
-@@ -29087,6 +29161,12 @@
+@@ -29087,6 +29163,12 @@
  				ast_log(LOG_WARNING, "Invalid value for timerb ('%s').  Setting to default ('%d').\n", v->value, global_timer_b);
  			}
  			timerb_set = 1;
@@ -222,7 +215,7 @@ Index: channels/chan_sip.c
  		} else if (!strcasecmp(v->name, "t1min")) {
  			global_t1min = atoi(v->value);
  		} else if (!strcasecmp(v->name, "transport")) {
-@@ -31668,7 +31748,8 @@
+@@ -31668,7 +31750,8 @@
  	MEMBER(sip_peer, maxms, AST_DATA_MILLISECONDS)		\
  	MEMBER(sip_peer, qualifyfreq, AST_DATA_MILLISECONDS)	\
  	MEMBER(sip_peer, timer_t1, AST_DATA_MILLISECONDS)	\
@@ -234,8 +227,8 @@ Index: channels/chan_sip.c
  
 Index: channels/sip/include/sip.h
 ===================================================================
---- channels/sip/include/sip.h	(.../branches/1.8)	(revision 402920)
-+++ channels/sip/include/sip.h	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402920)
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 402924)
++++ channels/sip/include/sip.h	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402924)
 @@ -87,6 +87,7 @@
  
  #define DEFAULT_RETRANS           1000        /*!< How frequently to retransmit Default: 2 * 500 ms in RFC 3261 */
@@ -270,8 +263,8 @@ Index: channels/sip/include/sip.h
  	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 Index: configs/sip.conf.sample
 ===================================================================
---- configs/sip.conf.sample	(.../branches/1.8)	(revision 402920)
-+++ configs/sip.conf.sample	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402920)
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 402924)
++++ configs/sip.conf.sample	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402924)
 @@ -513,9 +513,13 @@
  ;timert1=500                    ; Default T1 timer
                                  ; Defaults to 500 ms or the measured round-trip
@@ -290,7 +283,7 @@ Index: configs/sip.conf.sample
 Index: README.grape
 ===================================================================
 --- README.grape	(.../branches/1.8)	(revision 0)
-+++ README.grape	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402920)
++++ README.grape	(.../team/oej/grape-sip-timeout-pdd-1.8)	(revision 402924)
 @@ -0,0 +1,22 @@
 +Edvina AB
 +Olle E. Johansson
@@ -317,10 +310,6 @@ Index: README.grape
 
 Property changes on: README.grape
 ___________________________________________________________________
-Added: svn:mime-type
-## -0,0 +1 ##
-+text/plain
-\ No newline at end of property
 Added: svn:keywords
 ## -0,0 +1 ##
 +Author Date Id Revision
@@ -328,4 +317,8 @@ Added: svn:keywords
 Added: svn:eol-style
 ## -0,0 +1 ##
 +native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
 \ No newline at end of property
