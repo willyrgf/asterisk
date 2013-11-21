@@ -20942,14 +20942,6 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
  	/* Any response between 100 and 199 is PROCEEDING */
  	if (resp >= 100 && resp < 200 && p->invitestate == INV_CALLING) {
  		p->invitestate = INV_PROCEEDING;
-		if (p->timercid == -1) {
-			/* Trigger timer C */
-			AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p,
-						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
-						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
-						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
-			ast_debug(3, "Setting Timer C to %d \n", p->timer_c);
-		}
 	}
 
 	if (resp >= 200) {
@@ -20957,9 +20949,20 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		AST_SCHED_DEL_UNREF(sched, p->timercid, dialog_unref(p, "when you delete the timercid sched, you should dec the refcount for the stored dialog ptr"));
 		ast_debug(3, "Deleting Timer C (response received)\n");
 	} else {
-		/* reset timer C */
-		AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p, 1);
-		ast_debug(3, "Resetting Timer C to %d \n", p->timer_c);
+ 		if (p->invitestate == INV_PROCEEDING) {
+			if (p->timercid == -1) {
+				/* Trigger timer C */
+				AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c * 1000, dialog_proceeding_timeout, p,
+						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
+						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
+						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
+				ast_debug(3, "Setting Timer C to %d \n", p->timer_c);
+			} else {
+				/* reset timer C */
+				AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c * 1000, dialog_proceeding_timeout, p, 1);
+				ast_debug(3, "Resetting Timer C to %d s \n", p->timer_c);
+			}
+		}
 	}
 
  	/* Final response, not 200 ? */
