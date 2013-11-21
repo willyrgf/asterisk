@@ -740,6 +740,7 @@ static int global_authfailureevents;     /*!< Whether we send authentication fai
 static int global_t1;           /*!< T1 time */
 static int global_t1min;        /*!< T1 roundtrip time minimum */
 static int global_timer_b;      /*!< Timer B - RFC 3261 Section 17.1.1.2 */
+static int global_timer_c;      /*!< Timer C - RFC 3261 Section 16.6 */
 static unsigned int global_autoframing; /*!< Turn autoframing on or off. */
 static int global_qualifyfreq;          /*!< Qualify frequency */
 static int global_qualify_gap;          /*!< Time between our group of peer pokes */
@@ -1290,6 +1291,7 @@ static int __sip_autodestruct(const void *data);
 static void *registry_unref(struct sip_registry *reg, char *tag);
 static int update_call_counter(struct sip_pvt *fup, int event);
 static int auto_congest(const void *arg);
+static int dialog_proceeding_timeout(const void *arg);
 static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *addr, const int intended_method);
 static void free_old_route(struct sip_route *route);
 static void list_route(struct sip_route *route);
@@ -4280,6 +4282,9 @@ void sip_scheddestroy(struct sip_pvt *p, int ms)
 		if (p->timer_b == 0) {
 			p->timer_b = global_timer_b;  /* Set timer B if not set (RFC 3261) */
 		}
+		if (p->timer_c == 0) {
+			p->timer_c = global_timer_c;  /* Set timer C if not set (RFC 3261) */
+		}
 		ms = p->timer_t1 * 64;
 	}
 	if (sip_debug_test_pvt(p)) {
@@ -5798,6 +5803,12 @@ static int create_addr_from_peer(struct sip_pvt *dialog, struct sip_peer *peer)
 	else
 		dialog->timer_b = 64 * dialog->timer_t1;
 
+	if (peer->timer_c) {
+		dialog->timer_c = peer->timer_c;
+	} else {
+		dialog->timer_c = global_timer_c;
+	}
+
 	if ((ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
 	    (ast_test_flag(&dialog->flags[0], SIP_DTMF) == SIP_DTMF_AUTO))
 		dialog->noncodeccapability |= AST_RTP_DTMF;
@@ -5852,6 +5863,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 
 	dialog->timer_t1 = global_t1; /* Default SIP retransmission timer T1 (RFC 3261) */
 	dialog->timer_b = global_timer_b; /* Default SIP transaction timer B (RFC 3261) */
+	dialog->timer_c = global_timer_c; /* Default SIP transaction timer C (RFC 3261) */
 	peer = find_peer(peername, NULL, TRUE, FINDPEERS, FALSE, 0);
 
 	if (peer) {
@@ -5956,6 +5968,30 @@ static int auto_congest(const void *arg)
 	return 0;
 }
 
+/*! \brief Scheduled congestion on a call when no responses has been received for 3 minutes (or configured)
+ * Only called by the scheduler, must return the reference when done.
+ */
+static int dialog_proceeding_timeout(const void *arg)
+{
+	struct sip_pvt *p = (struct sip_pvt *)arg;
+
+	sip_pvt_lock(p);
+	p->timercid = -1;	/* event gone, will not be rescheduled */
+	if (p->owner) {
+		/* XXX fails on possible deadlock */
+		if (!ast_channel_trylock(p->owner)) {
+			append_history(p, "Cong", "Auto-congesting (timer C)");
+			ast_queue_control(p->owner, AST_CONTROL_CONGESTION);
+			ast_channel_unlock(p->owner);
+		}
+
+		/* Give the channel a chance to act before we proceed with destruction */
+		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+	}
+	sip_pvt_unlock(p);
+	dialog_unref(p, "unreffing arg passed into timer C callback (p->timerc)");
+	return 0;
+}
 
 /*! \brief Initiate SIP call from PBX
  *      used from the dial() application      */
@@ -8075,6 +8111,7 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 	p->rtcpeventid = -1;
 	p->initid = -1;
 	p->waitid = -1;
+	p->timercid = -1;
 	p->reinviteid = -1;
 	p->autokillid = -1;
 	p->request_queue_sched_id = -1;
@@ -8091,6 +8128,7 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 	if (intended_method != SIP_OPTIONS) {	/* Peerpoke has it's own system */
 		p->timer_t1 = global_t1;	/* Default SIP retransmission timer T1 (RFC 3261) */
 		p->timer_b = global_timer_b;	/* Default SIP transaction timer B (RFC 3261) */
+		p->timer_c = global_timer_c;	/* Default SIP transaction timer B (RFC 3261) */
 	}
 
 	if (!addr) {
@@ -16758,6 +16796,11 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
  		p->timer_b = peer->timer_b;
  	else
  		p->timer_b = 64 * p->timer_t1;
+ 	/* Set timer C to control transaction timeouts */
+ 	if (peer->timer_c)
+ 		p->timer_c = peer->timer_c;
+ 	else
+ 		p->timer_c = global_timer_c;
 
 	p->allowtransfer = peer->allowtransfer;
 
@@ -18320,6 +18363,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		ast_cli(fd, "  Timer T1     : %d\n", peer->timer_t1);
 		ast_cli(fd, "  Timer B      : %d\n", peer->timer_b);
+		ast_cli(fd, "  Timer C      : %d\n", peer->timer_c);
 		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
 		ast_cli(fd, "  Addr->IP     : %s\n", ast_sockaddr_stringify(&peer->addr));
 		ast_cli(fd, "  Defaddr->IP  : %s\n", ast_sockaddr_stringify(&peer->defaddr));
@@ -18598,6 +18642,7 @@ static char *sip_show_sched(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
                                         "__sip_autodestruct",
                                         "expire_register",
                                         "auto_congest",
+					"dialog_proceeding_timeout",
                                         "sip_reg_timeout",
                                         "sip_poke_peer_s",
                                         "sip_poke_noanswer",
@@ -18607,6 +18652,7 @@ static char *sip_show_sched(struct ast_cli_entry *e, int cmd, struct ast_cli_arg
                                      __sip_autodestruct,
                                      expire_register,
                                      auto_congest,
+				     dialog_proceeding_timeout,
                                      sip_reg_timeout,
                                      sip_poke_peer_s,
                                      sip_poke_noanswer,
@@ -19029,6 +19075,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
  	ast_cli(a->fd, "  Timer T1:               %d\n", global_t1);
 	ast_cli(a->fd, "  Timer T1 minimum:       %d\n", global_t1min);
  	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
+ 	ast_cli(a->fd, "  Timer C:                %d\n", global_timer_c);
 	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
 	ast_cli(a->fd, "  Early media focus:      %s\n", AST_CLI_YESNO(sip_cfg.early_media_focus));
 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
@@ -20893,8 +20940,27 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		resp = 183;
 
  	/* Any response between 100 and 199 is PROCEEDING */
- 	if (resp >= 100 && resp < 200 && p->invitestate == INV_CALLING)
+ 	if (resp >= 100 && resp < 200 && p->invitestate == INV_CALLING) {
  		p->invitestate = INV_PROCEEDING;
+		if (p->timercid == -1) {
+			/* Trigger timer C */
+			AST_SCHED_REPLACE_UNREF(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p,
+						dialog_unref(_data, "dialog ptr dec when SCHED_REPLACE del op succeeded"),
+						dialog_unref(p, "dialog ptr dec when SCHED_REPLACE add failed"),
+						dialog_ref(p, "dialog ptr inc when SCHED_REPLACE add succeeded") );
+			ast_debug(3, "Setting Timer C to %d \n", p->timer_c);
+		}
+	}
+
+	if (resp >= 200) {
+		/* Delete timer C - we have a response */
+		AST_SCHED_DEL_UNREF(sched, p->timercid, dialog_unref(p, "when you delete the timercid sched, you should dec the refcount for the stored dialog ptr"));
+		ast_debug(3, "Deleting Timer C (response received)\n");
+	} else {
+		/* reset timer C */
+		AST_SCHED_REPLACE_VARIABLE(p->timercid, sched, p->timer_c, dialog_proceeding_timeout, p, 1);
+		ast_debug(3, "Resetting Timer C to %d \n", p->timer_c);
+	}
 
  	/* Final response, not 200 ? */
  	if (resp >= 300 && (p->invitestate == INV_CALLING || p->invitestate == INV_PROCEEDING || p->invitestate == INV_EARLY_MEDIA ))
@@ -28267,6 +28333,7 @@ static void set_peer_defaults(struct sip_peer *peer)
 	peer->stimer.st_max_se = global_max_se;
 	peer->timer_t1 = global_t1;
 	peer->timer_b = global_timer_b;
+	peer->timer_c = global_timer_c;
 	clear_peer_mailboxes(peer);
 	peer->disallowed_methods = sip_cfg.disallowed_methods;
 	peer->transports = default_transports;
@@ -28357,7 +28424,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	int firstpass = 1;
 	uint16_t port = 0;
 	int format = 0;		/* Ama flags */
-	int timerb_set = 0, timert1_set = 0;
+	int timerb_set = 0, timert1_set = 0, timerc_set = 0;
 	time_t regseconds = 0;
 	struct ast_flags peerflags[3] = {{(0)}};
 	struct ast_flags mask[3] = {{(0)}};
@@ -28710,6 +28777,12 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					peer->timer_b = global_timer_b;
 				}
 				timerb_set = 1;
+			} else if (!strcasecmp(v->name, "timerc")) {
+				if ((sscanf(v->value, "%30d", &peer->timer_c) != 1) || (peer->timer_c > 100)) {
+					ast_log(LOG_WARNING, "'%s' is not a valid Timer C time at line %d (above 100, default 180 s).  Using configured default %d.\n", v->value, v->lineno, global_timer_c);
+					peer->timer_c = global_timer_c;
+				}
+				timerc_set = 1;
 			} else if (!strcasecmp(v->name, "setvar")) {
 				peer->chanvars = add_var(v->value, peer->chanvars);
 			} else if (!strcasecmp(v->name, "header")) {
@@ -29286,6 +29359,7 @@ static int reload_config(enum channelreloadreason reason)
 	global_authfailureevents = FALSE;
 	global_t1 = DEFAULT_TIMER_T1;
 	global_timer_b = 64 * DEFAULT_TIMER_T1;
+	global_timer_c = 180;	/* 3 minutes per RFC 3261 */
 	global_t1min = DEFAULT_T1MIN;
 	global_qualifyfreq = DEFAULT_QUALIFYFREQ;
 	global_t38_maxdatagram = -1;
@@ -29371,6 +29445,12 @@ static int reload_config(enum channelreloadreason reason)
 				ast_log(LOG_WARNING, "Invalid value for timerb ('%s').  Setting to default ('%d').\n", v->value, global_timer_b);
 			}
 			timerb_set = 1;
+		} else if (!strcasecmp(v->name, "timerc")) {
+			int tmp = atoi(v->value);
+			if (tmp < 100) {
+				global_timer_c = DEFAULT_TIMER_C;
+				ast_log(LOG_WARNING, "Invalid value (< 100 s) for timerc ('%s').  Setting to default ('%d').\n", v->value, global_timer_c);
+			}
 		} else if (!strcasecmp(v->name, "t1min")) {
 			global_t1min = atoi(v->value);
 		} else if (!strcasecmp(v->name, "transport")) {
@@ -31973,7 +32053,8 @@ AST_TEST_DEFINE(get_in_brackets_const_test)
 	MEMBER(sip_peer, maxms, AST_DATA_MILLISECONDS)		\
 	MEMBER(sip_peer, qualifyfreq, AST_DATA_MILLISECONDS)	\
 	MEMBER(sip_peer, timer_t1, AST_DATA_MILLISECONDS)	\
-	MEMBER(sip_peer, timer_b, AST_DATA_MILLISECONDS)
+	MEMBER(sip_peer, timer_b, AST_DATA_MILLISECONDS)	\
+	MEMBER(sip_peer, timer_c, AST_DATA_SECONDS)
 
 AST_DATA_STRUCTURE(sip_peer, DATA_EXPORT_SIP_PEER);
 
