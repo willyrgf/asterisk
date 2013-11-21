@@ -28427,7 +28427,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	int firstpass = 1;
 	uint16_t port = 0;
 	int format = 0;		/* Ama flags */
-	int timerb_set = 0, timert1_set = 0, timerc_set = 0;
+	int timerb_set = 0, timert1_set = 0;
 	time_t regseconds = 0;
 	struct ast_flags peerflags[3] = {{(0)}};
 	struct ast_flags mask[3] = {{(0)}};
@@ -28785,7 +28785,6 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 					ast_log(LOG_WARNING, "'%s' is not a valid Timer C time at line %d (above 100, default 180 s).  Using configured default %d.\n", v->value, v->lineno, global_timer_c);
 					peer->timer_c = global_timer_c;
 				}
-				timerc_set = 1;
 			} else if (!strcasecmp(v->name, "setvar")) {
 				peer->chanvars = add_var(v->value, peer->chanvars);
 			} else if (!strcasecmp(v->name, "header")) {
