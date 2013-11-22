@@ -468,8 +468,7 @@ static int __rtp_recvfrom(struct ast_rtp_instance *instance, void *buf, size_t s
 
 	if ((*in & 0xC0) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
 		if (rtcpdebug) {
-			ast_verbose("Got SRTP from           %s  - failed to decrypt information\n", ast_sockaddr_stringify(&remote_address))
-				     Sent RTP packet to      192.168.16.40
+			ast_verbose("Got SRTP from           %s  - failed to decrypt information\n", ast_sockaddr_stringify(&sa));
 		}
 	   	return -1;
 	}
