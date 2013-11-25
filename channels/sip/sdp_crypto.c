@@ -48,7 +48,10 @@ extern struct ast_srtp_policy_res *res_srtp_policy;
 struct sdp_crypto {
 	char *a_crypto;
 	unsigned char local_key[SRTP_MASTER_LEN];
+	char *tag;
 	char local_key64[SRTP_MASTER_LEN64];
+	unsigned char remote_key[SRTP_MASTER_LEN];
+	char suite[64];
 };
 
 static int set_crypto_policy(struct ast_srtp_policy *policy, int suite_val, const unsigned char *master_key, unsigned long ssrc, int inbound);
@@ -62,6 +65,8 @@ void sdp_crypto_destroy(struct sdp_crypto *crypto)
 {
 	ast_free(crypto->a_crypto);
 	crypto->a_crypto = NULL;
+	ast_free(crypto->tag);
+	crypto->tag = NULL;
 	ast_free(crypto);
 }
 
@@ -195,7 +200,6 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 	char *key_salt = NULL;
 	char *lifetime = NULL;
 	int found = 0;
-	int attr_len = strlen(attr);
 	int key_len = 0;
 	int suite_val = 0;
 	unsigned char remote_key[SRTP_MASTER_LEN];
@@ -257,42 +261,56 @@ int sdp_crypto_process(struct sdp_crypto *p, const char *attr, struct ast_rtp_in
 		return -1;
 	}
 
-
 	if ((key_len = ast_base64decode(remote_key, key_salt, sizeof(remote_key))) != SRTP_MASTER_LEN) {
-		ast_log(LOG_WARNING, "SRTP sdescriptions key %d != %d\n", key_len, SRTP_MASTER_LEN);
+		ast_log(LOG_WARNING, "SRTP descriptions key %d != %d\n", key_len, SRTP_MASTER_LEN);
 		return -1;
 	}
+
+	if (!memcmp(p->remote_key, remote_key, sizeof(p->remote_key))) {
+		ast_debug(1, "SRTP remote key unchanged; maintaining current policy\n");
+		return 0;
+	}
+
+	/* Set the accepted policy and remote key */
+	ast_copy_string(p->suite, suite, sizeof(p->suite));
+	memcpy(p->remote_key, remote_key, sizeof(p->remote_key));
 
 	if (sdp_crypto_activate(p, suite_val, remote_key, rtp) < 0) {
 		return -1;
 	}
 
-	if (!p->a_crypto) {
-		if (!(p->a_crypto = ast_calloc(1, attr_len + 11))) {
-			ast_log(LOG_ERROR, "Could not allocate memory for a_crypto\n");
+	if (!p->tag) {
+		ast_log(LOG_DEBUG, "Accepting crypto tag %s\n", tag);
+		p->tag = ast_strdup(tag);
+		if (!p->tag) {
+			ast_log(LOG_ERROR, "Could not allocate memory for tag\n");
 			return -1;
 		}
-		snprintf(p->a_crypto, attr_len + 10, "a=crypto:%s %s inline:%s\r\n", tag, suite, p->local_key64);
 	}
-	return 0;
+
+	/* Finally, rebuild the crypto line */
+	return sdp_crypto_offer(p);
 }
 
 int sdp_crypto_offer(struct sdp_crypto *p)
 {
-	char crypto_buf[128];
-	const char *crypto_suite = "AES_CM_128_HMAC_SHA1_80"; /* Crypto offer */
+	if (ast_strlen_zero(p->suite)) {
+		/* Default crypto offer */
+		strcpy(p->suite, "AES_CM_128_HMAC_SHA1_80");
+	}
 
+	/* Rebuild the crypto line */
 	if (p->a_crypto) {
 		ast_free(p->a_crypto);
 	}
 
-	if (snprintf(crypto_buf, sizeof(crypto_buf), "a=crypto:1 %s inline:%s\r\n",  crypto_suite, p->local_key64) < 1) {
+	if (ast_asprintf(&p->a_crypto, "a=crypto:%s %s inline:%s\r\n",
+			 p->tag ? p->tag : "1", p->suite, p->local_key64) == -1) {
+			ast_log(LOG_ERROR, "Could not allocate memory for crypto line\n");
 		return -1;
 	}
 
-	if (!(p->a_crypto = ast_strdup(crypto_buf))) {
-		return -1;
-	}
+	ast_log(LOG_DEBUG, "Crypto line: %s", p->a_crypto);
 
 	return 0;
 }

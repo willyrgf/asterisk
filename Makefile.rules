@@ -37,6 +37,7 @@ endif
 
 OPTIMIZE?=-O6
 ifneq ($(findstring darwin,$(OSARCH)),)
+  OPTIMIZE=-O4
   ifeq ($(shell if test `/usr/bin/sw_vers -productVersion | cut -c4` -gt 5; then echo 6; else echo 0; fi),6)
     # Snow Leopard/Lion has an issue with this optimization flag on large files (like chan_sip)
     OPTIMIZE+=-fno-inline-functions

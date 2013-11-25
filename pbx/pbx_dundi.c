@@ -1383,9 +1383,7 @@ static struct dundi_hdr *dundi_decrypt(struct dundi_transaction *trans, unsigned
 	unsigned long bytes;
 	struct dundi_hdr *h;
 	unsigned char *decrypt_space;
-	decrypt_space = alloca(srclen);
-	if (!decrypt_space)
-		return NULL;
+	decrypt_space = ast_alloca(srclen);
 	decrypt_memcpy(decrypt_space, src->encdata, srclen, src->iv, &trans->dcx);
 	/* Setup header */
 	h = (struct dundi_hdr *)dst;
@@ -1411,61 +1409,58 @@ static int dundi_encrypt(struct dundi_transaction *trans, struct dundi_packet *p
 	struct dundi_peer *peer;
 	unsigned char iv[16];
 	len = pack->datalen + pack->datalen / 100 + 42;
-	compress_space = alloca(len);
-	if (compress_space) {
-		memset(compress_space, 0, len);
-		/* We care about everthing save the first 6 bytes of header */
-		bytes = len;
-		res = compress(compress_space, &bytes, pack->data + 6, pack->datalen - 6);
-		if (res != Z_OK) {
-			ast_debug(1, "Ouch, compression failed!\n");
-			return -1;
-		}
-		memset(&ied, 0, sizeof(ied));
-		/* Say who we are */
-		if (!pack->h->iseqno && !pack->h->oseqno) {
-			/* Need the key in the first copy */
-			if (!(peer = find_peer(&trans->them_eid)))
-				return -1;
-			if (update_key(peer))
-				return -1;
-			if (!peer->sentfullkey)
-				ast_set_flag(trans, FLAG_SENDFULLKEY);
-			/* Append key data */
-			dundi_ie_append_eid(&ied, DUNDI_IE_EID, &trans->us_eid);
-			if (ast_test_flag(trans, FLAG_SENDFULLKEY)) {
-				dundi_ie_append_raw(&ied, DUNDI_IE_SHAREDKEY, peer->txenckey, 128);
-				dundi_ie_append_raw(&ied, DUNDI_IE_SIGNATURE, peer->txenckey + 128, 128);
-			} else {
-				dundi_ie_append_int(&ied, DUNDI_IE_KEYCRC32, peer->us_keycrc32);
-			}
-			/* Setup contexts */
-			trans->ecx = peer->us_ecx;
-			trans->dcx = peer->us_dcx;
-
-			/* We've sent the full key */
-			peer->sentfullkey = 1;
-		}
-		/* Build initialization vector */
-		build_iv(iv);
-		/* Add the field, rounded up to 16 bytes */
-		dundi_ie_append_encdata(&ied, DUNDI_IE_ENCDATA, iv, NULL, ((bytes + 15) / 16) * 16);
-		/* Copy the data */
-		if ((ied.pos + bytes) >= sizeof(ied.buf)) {
-			ast_log(LOG_NOTICE, "Final packet too large!\n");
-			return -1;
-		}
-		encrypt_memcpy(ied.buf + ied.pos, compress_space, bytes, iv, &trans->ecx);
-		ied.pos += ((bytes + 15) / 16) * 16;
-		/* Reconstruct header */
-		pack->datalen = sizeof(struct dundi_hdr);
-		pack->h->cmdresp = DUNDI_COMMAND_ENCRYPT;
-		pack->h->cmdflags = 0;
-		memcpy(pack->h->ies, ied.buf, ied.pos);
-		pack->datalen += ied.pos;
-		return 0;
+	compress_space = ast_alloca(len);
+	memset(compress_space, 0, len);
+	/* We care about everthing save the first 6 bytes of header */
+	bytes = len;
+	res = compress(compress_space, &bytes, pack->data + 6, pack->datalen - 6);
+	if (res != Z_OK) {
+		ast_debug(1, "Ouch, compression failed!\n");
+		return -1;
 	}
-	return -1;
+	memset(&ied, 0, sizeof(ied));
+	/* Say who we are */
+	if (!pack->h->iseqno && !pack->h->oseqno) {
+		/* Need the key in the first copy */
+		if (!(peer = find_peer(&trans->them_eid)))
+			return -1;
+		if (update_key(peer))
+			return -1;
+		if (!peer->sentfullkey)
+			ast_set_flag(trans, FLAG_SENDFULLKEY);
+		/* Append key data */
+		dundi_ie_append_eid(&ied, DUNDI_IE_EID, &trans->us_eid);
+		if (ast_test_flag(trans, FLAG_SENDFULLKEY)) {
+			dundi_ie_append_raw(&ied, DUNDI_IE_SHAREDKEY, peer->txenckey, 128);
+			dundi_ie_append_raw(&ied, DUNDI_IE_SIGNATURE, peer->txenckey + 128, 128);
+		} else {
+			dundi_ie_append_int(&ied, DUNDI_IE_KEYCRC32, peer->us_keycrc32);
+		}
+		/* Setup contexts */
+		trans->ecx = peer->us_ecx;
+		trans->dcx = peer->us_dcx;
+
+		/* We've sent the full key */
+		peer->sentfullkey = 1;
+	}
+	/* Build initialization vector */
+	build_iv(iv);
+	/* Add the field, rounded up to 16 bytes */
+	dundi_ie_append_encdata(&ied, DUNDI_IE_ENCDATA, iv, NULL, ((bytes + 15) / 16) * 16);
+	/* Copy the data */
+	if ((ied.pos + bytes) >= sizeof(ied.buf)) {
+		ast_log(LOG_NOTICE, "Final packet too large!\n");
+		return -1;
+	}
+	encrypt_memcpy(ied.buf + ied.pos, compress_space, bytes, iv, &trans->ecx);
+	ied.pos += ((bytes + 15) / 16) * 16;
+	/* Reconstruct header */
+	pack->datalen = sizeof(struct dundi_hdr);
+	pack->h->cmdresp = DUNDI_COMMAND_ENCRYPT;
+	pack->h->cmdflags = 0;
+	memcpy(pack->h->ies, ied.buf, ied.pos);
+	pack->datalen += ied.pos;
+	return 0;
 }
 
 static int check_key(struct dundi_peer *peer, unsigned char *newkey, unsigned char *newsig, uint32_t keycrc32)
@@ -1582,10 +1577,7 @@ static int handle_command_response(struct dundi_transaction *trans, struct dundi
 	}
 
 	if (datalen) {
-		bufcpy = alloca(datalen);
-		if (!bufcpy) {
-			goto return_cleanup;
-		}
+		bufcpy = ast_alloca(datalen);
 		/* Make a copy for parsing */
 		memcpy(bufcpy, hdr->ies, datalen);
 		ast_debug(1, "Got canonical message %d (%d), %d bytes data%s\n", cmd, hdr->oseqno, datalen, final ? " (Final)" : "");
@@ -3359,8 +3351,10 @@ static int optimize_transactions(struct dundi_request *dr, int order)
 		}
 
 		AST_LIST_TRAVERSE(&peers, peer, list) {
-			if (has_permission(&peer->include, dr->dcontext) &&
-			    ast_eid_cmp(&peer->eid, &trans->them_eid) &&
+			if (ast_eid_cmp(&peer->eid, &empty_eid) &&			/* peer's eid is not empty (in case of dynamic peers) */
+				(peer->lastms > -1) &&							/* peer is reachable */
+				has_permission(&peer->include, dr->dcontext) &&	/* peer has destination context */
+				ast_eid_cmp(&peer->eid, &trans->them_eid) &&	/* peer is not transaction endpoint */
 				(peer->order <= order)) {
 				/* For each other transaction, make sure we don't
 				   ask this EID about the others if they're not
@@ -3767,18 +3761,17 @@ static int dundi_precache_internal(const char *context, const char *number, int 
 			nummaps++;
 	}
 	if (nummaps) {
-		maps = alloca(nummaps * sizeof(*maps));
+		maps = ast_alloca(nummaps * sizeof(*maps));
 		nummaps = 0;
-		if (maps) {
-			AST_LIST_TRAVERSE(&mappings, cur, list) {
-				if (!strcasecmp(cur->dcontext, context))
-					maps[nummaps++] = *cur;
-			}
+		AST_LIST_TRAVERSE(&mappings, cur, list) {
+			if (!strcasecmp(cur->dcontext, context))
+				maps[nummaps++] = *cur;
 		}
 	}
 	AST_LIST_UNLOCK(&peers);
-	if (!nummaps || !maps)
+	if (!nummaps) {
 		return -1;
+	}
 	ttlms = DUNDI_FLUFF_TIME + ttl * DUNDI_TTL_TIME;
 	memset(&dr2, 0, sizeof(dr2));
 	memset(&dr, 0, sizeof(dr));
@@ -3893,7 +3886,6 @@ static int dundifunc_read(struct ast_channel *chan, const char *cmd, char *num, 
 {
 	int results;
 	int x;
-	struct ast_module_user *u;
 	struct dundi_result dr[MAX_RESULTS];
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(number);
@@ -3909,8 +3901,6 @@ static int dundifunc_read(struct ast_channel *chan, const char *cmd, char *num, 
 		ast_log(LOG_WARNING, "DUNDILOOKUP requires an argument (number)\n");
 		return -1;
 	}
-
-	u = ast_module_user_add(chan);
 
 	parse = ast_strdupa(num);
 
@@ -3933,8 +3923,6 @@ static int dundifunc_read(struct ast_channel *chan, const char *cmd, char *num, 
 			}
 		}
 	}
-
-	ast_module_user_remove(u);
 
 	return 0;
 }
@@ -3974,7 +3962,6 @@ static const struct ast_datastore_info dundi_result_datastore_info = {
 
 static int dundi_query_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
-	struct ast_module_user *u;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(number);
 		AST_APP_ARG(context);
@@ -3985,17 +3972,13 @@ static int dundi_query_read(struct ast_channel *chan, const char *cmd, char *dat
 	struct dundi_result_datastore *drds;
 	struct ast_datastore *datastore;
 
-	u = ast_module_user_add(chan);
-
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "DUNDIQUERY requires an argument (number)\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 
 	if (!chan) {
 		ast_log(LOG_ERROR, "DUNDIQUERY can not be used without a channel!\n");
-		ast_module_user_remove(u);
 		return -1;
 	}
 
@@ -4010,7 +3993,6 @@ static int dundi_query_read(struct ast_channel *chan, const char *cmd, char *dat
 		args.context = "e164";
 
 	if (!(drds = ast_calloc(1, sizeof(*drds)))) {
-		ast_module_user_remove(u);
 		return -1;
 	}
 
@@ -4019,7 +4001,6 @@ static int dundi_query_read(struct ast_channel *chan, const char *cmd, char *dat
 
 	if (!(datastore = ast_datastore_alloc(&dundi_result_datastore_info, buf))) {
 		drds_destroy(drds);
-		ast_module_user_remove(u);
 		return -1;
 	}
 
@@ -4035,8 +4016,6 @@ static int dundi_query_read(struct ast_channel *chan, const char *cmd, char *dat
 	ast_channel_datastore_add(chan, datastore);
 	ast_channel_unlock(chan);
 
-	ast_module_user_remove(u);
-
 	return 0;
 }
 
@@ -4047,7 +4026,6 @@ static struct ast_custom_function dundi_query_function = {
 
 static int dundi_result_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
-	struct ast_module_user *u;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(id);
 		AST_APP_ARG(resultnum);
@@ -4057,8 +4035,6 @@ static int dundi_result_read(struct ast_channel *chan, const char *cmd, char *da
 	struct dundi_result_datastore *drds;
 	struct ast_datastore *datastore;
 	int res = -1;
-
-	u = ast_module_user_add(chan);
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "DUNDIRESULT requires an argument (id and resultnum)\n");
@@ -4114,8 +4090,6 @@ static int dundi_result_read(struct ast_channel *chan, const char *cmd, char *da
 		ast_log(LOG_WARNING, "Result number %u is not valid for DUNDi query results for ID %s!\n", num, args.id);
 
 finish:
-	ast_module_user_remove(u);
-
 	return res;
 }
 
@@ -4514,7 +4488,9 @@ static void build_peer(dundi_eid *eid, struct ast_variable *v, int *globalpcmode
 		if (needregister) {
 			peer->registerid = ast_sched_add(sched, 2000, do_register, peer);
 		}
-		qualify_peer(peer, 1);
+		if (ast_eid_cmp(&peer->eid, &empty_eid)) {
+			qualify_peer(peer, 1);
+		}
 	}
 	AST_LIST_UNLOCK(&peers);
 }
@@ -4781,7 +4757,12 @@ static int set_config(char *config_file, struct sockaddr_in* sin, int reload)
 static int unload_module(void)
 {
 	pthread_t previous_netthreadid = netthreadid, previous_precachethreadid = precachethreadid, previous_clearcachethreadid = clearcachethreadid;
-	ast_module_user_hangup_all();
+
+	ast_cli_unregister_multiple(cli_dundi, ARRAY_LEN(cli_dundi));
+	ast_unregister_switch(&dundi_switch);
+	ast_custom_function_unregister(&dundi_function);
+	ast_custom_function_unregister(&dundi_query_function);
+	ast_custom_function_unregister(&dundi_result_function);
 
 	/* Stop all currently running threads */
 	dundi_shutdown = 1;
@@ -4798,11 +4779,6 @@ static int unload_module(void)
  		pthread_join(previous_clearcachethreadid, NULL);
  	}
 
-	ast_cli_unregister_multiple(cli_dundi, ARRAY_LEN(cli_dundi));
-	ast_unregister_switch(&dundi_switch);
-	ast_custom_function_unregister(&dundi_function);
-	ast_custom_function_unregister(&dundi_query_function);
-	ast_custom_function_unregister(&dundi_result_function);
 	close(netsocket);
 	io_context_destroy(io);
 	sched_context_destroy(sched);

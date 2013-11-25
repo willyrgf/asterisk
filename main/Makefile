@@ -31,7 +31,7 @@ AST_LIBS += $(OPENSSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 AST_LIBS += $(LIBXML2_LIB) 
 
-ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc linux-gnueabi linux-gnueabihf ),)
+ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
   AST_LIBS+=-ldl
   endif
@@ -174,6 +174,10 @@ GMIMELDFLAGS+=$(GMIME_LIB)
 endif
 
 $(OBJS): _ASTCFLAGS+=-DAST_MODULE=\"core\"
+
+ssl.o: _ASTCFLAGS+=$(OPENSSL_INCLUDE)
+
+tcptls.o: _ASTCFLAGS+=$(OPENSSL_INCLUDE)
 
 $(MAIN_TGT): $(OBJS) editline/libedit.a db1-ast/libdb1.a $(AST_EMBED_LDSCRIPTS)
 	@$(CC) -c -o buildinfo.o $(_ASTCFLAGS) buildinfo.c $(ASTCFLAGS)

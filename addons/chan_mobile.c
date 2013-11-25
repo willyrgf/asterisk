@@ -558,7 +558,7 @@ static char *handle_cli_mobile_search(struct ast_cli_entry *e, int cmd, struct a
 	max_rsp = 255;
 	flags = IREQ_CACHE_FLUSH;
 
-	ii = alloca(max_rsp * sizeof(inquiry_info));
+	ii = ast_alloca(max_rsp * sizeof(inquiry_info));
 	num_rsp = hci_inquiry(adapter->dev_id, len, max_rsp, NULL, &ii, flags);
 	if (num_rsp > 0) {
 		ast_cli(a->fd, FORMAT1, "Address", "Name", "Usable", "Type", "Port");
@@ -1371,7 +1371,7 @@ static int rfcomm_connect(bdaddr_t src, bdaddr_t dst, int remote_channel)
 	memset(&addr, 0, sizeof(addr));
 	addr.rc_family = AF_BLUETOOTH;
 	bacpy(&addr.rc_bdaddr, &src);
-	addr.rc_channel = (uint8_t) 1;
+	addr.rc_channel = (uint8_t) 0;
 	if (bind(s, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		ast_debug(1, "bind() failed (%d).\n", errno);
 		close(s);
@@ -2233,6 +2233,7 @@ static int hfp_parse_cmgr(struct hfp_pvt *hfp, char *buf, char **from_number, ch
 			if (buf[i] == '"') {
 				state++;
 			}
+			break;
 		case 2: /* mark the start of the number */
 			if (from_number) {
 				*from_number = &buf[i];

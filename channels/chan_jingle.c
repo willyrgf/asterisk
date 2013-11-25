@@ -1514,14 +1514,13 @@ static struct ast_channel *jingle_request(const char *type, format_t format, con
 
 	if (data) {
 		s = ast_strdupa(data);
-		if (s) {
-			sender = strsep(&s, "/");
-			if (sender && (sender[0] != '\0'))
-				to = strsep(&s, "/");
-			if (!to) {
-				ast_log(LOG_ERROR, "Bad arguments in Jingle Dialstring: %s\n", (char*) data);
-				return NULL;
-			}
+		sender = strsep(&s, "/");
+		if (sender && (sender[0] != '\0')) {
+			to = strsep(&s, "/");
+		}
+		if (!to) {
+			ast_log(LOG_ERROR, "Bad arguments in Jingle Dialstring: %s\n", (char*) data);
+			return NULL;
 		}
 	}
 
@@ -1927,6 +1926,7 @@ static int load_module(void)
 		ast_log(LOG_WARNING, "Unable to create I/O context\n");
 	}
 
+	bindaddr.sin_family = AF_INET;
 	ast_sockaddr_from_sin(&bindaddr_tmp, &bindaddr);
 	if (ast_find_ourip(&ourip_tmp, &bindaddr_tmp, AF_INET)) {
 		ast_log(LOG_WARNING, "Unable to get own IP address, Jingle disabled\n");

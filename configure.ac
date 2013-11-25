@@ -172,7 +172,7 @@ case "${host_os}" in
      OSARCH=cygwin
      PBX_WINARCH=1
      ;;
-     linux-gnueabi)
+     linux-gnueabi* |  linux-gnuspe)
      OSARCH=linux-gnu
      ;;
      *)
@@ -255,6 +255,7 @@ AC_PATH_PROG([CATDVI], [catdvi], :)
 AC_PATH_PROG([KPATHSEA], [kpsewhich], :)
 AC_PATH_PROG([XMLLINT], [xmllint], :)
 AC_PATH_PROG([XMLSTARLET], [xmlstarlet], :)
+AC_PATH_PROG([GIT], [git], :)
 if test "${WGET}" != ":" ; then
   DOWNLOAD=${WGET}
 else if test "${CURL}" != ":" ; then
@@ -567,7 +568,7 @@ AC_CHECK_FUNCS([asprintf atexit closefrom dup2 eaccess endpwent euidaccess ffsll
 # so that AC_CHECK_FUNCS can detect functions in that library.
 AC_CHECK_LIB([m], [sqrt])
 # BSD might not have exp2, and/or log2
-AC_CHECK_FUNCS([exp2 log2 exp10 log10 sin cos tan asin acos atan atan2 pow rint exp log remainder fmod round trunc floor ceil])
+AC_CHECK_FUNCS([exp2 log2 exp10 log10 sin cos tan asin acos atan atan2 pow rint exp log remainder fmod round roundf trunc floor ceil])
 
 # Certain architectures don't really have long double, even though
 # AC_CHECK_FUNCS would otherwise find the following functions.
@@ -1914,7 +1915,8 @@ if test "x${PBX_SPANDSP}" = "x1" ; then
 	AST_EXT_LIB_CHECK([SPANDSP], [spandsp], [t38_terminal_init], [spandsp.h], [-ltiff])
 fi
 
-AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_pollflags], [libss7.h])
+# Check for libss7 v1.0 branch compatible version.
+AST_EXT_LIB_CHECK([SS7], [ss7], [ss7_set_adjpc], [libss7.h])
 
 AST_EXT_LIB_CHECK([OPENR2], [openr2], [openr2_chan_new], [openr2.h])
 
@@ -2195,7 +2197,9 @@ PBX_LAUNCHD=0
 if test "${cross_compiling}" = "no";
 then
   AC_CHECK_FILE(/sbin/launchd, AC_DEFINE([HAVE_SBIN_LAUNCHD], 1, [Define to 1 if your system has /sbin/launchd.]))
-  PBX_LAUNCHD=1
+  if test "${HAVE_SBIN_LAUNCHD}" = 1; then
+    PBX_LAUNCHD=1
+  fi
 fi
 AC_SUBST(PBX_LAUNCHD)
 

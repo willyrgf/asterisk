@@ -103,8 +103,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>Decrements the value of a variable, while returning the updated value to the dialplan</para>
-			<para>Example: DEC(MyVAR) - Increments MyVar</para>
-			<para>Note: DEC(${MyVAR}) - Is wrong, as INC expects the variable name, not its value</para>
+			<para>Example: DEC(MyVAR) - Decrements MyVar</para>
+			<para>Note: DEC(${MyVAR}) - Is wrong, as DEC expects the variable name, not its value</para>
 		</description>
 	</function>
  ***/
@@ -420,8 +420,6 @@ static int crement_function_read(struct ast_channel *chan, const char *cmd,
 		int_value--;
 		modify_orig = 1;
 	}
-
-	ast_log(LOG_NOTICE, "The value is now: %d\n", int_value);
 
 	if (snprintf(returnvar, sizeof(returnvar), "%d", int_value) > 0) {
 		pbx_builtin_setvar_helper(chan, data, returnvar);

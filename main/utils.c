@@ -467,6 +467,69 @@ void ast_uri_decode(char *s)
 	*o = '\0';
 }
 
+int ast_xml_escape(const char *string, char * const outbuf, const size_t buflen)
+{
+	char *dst = outbuf;
+	char *end = outbuf + buflen - 1; /* save one for the null terminator */
+
+	/* Handle the case for the empty output buffer */
+	if (buflen == 0) {
+		return -1;
+	}
+
+	/* Escaping rules from http://www.w3.org/TR/REC-xml/#syntax */
+	/* This also prevents partial entities at the end of a string */
+	while (*string && dst < end) {
+		const char *entity = NULL;
+		int len = 0;
+
+		switch (*string) {
+		case '<':
+			entity = "&lt;";
+			len = 4;
+			break;
+		case '&':
+			entity = "&amp;";
+			len = 5;
+			break;
+		case '>':
+			/* necessary if ]]> is in the string; easier to escape them all */
+			entity = "&gt;";
+			len = 4;
+			break;
+		case '\'':
+			/* necessary in single-quoted strings; easier to escape them all */
+			entity = "&apos;";
+			len = 6;
+			break;
+		case '"':
+			/* necessary in double-quoted strings; easier to escape them all */
+			entity = "&quot;";
+			len = 6;
+			break;
+		default:
+			*dst++ = *string++;
+			break;
+		}
+
+		if (entity) {
+			ast_assert(len == strlen(entity));
+			if (end - dst < len) {
+				/* no room for the entity; stop */
+				break;
+			}
+			/* just checked for length; strcpy is fine */
+			strcpy(dst, entity);
+			dst += len;
+			++string;
+		}
+	}
+	/* Write null terminator */
+	*dst = '\0';
+	/* If any chars are left in string, return failure */
+	return *string == '\0' ? 0 : -1;
+}
+
 /*! \brief  ast_inet_ntoa: Recursive thread safe replacement of inet_ntoa */
 const char *ast_inet_ntoa(struct in_addr ia)
 {
@@ -770,16 +833,20 @@ static const char *locktype2str(enum ast_lock_type type)
 static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt)
 {
 	char **symbols;
+	int num_frames;
 
 	if (!bt) {
 		ast_str_append(str, 0, "\tNo backtrace to print\n");
 		return;
 	}
 
-	if ((symbols = ast_bt_get_symbols(bt->addresses, bt->num_frames))) {
+	/* store frame count locally to avoid the memory corruption that
+	 * sometimes happens on virtualized CentOS 6.x systems */
+	num_frames = bt->num_frames;
+	if ((symbols = ast_bt_get_symbols(bt->addresses, num_frames))) {
 		int frame_iterator;
 		
-		for (frame_iterator = 0; frame_iterator < bt->num_frames; ++frame_iterator) {
+		for (frame_iterator = 0; frame_iterator < num_frames; ++frame_iterator) {
 			ast_str_append(str, 0, "\t%s\n", symbols[frame_iterator]);
 		}
 
@@ -977,18 +1044,7 @@ static void *dummy_start(void *data)
 #ifdef DEBUG_THREADS
 	struct thr_lock_info *lock_info;
 	pthread_mutexattr_t mutex_attr;
-#endif
 
-	/* note that even though data->name is a pointer to allocated memory,
-	   we are not freeing it here because ast_register_thread is going to
-	   keep a copy of the pointer and then ast_unregister_thread will
-	   free the memory
-	*/
-	ast_free(data);
-	ast_register_thread(a.name);
-	pthread_cleanup_push(ast_unregister_thread, (void *) pthread_self());
-
-#ifdef DEBUG_THREADS
 	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info))))
 		return NULL;
 
@@ -1004,6 +1060,15 @@ static void *dummy_start(void *data)
 	AST_LIST_INSERT_TAIL(&lock_infos, lock_info, entry);
 	pthread_mutex_unlock(&lock_infos_lock.mutex); /* Intentionally not the wrapper */
 #endif /* DEBUG_THREADS */
+
+	/* note that even though data->name is a pointer to allocated memory,
+	   we are not freeing it here because ast_register_thread is going to
+	   keep a copy of the pointer and then ast_unregister_thread will
+	   free the memory
+	*/
+	ast_free(data);
+	ast_register_thread(a.name);
+	pthread_cleanup_push(ast_unregister_thread, (void *) pthread_self());
 
 	ret = a.start_routine(a.data);
 
@@ -1023,7 +1088,7 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 #endif
 
 	if (!attr) {
-		attr = alloca(sizeof(*attr));
+		attr = ast_alloca(sizeof(*attr));
 		pthread_attr_init(attr);
 	}
 
@@ -1050,9 +1115,8 @@ int ast_pthread_create_stack(pthread_t *thread, pthread_attr_t *attr, void *(*st
 		a->start_routine = start_routine;
 		a->data = data;
 		start_routine = dummy_start;
-		if (asprintf(&a->name, "%-20s started at [%5d] %s %s()",
+		if (ast_asprintf(&a->name, "%-20s started at [%5d] %s %s()",
 			     start_fn, line, file, caller) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 			a->name = NULL;
 		}
 		data = a;
@@ -1071,7 +1135,7 @@ int ast_pthread_create_detached_stack(pthread_t *thread, pthread_attr_t *attr, v
 	int res;
 
 	if (!attr) {
-		attr = alloca(sizeof(*attr));
+		attr = ast_alloca(sizeof(*attr));
 		pthread_attr_init(attr);
 		attr_destroy = 1;
 	}
@@ -1429,6 +1493,23 @@ struct timeval ast_tvsub(struct timeval a, struct timeval b)
 	}
 	return a;
 }
+
+int ast_remaining_ms(struct timeval start, int max_ms)
+{
+	int ms;
+
+	if (max_ms < 0) {
+		ms = max_ms;
+	} else {
+		ms = max_ms - ast_tvdiff_ms(ast_tvnow(), start);
+		if (ms < 0) {
+			ms = 0;
+		}
+	}
+
+	return ms;
+}
+
 #undef ONE_MILLION
 
 /*! \brief glibc puts a lock inside random(3), so that the results are thread-safe.
@@ -1935,7 +2016,7 @@ int ast_mkdir(const char *path, int mode)
 	int len = strlen(path), count = 0, x, piececount = 0;
 	char *tmp = ast_strdupa(path);
 	char **pieces;
-	char *fullpath = alloca(len + 1);
+	char *fullpath = ast_alloca(len + 1);
 	int res = 0;
 
 	for (ptr = tmp; *ptr; ptr++) {
@@ -1944,7 +2025,7 @@ int ast_mkdir(const char *path, int mode)
 	}
 
 	/* Count the components to the directory path */
-	pieces = alloca(count * sizeof(*pieces));
+	pieces = ast_alloca(count * sizeof(*pieces));
 	for (ptr = tmp; *ptr; ptr++) {
 		if (*ptr == '/') {
 			*ptr = '\0';
@@ -2134,3 +2215,35 @@ char *ast_utils_which(const char *binary, char *fullpath, size_t fullpath_size)
 	return NULL;
 }
 
+void ast_do_crash(void)
+{
+#if defined(DO_CRASH)
+	abort();
+	/*
+	 * Just in case abort() doesn't work or something else super
+	 * silly, and for Qwell's amusement.
+	 */
+	*((int *) 0) = 0;
+#endif	/* defined(DO_CRASH) */
+}
+
+#if defined(AST_DEVMODE)
+void __ast_assert_failed(int condition, const char *condition_str, const char *file, int line, const char *function)
+{
+	/*
+	 * Attempt to put it into the logger, but hope that at least
+	 * someone saw the message on stderr ...
+	 */
+	ast_log(__LOG_ERROR, file, line, function, "FRACK!, Failed assertion %s (%d)\n",
+		condition_str, condition);
+	fprintf(stderr, "FRACK!, Failed assertion %s (%d) at line %d in %s of %s\n",
+		condition_str, condition, line, function, file);
+	/*
+	 * Give the logger a chance to get the message out, just in case
+	 * we abort(), or Asterisk crashes due to whatever problem just
+	 * happened after we exit ast_assert().
+	 */
+	usleep(1);
+	ast_do_crash();
+}
+#endif	/* defined(AST_DEVMODE) */

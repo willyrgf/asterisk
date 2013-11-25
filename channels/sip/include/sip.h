@@ -96,6 +96,7 @@
 
 #define SIP_MAX_HEADERS           64     /*!< Max amount of SIP headers to read */
 #define SIP_MAX_LINES             256    /*!< Max amount of lines in SIP attachment (like SDP) */
+#define SIP_MAX_PACKET_SIZE       20480  /*!< Max SIP packet size */
 #define SIP_MIN_PACKET            4096   /*!< Initialize size of memory to allocate for packets */
 #define MAX_HISTORY_ENTRIES		  50	 /*!< Max entires in the history list for a sip_pvt */
 
@@ -357,9 +358,10 @@
 
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+#define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
-	(SIP_PAGE3_SNOM_AOC)
+	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
 
 /*@}*/
 
@@ -522,9 +524,15 @@ enum st_mode {
 
 /*! \brief The entity playing the refresher role for Session-Timers */
 enum st_refresher {
-        SESSION_TIMER_REFRESHER_AUTO,    /*!< Negotiated                      */
-        SESSION_TIMER_REFRESHER_UAC,     /*!< Session is refreshed by the UAC */
-        SESSION_TIMER_REFRESHER_UAS      /*!< Session is refreshed by the UAS */
+        SESSION_TIMER_REFRESHER_AUTO, /*!< Negotiated                      */
+        SESSION_TIMER_REFRESHER_US,   /*!< Initially prefer session refresh by Asterisk */
+        SESSION_TIMER_REFRESHER_THEM, /*!< Initially prefer session refresh by the other side */
+};
+
+enum st_refresher_param {
+	SESSION_TIMER_REFRESHER_PARAM_UNKNOWN,
+	SESSION_TIMER_REFRESHER_PARAM_UAC,
+	SESSION_TIMER_REFRESHER_PARAM_UAS,
 };
 
 /*! \brief Define some implemented SIP transports
@@ -762,6 +770,7 @@ struct sip_request {
 	/* XXX Do we need to unref socket.ser when the request goes away? */
 	struct sip_socket socket;          /*!< The socket used for this request */
 	AST_LIST_ENTRY(sip_request) next;
+	unsigned int reqsipoptions; /*!< Items needed for Required header in responses */
 };
 
 /* \brief given a sip_request and an offset, return the char * that resides there
@@ -793,6 +802,7 @@ struct sip_invite_param {
 	enum sip_auth_type auth_type;  /*!< Authentication type */
 	const char *replaces;       /*!< Replaces header for call transfers */
 	int transfer;               /*!< Flag - is this Invite part of a SIP transfer? (invite/replaces) */
+	struct sip_proxy *outboundproxy; /*!< Outbound proxy URI */
 };
 
 /*! \brief Structure to save routing information for a SIP session */
@@ -894,14 +904,14 @@ struct sip_notify {
 struct sip_st_dlg {
 	int st_active;                     /*!< Session-Timers on/off */
 	int st_interval;                   /*!< Session-Timers negotiated session refresh interval */
+	enum st_refresher st_ref;          /*!< Session-Timers cached refresher */
 	int st_schedid;                    /*!< Session-Timers ast_sched scheduler id */
-	enum st_refresher st_ref;          /*!< Session-Timers session refresher */
 	int st_expirys;                    /*!< Session-Timers number of expirys */
 	int st_active_peer_ua;             /*!< Session-Timers on/off in peer UA */
 	int st_cached_min_se;              /*!< Session-Timers cached Min-SE */
 	int st_cached_max_se;              /*!< Session-Timers cached Session-Expires */
 	enum st_mode st_cached_mode;       /*!< Session-Timers cached M.O. */
-	enum st_refresher st_cached_ref;   /*!< Session-Timers cached refresher */
+	enum st_refresher st_cached_ref;   /*!< Session-Timers session refresher */
 	unsigned char quit_flag:1;         /*!< Stop trying to lock; just quit */
 };
 
@@ -910,10 +920,10 @@ struct sip_st_dlg {
  *   of SIP Session-Timers feature on a per user/peer basis.
  */
 struct sip_st_cfg {
-	enum st_mode st_mode_oper;    /*!< Mode of operation for Session-Timers           */
-	enum st_refresher st_ref;     /*!< Session-Timer refresher                        */
-	int st_min_se;                /*!< Lowest threshold for session refresh interval  */
-	int st_max_se;                /*!< Highest threshold for session refresh interval */
+	enum st_mode st_mode_oper;      /*!< Mode of operation for Session-Timers           */
+	enum st_refresher_param st_ref; /*!< Session-Timer refresher                        */
+	int st_min_se;                  /*!< Lowest threshold for session refresh interval  */
+	int st_max_se;                  /*!< Highest threshold for session refresh interval */
 };
 
 /*! \brief Structure for remembering offered media in an INVITE, to make sure we reply
@@ -1056,6 +1066,7 @@ struct sip_pvt {
 	struct sip_auth_container *peerauth;/*!< Realm authentication credentials */
 	int noncecount;                     /*!< Nonce-count */
 	unsigned int stalenonce:1;          /*!< Marks the current nonce as responded too */
+	unsigned int ongoing_reinvite:1;    /*!< There is a reinvite in progress that might need to be cleaned up */
 	char lastmsg[256];                  /*!< Last Message sent/received */
 	int amaflags;                       /*!< AMA Flags */
 	uint32_t pendinginvite; /*!< Any pending INVITE or state NOTIFY (in subscribe pvt's) ? (seqno of this) */
@@ -1068,6 +1079,7 @@ struct sip_pvt {
 
 	int initid;                         /*!< Auto-congest ID if appropriate (scheduler) */
 	int waitid;                         /*!< Wait ID for scheduler after 491 or other delays */
+	int reinviteid;                     /*!< Reinvite in case of provisional, but no final response */
 	int autokillid;                     /*!< Auto-kill ID (scheduler) */
 	int t38id;                          /*!< T.38 Response ID */
 	struct sip_refer *refer;            /*!< REFER: SIP transfer data structure */

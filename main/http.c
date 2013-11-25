@@ -252,7 +252,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 		goto out403;
 	}
 
-	path = alloca(len);
+	path = ast_alloca(len);
 	sprintf(path, "%s/static-http/%s", ast_config_AST_DATA_DIR, uri);
 	if (stat(path, &st)) {
 		goto out404;
@@ -622,6 +622,7 @@ struct ast_variable *ast_http_get_post_vars(
 	int content_length = 0;
 	struct ast_variable *v, *post_vars=NULL, *prev = NULL;
 	char *buf, *var, *val;
+	int res;
 
 	for (v = headers; v; v = v->next) {
 		if (!strcasecmp(v->name, "Content-Type")) {
@@ -634,21 +635,27 @@ struct ast_variable *ast_http_get_post_vars(
 
 	for (v = headers; v; v = v->next) {
 		if (!strcasecmp(v->name, "Content-Length")) {
-			content_length = atoi(v->value) + 1;
+			content_length = atoi(v->value);
 			break;
 		}
 	}
 
-	if (!content_length) {
+	if (content_length <= 0) {
 		return NULL;
 	}
 
-	if (!(buf = alloca(content_length))) {
+	buf = ast_malloc(content_length + 1);
+	if (!buf) {
 		return NULL;
 	}
-	if (!fgets(buf, content_length, ser->f)) {
-		return NULL;
+
+	res = fread(buf, 1, content_length, ser->f);
+	if (res < content_length) {
+		/* Error, distinguishable by ferror() or feof(), but neither
+		 * is good. */
+		goto done;
 	}
+	buf[content_length] = '\0';
 
 	while ((val = strsep(&buf, "&"))) {
 		var = strsep(&val, "=");
@@ -667,6 +674,9 @@ struct ast_variable *ast_http_get_post_vars(
 			prev = v;
 		}
 	}
+	
+done:
+	ast_free(buf);
 	return post_vars;
 }
 
@@ -786,7 +796,7 @@ cleanup:
 static HOOK_T ssl_write(void *cookie, const char *buf, LEN_T len)
 {
 #if 0
-	char *s = alloca(len+1);
+	char *s = ast_alloca(len+1);
 	strncpy(s, buf, len);
 	s[len] = '\0';
 	ast_verbose("ssl write size %d <%s>\n", (int)len, s);
@@ -1206,11 +1216,17 @@ static struct ast_cli_entry cli_http[] = {
 	AST_CLI_DEFINE(handle_show_http, "Display HTTP server status"),
 };
 
+static void http_shutdown(void)
+{
+	ast_cli_unregister_multiple(cli_http, ARRAY_LEN(cli_http));
+}
+
 int ast_http_init(void)
 {
 	ast_http_uri_link(&statusuri);
 	ast_http_uri_link(&staticuri);
 	ast_cli_register_multiple(cli_http, ARRAY_LEN(cli_http));
+	ast_register_atexit(http_shutdown);
 
 	return __ast_http_load(0);
 }
