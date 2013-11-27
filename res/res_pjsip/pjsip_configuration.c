@@ -666,11 +666,11 @@ static int group_handler(const struct aco_option *opt,
 {
 	struct ast_sip_endpoint *endpoint = obj;
 
-	if (!strncmp(var->name, "callgroup", 9)) {
+	if (!strncmp(var->name, "call_group", 10)) {
 		if (!(endpoint->pickup.callgroup = ast_get_group(var->value))) {
 			return -1;
 		}
-	} else if (!strncmp(var->name, "pickupgroup", 11)) {
+	} else if (!strncmp(var->name, "pickup_group", 12)) {
 		if (!(endpoint->pickup.pickupgroup = ast_get_group(var->value))) {
 			return -1;
 		}
@@ -710,12 +710,12 @@ static int named_groups_handler(const struct aco_option *opt,
 {
 	struct ast_sip_endpoint *endpoint = obj;
 
-	if (!strncmp(var->name, "namedcallgroup", 14)) {
+	if (!strncmp(var->name, "named_call_group", 16)) {
 		if (!(endpoint->pickup.named_callgroups =
 		      ast_get_namedgroups(var->value))) {
 			return -1;
 		}
-	} else if (!strncmp(var->name, "namedpickupgroup", 16)) {
+	} else if (!strncmp(var->name, "named_pickup_group", 18)) {
 		if (!(endpoint->pickup.named_pickupgroups =
 		      ast_get_namedgroups(var->value))) {
 			return -1;
@@ -1404,11 +1404,24 @@ void ast_res_pjsip_destroy_configuration(void)
 	ast_sorcery_unref(sip_sorcery);
 }
 
-int ast_res_pjsip_reload_configuration(void)
+/*!
+ * \internal
+ * \brief Reload configuration within a PJSIP thread
+ */
+static int reload_configuration_task(void *obj)
 {
 	if (sip_sorcery) {
 		ast_sorcery_reload(sip_sorcery);
 	}
+	return 0;
+}
+
+int ast_res_pjsip_reload_configuration(void)
+{
+	if (ast_sip_push_task(NULL, reload_configuration_task, NULL)) {
+		ast_log(LOG_WARNING, "Failed to reload PJSIP configuration\n");
+	}
+
 	return 0;
 }
 
