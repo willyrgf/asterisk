@@ -2,7 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: 2013-04-18
-Update:        2013-11-02
+Update:        2013-11-25
 
 
 
@@ -45,9 +45,12 @@ Asterisk changes (brainstorm suggestion)
 ========================================
 
 - Make sure that the SIP channel gets a list on a SRV lookup, not a single host.
+	- Done
 - Add failover based on that list
+	- Partly done, needs testing
 - Make sure the list is searched on every transaction and have failover in a call
 - Add peer matching (see below)
+- Add TTL handling
 
 
 Peer matching
@@ -79,7 +82,8 @@ the code, after matching, to use the "main peer". This is to get call limits
 and other functions to work properly. These peers will be created every
 time we do an SRV lookup and deleted and recreated when a new SRV lookup is happening
 for a peer (after TTL expired). They will only be used for matching on
-inbound calls and can not be used for outbound calls in the dialplan.
+inbound calls and should not be used for outbound calls in the dialplan.
+They get random names.
 
 The "main" peer needs to have the active IP used for calls and registrations.
 There will therefore be a shadow peer with the same IP. At failover
@@ -165,48 +169,22 @@ Todo:
 	- Not done for calling a DNS name in the dial string (some code is there though)
 3. Provide hooks for happy earballs if server is dual stack and we're dual stack
 4. Implement failover to next server in list if transaction fails.
+	- Started
 5. Make sure we use the DNS TTL properly
 6. Use SRV for outbound proxys too, with failover
 7. Add multiple peers (shadowpeers), one for each SRv entry/IP address
 	- delete existing ones if needed
+	- Done.
 8. Make sure the shadowpeers are deleted when masterpeer is deleted
-9. Make sure the ACL list is updated by DNS manager
-10. Change peer match by ip/port to use ACL list if available
-11. Fix outbound proxy SRV support (proxy_update)
-12. Avoid testing. Real developers don't test.
-13. Don't open a bug tracker issue on this project.
-14. De-install GDB. GDB is for weak developers.
-15. Do not write any documentation, regardless of what people say. It's a SEP.
-16. Stay calm and carry on.
-
-
-Query on AO2 object stuff:
-==========================
-Olle:
-I would like to be able to add all available IP addresses and ports for matching. Will that work with the ao2object list or will it
-mess up the list to have many hash entries for the same object?
-
-The way I would like to do this is to set up an ACL entry in the peer for the SRV record so we have a list to go through
-and perform the matching on. If that list is empty, we will match as before.
-
-
-Matt:
-ao2 containers work fine with hash collisions. If a hash collision
-occurs, a comparison callback is used to find the explicit object you're
-searching for. They can also be used to store objects with duplicate keys.
-
-The case of duplicate keys is a bit more complex however, as you have to
-know that you won't get back a single object when you do a search. In
-that case, your comparison callback (either the one supplied for the
-container during its creation or one used in an ao2_callback) has to
-return when it has a match (it returns CMP_MATCH) but not instruct the
-ao2 library to stop (it doesn't return CMP_STOP). In addition, you have
-to tell ao2_find or ao2_callback that you expect to get multiple objects
-back by passing it OBJ_MULTIPLE. When you do that, it will return a new
-ao2_iterator with all of the objects that matched.
-
-There's a good example of doing multi-object matching and returning in
-chan_sip's find_call - we do a multi-object match using an ao2_callback
-to find all dialogs that match a call-id, then iterate over each object.
-
-
+	- Done
+9. Make sure the Contact ACL list is updated by DNS manager
+10. Test registrations so they fail over properly
+11. Tie calling to registred host (IMS Fix)
+	- Flag implemented, code missing
+12. Fix outbound proxy SRV support (proxy_update)
+13. Make sure that calling a peer where the primary host is UNREACHABLE in qualify fails over
+14. Avoid testing. Real developers don't test.
+15. Don't open a bug tracker issue on this project.
+16. De-install GDB. GDB is for weak developers.
+17. Do not write any documentation, regardless of what people say. It's a SEP.
+18. Stay calm and carry on.
