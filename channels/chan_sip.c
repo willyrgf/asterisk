@@ -229,7 +229,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
    In normal operation, the macros defined will throw away the tags, so they do not
    affect the speed of the program at all. They can be considered to be documentation.
 */
-/* #define  REF_DEBUG 1 */
+#define  REF_DEBUG 1
 #include "asterisk/lock.h"
 #include "asterisk/config.h"
 #include "asterisk/module.h"
@@ -1362,7 +1362,9 @@ static int sip_notify_allocate(struct sip_pvt *p);
 static void ast_quiet_chan(struct ast_channel *chan);
 static int attempt_transfer(struct sip_dual *transferer, struct sip_dual *target);
 static int do_magic_pickup(struct ast_channel *channel, const char *extension, const char *context);
+#ifdef HOST_IP_DEPRECATED
 static void free_sip_host_ip(struct sip_host_ip *hostlist);
+#endif
 
 /*--- Device monitoring and Device/extension state/event handling */
 static int cb_extensionstate(char *context, char* exten, int state, void *data);
@@ -3172,6 +3174,11 @@ static int match_and_cleanup_peer_sched(void *peerobj, void *arg, int flags)
 	struct sip_peer *peer = peerobj;
 	peer_unlink_flag_t which = *(peer_unlink_flag_t *)arg;
 
+	if (!peer) {
+		ast_debug(3, "Peer already gone. Pointer is zero. What's up dude?\n");
+		return 0;
+	}
+
 	if (which == SIP_PEERS_ALL || peer->the_mark) {
 		peer_sched_cleanup(peer);
 		if (peer->dnsmgr) {
@@ -4616,11 +4623,12 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 				__sip_xmit(p, req->data);
 			if (res == -1 || res == XMIT_ERROR) {
 				char hostname[MAXHOSTNAMELEN];
+				const char *host = &hostname[0];
 				unsigned short port, prio, weight;
 				ast_debug(3, "====>> SRV failover. Changing to next SRV record in the list\n");
 				/* XXX SRV FAILOVER HERE XXX */
 				/* Hmm. If this is a peer - should we use the peer srvcontext? */
-				if(ast_srv_get_next_record(p->srvcontext, &hostname, &port, &prio, &weight)) {
+				if(ast_srv_get_next_record(p->srvcontext, &host, &port, &prio, &weight)) {
 					ast_log(LOG_WARNING, "No more hosts: %s\n", p->srvdomain);
 					res = -1;
 				} else  {
@@ -4997,6 +5005,7 @@ static void destroy_mailbox(struct sip_mailbox *mailbox)
 	ast_free(mailbox);
 }
 
+#ifdef HOST_IP_DEPRECATED
 static void host_ip_list_debug(struct sip_host_ip *hostip)
 {
 	struct sip_host_ip *hip = hostip;
@@ -5024,7 +5033,9 @@ static struct sip_host_ip *add_sip_host_ip(struct sip_host_ip *hostip, struct as
 
 	return new;
 }
+#endif
 
+#ifdef HOST_IP_DEPRECATED
 /*! Release srv host entries */
 static void free_sip_host_ip(struct sip_host_ip *hostlist) 
 {
@@ -5036,6 +5047,7 @@ static void free_sip_host_ip(struct sip_host_ip *hostlist)
 		hip = hup;
 	}
 }
+#endif
 
 /*! Destroy all peer-related mailbox subscriptions */
 static void clear_peer_mailboxes(struct sip_peer *peer)
@@ -5476,7 +5488,7 @@ static int find_by_name(void *obj, void *arg, void *data, int flags)
 		}
 		break;
 	case FINDPEERS:
-		if (!(search->type & SIP_TYPE_PEER)) {
+		if (!(search->type & SIP_TYPE_PEER) && !(search->type & SIP_TYPE_PEERSHADOW)) {
 			return 0;
 		}
 		break;
@@ -5883,7 +5895,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 	char host[MAXHOSTNAMELEN];
 	char service[MAXHOSTNAMELEN];
 	int srv_ret = 0;
-	unsigned short tportno;
+	unsigned short tportno = 0;
 
 	AST_DECLARE_APP_ARGS(hostport,
 		AST_APP_ARG(host);
@@ -16853,7 +16865,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		}
 
 		if (authpeer) {
-			ao2_t_ref(peer, 1, "copy pointer into (*authpeer)");
+			ref_peer(peer, "copy pointer into (*authpeer)");
 			(*authpeer) = peer;	/* Add a ref to the object here, to keep it in memory a bit longer if it is realtime */
 		}
 
@@ -17514,6 +17526,7 @@ struct show_peers_context {
 	int peers_mon_offline;
 	int peers_unmon_offline;
 	int peers_unmon_online;
+	int peershadows;
 };
 
 /*! \brief Execute sip show peers command */
@@ -17527,6 +17540,7 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 		.peers_mon_offline = 0,
 		.peers_unmon_online = 0,
 		.peers_unmon_offline = 0,
+		.peershadows = 0,
 	};
 	struct sip_peer *peer;
 	struct ao2_iterator* it_peers;
@@ -17581,7 +17595,8 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 	while ((peer = ao2_t_iterator_next(it_peers, "iterate thru peers table"))) {
 		ao2_lock(peer);
 
-		if (!(peer->type & SIP_TYPE_PEER)) {
+		if (!(peer->type & SIP_TYPE_PEER) && !(peer->type & SIP_TYPE_PEERSHADOW)) {
+			ast_debug(2, "==> Removing object  %s from list \n", peer->name);
 			ao2_unlock(peer);
 			unref_peer(peer, "unref peer because it's actually a user");
 			continue;
@@ -17605,8 +17620,8 @@ static char *_sip_show_peers(int fd, int *total, struct mansession *s, const str
 	}
 
 	if (!s) {
-		ast_cli(fd, "%d sip peers [Monitored: %d online, %d offline Unmonitored: %d online, %d offline]\n",
-		        total_peers, cont.peers_mon_online, cont.peers_mon_offline, cont.peers_unmon_online, cont.peers_unmon_offline);
+		ast_cli(fd, "%d sip peers [Shadow peers: %d, Monitored: %d online, %d offline Unmonitored: %d online, %d offline]\n",
+		        total_peers, cont.peershadows, cont.peers_mon_online, cont.peers_mon_offline, cont.peers_unmon_online, cont.peers_unmon_offline);
 	}
 
 	if (cont.havepattern) {
@@ -17659,6 +17674,10 @@ static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct
 		ast_copy_string(name, peer->name, sizeof(name));
 	}
 
+	if (peer->type & SIP_TYPE_PEERSHADOW) {
+		cont->peershadows++;
+	}
+
 	pstatus = peer_status(peer, status, sizeof(status));
 	if (pstatus == 1) {
 		cont->peers_mon_online++;
@@ -17696,6 +17715,7 @@ static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct
 		"TextSupport: %s\r\n"
 		"ACL: %s\r\n"
 		"Status: %s\r\n"
+		"Shadowpeer: %s\r\n"
 		"RealtimeDevice: %s\r\n\r\n",
 		cont->idtext,
 		peer->name,
@@ -17707,6 +17727,7 @@ static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct
 		ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT) ? "yes" : "no",	/* TEXTSUPPORT=yes? */
 		peer->ha ? "yes" : "no",       /* permit/deny */
 		status,
+		peer->type & SIP_TYPE_PEERSHADOW ? "yes" : "no",
 		cont->realtimepeers ? (peer->is_realtime ? "yes":"no") : "no");
 	}
 	ao2_unlock(peer);
@@ -18308,7 +18329,12 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ao2_unlock(peer);
 
 		ast_cli(fd, "\n\n");
-		ast_cli(fd, "  * Name       : %s\n", peer->name);
+		ast_cli(fd, "  * Name       : %s", peer->name);
+		if (peer->masterpeer) {
+			ast_cli(fd, " (shadow per for DNS SRV support. Master peer: %s)\n", peer->masterpeer->name);
+		} else {
+			ast_cli(fd, "\n");
+		}
 		if (realtimepeers) {	/* Realtime is enabled */
 			ast_cli(fd, "  Realtime peer: %s\n", peer->is_realtime ? "Yes, cached" : "No");
 		}
@@ -28132,12 +28158,12 @@ static struct sip_peer *temp_peer(const char *name)
 		return NULL;
 
 	if (ast_string_field_init(peer, 512)) {
-		ao2_t_ref(peer, -1, "failed to string_field_init, drop peer");
+		unref_peer(peer, "failed to string_field_init, drop peer");
 		return NULL;
 	}
 	
 	if (!(peer->cc_params = ast_cc_config_params_init())) {
-		ao2_t_ref(peer, -1, "failed to allocate cc_params for peer");
+		unref_peer(peer, "failed to allocate cc_params for peer");
 		return NULL;
 	}
 
@@ -28207,8 +28233,12 @@ static void link_shadow_peer(struct sip_peer *masterpeer, struct sip_peer *shado
 	}
 	shadow->delme = 0;
 	shadow->peer = shadowpeer;
-	ast_copy_string(shadow->hostname, hostname, sizeof(shadow->hostname));
-	AST_LIST_INSERT_TAIL(&masterpeer->peer_shadows, shadow, entry);
+	if (hostname != NULL) {
+		ast_copy_string(shadow->hostname, hostname, sizeof(shadow->hostname));
+	}
+	AST_LIST_INSERT_HEAD(&masterpeer->peer_shadows, shadow, entry);
+	ast_debug(2, "=== Inserted shadow peer %s in list for peer %s \n", shadowpeer->name, masterpeer->name);
+
 	return;
 }
 
@@ -28216,19 +28246,30 @@ static void link_shadow_peer(struct sip_peer *masterpeer, struct sip_peer *shado
 static void shadow_peer_delete_all(struct sip_peer *masterpeer)
 {
 	struct sip_shadow_peer *shadow;
+	int deletedshadows = 0;
 
-	if (AST_LIST_EMPTY(&masterpeer->peer_shadows)) {
+	if (!masterpeer) {
 		return;
 	}
 
-	AST_LIST_TRAVERSE_SAFE_BEGIN(&masterpeer->peer_shadows, shadow, entry) {
-		/* remove shadow peer from IP list */
-		unlink_peer_from_tables(shadow->peer);
-		ao2_t_ref(shadow->peer, -1, "Removing all shadow peers");
-		AST_LIST_REMOVE_CURRENT(entry);
-		ast_free(shadow);
+	if (AST_LIST_EMPTY(&masterpeer->peer_shadows)) {
+		ast_debug(2, "=== Deleting no shadow peers for peer %s (list empty)\n", masterpeer->name);
+		return;
 	}
-	AST_LIST_TRAVERSE_SAFE_END;
+	ast_debug(2, "=== Deleting all shadow peers for peer %s\n", masterpeer->name);
+
+	//AST_LIST_TRAVERSE_SAFE_BEGIN(&masterpeer->peer_shadows, shadow, entry) {
+	while ((shadow = AST_LIST_REMOVE_HEAD(&masterpeer->peer_shadows, entry))) {
+		/* remove shadow peer from IP list */
+		ast_debug(3, "Removing shadow peer %s from tables\n", shadow->peer->name);
+		unlink_peer_from_tables(shadow->peer);
+		ast_debug(3, "Removing shadow peer %s from the universe (unref)\n", shadow->peer->name);
+		//unref_peer(shadow->peer, "shadow_peer_delete_all: Removing all shadow peers for a peer");
+		ast_free(shadow);
+		deletedshadows++;
+	}
+	//AST_LIST_TRAVERSE_SAFE_END;
+	ast_debug(2, "---> Deleted %d shadows from peer %s\n", deletedshadows, masterpeer->name);
 }
 
 /*! \brief Copy a peer into a new peer 
@@ -28248,6 +28289,8 @@ static void shadow_peer_delete_all(struct sip_peer *masterpeer)
 	-	struct srv_context *srvcontext;	// SRV lookup chain for failover - runtime, not config
 	-	struct timeval ps;              //: Time for sending SIP OPTION in sip_pke_peer() - runtime, not config
 	-	struct sip_pvt *mwipvt;         // for MWI - runtime, not config
+ 	-	the_mark
+	-	various sched ID's
 
  Note: This was coded on a Norwegian Boeing 737-800 that was too new for Wifi... Wifi is not installed
 	by Boeing so I was offline and coding instead of being social with my nerd friends. OEJ.
@@ -28323,7 +28366,7 @@ static struct sip_peer *copy_peer(struct sip_peer *destpeer, const struct sip_pe
 	/*! Automatic peers need to destruct themselves */
 	destpeer->selfdestruct = origpeer->selfdestruct;
 	/*! moved out of ASTOBJ into struct proper; That which bears the_mark should be deleted! */
-	destpeer->the_mark = origpeer->the_mark;
+	/* destpeer->the_mark = origpeer->the_mark; not copied*/
 	/*! Whether to use our local configuration for frame sizes (off) */
 	destpeer->autoframing = origpeer->autoframing;
 	/*! If it's a realtime peer, are they using the deprecated "username" instead of "defaultuser" */
@@ -28335,9 +28378,9 @@ static struct sip_peer *copy_peer(struct sip_peer *destpeer, const struct sip_pe
 	/*! Number of calls in use */
 	destpeer->inUse = origpeer->inUse;
 	/*! Number of calls ringing */
-	destpeer->inRinging = origpeer->inRinging;
+	/* destpeer->inRinging = origpeer->inRinging; Not copied */
 	/*! Peer has someone on hold */
-	destpeer->onHold = origpeer->onHold;
+	/* destpeer->onHold = origpeer->onHold;   -Not copied */
 	/*! Limit of concurrent calls */
 	destpeer->call_limit = origpeer->call_limit;
 	/*! T.38 FaxMaxDatagram override */
@@ -28376,8 +28419,6 @@ static struct sip_peer *copy_peer(struct sip_peer *destpeer, const struct sip_pe
 	ast_sockaddr_copy(&destpeer->addr, &origpeer->addr);
 	/*! Whether the port should be included in the URI */
 	destpeer->portinuri = origpeer->portinuri;
-	/*!  Qualification: When to expire poke (qualify= checking) */
-	destpeer->pokeexpire = origpeer->pokeexpire;
 	/*!  Qualification: How long last response took (in ms), or -1 for no response */
 	destpeer->lastms = origpeer->lastms;
 	/*!  Qualification: Max ms we will accept for the host to be up, 0 to not monitor */
@@ -28387,13 +28428,21 @@ static struct sip_peer *copy_peer(struct sip_peer *destpeer, const struct sip_pe
 	/*!  Default IP address, used until registration */
 	ast_sockaddr_copy(&destpeer->defaddr, &origpeer->defaddr);
 	/*!  Access control list */
-	ast_copy_ha(destpeer->ha, origpeer->ha);
+	if (origpeer->ha) {
+		ast_copy_ha(destpeer->ha, origpeer->ha);
+	}
 	/*!  Restrict what IPs are allowed in the Contact header (for registration) */
-	ast_copy_ha(destpeer->contactha, origpeer->contactha);
+	if (origpeer->contactha) {
+		ast_copy_ha(destpeer->contactha, origpeer->contactha);
+	}
 	/*!  Restrict what IPs are allowed to interchange direct media with */
-	ast_copy_ha(destpeer->directmediaha, origpeer->directmediaha);
+	if (origpeer->directmediaha) {
+		ast_copy_ha(destpeer->directmediaha, origpeer->directmediaha);
+	}
 	/*!  Variables to set for channel created by user */
-	destpeer->chanvars = ast_variables_dup(origpeer->chanvars);
+	if (origpeer->chanvars) {
+		destpeer->chanvars = ast_variables_dup(origpeer->chanvars);
+	}
 	/*!  The maximum T1 value for the peer */
 	destpeer->timer_t1 = origpeer->timer_t1;
 	/*!  The maximum timer B (transaction timeouts) */
@@ -28423,12 +28472,12 @@ static struct sip_peer *create_new_peer(int realtime)
 	}
 
 	if (ast_string_field_init(peer, 512)) {
-		ao2_t_ref(peer, -1, "failed to string_field_init, drop peer");
+		unref_peer(peer, "failed to string_field_init, drop peer");
 		return NULL;
 	}
 
 	if (!(peer->cc_params = ast_cc_config_params_init())) {
-		ao2_t_ref(peer, -1, "failed to allocate cc_params for peer");
+		unref_peer(peer, "failed to allocate cc_params for peer");
 		return NULL;
 	}
 
@@ -28450,7 +28499,12 @@ static struct sip_peer *create_shadow_peer(struct sip_peer *peer, struct ast_soc
 	struct sip_peer *shadowpeer = create_new_peer(FALSE);
 	char peername[80];
 
-	if (!shadowpeer) {
+	if (shadowpeer == NULL) {
+		ast_debug(2, "=== Could not create new shadow peer? \n");
+		return NULL;
+	}
+	if (peer == NULL) {
+		ast_debug(2, "=== No peer? \n");
 		return NULL;
 	}
 	ast_copy_string(peername, peer->name, sizeof(peername));
@@ -28458,14 +28512,15 @@ static struct sip_peer *create_shadow_peer(struct sip_peer *peer, struct ast_soc
 		/* Cut the long name to get room for random string */
 		peername[60] = '\0';
 	}
-	ast_string_field_build(shadowpeer, name, "%s-%08lx", peername, ast_random());
-	ast_debug(2, "Created shadow DNS peer %s for %s - based on peer %s\n", shadowpeer->name, hostname, peer->name);
 
 	shadowpeer->lastmsgssent = -1;
 	shadowpeer->ha = NULL;
 	shadowpeer->directmediaha = NULL;
 	set_peer_defaults(shadowpeer);	/* Set peer defaults */
+	ref_peer(peer, "Adding ref before copying");
 	copy_peer(shadowpeer, peer);	/* Copy the peer */
+	snprintf(shadowpeer->name, sizeof(shadowpeer->name), "%s-%08lx", peername, ast_random());
+	ast_debug(2, "Created shadow DNS peer %s for %s - based on peer %s\n", shadowpeer->name, hostname, peer->name);
 	ast_sockaddr_copy(&shadowpeer->addr, addr);	/* Set the address and family */
 	ast_sockaddr_set_port(&shadowpeer->addr, tportno); /* Set the port number */
 	shadowpeer->type = SIP_TYPE_PEERSHADOW;
@@ -28473,7 +28528,7 @@ static struct sip_peer *create_shadow_peer(struct sip_peer *peer, struct ast_soc
 	/* Adding the IP to the global contact ACL */
 	if (global_dynamic_exclude_static) {
 		int ha_error = 0;
-		sip_cfg.contact_ha = ast_append_ha("deny", ast_sockaddr_stringify_addr(&addr), sip_cfg.contact_ha, &ha_error);
+		sip_cfg.contact_ha = ast_append_ha("deny", ast_sockaddr_stringify_addr(addr), sip_cfg.contact_ha, &ha_error);
 	}
 	/* Add a reference to the master */
 	/* Note: Adding a ref to the master stops the master from being deleted which
@@ -28481,11 +28536,14 @@ static struct sip_peer *create_shadow_peer(struct sip_peer *peer, struct ast_soc
 	shadowpeer->masterpeer = peer;
 
 	/* Link to the original peer */
-	link_shadow_link(shadowpeer, peer, hostname);
+	link_shadow_peer(peer, shadowpeer, hostname);
+
 
 	/* Add shadow peer to peer list */
 	ao2_t_link(peers_by_ip, shadowpeer, "link shadow peer into peers_by_ip table");
-
+	ao2_t_link(peers, shadowpeer, "link peer into peer table");
+	unref_peer(shadowpeer, "Created and ready to go, live long and prosper");
+	unref_peer(peer, "Added a shadow peer. ");
 	/* Live long and prosper */
 	return shadowpeer;
 }
@@ -28496,7 +28554,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	struct sip_peer *peer = NULL;
 	struct ast_ha *oldha = NULL;
 	struct ast_ha *olddirectmediaha = NULL;
+#ifdef HOST_IP_DEPRECATED
 	struct sip_host_ip *old_sip_host_ip = NULL;
+#endif
 	int found = 0;
 	int firstpass = 1;
 	uint16_t port = 0;
@@ -28524,6 +28584,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		peer = ao2_t_find(peers, &tmp_peer, OBJ_POINTER | OBJ_UNLINK, "find and unlink peer from peers table");
 	}
 
+
 	if (peer) {
 		/* Already in the list, remove it and it will be added back (or FREE'd)  */
 		found++;
@@ -28532,8 +28593,12 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		if (!ast_sockaddr_isnull(&peer->addr)) {
 			ao2_t_unlink(peers_by_ip, peer, "ao2_unlink peer from peers_by_ip table");
 		}
-		if (!(peer->the_mark))
+		if (!(peer->the_mark)) {
 			firstpass = 0;
+		}
+
+		/* Remove any shadows to this peer first */
+		shadow_peer_delete_all(peer);
 	} else {
 		if (!(peer = create_new_peer(realtime))) {
 			return NULL;
@@ -29105,8 +29170,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 			ast_debug(3, "   ==> Settling on SRV entry %d (prio %d weight %d): %s\n", rec - 1, prio, weight, hostname);
 
-			/* Remove any shadows to this peer first */
-			shadow_peer_delete_all(peer);
+
 			for (rec = 1; rec <= ast_srv_get_record_count(peer->srvcontext); rec++) {
 				int res;
 				struct ast_sockaddr ip;
@@ -29247,7 +29311,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 
 	ast_free_ha(oldha);
 	ast_free_ha(olddirectmediaha);
+#ifdef HOST_IP_DEPRECATED
 	free_sip_host_ip(old_sip_host_ip);
+#endif
 	if (!ast_strlen_zero(callback)) { /* build string from peer info */
 		char *reg_string;
 		if (ast_asprintf(&reg_string, "%s?%s:%s@%s/%s", peer->name, peer->username, !ast_strlen_zero(peer->remotesecret) ? peer->remotesecret : peer->secret, peer->tohost, callback) >= 0) {
@@ -29262,7 +29328,11 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 static int peer_markall_func(void *device, void *arg, int flags)
 {
 	struct sip_peer *peer = device;
-	peer->the_mark = 1;
+	if (! (peer->type & SIP_TYPE_PEERSHADOW)) {	/* Don't mark peer shadows for removal, they live and die with their master  */
+		peer->the_mark = 1;
+	} else {
+		ast_debug(3, "Not marking shadow peer %s for destruction \n", peer->name);
+	}
 	return 0;
 }
 
@@ -29492,7 +29562,6 @@ static int reload_config(enum channelreloadreason reason)
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWSUBSCRIBE);	/* Default for all devices: TRUE */
 	ast_set_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP_YES);	/* Default for all devices: Yes */
 	sip_cfg.peer_rtupdate = TRUE;
-	sip_cfg.ims_regcall = DEFAULT_IMS_REGCALL;			/*!< Register before a call */
 	global_dynamic_exclude_static = 0;	/* Exclude static peers */
 	sip_cfg.tcp_enabled = FALSE;
 
@@ -31173,7 +31242,7 @@ static char *sip_reload(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a
 		ast_string_field_set(new_peer, md5secret, BOGUS_PEER_MD5SECRET);
 		ast_clear_flag(&new_peer->flags[0], SIP_INSECURE);
 		bogus_peer = new_peer;
-		ao2_t_ref(tmp_peer, -1, "unref the old bogus_peer during reload");
+		unref_peer(tmp_peer, "unref the old bogus_peer during reload");
 	} else {
 		ast_log(LOG_ERROR, "Could not update the fake authentication peer.\n");
 		/* You probably have bigger (memory?) issues to worry about though.. */
@@ -32389,7 +32458,7 @@ static int load_module(void)
 	/* Make sure we can register our sip channel type */
 	if (ast_channel_register(&sip_tech)) {
 		ast_log(LOG_ERROR, "Unable to register channel type 'SIP'\n");
-		ao2_t_ref(bogus_peer, -1, "unref the bogus_peer");
+		unref_peer(bogus_peer, "unref the bogus_peer");
 		io_context_destroy(io);
 		sched_context_destroy(sched);
 		return AST_MODULE_LOAD_FAILURE;
@@ -32631,7 +32700,7 @@ static int unload_module(void)
 		ast_debug(2, "TCP/TLS thread container did not become empty :(\n");
 	}
 
-	ao2_t_ref(bogus_peer, -1, "unref the bogus_peer");
+	unref_peer(bogus_peer, "unref the bogus_peer");
 
 	ao2_t_ref(peers, -1, "unref the peers table");
 	ao2_t_ref(peers_by_ip, -1, "unref the peers_by_ip table");

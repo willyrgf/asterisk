@@ -1200,8 +1200,8 @@ struct sip_mailbox {
  *\brief  A lof shadow peers
  */
 struct sip_shadow_peer {
-	AST_LIST_ENTRY(sip_shadow_peer) entry;
 	char hostname[MAXHOSTNAMELEN];
+	AST_LIST_ENTRY(sip_shadow_peer) entry;
 	unsigned int delme:1;
 	struct sip_peer *peer;
 };
@@ -1304,8 +1304,9 @@ struct sip_peer {
 
 	/*XXX Seems like we suddenly have two flags with the same content. Why? To be continued... */
 	enum sip_peer_type type; /*!< Distinguish between "user" and "peer" types. This is used solely for CLI and manager commands */
+
+	AST_LIST_HEAD_NOLOCK(,sip_shadow_peer) peer_shadows; /*!< If we are the master, this is our shadows */
 	struct sip_peer *masterpeer;       /*!< If this peer is a SHADOWPEER this is the master */
-	AST_LIST_HEAD_NOLOCK(,sip_shadow_peer) peer_shadows; /*! If we are the master, this is our shadows */
 
 	unsigned int disallowed_methods;
 	struct ast_cc_config_params *cc_params;

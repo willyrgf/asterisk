@@ -125,9 +125,6 @@ static int parse_srv(unsigned char *answer, int len, unsigned char *msg, struct 
 	entry->weight = ntohs(srv->weight);
 	entry->port = ntohs(srv->port);
 	entry->ttl_expire = *ttl_expire;
-	if (ast_tvcmp(context->min_ttl_expire, entry->ttl_expire) == -1) {
-		context->min_ttl_expire = *ttl_expire;
-	}
 	strcpy(entry->host, repl);
 	if (option_debug > 3) {
 		char exptime[64];
@@ -158,18 +155,26 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 		return -1;
 	}
 
-	if (parse_srv(answer, len, fullanswer, &entry, &expiry))
+	if (parse_srv(answer, len, fullanswer, &entry, &expiry)) {
 		return -1;
+	}
 
-	if (entry->weight)
+	if (entry->weight) {
 		c->have_weights = 1;
+	}
+
+	/* Make sure we are aware of the shortest expiry for updates */
+	if (ast_tvcmp(c->min_ttl_expire, entry->ttl_expire) == -1) {
+		c->min_ttl_expire = entry->ttl_expire;
+	}
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&c->entries, current, list) {
 		ast_debug(3, "         ===> Looking at you, %s \n", current->host);
 		/* insert this entry just before the first existing
 	   	entry with a higher priority */
-		if (current->priority <= entry->priority)
+		if (current->priority <= entry->priority) {
 			continue;
+		}
 
 		AST_LIST_INSERT_BEFORE_CURRENT(entry, list);
 		c->num_records++;
@@ -314,7 +319,7 @@ void ast_srv_context_free_list(struct srv_context *context)
 	context->prev = NULL;
 	context->current = NULL;
 	context->num_records = 0;
-	SKREP context->min_ttl_expire = 0;
+	context->min_ttl_expire = ast_tv(0, 0);
 }
 
 int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, const char *service)
@@ -419,7 +424,7 @@ int ast_srv_get_next_record(struct srv_context *context, const char **host,
 	*weight = entry->weight;
 	res = 0;
 	context->current = entry;
-	ast_debug(3, "   ==> DNS SRV select next host: %s port %hu \n", *host, (unsigned int) port);
+	ast_debug(3, "   ==> DNS SRV select next host: %s port %hu \n", *host, (int) port);
 
 	return res;
 }
