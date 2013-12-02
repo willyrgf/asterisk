@@ -2539,7 +2539,7 @@ static int retrieve_file(char *dir, int msgnum)
 		ast_odbc_release_obj(obj);
 	} else
 		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
-yuck:	
+yuck:
 	if (f)
 		fclose(f);
 	if (fd > -1)
@@ -2560,7 +2560,8 @@ static int last_message_index(struct ast_vm_user *vmu, char *dir)
 	struct odbc_obj *obj;
 	obj = ast_odbc_request_obj(odbc_database, 0);
 	if (obj) {
-		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir=?",odbc_table);
+		snprintf(sql, sizeof(sql), "SELECT msgnum FROM %s WHERE dir=? order by msgnum desc limit 1", odbc_table);
+
 		stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, &gps);
 		if (!stmt) {
 			ast_log(LOG_WARNING, "SQL Execute error!\n[%s]\n\n", sql);
@@ -2569,7 +2570,12 @@ static int last_message_index(struct ast_vm_user *vmu, char *dir)
 		}
 		res = SQLFetch(stmt);
 		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
-			ast_log(LOG_WARNING, "SQL Fetch error!\n[%s]\n\n", sql);
+			if (res == SQL_NO_DATA) {
+				ast_log(LOG_DEBUG, "Directory '%s' has no messages and therefore no index was retrieved.\n", dir);
+			} else {
+				ast_log(LOG_WARNING, "SQL Fetch error!\n[%s]\n\n", sql);
+			}
+
 			SQLFreeHandle (SQL_HANDLE_STMT, stmt);
 			ast_odbc_release_obj(obj);
 			goto yuck;
@@ -2582,12 +2588,13 @@ static int last_message_index(struct ast_vm_user *vmu, char *dir)
 			goto yuck;
 		}
 		if (sscanf(rowdata, "%30d", &x) != 1)
-			ast_log(LOG_WARNING, "Failed to read message count!\n");
+			ast_log(LOG_WARNING, "Failed to read message index!\n");
 		SQLFreeHandle (SQL_HANDLE_STMT, stmt);
 		ast_odbc_release_obj(obj);
+		return x;
 	} else
 		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
-yuck:	
+yuck:
 	return x - 1;
 }
 
@@ -2633,13 +2640,54 @@ static int message_exists(char *dir, int msgnum)
 		ast_odbc_release_obj(obj);
 	} else
 		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
-yuck:	
+yuck:
 	return x;
 }
 
 static int count_messages(struct ast_vm_user *vmu, char *dir)
 {
-	return last_message_index(vmu, dir) + 1;
+	int x = 0;
+	int res;
+	SQLHSTMT stmt;
+	char sql[PATH_MAX];
+	char rowdata[20];
+	char *argv[] = { dir };
+	struct generic_prepare_struct gps = { .sql = sql, .argc = 1, .argv = argv };
+
+	struct odbc_obj *obj;
+	obj = ast_odbc_request_obj(odbc_database, 0);
+	if (obj) {
+		snprintf(sql, sizeof(sql), "SELECT COUNT(*) FROM %s WHERE dir=?", odbc_table);
+		stmt = ast_odbc_prepare_and_execute(obj, generic_prepare, &gps);
+		if (!stmt) {
+			ast_log(LOG_WARNING, "SQL Execute error!\n[%s]\n\n", sql);
+			ast_odbc_release_obj(obj);
+			goto yuck;
+		}
+		res = SQLFetch(stmt);
+		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+			ast_log(LOG_WARNING, "SQL Fetch error!\n[%s]\n\n", sql);
+			SQLFreeHandle (SQL_HANDLE_STMT, stmt);
+			ast_odbc_release_obj(obj);
+			goto yuck;
+		}
+		res = SQLGetData(stmt, 1, SQL_CHAR, rowdata, sizeof(rowdata), NULL);
+		if ((res != SQL_SUCCESS) && (res != SQL_SUCCESS_WITH_INFO)) {
+			ast_log(LOG_WARNING, "SQL Get Data error!\n[%s]\n\n", sql);
+			SQLFreeHandle (SQL_HANDLE_STMT, stmt);
+			ast_odbc_release_obj(obj);
+			goto yuck;
+		}
+		if (sscanf(rowdata, "%30d", &x) != 1)
+			ast_log(LOG_WARNING, "Failed to read message count!\n");
+		SQLFreeHandle (SQL_HANDLE_STMT, stmt);
+		ast_odbc_release_obj(obj);
+		return x;
+	} else
+		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
+yuck:
+	return x - 1;
+
 }
 
 static void delete_file(char *sdir, int smsg)
@@ -2834,7 +2882,7 @@ static int store_file(char *dir, char *mailboxuser, char *mailboxcontext, int ms
 		ast_odbc_release_obj(obj);
 	} else
 		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
-yuck:	
+yuck:
 	if (cfg)
 		ast_config_destroy(cfg);
 	if (fdm != MAP_FAILED)
@@ -3593,7 +3641,8 @@ plain_message:
 		char *ctype = (!strcasecmp(format, "ogg")) ? "application/" : "audio/x-";
 		char tmpdir[256], newtmp[256];
 		int tmpfd = -1;
-	
+		int soxstatus = 0;
+
 		if (vmu->volgain < -.001 || vmu->volgain > .001) {
 			create_dirpath(tmpdir, sizeof(tmpdir), vmu->context, vmu->mailbox, "tmp");
 			snprintf(newtmp, sizeof(newtmp), "%s/XXXXXX", tmpdir);
@@ -3602,7 +3651,6 @@ plain_message:
 			if (option_debug > 2)
 				ast_log(LOG_DEBUG, "newtmp: %s\n", newtmp);
 			if (tmpfd > -1) {
-				int soxstatus;
 				snprintf(tmpcmd, sizeof(tmpcmd), "sox -v %.4f %s.%s %s.%s", vmu->volgain, attach, format, newtmp, format);
 				if ((soxstatus = ast_safe_system(tmpcmd)) == 0) {
 					attach = newtmp;
@@ -3625,7 +3673,9 @@ plain_message:
 		base_encode(fname, p);
 		fprintf(p, ENDL "--%s--" ENDL "." ENDL, bound);
 		if (tmpfd > -1) {
-			unlink(fname);
+			if (soxstatus == 0) {
+				unlink(fname);
+			}
 			close(tmpfd);
 			unlink(newtmp);
 		}
@@ -3911,7 +3961,7 @@ static int inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
 	} else
 		ast_log(LOG_WARNING, "Failed to obtain database object for '%s'!\n", odbc_database);
 		
-yuck:	
+yuck:
 	return x;
 }
 
@@ -4486,12 +4536,10 @@ static int leave_voicemail(struct ast_channel *chan, char *ext, struct leave_vm_
 					ast_unlock_path(dir);
 					inprocess_count(vmu->mailbox, vmu->context, -1);
 				} else {
-					for (;;) {
-						make_file(fn, sizeof(fn), dir, msgnum);
-						if (!EXISTS(dir, msgnum, fn, NULL))
-							break;
-						msgnum++;
-					}
+#ifndef IMAP_STORAGE
+					msgnum = last_message_index(vmu, dir) + 1;
+#endif
+					make_file(fn, sizeof(fn), dir, msgnum);
 
 					/* assign a variable with the name of the voicemail file */ 
 #ifndef IMAP_STORAGE
@@ -4557,7 +4605,7 @@ leave_vm_out:
 	return res;
 }
 
-#if !defined(IMAP_STORAGE) && !defined(ODBC_STORAGE)
+#if !defined(IMAP_STORAGE)
 static int resequence_mailbox(struct ast_vm_user *vmu, char *dir, int stopcount)
 {
 	/* we know the actual number of messages, so stop process when number is hit */
@@ -5997,9 +6045,6 @@ static int play_message(struct ast_channel *chan, struct ast_vm_user *vmu, struc
 #ifndef IMAP_STORAGE
 static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu,int box)
 {
-#ifndef ODBC_STORAGE
-	int res = 0;
-#endif
 	int count_msg, last_msg;
 
 	ast_copy_string(vms->curbox, mbox(box), sizeof(vms->curbox));
@@ -6035,14 +6080,10 @@ static int open_mailbox(struct vm_state *vms, struct ast_vm_user *vmu,int box)
 
 	if (last_msg < -1) {
 		return last_msg;
-	}
-#ifndef ODBC_STORAGE
-	else if (vms->lastmsg != last_msg)
-	{
+	} else if (vms->lastmsg != last_msg) {
 		ast_log(LOG_NOTICE, "Resequencing Mailbox: %s, expected %d but found %d message(s) in box with max threshold of %d.\n", vms->curdir, last_msg + 1, vms->lastmsg + 1, vmu->maxmsg);
-		res = resequence_mailbox(vmu, vms->curdir, count_msg);
+		resequence_mailbox(vmu, vms->curdir, count_msg);
 	}
-#endif
 
 	return 0;
 }
@@ -6052,6 +6093,7 @@ static int close_mailbox(struct vm_state *vms, struct ast_vm_user *vmu)
 {
 	int x = 0;
 #ifndef IMAP_STORAGE
+	int last_msg_index;
 	int res = 0, nummsg;
 #endif
 
@@ -6063,9 +6105,14 @@ static int close_mailbox(struct vm_state *vms, struct ast_vm_user *vmu)
 	/* Get the deleted messages fixed */ 
 	if (vm_lock_path(vms->curdir))
 		return ERROR_LOCK_PATH;
-	 
+
+	last_msg_index = last_message_index(vmu, vms->curdir);
+	if (last_msg_index !=  vms->lastmsg) {
+		ast_log(LOG_NOTICE, "%d messages arrived while mailbox was open\n", last_msg_index - vms->lastmsg);
+	}
+ 
 	/* must check up to last detected message, just in case it is erroneously greater than maxmsg */
-	for (x = 0; x < vms->lastmsg + 1; x++) { 
+	for (x = 0; x < last_msg_index + 1; x++) { 
 		if (!vms->deleted[x] && (strcasecmp(vms->curbox, "INBOX") || !vms->heard[x])) { 
 			/* Save this message.  It's not in INBOX or hasn't been heard */ 
 			make_file(vms->fn, sizeof(vms->fn), vms->curdir, x); 

@@ -1459,8 +1459,11 @@ static int dial_exec_full(struct ast_channel *chan, void *data, struct ast_flags
 	 * to which the datastore was moved hangs up, it will attempt to free this
 	 * datastore again, causing a crash
 	 */
-	if (!ast_channel_datastore_remove(chan, datastore))
+	ast_channel_lock(chan);
+	if (!ast_channel_datastore_remove(chan, datastore)) {
 		ast_channel_datastore_free(datastore);
+	}
+	ast_channel_unlock(chan);
 	if (!peer) {
 		if (result) {
 			res = result;

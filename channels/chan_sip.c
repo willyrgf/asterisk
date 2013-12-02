@@ -2487,11 +2487,17 @@ static void remove_provisional_keepalive_sched(struct sip_pvt *pvt)
 		return;
 	}
 	res = AST_SCHED_DEL(sched, pvt->provisional_keepalive_data->sched_id);
-	/* If we could not remove this item. remove pvt's reference this data and mark it for removal
-	 * for the next time the scheduler uses it. The scheduler has it's own ref to this data
-	 * and will detect it should not reschedule the event since the sched_id is -1 and pvt == NULL */
 	if (res == -1) {
+		/* If we could not remove this item. remove pvt's reference
+		 * this data and mark it for removal for the next time the
+		 * scheduler uses it. The scheduler has it's own ref to this
+		 * data and will detect it should not reschedule the event
+		 * since the sched_id is -1 and pvt == NULL */
 		pvt->provisional_keepalive_data = unref_provisional_keepalive(pvt->provisional_keepalive_data);
+	} else {
+		/* If we successfully canceled the scheduler entry, we need to
+		 * remove its reference to the data. */
+		ao2_ref(pvt->provisional_keepalive_data, -1);
 	}
 }
 
@@ -2764,7 +2770,7 @@ static void sip_destroy_peer(struct sip_peer *peer)
 	ast_free_ha(peer->ha);
 	if (ast_test_flag(&peer->flags[1], SIP_PAGE2_SELFDESTRUCT))
 		apeerobjs--;
-	else if (ast_test_flag(&peer->flags[0], SIP_REALTIME))
+	else if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && ast_test_flag(&peer->flags[0], SIP_REALTIME))
 		rpeerobjs--;
 	else
 		speerobjs--;
@@ -2972,7 +2978,7 @@ static void sip_destroy_user(struct sip_user *user)
 		ast_variables_destroy(user->chanvars);
 		user->chanvars = NULL;
 	}
-	if (ast_test_flag(&user->flags[0], SIP_REALTIME))
+	if (!ast_test_flag(&global_flags[1], SIP_PAGE2_RTCACHEFRIENDS) && ast_test_flag(&user->flags[0], SIP_REALTIME))
 		ruserobjs--;
 	else
 		suserobjs--;
@@ -4056,7 +4062,11 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 		}
 		if (p) {
 			ast_mutex_lock(&p->lock);
-			if (p->rtp) {
+			if (p->t38.state == T38_ENABLED && !p->t38.direct) {
+				/* drop frame, can't sent VOICE frames while in T.38 mode */
+				ast_mutex_unlock(&p->lock);
+				break;
+			} else if (p->rtp) {
 				/* If channel is not up, activate early media session */
 				if ((ast->_state != AST_STATE_UP) &&
 				    !ast_test_flag(&p->flags[0], SIP_PROGRESS_SENT) &&
@@ -4067,12 +4077,9 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 						transmit_provisional_response(p, "183 Session Progress", &p->initreq, 1);
 						ast_set_flag(&p->flags[0], SIP_PROGRESS_SENT);
 					}
-				} else if (p->t38.state == T38_ENABLED && !p->t38.direct) {
-					/* drop frame, can't sent VOICE frames while in T.38 mode */
-				} else {
-					p->lastrtptx = time(NULL);
-					res = ast_rtp_write(p->rtp, frame);
 				}
+				p->lastrtptx = time(NULL);
+				res = ast_rtp_write(p->rtp, frame);
 			}
 			ast_mutex_unlock(&p->lock);
 		}
@@ -4967,10 +4974,7 @@ static void free_via(struct sip_via *v)
 		return;
 	}
 
-	if (v->via) {
-		ast_free(v->via);
-	}
-
+	ast_free(v->via);
 	ast_free(v);
 }
 
@@ -5093,6 +5097,21 @@ static int addr_is_multicast(struct in_addr *addr)
 	return ((ntohl(addr->s_addr) & 0xf0000000) == 0xe0000000);
 }
 
+/*!
+ * \brief Process the Via header according to RFC 3261 section 18.2.2.
+ * \param p a sip_pvt structure that will be modified according to the received
+ * header
+ * \param req a sip request with a Via header to process
+ *
+ * This function will update the destination of the response according to the
+ * Via header in the request and RFC 3261 section 18.2.2. We do not have a
+ * transport layer so we ignore certain values like the 'received' param (we
+ * set the destination address to the addres the request came from in the
+ * respprep() function).
+ *
+ * \retval -1 error
+ * \retval 0 success
+ */
 static int process_via(struct sip_pvt *p, const struct sip_request *req)
 {
 	struct sip_via *via = parse_via(get_header(req, "Via"));
@@ -5117,16 +5136,12 @@ static int process_via(struct sip_pvt *p, const struct sip_request *req)
 		p->sa.sin_family = AF_INET;
 		memcpy(&p->sa.sin_addr, hp->h_addr, sizeof(p->sa.sin_addr));
 
-		if (via->port) {
-			p->sa.sin_port = via->port;
-		} else {
-			p->sa.sin_port = STANDARD_SIP_PORT;
-		}
-
 		if (addr_is_multicast(&p->sa.sin_addr)) {
 			setsockopt(sipsock, IPPROTO_IP, IP_MULTICAST_TTL, &via->ttl, sizeof(via->ttl));
 		}
 	}
+
+	p->sa.sin_port = htons(via->port ? via->port : STANDARD_SIP_PORT);
 
 	free_via(via);
 	return 0;
@@ -6779,6 +6794,9 @@ static int respprep(struct sip_request *resp, struct sip_pvt *p, const char *msg
 
 	/* default to routing the response to the address where the request
 	 * came from.  Since we don't have a transport layer, we do this here.
+	 * The process_via() function will update the port to either the port
+	 * specified in the via header or the default port later on (per RFC
+	 * 3261 section 18.2.2).
 	 */
 	p->sa = p->recv;
 
@@ -9023,7 +9041,7 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 	char *firstcuri = NULL;
 	int start = 0;
 	int wildcard_found = 0;
-	int single_binding_found;
+	int single_binding_found = 0;
 
 	ast_copy_string(contact, __get_header(req, "Contact", &start), sizeof(contact));
 
@@ -9077,26 +9095,16 @@ static enum parse_register_result parse_register_contact(struct sip_pvt *pvt, st
 		return PARSE_REGISTER_QUERY;
 	} else if (!strcasecmp(curi, "*") || !expiry) {	/* Unregister this peer */
 		/* This means remove all registrations and return OK */
-		memset(&peer->addr, 0, sizeof(peer->addr));
 		if (!AST_SCHED_DEL(sched, peer->expire)) {
 			struct sip_peer *peer_ptr = peer;
 			ASTOBJ_UNREF(peer_ptr, sip_destroy_peer);
 		}
 
-		destroy_association(peer);
-		
-		register_peer_exten(peer, 0);	/* Add extension from regexten= setting in sip.conf */
-		peer->fullcontact[0] = '\0';
-		peer->useragent[0] = '\0';
-		peer->sipoptions = 0;
-		peer->lastms = 0;
-		peer->portinuri = 0;
-		pvt->expiry = 0;
+		expire_register(ASTOBJ_REF(peer));
 
 		if (option_verbose > 2)
 			ast_verbose(VERBOSE_PREFIX_3 "Unregistered SIP '%s'\n", peer->name);
 
-		manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "Peer: SIP/%s\r\nPeerStatus: Unregistered\r\n", peer->name);
 		return PARSE_REGISTER_UPDATE;
 	}
 
@@ -9785,14 +9793,14 @@ static void transmit_fake_auth_response(struct sip_pvt *p, int sipmethod, struct
 	if (ast_test_flag(req, SIP_PKT_IGNORE) && !ast_strlen_zero(p->randdata) && ast_strlen_zero(authtoken)) {
 		/* This is a retransmitted invite/register/etc, don't reconstruct authentication
 		 * information */
-		transmit_response_with_auth(p, response, req, p->randdata, 0, respheader, 0);
+		transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
 		/* Schedule auto destroy in 32 seconds (according to RFC 3261) */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return;
 	} else if (ast_strlen_zero(p->randdata) || ast_strlen_zero(authtoken)) {
 		/* We have no auth, so issue challenge and request authentication */
 		set_nonce_randdata(p, 1);
-		transmit_response_with_auth(p, response, req, p->randdata, 0, respheader, 0);
+		transmit_response_with_auth(p, response, req, p->randdata, reliable, respheader, 0);
 		/* Schedule auto destroy in 32 seconds */
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		return;
@@ -10742,7 +10750,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 		ast_copy_flags(&p->flags[0], &user->flags[0], SIP_FLAGS_TO_COPY);
 		ast_copy_flags(&p->flags[1], &user->flags[1], SIP_PAGE2_FLAGS_TO_COPY);
 		if (sipmethod == SIP_INVITE) {
-			/* copy channel vars */
+			/* destroy old channel vars and copy new channel vars */
+			ast_variables_destroy(p->chanvars);
+			p->chanvars = NULL;
 			for (v = user->chanvars ; v ; v = v->next) {
 				if ((tmpvar = ast_variable_new(v->name, v->value))) {
 					tmpvar->next = p->chanvars; 
@@ -10902,7 +10912,9 @@ static enum check_auth_result check_user_full(struct sip_pvt *p, struct sip_requ
 				ast_string_field_set(p, authname, peer->name);
 
 				if (sipmethod == SIP_INVITE) {
-					/* copy channel vars */
+					/* destroy old channel vars and copy new channel vars */
+					ast_variables_destroy(p->chanvars);
+					p->chanvars = NULL;
 					for (v = peer->chanvars ; v ; v = v->next) {
 						if ((tmpvar = ast_variable_new(v->name, v->value))) {
 							tmpvar->next = p->chanvars; 
@@ -11470,6 +11482,7 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 	int multi = FALSE;
 	char *name = NULL;
 	regex_t regexbuf;
+	int havepattern = 0;
 
 	switch (argc) {
 	case 4:
@@ -11528,8 +11541,10 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 	}
 
 	if (multi && name) {
-		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB))
+		if (regcomp(&regexbuf, name, REG_EXTENDED | REG_NOSUB)) {
 			return RESULT_SHOWUSAGE;
+		}
+		havepattern = 1;
 	}
 
 	if (multi) {
@@ -11602,6 +11617,10 @@ static int sip_prune_realtime(int fd, int argc, char *argv[])
 			} else
 				ast_cli(fd, "User '%s' not found.\n", name);
 		}
+	}
+
+	if (havepattern) {
+		regfree(&regexbuf);
 	}
 
 	return RESULT_SUCCESS;
@@ -15853,6 +15872,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 					/* Unlock locks so ast_hangup can do its magic */
 					ast_mutex_unlock(&c->lock);
+					*nounlock = 1;
 					ast_mutex_unlock(&p->lock);
 					ast_hangup(c);
 					ast_mutex_lock(&p->lock);
@@ -15861,7 +15881,9 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			} else {	/* Pickup call in call group */
 				ast_channel_unlock(c);
 				*nounlock = 1;
+				ast_mutex_unlock(&p->lock);
 				if (ast_pickup_call(c)) {
+					ast_mutex_lock(&p->lock);
 					ast_log(LOG_NOTICE, "Nothing to pick up for %s\n", p->callid);
 					if (ast_test_flag(req, SIP_PKT_IGNORE))
 						transmit_response(p, "503 Unavailable", req);	/* OEJ - Right answer? */
@@ -15872,13 +15894,11 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 					ast_mutex_unlock(&p->lock);
 					c->hangupcause = AST_CAUSE_CALL_REJECTED;
 				} else {
-					ast_mutex_unlock(&p->lock);
-					ast_setstate(c, AST_STATE_DOWN);
 					c->hangupcause = AST_CAUSE_NORMAL_CLEARING;
 				}
-				p->invitestate = INV_COMPLETED;
 				ast_hangup(c);
 				ast_mutex_lock(&p->lock);
+				p->invitestate = INV_COMPLETED;
 				c = NULL;
 			}
 			break;
@@ -16089,6 +16109,10 @@ static int local_attended_transfer(struct sip_pvt *transferer, struct sip_dual *
 			if (option_debug)
 				ast_log(LOG_DEBUG, "SIP attended transfer: Unlocking channel %s\n", targetcall_pvt->owner->name);
 			ast_channel_unlock(targetcall_pvt->owner);
+		}
+		ast_indicate(target.chan1, AST_CONTROL_UNHOLD);
+		if (target.chan2) {
+			ast_indicate(target.chan2, AST_CONTROL_UNHOLD);
 		}
 	}
 	return 1;
@@ -18182,15 +18206,14 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 		}
 	} else if (!strcasecmp(v->name, "nat")) {
 		ast_set_flag(&mask[0], SIP_NAT);
-		ast_clear_flag(&flags[0], SIP_NAT);
-		if (!strcasecmp(v->value, "never"))
-			ast_set_flag(&flags[0], SIP_NAT_NEVER);
-		else if (!strcasecmp(v->value, "route"))
-			ast_set_flag(&flags[0], SIP_NAT_ROUTE);
-		else if (ast_true(v->value))
-			ast_set_flag(&flags[0], SIP_NAT_ALWAYS);
-		else
-			ast_set_flag(&flags[0], SIP_NAT_RFC3581);
+		ast_set_flag(&flags[0], SIP_NAT_ALWAYS);
+		if (!strcasecmp(v->value, "never")) {
+			ast_set_flags_to(&flags[0], SIP_NAT, SIP_NAT_NEVER);
+		} else if (!strcasecmp(v->value, "route")) {
+			ast_set_flags_to(&flags[0], SIP_NAT, SIP_NAT_ROUTE);
+		} else if (ast_false(v->value)) {
+			ast_set_flags_to(&flags[0], SIP_NAT, SIP_NAT_RFC3581);
+		}
 	} else if (!strcasecmp(v->name, "canreinvite")) {
 		ast_set_flag(&mask[0], SIP_REINVITE);
 		ast_clear_flag(&flags[0], SIP_REINVITE);
@@ -18932,6 +18955,18 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 	return peer;
 }
 
+static void display_nat_warning(const char *cat, int reason, struct ast_flags *flags) {
+	int global_nat, specific_nat;
+
+	if (reason == CHANNEL_MODULE_LOAD && (specific_nat = ast_test_flag(&flags[0], SIP_NAT)) != (global_nat = ast_test_flag(&global_flags[0], SIP_NAT))) {
+		ast_log(LOG_WARNING, "!!! PLEASE NOTE: Setting 'nat' for a peer/user that differs from the  global setting can make\n");
+		ast_log(LOG_WARNING, "!!! the name of that peer/user discoverable by an attacker. Replies for non-existent peers/users\n");
+		ast_log(LOG_WARNING, "!!! will be sent to a different port than replies for an existing peer/user. If at all possible,\n");
+		ast_log(LOG_WARNING, "!!! use the global 'nat' setting and do not set 'nat' per peer/user.\n");
+		ast_log(LOG_WARNING, "!!! (config category='%s' global='%s' peer/user='%s')\n", cat, nat2str(global_nat), nat2str(specific_nat));
+	}
+}
+
 /*! \brief Re-read SIP.conf config file
 \note	This function reloads all config data, except for
 	active peers (with registrations). They will only
@@ -19071,9 +19106,10 @@ static int reload_config(enum channelreloadreason reason)
 	ast_copy_string(default_mohinterpret, DEFAULT_MOHINTERPRET, sizeof(default_mohinterpret));
 	ast_copy_string(default_mohsuggest, DEFAULT_MOHSUGGEST, sizeof(default_mohsuggest));
 	ast_copy_string(default_vmexten, DEFAULT_VMEXTEN, sizeof(default_vmexten));
-	ast_set_flag(&global_flags[0], SIP_DTMF_RFC2833);			/*!< Default DTMF setting: RFC2833 */
-	ast_set_flag(&global_flags[0], SIP_NAT_RFC3581);			/*!< NAT support if requested by device with rport */
-	ast_set_flag(&global_flags[0], SIP_CAN_REINVITE);			/*!< Allow re-invites */
+	ast_set_flag(&global_flags[0], SIP_DTMF_RFC2833); /*!< Default DTMF setting: RFC2833 */
+	ast_set_flag(&global_flags[0], SIP_NAT_RFC3581);  /*!< NAT support if requested by device with rport */
+	ast_set_flag(&global_flags[0], SIP_CAN_REINVITE); /*!< Allow re-invites */
+	ast_set_flag(&global_flags[0], SIP_NAT_ALWAYS);   /*!< Default to nat=yes */
 	ast_set_flag(&global_flags[1], SIP_PAGE2_FORWARD_LOOP_DETECTED); /*!< Set up call forward on 482 Loop Detected */
 
 	/* Debugging settings, always default to off */
@@ -19453,6 +19489,7 @@ static int reload_config(enum channelreloadreason reason)
 			if (is_user) {
 				user = build_user(cat, ast_variable_browse(cfg, cat), NULL, 0);
 				if (user) {
+					display_nat_warning(cat, reason, &user->flags[0]);
 					ASTOBJ_CONTAINER_LINK(&userl,user);
 					ASTOBJ_UNREF(user, sip_destroy_user);
 					user_count++;
@@ -19461,6 +19498,9 @@ static int reload_config(enum channelreloadreason reason)
 			if (is_peer) {
 				peer = build_peer(cat, ast_variable_browse(cfg, cat), NULL, 0, 0);
 				if (peer) {
+					if (!is_user) {
+						display_nat_warning(cat, reason, &peer->flags[0]);
+					}
 					ASTOBJ_CONTAINER_LINK(&peerl,peer);
 					ASTOBJ_UNREF(peer, sip_destroy_peer);
 					peer_count++;
@@ -19468,6 +19508,7 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		}
 	}
+
 	if (ast_find_ourip(&__ourip, bindaddr)) {
 		ast_log(LOG_WARNING, "Unable to get own IP address, SIP disabled\n");
 		ast_config_destroy(cfg);
