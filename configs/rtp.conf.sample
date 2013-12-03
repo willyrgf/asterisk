@@ -33,19 +33,20 @@ rtpend=20000
 ; connected. This option is set to 4 by default.
 ; probation=8
 
-; The RTP channels has an implementation of Packet Loss Concealment
-; that is named "Poor Man's PLC". Normally a PLC happens withing the
-; context of a jitter buffer. This PLC just copies the previous
-; packet into the stream again if a packet (or multiple) is missing.
-; If a packet arrives too late (reordered) it will be ignored.
-; This introduces a bit of jitter since we're sending two
-; packets at the same time. Hopefully the phone or gw at the
-; end of the line will have a jitter buffer and play out the media
-; properly. This PLC will make sure that Asterisk outbound RTP streams has
-; less skew and that recordings will actually have a proper amount of
-; media. Default is turned off.
-; This setting apply to ALL rtp streams in this Asterisk instance.
-; If you have video or text streams, it might not be a good idea.
+; The "Bridgepacketloss" is a setting that is disabled by default in this release.
+; Asterisk by default resequences RTP packets, so that if we receive packets 20,21,23,24
+; they will be renumbered as 20,21,22,23. If you set this setting to "yes" there will
+; be a gap in the outbound sequence numbers as well, which in most cases will help
+; both codecs and jitter buffers/PLC functions in the receiving end - a phone or a gateway.
+; The function also supports out of order packets, so if we receive 20,23,21,22,24
+; the seqence numbers on the outbound stream will be out of order in the same way.
+bridgepacketloss=no
+
+; If a channel driver turns on Poor Man's PLC the RTP channel will replace lost packets
+; with a copy of a previous packet. The "plcmax" setting defines the maximum number of
+; packets inserted in one operation. If the seqno indicates 200 lost packets, it doesn't
+; make much sense to inject all of them. (default 10)
+; For many codecs, the size of the packet is 20 ms (see packetization settings)
+; so 10 packets is 0.2 secs of noise. 50 packets is a second and will sound really bad.
+;plcmax = 42
 ;
-; You can turn this on per device or globally in sip.conf too.
-;plc=yes

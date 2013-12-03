@@ -5605,10 +5605,8 @@ static int dialog_initialize_rtp(struct sip_pvt *dialog)
 
 		ast_rtp_instance_set_prop(dialog->trtp, AST_RTP_PROPERTY_RTCP, 1);
 	}
-	if (ast_test_flag(&dialog->flags[2], SIP_PAGE3_POORMANSPLC)) {
-		/* This is only supported for AUDIO */
-		ast_rtp_instance_plc_set_state(dialog->rtp, TRUE);
-	}
+	/* PLC is only supported for AUDIO */
+	ast_rtp_instance_plc_set_state(dialog->rtp, ast_test_flag(&dialog->flags[2], SIP_PAGE3_POORMANSPLC));
 
 	ast_rtp_instance_set_timeout(dialog->rtp, dialog->rtptimeout);
 	ast_rtp_instance_set_hold_timeout(dialog->rtp, dialog->rtpholdtimeout);
@@ -16793,6 +16791,7 @@ static enum check_auth_result check_peer_ok(struct sip_pvt *p, char *of,
 		if (!dialog_initialize_rtp(p)) {
 			if (p->rtp) {
 				ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(p->rtp), p->rtp, &peer->prefs);
+				ast_rtp_instance_plc_set_state(p->rtp, ast_test_flag(&p->flags[2], SIP_PAGE3_POORMANSPLC));
 				p->autoframing = peer->autoframing;
 			}
 		} else {

@@ -89,6 +89,9 @@ static int dtmftimeout = DEFAULT_DTMF_TIMEOUT;
 static int rtpstart = DEFAULT_RTP_START;			/*!< First port for RTP sessions (set in rtp.conf) */
 static int rtpend = DEFAULT_RTP_END;			/*!< Last port for RTP sessions (set in rtp.conf) */
 static int bridgepacketloss;		/*!< Expose packet loss when sending RTP */
+static int plcmax;                      /*!< Maximum number of PLC injections in the stream in one operation */
+#define DEFAULT_PLCMAX 10
+
 static int rtpdebug;			/*!< Are we debugging? */
 static int rtcpdebug;			/*!< Are we debugging RTCP? */
 static int rtcpstats;			/*!< Are we debugging RTCP? */
@@ -2373,7 +2376,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 
 	if (rtp->rxcount > 1) {
 		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && seqno < rtp->lastrxseqno)  {
-			/* This is a latecome we've already replaced. A jitter buffer would have handled this
+			/* This is a latecomer we've already replaced. A jitter buffer would have handled this
 			   properly, but in many cases we can't afford a jitterbuffer and will have to live
 			   with the face that the poor man's PLC already has replaced this frame and we can't
 			   insert it AGAIN, because that would cause negative skew.
@@ -2384,13 +2387,20 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		lostpackets = (int) seqno - (int) rtp->lastrxseqno - 1;
 		/* RTP sequence numbers are consecutive. Have we lost a packet? */
 		if (lostpackets) {
-			ast_log(LOG_DEBUG, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
+			ast_debug(2, "**** Packet loss detected - # %d. Current Seqno %-6.6u\n", lostpackets, seqno);
 		}
 		if (ast_test_flag(rtp, FLAG_POORMANSPLC) && rtp->plcbuf != NULL) {
 			int i;
-			for (i = 0; i < lostpackets; i++) {
-				AST_LIST_INSERT_TAIL(&frames, ast_frdup(rtp->plcbuf), frame_list);
-				ast_log(LOG_DEBUG, "**** Inserting buffer frame %d. \n", i + 1);
+			for (i = 0; i < lostpackets && i < plcmax; i++) {
+				struct ast_frame *new;
+				rtp->lastrxseqno++;
+				/* Fix the seqno in the frame */
+				rtp->plcbuf->seqno = rtp->lastrxseqno;
+				rtp->plcbuf->ts += rtp->plcbuf->len;
+				new = ast_frdup(rtp->plcbuf);
+
+				AST_LIST_INSERT_TAIL(&frames, new, frame_list);
+				ast_debug(2, "**** Inserting buffer frame %d. Seqno %d\n", i + 1, rtp->plcbuf->seqno);
 			}
 		}
 	}
