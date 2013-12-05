@@ -3,7 +3,7 @@ Olle E. Johansson
 
 
 Started: 2012-09-18
-Updated: 2012-11-19
+Updated: 2013-12-05
 
 
 
@@ -63,6 +63,20 @@ Current state:
 - Comfort noise generator will be used when CNG frame is received, until the RTP
   channel signals that CNG will end.
 
+Detecting Silence
+=================
+The current silence detector in Asterisk only supports signed linear audio.
+This means that for a g.729 call we have to transcode to signed linear, listen 
+for audio and then transcode back. Not a good efficient solution. I will implement
+this as a showcase in the first step.
+
+Later we have to
+- Add silence detection to the codec modules so they can signal silence
+  in an incoming stream to the core
+- Add silence detection as a framehook procedure. This way we only have to
+  convert the media once and have a "fork" listen for silence. We keep
+  the media in the existing format over the bridge.
+
 Debugging
 =========
 Place a call between one phone that supports CN (I've used a SNOM 820) and a
@@ -82,6 +96,7 @@ Todo :: comfort noise support
   	- Start sending CNG
   	- Listen for talk detection
   	- Stop sending CNG, send media
+  - Ask Matt J and File about frame hooks and how this solution should look
 
 Done:
   - Support in core bridge
@@ -104,8 +119,9 @@ Terms
 -----
 - DTX Discontinues Transmission capability
 - VAD Voice Activity Detection
-- CN Comfort Noise 
+- CN Comfort Noise , http://en.wikipedia.org/wiki/Comfort_noise
 - CNG Comfort Noise Generator
+- Silence Suppression: http://en.wikipedia.org/wiki/Silence_suppression
 
 RTP Framing (RFC 3389 section 4)
 --------------------------------
@@ -154,4 +170,5 @@ packets (which will not happen) to send out, CN will not work.
 
 Yes, you can still operate on timer. The RTP bridge still has all the normal bridging logic in it. That's how music on hold and such works.
 
-
+Brian West in ASTERISK-140 2004-04-24:
+"This is the one thing that keeps asterisk out of the big boy toy box.... lets get it going boys."
