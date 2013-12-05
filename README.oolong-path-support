@@ -1,0 +1,32 @@
+Edvina AB
+Olle E. Johansson
+
+
+
+
+SIP PATH header support for Asterisk
+====================================
+
+This branch is based on Klaus Darillions work in
+https://reviewboard.asterisk.org/r/991/
+
+I've added
+- Realtime support (not tested)
+- Global flag support
+
+Tested without realtime, it works as expected.
+
+What is path header?
+====================
+Path is documented in RFC 3327. 
+
+Since REGISTER requests can not support Record-Route/route an edge proxy that is separate from a registrar/location
+server adds a Path: header to a SIP REGISTER request to indicate that requests to this contact should be routed
+through a certain edge proxy. This is saved in the registration database and used for new requests to the
+registred contact.
+
+In Asterisk we save the Path in the AstDB and/or in the realtime database
+
+Todo:
+----
+- Update LDAP schemas for realtime
