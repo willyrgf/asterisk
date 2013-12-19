@@ -1535,8 +1535,6 @@ static int process_crypto(struct sip_pvt *p, struct ast_rtp_instance *rtp, struc
 
 /*------ T38 Support --------- */
 static int transmit_response_with_t38_sdp(struct sip_pvt *p, char *msg, struct sip_request *req, int retrans);
-static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan);
-static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
 static void change_t38_state(struct sip_pvt *p, int state);
 
 /*------ Session-Timers functions --------- */
@@ -3570,13 +3568,6 @@ static struct sip_registry *registry_addref(struct sip_registry *reg, char *tag)
 	ast_debug(3, "SIP Registry %s: refcount now %d\n", reg->hostname, reg->refcount + 1);
 	return ASTOBJ_REF(reg);	/* Add pointer to registry in packet */
 }
-
-/*! \brief Interface structure with callbacks used to connect to UDPTL module*/
-static struct ast_udptl_protocol sip_udptl = {
-	.type = "SIP",
-	.get_udptl_info = sip_get_udptl_peer,
-	.set_udptl_peer = sip_set_udptl_peer,
-};
 
 static void append_history_full(struct sip_pvt *p, const char *fmt, ...)
 	__attribute__((format(printf, 2, 3)));
@@ -20362,10 +20353,8 @@ static void peer_mailboxes_to_str(struct ast_str **mailbox_str, struct sip_peer 
 	struct sip_mailbox *mailbox;
 
 	AST_LIST_TRAVERSE(&peer->mailboxes, mailbox, entry) {
-		ast_str_append(mailbox_str, 0, "%s%s%s%s",
-			mailbox->mailbox,
-			ast_strlen_zero(mailbox->context) ? "" : "@",
-			S_OR(mailbox->context, ""),
+		ast_str_append(mailbox_str, 0, "%s%s",
+			mailbox->id,
 			AST_LIST_NEXT(mailbox, entry) ? "," : "");
 	}
 }
@@ -27445,16 +27434,12 @@ static int handle_request_publish(struct sip_pvt *p, struct sip_request *req, st
 static void add_peer_mwi_subs(struct sip_peer *peer)
 {
 	struct sip_mailbox *mailbox;
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
 	AST_LIST_TRAVERSE(&peer->mailboxes, mailbox, entry) {
 		struct stasis_topic *mailbox_specific_topic;
 		mailbox->event_sub = stasis_unsubscribe(mailbox->event_sub);
 
-		ast_str_reset(uniqueid);
-		ast_str_set(&uniqueid, 0, "%s@%s", mailbox->mailbox, S_OR(mailbox->context, "default"));
-
-		mailbox_specific_topic = ast_mwi_topic(ast_str_buffer(uniqueid));
+		mailbox_specific_topic = ast_mwi_topic(mailbox->id);
 		if (mailbox_specific_topic) {
 			ao2_ref(peer, +1);
 			mailbox->event_sub = stasis_subscribe(mailbox_specific_topic, mwi_event_cb, peer);
@@ -28658,17 +28643,13 @@ static int get_cached_mwi(struct sip_peer *peer, int *new, int *old)
 {
 	struct sip_mailbox *mailbox;
 	int in_cache;
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
 	in_cache = 0;
 	AST_LIST_TRAVERSE(&peer->mailboxes, mailbox, entry) {
 		RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 		struct ast_mwi_state *mwi_state;
 
-		ast_str_reset(uniqueid);
-		ast_str_set(&uniqueid, 0, "%s@%s", mailbox->mailbox, S_OR(mailbox->context, "default"));
-
-		msg = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(), ast_str_buffer(uniqueid));
+		msg = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(), mailbox->id);
 		if (!msg) {
 			continue;
 		}
@@ -30458,24 +30439,24 @@ static struct sip_peer *temp_peer(const char *name)
 /*! \todo document this function */
 static void add_peer_mailboxes(struct sip_peer *peer, const char *value)
 {
-	char *next, *mbox, *context;
+	char *next;
+	char *mbox;
 
 	next = ast_strdupa(value);
 
-	while ((mbox = context = strsep(&next, ","))) {
+	while ((mbox = strsep(&next, ","))) {
 		struct sip_mailbox *mailbox;
 		int duplicate = 0;
+
 		/* remove leading/trailing whitespace from mailbox string */
 		mbox = ast_strip(mbox);
-		strsep(&context, "@");
-
 		if (ast_strlen_zero(mbox)) {
 			continue;
 		}
 
 		/* Check whether the mailbox is already in the list */
 		AST_LIST_TRAVERSE(&peer->mailboxes, mailbox, entry) {
-			if (!strcmp(mailbox->mailbox, mbox) && !strcmp(S_OR(mailbox->context, ""), S_OR(context, ""))) {
+			if (!strcmp(mailbox->id, mbox)) {
 				duplicate = 1;
 				break;
 			}
@@ -30484,15 +30465,11 @@ static void add_peer_mailboxes(struct sip_peer *peer, const char *value)
 			continue;
 		}
 
-		if (!(mailbox = ast_calloc(1, sizeof(*mailbox) + strlen(mbox) + strlen(S_OR(context, ""))))) {
+		mailbox = ast_calloc(1, sizeof(*mailbox) + strlen(mbox));
+		if (!mailbox) {
 			continue;
 		}
-
-		if (!ast_strlen_zero(context)) {
-			mailbox->context = mailbox->mailbox + strlen(mbox) + 1;
-			strcpy(mailbox->context, context); /* SAFE */
-		}
-		strcpy(mailbox->mailbox, mbox); /* SAFE */
+		strcpy(mailbox->id, mbox); /* SAFE */
 
 		AST_LIST_INSERT_TAIL(&peer->mailboxes, mailbox, entry);
 	}
@@ -30839,7 +30816,18 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				/* People expect that if 'hasvoicemail' is set, that the mailbox will
 				 * be also set, even if not explicitly specified. */
 				if (ast_true(v->value) && AST_LIST_EMPTY(&peer->mailboxes)) {
-					add_peer_mailboxes(peer, name);
+					/*
+					 * hasvoicemail is a users.conf legacy voicemail enable method.
+					 * hasvoicemail is only going to work for app_voicemail mailboxes.
+					 */
+					if (strchr(name, '@')) {
+						add_peer_mailboxes(peer, name);
+					} else {
+						char mailbox[AST_MAX_MAILBOX_UNIQUEID];
+
+						snprintf(mailbox, sizeof(mailbox), "%s@default", name);
+						add_peer_mailboxes(peer, mailbox);
+					}
 				}
 			} else if (!strcasecmp(v->name, "subscribemwi")) {
 				ast_set2_flag(&peer->flags[1], ast_true(v->value), SIP_PAGE2_SUBSCRIBEMWIONLY);
@@ -32457,67 +32445,6 @@ static int reload_config(enum channelreloadreason reason)
 		acl_change_stasis_subscribe();
 	}
 
-	return 0;
-}
-
-static struct ast_udptl *sip_get_udptl_peer(struct ast_channel *chan)
-{
-	struct sip_pvt *p;
-	struct ast_udptl *udptl = NULL;
-
-	p = ast_channel_tech_pvt(chan);
-	if (!p) {
-		return NULL;
-	}
-
-	sip_pvt_lock(p);
-	if (p->udptl && ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
-		udptl = p->udptl;
-	}
-	sip_pvt_unlock(p);
-	return udptl;
-}
-
-static int sip_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
-{
-	struct sip_pvt *p;
-
-	/* Lock the channel and the private safely. */
-	ast_channel_lock(chan);
-	p = ast_channel_tech_pvt(chan);
-	if (!p) {
-		ast_channel_unlock(chan);
-		return -1;
-	}
-	sip_pvt_lock(p);
-	if (p->owner != chan) {
-		/* I suppose it could be argued that if this happens it is a bug. */
-		ast_debug(1, "The private is not owned by channel %s anymore.\n", ast_channel_name(chan));
-		sip_pvt_unlock(p);
-		ast_channel_unlock(chan);
-		return 0;
-	}
-
-	if (udptl) {
-		ast_udptl_get_peer(udptl, &p->udptlredirip);
-	} else {
-		memset(&p->udptlredirip, 0, sizeof(p->udptlredirip));
-	}
-	if (!ast_test_flag(&p->flags[0], SIP_GOTREFER)) {
-		if (!p->pendinginvite) {
-			ast_debug(3, "Sending reinvite on SIP '%s' - It's UDPTL soon redirected to IP %s\n",
-					p->callid, ast_sockaddr_stringify(udptl ? &p->udptlredirip : &p->ourip));
-			transmit_reinvite_with_sdp(p, TRUE, FALSE);
-		} else if (!ast_test_flag(&p->flags[0], SIP_PENDINGBYE)) {
-			ast_debug(3, "Deferring reinvite on SIP '%s' - It's UDPTL will be redirected to IP %s\n",
-					p->callid, ast_sockaddr_stringify(udptl ? &p->udptlredirip : &p->ourip));
-			ast_set_flag(&p->flags[0], SIP_NEEDREINVITE);
-		}
-	}
-	/* Reset lastrtprx timer */
-	p->lastrtprx = p->lastrtptx = time(NULL);
-	sip_pvt_unlock(p);
-	ast_channel_unlock(chan);
 	return 0;
 }
 
@@ -34339,8 +34266,7 @@ static int peers_data_provider_get(const struct ast_data_search *search,
 			if (!data_peer_mailbox) {
 				continue;
 			}
-			ast_data_add_str(data_peer_mailbox, "mailbox", mailbox->mailbox);
-			ast_data_add_str(data_peer_mailbox, "context", mailbox->context);
+			ast_data_add_str(data_peer_mailbox, "id", mailbox->id);
 		}
 
 		/* amaflags */
@@ -34515,9 +34441,6 @@ static int load_module(void)
 	/* Register all CLI functions for SIP */
 	ast_cli_register_multiple(cli_sip, ARRAY_LEN(cli_sip));
 
-	/* Tell the UDPTL subdriver that we're here */
-	ast_udptl_proto_register(&sip_udptl);
-
 	/* Tell the RTP engine about our RTP glue */
 	ast_rtp_glue_register(&sip_rtp_glue);
 
@@ -34647,9 +34570,6 @@ static int unload_module(void)
 
 	/* Unregister CLI commands */
 	ast_cli_unregister_multiple(cli_sip, ARRAY_LEN(cli_sip));
-
-	/* Disconnect from UDPTL */
-	ast_udptl_proto_unregister(&sip_udptl);
 
 	/* Disconnect from RTP engine */
 	ast_rtp_glue_unregister(&sip_rtp_glue);
