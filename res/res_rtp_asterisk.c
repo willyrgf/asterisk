@@ -75,6 +75,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RTCP_PT_APP     204
 
 #define RTP_MTU		1200
+#define DTMF_SAMPLE_RATE_MS    8 /*!< DTMF samples per millisecond */
 
 #define DEFAULT_DTMF_TIMEOUT (150 * (8000 / 1000))	/*!< samples */
 
@@ -366,7 +367,7 @@ static int __rtp_recvfrom(struct ast_rtp_instance *instance, void *buf, size_t s
 	   return len;
 	}
 
-	if ((*in > 1) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
+	if ((*in & 0xC0) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
 	   return -1;
 	}
 
@@ -514,6 +515,35 @@ static int rtp_learning_rtp_seq_update(struct ast_rtp *rtp, uint16_t seq)
 	}
 
 	return probation;
+}
+
+/*!
+ * \internal
+ * \brief Calculates the elapsed time from issue of the first tx packet in an
+ *        rtp session and a specified time
+ *
+ * \param rtp pointer to the rtp struct with the transmitted rtp packet
+ * \param delivery time of delivery - if NULL or zero value, will be ast_tvnow()
+ *
+ * \return time elapsed in milliseconds
+ */
+static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery)
+{
+	struct timeval t;
+	long ms;
+
+	if (ast_tvzero(rtp->txcore)) {
+		rtp->txcore = ast_tvnow();
+		rtp->txcore.tv_usec -= rtp->txcore.tv_usec % 20000;
+	}
+
+	t = (delivery && !ast_tvzero(*delivery)) ? *delivery : ast_tvnow();
+	if ((ms = ast_tvdiff_ms(t, rtp->txcore)) < 0) {
+		ms = 0;
+	}
+	rtp->txcore = t;
+
+	return (unsigned int) ms;
 }
 
 static int ast_rtp_new(struct ast_rtp_instance *instance,
@@ -669,6 +699,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 	rtp->send_duration = 160;
+	rtp->lastts += calc_txstamp(rtp, NULL) * DTMF_SAMPLE_RATE_MS;
 	rtp->lastdigitts = rtp->lastts + rtp->send_duration;
 
 	/* Create the actual packet that we will be sending */
@@ -741,6 +772,7 @@ static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
 	/* And now we increment some values for the next time we swing by */
 	rtp->seqno++;
 	rtp->send_duration += 160;
+	rtp->lastts += calc_txstamp(rtp, NULL) * DTMF_SAMPLE_RATE_MS;
 
 	return 0;
 }
@@ -749,7 +781,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr remote_address = { {0,} };
-	int hdrlen = 12, res = 0, i = 0;
+	int hdrlen = 12, res = -1, i = 0;
 	char data[256];
 	unsigned int *rtpheader = (unsigned int*)data;
 	unsigned int measured_samples;
@@ -758,7 +790,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 
 	/* Make sure we know where the remote side is so we can send them the packet we construct */
 	if (ast_sockaddr_isnull(&remote_address)) {
-		return -1;
+		goto cleanup;
 	}
 
 	/* Convert the given digit to the one we are going to send */
@@ -774,7 +806,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 		digit = digit - 'a' + 12;
 	} else {
 		ast_log(LOG_WARNING, "Don't know how to represent '%c'\n", digit);
-		return -1;
+		goto cleanup;
 	}
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
@@ -809,13 +841,15 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 
 		rtp->seqno++;
 	}
+	res = 0;
 
 	/* Oh and we can't forget to turn off the stuff that says we are sending DTMF */
-	rtp->lastts += rtp->send_duration;
+	rtp->lastts += calc_txstamp(rtp, NULL) * DTMF_SAMPLE_RATE_MS;
+cleanup:
 	rtp->sending_digit = 0;
 	rtp->send_digit = 0;
 
-	return 0;
+	return res;
 }
 
 static int ast_rtp_dtmf_end(struct ast_rtp_instance *instance, char digit)
@@ -858,25 +892,6 @@ static void ast_rtp_change_source(struct ast_rtp_instance *instance)
 	rtp->ssrc = ssrc;
 
 	return;
-}
-
-static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery)
-{
-	struct timeval t;
-	long ms;
-
-	if (ast_tvzero(rtp->txcore)) {
-		rtp->txcore = ast_tvnow();
-		rtp->txcore.tv_usec -= rtp->txcore.tv_usec % 20000;
-	}
-
-	t = (delivery && !ast_tvzero(*delivery)) ? *delivery : ast_tvnow();
-	if ((ms = ast_tvdiff_ms(t, rtp->txcore)) < 0) {
-		ms = 0;
-	}
-	rtp->txcore = t;
-
-	return (unsigned int) ms;
 }
 
 static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw)
@@ -2273,8 +2288,16 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		f = ast_frisolate(&srcupdate);
 		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
 
+		rtp->seedrxseqno = 0;
+		rtp->rxcount = 0;
+		rtp->cycles = 0;
+		rtp->lastrxseqno = 0;
 		rtp->last_seqno = 0;
 		rtp->last_end_timestamp = 0;
+		if (rtp->rtcp) {
+			rtp->rtcp->expected_prior = 0;
+			rtp->rtcp->received_prior = 0;
+		}
 	}
 
 	rtp->rxssrc = ssrc;
@@ -2792,8 +2815,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 {
 	unsigned int *rtpheader;
 	int hdrlen = 12;
-	int res;
-	struct ast_rtp_payload_type payload;
+	int res, payload = 0;
 	char data[256];
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr remote_address = { {0,} };
@@ -2804,7 +2826,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 		return -1;
 	}
 
-	payload = ast_rtp_codecs_payload_lookup(ast_rtp_instance_get_codecs(instance), AST_RTP_CN);
+	payload = ast_rtp_codecs_payload_code(ast_rtp_instance_get_codecs(instance), 0, AST_RTP_CN);
 
 	level = 127 - (level & 0x7f);
 	
@@ -2812,7 +2834,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 
 	/* Get a pointer to the header */
 	rtpheader = (unsigned int *)data;
-	rtpheader[0] = htonl((2 << 30) | (1 << 23) | (payload.code << 16) | (rtp->seqno++));
+	rtpheader[0] = htonl((2 << 30) | (payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastts);
 	rtpheader[2] = htonl(rtp->ssrc); 
 	data[12] = level;
@@ -2826,6 +2848,8 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 				ast_sockaddr_stringify(&remote_address),
 				AST_RTP_CN, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
+
+	rtp->seqno++;
 
 	return res;
 }

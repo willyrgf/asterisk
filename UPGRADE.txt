@@ -17,6 +17,44 @@
 === UPGRADE-1.6.txt -- Upgrade info for 1.4 to 1.6
 ===
 ===========================================================
+from 1.8.23.0 to 1.8.24.0:
+* res_agi will now properly indicate if there was an error in streaming an
+  audio file.  The result code will be -1 and the result returned from the
+  the function will be RESULT_FAILURE instead of the prior behavior of always
+  returning RESULT_SUCCESS even if there was an error. 
+
+* The option "register_retry_403" has been added to chan_sip to work around
+  servers that are known to erroneously send 403 in response to valid
+  REGISTER requests and allows Asterisk to continue attepmting to connect.
+
+* Certain dialplan functions have been marked as 'dangerous', and may only be
+  executed from the dialplan. Execution from extenal sources (AMI's GetVar and
+  SetVar actions; etc.) may be inhibited by setting live_dangerously in the
+  [options] section of asterisk.conf to no. SHELL(), channel locking, and direct
+  file read/write functions are marked as dangerous. DB_DELETE() and
+  REALTIME_DESTROY() are marked as dangerous for reads, but can now safely
+  accept writes (which ignore the provided value).
+
+from 1.8.22.0 to 1.8.23.0:
+* The default settings for chan_sip are now overriden properly by the general
+  settings in sip.conf.  Please look over your settings upon upgrading.
+
+* It is now possible to play the Queue prompts to the first user waiting in a call queue.
+  Note that this may impact the ability for agents to talk with users, as a prompt may
+  still be playing when an agent connects to the user. This ability is disabled by
+  default but can be enabled on an individual queue using the 'announce-to-first-user'
+  option.
+
+from 1.8.21.0 to 1.8.22.0:
+* Added the 'n' option to MeetMe to prevent application of the DENOISE function
+  to a channel joining a conference. Some channel drivers that vary the number
+  of audio samples in a voice frame will experience significant quality problems
+  if a denoiser is attached to the channel; this option gives them the ability
+  to remove the denoiser without having to unload func_speex.
+
+* The Registry AMI event for SIP registrations will now always include the
+  Username field. A previous bug fix missed an instance where it was not
+  included; that has been corrected in this release.
 
 from 1.8.20.0 to 1.8.20.1:
 * Asterisk would previously not output certain error messages when a remote

@@ -5382,7 +5382,7 @@ struct ast_channel *ast_call_forward(struct ast_channel *caller, struct ast_chan
 			ast_cdr_setaccount(new_chan, oh->account);
 			ast_channel_unlock(new_chan);
 		}
-	} else if (caller) { /* no outgoing helper so use caller if avaliable */
+	} else if (caller) { /* no outgoing helper so use caller if available */
 		call_forward_inherit(new_chan, caller, orig);
 	}
 
@@ -6218,18 +6218,19 @@ void ast_channel_inherit_variables(const struct ast_channel *parent, struct ast_
 			newvar = ast_var_assign(&varname[1], ast_var_value(current));
 			if (newvar) {
 				AST_LIST_INSERT_TAIL(&child->varshead, newvar, entries);
-				ast_debug(1, "Copying soft-transferable variable %s.\n", ast_var_name(newvar));
+				ast_debug(1, "Inheriting variable %s from %s to %s.\n",
+					ast_var_name(newvar), parent->name, child->name);
 			}
 			break;
 		case 2:
 			newvar = ast_var_assign(varname, ast_var_value(current));
 			if (newvar) {
 				AST_LIST_INSERT_TAIL(&child->varshead, newvar, entries);
-				ast_debug(1, "Copying hard-transferable variable %s.\n", ast_var_name(newvar));
+				ast_debug(1, "Inheriting variable %s from %s to %s.\n",
+					ast_var_name(newvar), parent->name, child->name);
 			}
 			break;
 		default:
-			ast_debug(1, "Not copying variable %s.\n", ast_var_name(current));
 			break;
 		}
 	}
@@ -6350,14 +6351,14 @@ void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *pee
 	linkedid = oldest_linkedid(linkedid, peer->uniqueid);
 	if (chan->_bridge) {
 		bridged = ast_bridged_channel(chan);
-		if (bridged != peer) {
+		if (bridged && bridged != peer) {
 			linkedid = oldest_linkedid(linkedid, bridged->linkedid);
 			linkedid = oldest_linkedid(linkedid, bridged->uniqueid);
 		}
 	}
 	if (peer->_bridge) {
 		bridged = ast_bridged_channel(peer);
-		if (bridged != chan) {
+		if (bridged && bridged != chan) {
 			linkedid = oldest_linkedid(linkedid, bridged->linkedid);
 			linkedid = oldest_linkedid(linkedid, bridged->uniqueid);
 		}
@@ -6370,13 +6371,13 @@ void ast_channel_set_linkgroup(struct ast_channel *chan, struct ast_channel *pee
 	ast_channel_change_linkedid(peer, linkedid);
 	if (chan->_bridge) {
 		bridged = ast_bridged_channel(chan);
-		if (bridged != peer) {
+		if (bridged && bridged != peer) {
 			ast_channel_change_linkedid(bridged, linkedid);
 		}
 	}
 	if (peer->_bridge) {
 		bridged = ast_bridged_channel(peer);
-		if (bridged != chan) {
+		if (bridged && bridged != chan) {
 			ast_channel_change_linkedid(bridged, linkedid);
 		}
 	}
@@ -6504,6 +6505,8 @@ int ast_do_masquerade(struct ast_channel *original)
 	int x;
 	int i;
 	int origstate;
+	unsigned int orig_disablestatecache;
+	unsigned int clone_disablestatecache;
 	int visible_indication;
 	int clone_was_zombie = 0;/*!< TRUE if the clonechan was a zombie before the masquerade. */
 	struct ast_frame *current;
@@ -6727,6 +6730,20 @@ int ast_do_masquerade(struct ast_channel *original)
 	origstate = original->_state;
 	original->_state = clonechan->_state;
 	clonechan->_state = origstate;
+
+	/* And the swap the cachable state too. Otherwise we'd start caching
+	 * Local channels and ignoring real ones. */
+	orig_disablestatecache = ast_test_flag(original, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+	clone_disablestatecache = ast_test_flag(clonechan, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+	if (orig_disablestatecache != clone_disablestatecache) {
+		if (orig_disablestatecache) {
+			ast_clear_flag(original, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+			ast_set_flag(clonechan, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+		} else {
+			ast_set_flag(original, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+			ast_clear_flag(clonechan, AST_FLAG_DISABLE_DEVSTATE_CACHE);
+		}
+	}
 
 	/* Mangle the name of the clone channel */
 	snprintf(zombn, sizeof(zombn), "%s<ZOMBIE>", orig); /* quick, hide the brains! */
@@ -7223,8 +7240,11 @@ static enum ast_bridge_result ast_generic_bridge(struct ast_channel *c0, struct 
 				if (c1->_softhangup & AST_SOFTHANGUP_UNBRIDGE) {
 					ast_channel_clear_softhangup(c1, AST_SOFTHANGUP_UNBRIDGE);
 				}
+				ast_channel_lock_both(c0, c1);
 				c0->_bridge = c1;
 				c1->_bridge = c0;
+				ast_channel_unlock(c0);
+				ast_channel_unlock(c1);
 			}
 			continue;
 		}
@@ -7471,8 +7491,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	}
 
 	/* Keep track of bridge */
+	ast_channel_lock_both(c0, c1);
 	c0->_bridge = c1;
 	c1->_bridge = c0;
+	ast_channel_unlock(c0);
+	ast_channel_unlock(c1);
 
 	ast_set_owners_and_peers(c0, c1);
 
@@ -7569,8 +7592,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 			if (c1->_softhangup & AST_SOFTHANGUP_UNBRIDGE) {
 				ast_channel_clear_softhangup(c1, AST_SOFTHANGUP_UNBRIDGE);
 			}
+			ast_channel_lock_both(c0, c1);
 			c0->_bridge = c1;
 			c1->_bridge = c0;
+			ast_channel_unlock(c0);
+			ast_channel_unlock(c1);
 			ast_debug(1, "Unbridge signal received. Ending native bridge.\n");
 			continue;
 		}
@@ -7627,8 +7653,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 					continue;
 				}
 
+				ast_channel_lock_both(c0, c1);
 				c0->_bridge = NULL;
 				c1->_bridge = NULL;
+				ast_channel_unlock(c0);
+				ast_channel_unlock(c1);
 				return res;
 			} else {
 				ast_clear_flag(c0, AST_FLAG_NBRIDGE);
@@ -7678,8 +7707,11 @@ enum ast_bridge_result ast_channel_bridge(struct ast_channel *c0, struct ast_cha
 	ast_indicate(c0, AST_CONTROL_SRCUPDATE);
 	ast_indicate(c1, AST_CONTROL_SRCUPDATE);
 
+	ast_channel_lock_both(c0, c1);
 	c0->_bridge = NULL;
 	c1->_bridge = NULL;
+	ast_channel_unlock(c0);
+	ast_channel_unlock(c1);
 
 	ast_manager_event_multichan(EVENT_FLAG_CALL, "Unlink", 2, chans,
 		"Channel1: %s\r\n"

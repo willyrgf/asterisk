@@ -471,7 +471,6 @@ enum check_auth_result {
 	AUTH_SECRET_FAILED = -1,
 	AUTH_USERNAME_MISMATCH = -2,
 	AUTH_NOT_FOUND = -3,	/*!< returned by register_verify */
-	AUTH_FAKE_AUTH = -4,
 	AUTH_UNKNOWN_DOMAIN = -5,
 	AUTH_PEER_NOT_DYNAMIC = -6,
 	AUTH_ACL_FAILED = -7,
@@ -906,7 +905,6 @@ struct sip_st_dlg {
 	int st_interval;                   /*!< Session-Timers negotiated session refresh interval */
 	enum st_refresher st_ref;          /*!< Session-Timers cached refresher */
 	int st_schedid;                    /*!< Session-Timers ast_sched scheduler id */
-	int st_expirys;                    /*!< Session-Timers number of expirys */
 	int st_active_peer_ua;             /*!< Session-Timers on/off in peer UA */
 	int st_cached_min_se;              /*!< Session-Timers cached Min-SE */
 	int st_cached_max_se;              /*!< Session-Timers cached Session-Expires */
@@ -969,6 +967,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(theirprovtag); /*!< Provisional their tag, used when evaluating responses to invites */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
@@ -1311,6 +1310,7 @@ struct sip_registry {
 		AST_STRING_FIELD(md5secret);  /*!< Password in md5 */
 		AST_STRING_FIELD(callback);   /*!< Contact extension */
 		AST_STRING_FIELD(peername);   /*!< Peer registering to */
+		AST_STRING_FIELD(localtag);   /*!< Local tag generated same time as callid */
 	);
 	enum sip_transport transport;   /*!< Transport for this registration UDP, TCP or TLS */
 	int portno;                     /*!< Optional port override */

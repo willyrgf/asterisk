@@ -1126,6 +1126,7 @@ struct call_queue {
 	unsigned int dead:1;
 	unsigned int eventwhencalled:2;
 	unsigned int ringinuse:1;
+	unsigned int announce_to_first_user:1; /*!< Whether or not we announce to the first user in a queue */
 	unsigned int setinterfacevar:1;
 	unsigned int setqueuevar:1;
 	unsigned int setqueueentryvar:1;
@@ -1405,7 +1406,7 @@ static int get_member_status(struct call_queue *q, int max_penalty, int min_pena
 	ao2_lock(q);
 	mem_iter = ao2_iterator_init(q->members, 0);
 	for (; (member = ao2_iterator_next(&mem_iter)); ao2_ref(member, -1)) {
-		if ((max_penalty && (member->penalty > max_penalty)) || (min_penalty && (member->penalty < min_penalty))) {
+		if ((max_penalty != INT_MAX && member->penalty > max_penalty) || (min_penalty != INT_MAX && member->penalty < min_penalty)) {
 			if (conditions & QUEUE_EMPTY_PENALTY) {
 				ast_debug(4, "%s is unavailable because his penalty is not between %d and %d\n", member->membername, min_penalty, max_penalty);
 				continue;
@@ -1730,6 +1731,7 @@ static void init_queue(struct call_queue *q)
 	q->roundingseconds = 0; /* Default - don't announce seconds */
 	q->servicelevel = 0;
 	q->ringinuse = 1;
+	q->announce_to_first_user = 0;
 	q->setinterfacevar = 0;
 	q->setqueuevar = 0;
 	q->setqueueentryvar = 0;
@@ -1992,6 +1994,8 @@ static void queue_set_param(struct call_queue *q, const char *param, const char 
 		ast_string_field_set(q, sound_reporthold, val);
 	} else if (!strcasecmp(param, "announce-frequency")) {
 		q->announcefrequency = atoi(val);
+	} else if (!strcasecmp(param, "announce-to-first-user")) {
+		q->announce_to_first_user = ast_true(val);
 	} else if (!strcasecmp(param, "min-announce-frequency")) {
 		q->minannouncefrequency = atoi(val);
 		ast_debug(1, "%s=%s for queue '%s'\n", param, val, q->name);
@@ -3607,7 +3611,7 @@ static void rna(int rnatime, struct queue_ent *qe, char *interface, char *member
  *
  * \todo eventually all call forward logic should be intergerated into and replaced by ast_call_forward()
  */
-static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callattempt *outgoing, int *to, char *digit, int prebusies, int caller_disconnect, int forwardsallowed)
+static struct callattempt *wait_for_answer(struct queue_ent *qe, struct callattempt *outgoing, int *to, char *digit, int prebusies, int caller_disconnect, int forwardsallowed, int ringing)
 {
 	const char *queue = qe->parent->name;
 	struct callattempt *o, *start = NULL, *prev = NULL;
@@ -4087,6 +4091,16 @@ skip_frame:;
 		}
 	}
 
+	/* Make a position announcement, if enabled */
+ 	if (qe->parent->announcefrequency && qe->parent->announce_to_first_user) {
+		say_position(qe, ringing);
+	}
+
+ 	/* Make a periodic announcement, if enabled */
+ 	if (qe->parent->periodicannouncefrequency && qe->parent->announce_to_first_user) {
+ 		say_periodic_announcement(qe, ringing);
+ 	}
+ 
 	if (!*to) {
 		for (o = start; o; o = o->call_next) {
 			rna(orig, qe, o->interface, o->member->membername, 1);
@@ -4159,23 +4173,54 @@ static int is_our_turn(struct queue_ent *qe)
 */
 static void update_qe_rule(struct queue_ent *qe)
 {
-	int max_penalty = qe->pr->max_relative ? qe->max_penalty + qe->pr->max_value : qe->pr->max_value;
-	int min_penalty = qe->pr->min_relative ? qe->min_penalty + qe->pr->min_value : qe->pr->min_value;
-	char max_penalty_str[20], min_penalty_str[20]; 
-	/* a relative change to the penalty could put it below 0 */
-	if (max_penalty < 0)
-		max_penalty = 0;
-	if (min_penalty < 0)
-		min_penalty = 0;
-	if (min_penalty > max_penalty)
-		min_penalty = max_penalty;
-	snprintf(max_penalty_str, sizeof(max_penalty_str), "%d", max_penalty);
-	snprintf(min_penalty_str, sizeof(min_penalty_str), "%d", min_penalty);
-	pbx_builtin_setvar_helper(qe->chan, "QUEUE_MAX_PENALTY", max_penalty_str);
-	pbx_builtin_setvar_helper(qe->chan, "QUEUE_MIN_PENALTY", min_penalty_str);
-	qe->max_penalty = max_penalty;
-	qe->min_penalty = min_penalty;
-	ast_debug(3, "Setting max penalty to %d and min penalty to %d for caller %s since %d seconds have elapsed\n", qe->max_penalty, qe->min_penalty, qe->chan->name, qe->pr->time);
+	int max_penalty = INT_MAX;
+
+	if (qe->max_penalty != INT_MAX) {
+		char max_penalty_str[20];
+
+		if (qe->pr->max_relative) {
+			max_penalty = qe->max_penalty + qe->pr->max_value;
+		} else {
+			max_penalty = qe->pr->max_value;
+		}
+
+		/* a relative change to the penalty could put it below 0 */
+		if (max_penalty < 0) {
+			max_penalty = 0;
+		}
+
+		snprintf(max_penalty_str, sizeof(max_penalty_str), "%d", max_penalty);
+		pbx_builtin_setvar_helper(qe->chan, "QUEUE_MAX_PENALTY", max_penalty_str);
+		qe->max_penalty = max_penalty;
+		ast_debug(3, "Setting max penalty to %d for caller %s since %d seconds have elapsed\n",
+			qe->max_penalty, qe->chan->name, qe->pr->time);
+	}
+
+	if (qe->min_penalty != INT_MAX) {
+		char min_penalty_str[20];
+		int min_penalty;
+
+		if (qe->pr->min_relative) {
+			min_penalty = qe->min_penalty + qe->pr->min_value;
+		} else {
+			min_penalty = qe->pr->min_value;
+		}
+
+		if (min_penalty < 0) {
+			min_penalty = 0;
+		}
+
+		if (max_penalty != INT_MAX && min_penalty > max_penalty) {
+			min_penalty = max_penalty;
+		}
+
+		snprintf(min_penalty_str, sizeof(min_penalty_str), "%d", min_penalty);
+		pbx_builtin_setvar_helper(qe->chan, "QUEUE_MIN_PENALTY", min_penalty_str);
+		qe->min_penalty = min_penalty;
+		ast_debug(3, "Setting min penalty to %d for caller %s since %d seconds have elapsed\n",
+			qe->min_penalty, qe->chan->name, qe->pr->time);
+	}
+
 	qe->pr = AST_LIST_NEXT(qe->pr, list);
 }
 
@@ -4320,8 +4365,8 @@ static int calc_metric(struct call_queue *q, struct member *mem, int pos, struct
 	unsigned char usepenalty = (membercount <= q->penaltymemberslimit) ? 0 : 1;
 
 	if (usepenalty) {
-		if ((qe->max_penalty && (mem->penalty > qe->max_penalty)) ||
-			(qe->min_penalty && (mem->penalty < qe->min_penalty))) {
+		if ((qe->max_penalty != INT_MAX && mem->penalty > qe->max_penalty) ||
+			(qe->min_penalty != INT_MAX && mem->penalty < qe->min_penalty)) {
 			return -1;
 		}
 	} else {
@@ -4833,7 +4878,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 	ring_one(qe, outgoing, &numbusies);
 	lpeer = wait_for_answer(qe, outgoing, &to, &digit, numbusies,
 		ast_test_flag(&(bridge_config.features_caller), AST_FEATURE_DISCONNECT),
-		forwardsallowed);
+		forwardsallowed, ringing);
 	/* The ast_channel_datastore_remove() function could fail here if the
 	 * datastore was moved to another channel during a masquerade. If this is
 	 * the case, don't free the datastore here because later, when the channel
@@ -6149,10 +6194,10 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_MAX_PENALTY}: Invalid value (%s), channel %s.\n",
 				max_penalty_str, chan->name);
-			max_penalty = 0;
+			max_penalty = INT_MAX;
 		}
 	} else {
-		max_penalty = 0;
+		max_penalty = INT_MAX;
 	}
 
 	if ((min_penalty_str = pbx_builtin_getvar_helper(chan, "QUEUE_MIN_PENALTY"))) {
@@ -6161,10 +6206,10 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_MIN_PENALTY}: Invalid value (%s), channel %s.\n",
 				min_penalty_str, chan->name);
-			min_penalty = 0;
+			min_penalty = INT_MAX;
 		}
 	} else {
-		min_penalty = 0;
+		min_penalty = INT_MAX;
 	}
 	ast_channel_unlock(chan);
 
@@ -6338,7 +6383,7 @@ stop:
 			}
 		} else if (qe.valid_digits) {
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY",
-				"%s|%d", qe.digits, qe.pos);
+				"%s|%d|%d|%ld", qe.digits, qe.pos, qe.opos, (long) time(NULL) - qe.start);
 		}
 	}
 
@@ -7247,9 +7292,10 @@ static char *__queues_show(struct mansession *s, int fd, int argc, const char * 
 		ao2_lock(q);
 		/* This check is to make sure we don't print information for realtime
 		 * queues which have been deleted from realtime but which have not yet
-		 * been deleted from the in-core container
+		 * been deleted from the in-core container. Only do this if we're not
+		 * looking for a specific queue.
 		 */
-		if (q->realtime) {
+		if (argc < 3 && q->realtime) {
 			realtime_queue = load_realtime_queue(q->name);
 			if (!realtime_queue) {
 				ao2_unlock(q);
@@ -7936,8 +7982,8 @@ static char *handle_queue_add_member(struct ast_cli_entry *e, int cmd, struct as
 	case CLI_INIT:
 		e->command = "queue add member";
 		e->usage =
-			"Usage: queue add member <channel> to <queue> [[[penalty <penalty>] as <membername>] state_interface <interface>]\n"
-			"       Add a channel to a queue with optionally:  a penalty, membername and a state_interface\n";
+			"Usage: queue add member <dial string> to <queue> [[[penalty <penalty>] as <membername>] state_interface <interface>]\n"
+			"       Add a dial string (Such as a channel,e.g. SIP/6001) to a queue with optionally:  a penalty, membername and a state_interface\n";
 		return NULL;
 	case CLI_GENERATE:
 		return complete_queue_add_member(a->line, a->word, a->pos, a->n);
@@ -8429,6 +8475,7 @@ static struct ast_cli_entry cli_queue[] = {
 	MEMBER(call_queue, dead, AST_DATA_BOOLEAN)			\
 	MEMBER(call_queue, eventwhencalled, AST_DATA_BOOLEAN)		\
 	MEMBER(call_queue, ringinuse, AST_DATA_BOOLEAN)			\
+	MEMBER(call_queue, announce_to_first_user, AST_DATA_BOOLEAN)	\
 	MEMBER(call_queue, setinterfacevar, AST_DATA_BOOLEAN)		\
 	MEMBER(call_queue, setqueuevar, AST_DATA_BOOLEAN)		\
 	MEMBER(call_queue, setqueueentryvar, AST_DATA_BOOLEAN)		\
@@ -8692,6 +8739,8 @@ static int unload_module(void)
 	res |= ast_manager_unregister("QueuePause");
 	res |= ast_manager_unregister("QueueLog");
 	res |= ast_manager_unregister("QueuePenalty");
+	res |= ast_manager_unregister("QueueReload");
+	res |= ast_manager_unregister("QueueReset");
 	res |= ast_unregister_application(app_aqm);
 	res |= ast_unregister_application(app_rqm);
 	res |= ast_unregister_application(app_pqm);

@@ -1512,17 +1512,22 @@ static char *handle_showmancmd(struct ast_cli_entry *e, int cmd, struct ast_cli_
 			if (!strcasecmp(cur->action, a->argv[num])) {
 #ifdef AST_XML_DOCS
 				if (cur->docsrc == AST_XML_DOC) {
+					char *syntax = ast_xmldoc_printable(S_OR(cur->syntax, "Not available"), 1);
+					char *synopsis = ast_xmldoc_printable(S_OR(cur->synopsis, "Not available"), 1);
+					char *description = ast_xmldoc_printable(S_OR(cur->description, "Not available"), 1);
+					char *arguments = ast_xmldoc_printable(S_OR(cur->arguments, "Not available"), 1);
+					char *seealso = ast_xmldoc_printable(S_OR(cur->seealso, "Not available"), 1);
 					ast_cli(a->fd, "%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n%s%s\n\n",
-						syntax_title,
-						ast_xmldoc_printable(S_OR(cur->syntax, "Not available"), 1),
-						synopsis_title,
-						ast_xmldoc_printable(S_OR(cur->synopsis, "Not available"), 1),
-						description_title,
-						ast_xmldoc_printable(S_OR(cur->description, "Not available"), 1),
-						arguments_title,
-						ast_xmldoc_printable(S_OR(cur->arguments, "Not available"), 1),
-						seealso_title,
-						ast_xmldoc_printable(S_OR(cur->seealso, "Not available"), 1));
+						syntax_title, syntax,
+						synopsis_title, synopsis,
+						description_title, description,
+						arguments_title, arguments,
+						seealso_title, seealso);
+					ast_free(syntax);
+					ast_free(synopsis);
+					ast_free(description);
+					ast_free(arguments);
+					ast_free(seealso);
 				} else
 #endif
 				{
@@ -3465,7 +3470,7 @@ static int action_sendtext(struct mansession *s, const struct message *m)
 		astman_send_error(s, m, "Failure");
 	}
 
-	return res;
+	return 0;
 }
 
 /*! \brief  action_redirect: The redirect manager command */
@@ -6893,7 +6898,15 @@ static int __init_manager(int reload)
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
 		val = var->value;
 
-		if (!ast_tls_read_conf(&ami_tls_cfg, &amis_desc, var->name, val)) {
+		/* read tls config options while preventing unsupported options from being set */
+		if (strcasecmp(var->name, "tlscafile")
+			&& strcasecmp(var->name, "tlscapath")
+			&& strcasecmp(var->name, "tlscadir")
+			&& strcasecmp(var->name, "tlsverifyclient")
+			&& strcasecmp(var->name, "tlsdontverifyserver")
+			&& strcasecmp(var->name, "tlsclientmethod")
+			&& strcasecmp(var->name, "sslclientmethod")
+			&& !ast_tls_read_conf(&ami_tls_cfg, &amis_desc, var->name, val)) {
 			continue;
 		}
 

@@ -169,6 +169,18 @@
 ;
 ;resetinterval = 3600
 ;
+; Assume inband audio may be present when a PROCEEDING message is received.
+; Q.931 Section 5.1.2 says the network cannot assume that the CPE side has
+; attached to the B channel at this time without explicitly sending the
+; progress indicator ie informing the CPE side to attach to the B channel
+; for audio.  However, some non-compliant ISDN switches send a PROCEEDING
+; without the progress indicator ie indicating inband audio is available and
+; assume that the CPE device has connected the media path for listening to
+; ringback and other messages.
+; Default yes in current release branches for backward compatibility.
+;
+;inband_on_proceeding=yes
+;
 ; Overlap dialing mode (sending overlap digits)
 ; Cannot be changed on a reload.
 ;
@@ -491,7 +503,8 @@ usecallerid=yes
 ; easily be re-attaching to a prior incoming call that was not yet hung up).
 ; This option changes the hangup to wait for a dialtone on the line, before
 ; marking the line as once again available for use with outgoing calls.
-;waitfordialtone=yes
+; Specified in milliseconds, not set by default.
+;waitfordialtone=1000
 ;
 ; The following option enables receiving MWI on FXO lines.  The default
 ; value is no.

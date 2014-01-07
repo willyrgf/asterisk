@@ -3260,7 +3260,7 @@ static void aji_init_event_distribution(struct aji_client *client)
  */
 static int aji_handle_pubsub_event(void *data, ikspak *pak)
 {
-	char *item_id, *device_state, *context, *cachable_str;
+	char *item_id, *device_state, *mailbox, *cachable_str;
 	int oldmsgs, newmsgs;
 	iks *item, *item_content;
 	struct ast_eid pubsub_eid;
@@ -3280,27 +3280,29 @@ static int aji_handle_pubsub_event(void *data, ikspak *pak)
 		return IKS_FILTER_EAT;
 	}
 	if (!strcasecmp(iks_name(item_content), "state")) {
-		device_state = iks_find_cdata(item, "state");
-		if ((cachable_str = iks_find_cdata(item, "cachable"))) {
+		if ((cachable_str = iks_find_attrib(item_content, "cachable"))) {
 			sscanf(cachable_str, "%30d", &cachable);
 		}
+		device_state = iks_find_cdata(item, "state");
 		if (!(event = ast_event_new(AST_EVENT_DEVICE_STATE_CHANGE,
 					    AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, item_id, AST_EVENT_IE_STATE,
 					    AST_EVENT_IE_PLTYPE_UINT, ast_devstate_val(device_state), AST_EVENT_IE_EID,
 					    AST_EVENT_IE_PLTYPE_RAW, &pubsub_eid, sizeof(pubsub_eid),
+					    AST_EVENT_IE_CACHABLE, AST_EVENT_IE_PLTYPE_UINT, cachable,
 					    AST_EVENT_IE_END))) {
 			return IKS_FILTER_EAT;
 		}
 	} else if (!strcasecmp(iks_name(item_content), "mailbox")) {
-		context = strsep(&item_id, "@");
+		mailbox = strsep(&item_id, "@");
 		sscanf(iks_find_cdata(item_content, "OLDMSGS"), "%10d", &oldmsgs);
 		sscanf(iks_find_cdata(item_content, "NEWMSGS"), "%10d", &newmsgs);
-		if (!(event = ast_event_new(AST_EVENT_MWI, AST_EVENT_IE_MAILBOX,
-			AST_EVENT_IE_PLTYPE_STR, item_id, AST_EVENT_IE_CONTEXT,
-			AST_EVENT_IE_PLTYPE_STR, context, AST_EVENT_IE_OLDMSGS,
-			AST_EVENT_IE_PLTYPE_UINT, oldmsgs, AST_EVENT_IE_NEWMSGS,
-			AST_EVENT_IE_PLTYPE_UINT, newmsgs, AST_EVENT_IE_EID, AST_EVENT_IE_PLTYPE_RAW,
-			&pubsub_eid, sizeof(pubsub_eid), AST_EVENT_IE_END))) {
+		if (!(event = ast_event_new(AST_EVENT_MWI,
+			AST_EVENT_IE_MAILBOX, AST_EVENT_IE_PLTYPE_STR, mailbox,
+			AST_EVENT_IE_CONTEXT, AST_EVENT_IE_PLTYPE_STR, item_id,
+			AST_EVENT_IE_OLDMSGS, AST_EVENT_IE_PLTYPE_UINT, oldmsgs,
+			AST_EVENT_IE_NEWMSGS, AST_EVENT_IE_PLTYPE_UINT, newmsgs,
+			AST_EVENT_IE_EID, AST_EVENT_IE_PLTYPE_RAW, &pubsub_eid, sizeof(pubsub_eid),
+			AST_EVENT_IE_END))) {
 			return IKS_FILTER_EAT;
 		}
 	} else {
@@ -3506,7 +3508,7 @@ static int aji_handle_pubsub_error(void *data, ikspak *pak)
 	iks *orig_pubsub = iks_find(pak->x, "pubsub");
 	struct aji_client *client;
 	if (!orig_pubsub) {
-		ast_log(LOG_ERROR, "Error isn't a PubSub error, why are we here?\n");
+		ast_debug(1, "Error isn't a PubSub error, why are we here?\n");
 		return IKS_FILTER_EAT;
 	}
 	orig_request = iks_child(orig_pubsub);

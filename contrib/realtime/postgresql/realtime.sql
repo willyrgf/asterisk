@@ -39,7 +39,7 @@ callgroup character varying(10),
 callerid character varying(80),
 canreinvite character varying(3) DEFAULT 'yes',
 context character varying(80),
-defaultip character varying(15),
+defaultip character varying(45),
 dtmfmode character varying(7),
 fromuser character varying(80),
 fromdomain character varying(80),
@@ -48,7 +48,7 @@ insecure character varying(4),
 "language" character varying(2),
 mailbox character varying(50),
 md5secret character varying(80),
-nat character varying(5) DEFAULT 'no' NOT NULL,
+nat character varying(29) DEFAULT '' NOT NULL,
 permit character varying(95),
 deny character varying(95),
 mask character varying(95),
@@ -136,6 +136,23 @@ penalty int8,
 PRIMARY KEY (queue_name, interface)
 ) WITHOUT OIDS;
 
+drop table queue_log;
+CREATE TABLE "queue_log" (
+"id" SERIAL,
+"time" TIMESTAMP WITHOUT TIME ZONE DEFAULT now() NOT NULL,
+"callid" character varying(50) NOT NULL,
+"queuename" character varying(50) NOT NULL,
+"agent" character varying(50) NOT NULL,
+"event" character varying(20) NOT NULL,
+"data1" character varying(50) NOT NULL,
+"data2" character varying(50) NOT NULL,
+"data3" character varying(50) NOT NULL,
+"data4" character varying(50) NOT NULL,
+"data5" character varying(50) NOT NULL,
+CONSTRAINT queue_log_pkey PRIMARY KEY (id)
+) WITHOUT OIDS;
+
+GRANT ALL ON TABLE queue_log TO asterisk;
 GRANT ALL ON TABLE cdr TO asterisk;
 GRANT ALL ON TABLE extensions_conf TO asterisk;
 GRANT ALL ON TABLE sip_conf TO asterisk;

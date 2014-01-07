@@ -594,14 +594,18 @@ static int dundi_lookup_local(struct dundi_result *dr, struct dundi_mapping *map
 			ast_eid_to_str(dr[anscnt].eid_str, sizeof(dr[anscnt].eid_str), &dr[anscnt].eid);
 			if (ast_test_flag(&flags, DUNDI_FLAG_EXISTS)) {
 				AST_LIST_HEAD_INIT_NOLOCK(&headp);
-				newvariable = ast_var_assign("NUMBER", called_number);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
-				newvariable = ast_var_assign("EID", dr[anscnt].eid_str);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
-				newvariable = ast_var_assign("SECRET", cursecret);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
-				newvariable = ast_var_assign("IPADDR", ipaddr);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				if ((newvariable = ast_var_assign("NUMBER", called_number))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
+				if ((newvariable = ast_var_assign("EID", dr[anscnt].eid_str))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
+				if ((newvariable = ast_var_assign("SECRET", cursecret))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
+				if ((newvariable = ast_var_assign("IPADDR", ipaddr))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
 				pbx_substitute_variables_varshead(&headp, map->dest, dr[anscnt].dest, sizeof(dr[anscnt].dest));
 				while ((newvariable = AST_LIST_REMOVE_HEAD(&headp, entries)))
 					ast_var_delete(newvariable);
@@ -2162,7 +2166,7 @@ static void *network_thread(void *ignore)
 	   from the network, and queue them for delivery to the channels */
 	int res;
 	/* Establish I/O callback for socket read */
-	ast_io_add(io, netsocket, socket_read, AST_IO_IN, NULL);
+	int *socket_read_id = ast_io_add(io, netsocket, socket_read, AST_IO_IN, NULL);
 
 	while (!dundi_shutdown) {
 		res = ast_sched_wait(sched);
@@ -2177,6 +2181,7 @@ static void *network_thread(void *ignore)
 		check_password();
 	}
 
+	ast_io_remove(io, socket_read_id);
 	netthreadid = AST_PTHREADT_NULL;
 
 	return NULL;
