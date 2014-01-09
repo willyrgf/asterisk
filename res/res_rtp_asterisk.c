@@ -467,7 +467,7 @@ static int __rtp_recvfrom(struct ast_rtp_instance *instance, void *buf, size_t s
 	}
 
 	if ((*in & 0xC0) && res_srtp && srtp && res_srtp->unprotect(srtp, buf, &len, rtcp) < 0) {
-		if (rtcpdebug) {
+		if (rtpdebug) {
 			ast_verbose("Got SRTP from           %s  - failed to decrypt information\n", ast_sockaddr_stringify(sa));
 		}
 	   	return -1;
@@ -1915,7 +1915,7 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 
 	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 		ast_set_flag(rtp, FLAG_CN_ACTIVE);
-		ast_debug(0, "###### ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
+		ast_debug(2, "ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
 		/* Start the generator on the other end. */
 	
 	} else {
@@ -2724,7 +2724,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		if (payload.code != AST_RTP_CN && ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 			/* Insert a control frame to indicate that we need to shut down Comfort Noise generators, if active */
 			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
-			ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+			ast_debug(2, "DEACTIVATING Comfort Noise \n");
 			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
 			f = ast_frdup(&cngoff);
 			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
@@ -2760,7 +2760,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 		struct ast_frame *f = NULL;
 		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
-		ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
+		ast_debug(2, "DEACTIVATING Comfort Noise \n");
 		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
 		f = ast_frdup(&cngoff);
 		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
@@ -3203,11 +3203,11 @@ static void ast_rtp_hold(struct ast_rtp_instance *instance, int status)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	if (status) {
-		ast_debug(1, "##### HOLDING RTCP, Have a nice day \n");
+		ast_debug(2, " HOLDING RTCP, Have a nice day \n");
 		ast_set_flag(rtp, FLAG_HOLD);
 	} else {
 		/* CLEAR */
-		ast_debug(1, "##### UNHOLDING RTCP, You will get audio now. \n");
+		ast_debug(2, " UNHOLDING RTCP, You will get audio now. \n");
 		ast_clear_flag(rtp, FLAG_HOLD);
 	}
 }
@@ -3217,12 +3217,12 @@ static void ast_rtp_stop(struct ast_rtp_instance *instance)
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	struct ast_sockaddr addr = { {0,} };
 
-	ast_debug(1, "##### Stopping RTP, Sending good bye \n");
+	ast_debug(2, " Stopping RTP, Sending good bye \n");
 
 	/* Send RTCP goodbye packet */
 	if (rtp->isactive && rtp->rtcp) {
 		ast_rtcp_write_sr(instance, 1);
-		ast_debug(1, "##### Stopping RTCP, Sent good bye \n");
+		ast_debug(2, " Stopping RTCP, Sent good bye \n");
 	}
 	if (rtp->rtcp && rtp->rtcp->schedid > 0) {
 		if (!ast_sched_del(rtp->sched, rtp->rtcp->schedid)) {
@@ -3230,7 +3230,7 @@ static void ast_rtp_stop(struct ast_rtp_instance *instance)
 			ao2_ref(instance, -1);
 		}
 		rtp->rtcp->schedid = -1;
-		ast_debug(1, "##### Stopping RTCP, Removing scheduler \n");
+		ast_debug(2, " Stopping RTCP, Removing scheduler \n");
 	}
 
 	if (rtp->red) {
@@ -3269,9 +3269,7 @@ void ast_rtcp_setcname(struct ast_rtp_instance *instance, const char *cname, siz
 	}
 	ast_copy_string(rtp->rtcp->ourcname, cname, length+1);
 	rtp->rtcp->ourcnamelength = length;
-	if (option_debug > 3) {
-		ast_log(LOG_DEBUG, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
-	}
+	ast_debug(3, "--- Copied CNAME %s to RTCP structure (length %d)\n", cname, (int) length);
 }
 
 /*! \brief set the name of the bridged channel
