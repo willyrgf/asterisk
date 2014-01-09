@@ -186,7 +186,6 @@ void sip_rtcp_report(struct sip_pvt *dialog, struct ast_rtp_instance *instance, 
 	   monitor thread instead.
 	 */
 	if (reporttype == 1) {
-		ast_log(LOG_DEBUG, "---- Activation qual structure in dialog \n");
 		qual.end = ast_tvnow();
  		qual.mediatype = media;
 		if (media == SDP_AUDIO) {  /* Audio */
@@ -213,8 +212,6 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	char buf_outpackets[25], buf_inpackets[25];
 	int qosrealtime = ast_check_realtime("rtpcqr");
 
-	ast_log(LOG_DEBUG, "************* QOS END REPORTS: The final countdown!!!!! Yeah. \n");
-
 	if (!qual) {
 		ast_log(LOG_ERROR, "No CQR data provided \n");
 		return;
@@ -228,7 +225,7 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	if (!ast_tvzero(qual->end) && !ast_tvzero(qual->start)) {
 		duration = (unsigned int)(ast_tvdiff_ms(qual->end, qual->start) / 1000);
 	} else {
-		ast_log(LOG_DEBUG, "**** WTF? No duration? What type of call is THAT? \n");
+		ast_debug(2, "**** No duration? What type of call is THAT? \n");
 		duration = 0;
 	}
 
@@ -252,7 +249,6 @@ void qos_write_realtime(struct sip_pvt *dialog, struct ast_rtp_instance_stats *q
 	//sprintf(buf_inpackets, "%d", qual->remote_count);	/* Do check again */
 	//sprintf(buf_outpackets, "%d", qual->local_count);
 
-	ast_log(LOG_DEBUG, "************* QOS END REPORTS: Probing new logging channel LOG_CQR!!!!! Yeah. \n");
 	ast_log(LOG_CQR, "CQR Channel: %s Uid %s Bch %s Buid %s Pvt %s Media %s Lssrc %s Rssrc %s Rip %s Rtt %s:%s:%s Ljitter %s Rjitter %s Rtcpstatus %s Dur %s Pout %s Plossout %s Pin %s Plossin %s\n",
 		qual->channel[0] ? qual->channel : "",
 		qual->uniqueid[0] ? qual->uniqueid : "",
@@ -305,7 +301,7 @@ CREATE TABLE `astcqr` (
   `readcost` varchar(10) NOT NULL,
   `remoteip` varchar(25) NOT NULL,
   KEY `ChannelUnique` (`channel`,`uniqueid`)
-) ENGINE=MyISAM DEFAULT CHARSET=latin1 COMMENT='FOr pinefrog stats'
+) ENGINE=MyISAM DEFAULT CHARSET=latin1 COMMENT='For pinefrog stats'
 */
 
 	ast_store_realtime("rtpcqr", 
@@ -342,7 +338,6 @@ CREATE TABLE `astcqr` (
 int send_rtcp_events(const void *data)
 {
 	struct sip_pvt *dialog = (struct sip_pvt *) data;
-	ast_log(LOG_DEBUG, "***** SENDING RTCP EVENT \n");
 
 	if (dialog->rtp && !ast_rtp_instance_isactive(dialog->rtp)) {
 		ast_debug(1, "          ***** Activating RTCP report \n");
@@ -359,7 +354,6 @@ int send_rtcp_events(const void *data)
 /*! \brief Activate RTCP events at start of call */
 void start_rtcp_events(struct sip_pvt *dialog, struct sched_context *sched)
 {
-	ast_debug(2, "***** STARTING SENDING RTCP EVENT \n");
 	/* Check if it's already active */
 
 	if (dialog->rtp && !ast_rtp_instance_isactive(dialog->rtp)) {
