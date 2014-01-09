@@ -718,9 +718,9 @@ struct dahdi_pvt {
 	struct dahdi_pvt *oprpeer;				/*!< "Operator Services" peer tech_pvt ptr */
 	/*! \brief Amount of gain to increase during caller id */
 	float cid_rxgain;
-	/*! \brief Rx gain set by chan_dahdi.conf */
+	/*! \brief Software Rx gain set by chan_dahdi.conf */
 	float rxgain;
-	/*! \brief Tx gain set by chan_dahdi.conf */
+	/*! \brief Software Tx gain set by chan_dahdi.conf */
 	float txgain;
 
 	float txdrc; /*!< Dynamic Range Compression factor. a number between 1 and 6ish */
@@ -1747,11 +1747,8 @@ static int my_get_callerid(void *pvt, char *namebuf, char *numbuf, enum analog_e
 		 * a failure and die, and returning 2 means no event was received. */
 		res = read(p->subs[index].dfd, buf, sizeof(buf));
 		if (res < 0) {
-			if (errno != ELAST) {
-				ast_log(LOG_WARNING, "read returned error: %s\n", strerror(errno));
-				callerid_free(p->cs);
-				return -1;
-			}
+			ast_log(LOG_WARNING, "read returned error: %s\n", strerror(errno));
+			return -1;
 		}
 
 		if (analog_p->ringt > 0) {
@@ -11709,6 +11706,11 @@ static struct dahdi_pvt *handle_init_event(struct dahdi_pvt *i, int event)
 	return NULL;
 }
 
+static void monitor_pfds_clean(void *arg) {
+	struct pollfd **pfds = arg;
+	ast_free(*pfds);
+}
+
 static void *do_monitor(void *data)
 {
 	int count, res, res2, spoint, pollres=0;
@@ -11732,6 +11734,7 @@ static void *do_monitor(void *data)
 #endif
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
+	pthread_cleanup_push(monitor_pfds_clean, &pfds);
 	for (;;) {
 		/* Lock the interface list */
 		ast_mutex_lock(&iflock);
@@ -11988,6 +11991,7 @@ static void *do_monitor(void *data)
 		ast_mutex_unlock(&iflock);
 	}
 	/* Never reached */
+	pthread_cleanup_pop(1);
 	return NULL;
 
 }
@@ -15257,8 +15261,8 @@ static int action_dahdirestart(struct mansession *s, const struct message *m)
 
 static char *dahdi_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-#define FORMAT "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
-#define FORMAT2 "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
+#define FORMAT "%7s %-15.15s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
+#define FORMAT2 "%7s %-15.15s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s\n"
 	ast_group_t targetnum = 0;
 	int filtertype = 0;
 	struct dahdi_pvt *tmp = NULL;
@@ -15690,15 +15694,20 @@ static char *dahdi_set_hwgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "dahdi set hwgain";
+		e->command = "dahdi set hwgain {rx|tx}";
 		e->usage =
 			"Usage: dahdi set hwgain <rx|tx> <chan#> <gain>\n"
-			"	Sets the hardware gain on a a given channel, overriding the\n"
-			"   value provided at module loadtime, whether the channel is in\n"
-			"   use or not.  Changes take effect immediately.\n"
+			"   Sets the hardware gain on a given channel.  Changes take effect\n"
+			"   immediately whether the channel is in use or not.\n"
+			"\n"
 			"   <rx|tx> which direction do you want to change (relative to our module)\n"
 			"   <chan num> is the channel number relative to the device\n"
-			"   <gain> is the gain in dB (e.g. -3.5 for -3.5dB)\n";
+			"   <gain> is the gain in dB (e.g. -3.5 for -3.5dB)\n"
+			"\n"
+			"   Please note:\n"
+			"   * This is currently the only way to set hwgain by the channel driver.\n"
+			"   * hwgain is only supportable by hardware with analog ports because\n"
+			"     hwgain works on the analog side of an analog-digital conversion.\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -15759,12 +15768,13 @@ static char *dahdi_set_swgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "dahdi set swgain";
+		e->command = "dahdi set swgain {rx|tx}";
 		e->usage =
 			"Usage: dahdi set swgain <rx|tx> <chan#> <gain>\n"
-			"	Sets the software gain on a a given channel, overriding the\n"
-			"   value provided at module loadtime, whether the channel is in\n"
-			"   use or not.  Changes take effect immediately.\n"
+			"   Sets the software gain on a given channel and overrides the\n"
+			"   value provided at module loadtime.  Changes take effect\n"
+			"   immediately whether the channel is in use or not.\n"
+			"\n"
 			"   <rx|tx> which direction do you want to change (relative to our module)\n"
 			"   <chan num> is the channel number relative to the device\n"
 			"   <gain> is the gain in dB (e.g. -3.5 for -3.5dB)\n";
@@ -15808,6 +15818,12 @@ static char *dahdi_set_swgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 		ast_cli(a->fd, "software %s gain set to %.1f on channel %d\n",
 			tx ? "tx" : "rx", gain, channel);
+
+		if (tx) {
+			tmp->txgain = gain;
+		} else {
+			tmp->rxgain = gain;
+		}
 		break;
 	}
 	ast_mutex_unlock(&iflock);
@@ -16722,8 +16738,10 @@ static int __unload_module(void)
 
 #ifdef HAVE_PRI
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (pris[i].pri.master != AST_PTHREADT_NULL)
+		if (pris[i].pri.master != AST_PTHREADT_NULL) {
 			pthread_cancel(pris[i].pri.master);
+			pthread_kill(pris[i].pri.master, SIGURG);
+		}
 	}
 	ast_cli_unregister_multiple(dahdi_pri_cli, ARRAY_LEN(dahdi_pri_cli));
 	ast_unregister_application(dahdi_send_keypad_facility_app);
@@ -16733,9 +16751,11 @@ static int __unload_module(void)
 #endif
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (linksets[i].ss7.master != AST_PTHREADT_NULL)
+		if (linksets[i].ss7.master != AST_PTHREADT_NULL) {
 			pthread_cancel(linksets[i].ss7.master);
+			pthread_kill(linksets[i].ss7.master, SIGURG);
 		}
+	}
 	ast_cli_unregister_multiple(dahdi_ss7_cli, ARRAY_LEN(dahdi_ss7_cli));
 #endif	/* defined(HAVE_SS7) */
 #if defined(HAVE_OPENR2)
@@ -16776,8 +16796,9 @@ static int __unload_module(void)
 
 #if defined(HAVE_PRI)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (pris[i].pri.master && (pris[i].pri.master != AST_PTHREADT_NULL))
+		if (pris[i].pri.master && (pris[i].pri.master != AST_PTHREADT_NULL)) {
 			pthread_join(pris[i].pri.master, NULL);
+		}
 		for (j = 0; j < SIG_PRI_NUM_DCHANS; j++) {
 			dahdi_close_pri_fd(&(pris[i]), j);
 		}
@@ -16792,8 +16813,9 @@ static int __unload_module(void)
 
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (linksets[i].ss7.master && (linksets[i].ss7.master != AST_PTHREADT_NULL))
+		if (linksets[i].ss7.master && (linksets[i].ss7.master != AST_PTHREADT_NULL)) {
 			pthread_join(linksets[i].ss7.master, NULL);
+		}
 		for (j = 0; j < SIG_SS7_NUM_DCHANS; j++) {
 			dahdi_close_ss7_fd(&(linksets[i]), j);
 		}

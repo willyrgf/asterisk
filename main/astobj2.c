@@ -98,7 +98,7 @@ void ao2_bt(void)
 	for(i = 0; i < c; i++) {
 		ast_verbose("%d: %p %s\n", i, addresses[i], strings[i]);
 	}
-	ast_free(strings);
+	ast_std_free(strings);
 }
 #endif
 
@@ -441,7 +441,7 @@ struct ao2_container *__ao2_container_alloc_debug(const unsigned int n_buckets, 
 	/* compute the container size */
 	const unsigned int num_buckets = hash_fn ? n_buckets : 1;
 	size_t container_size = sizeof(struct ao2_container) + num_buckets * sizeof(struct bucket);
-	struct ao2_container *c = __ao2_alloc_debug(container_size, container_destruct_debug, tag, file, line, funcname, ref_debug);
+	struct ao2_container *c = __ao2_alloc_debug(container_size, ref_debug ? container_destruct_debug : container_destruct, tag, file, line, funcname, ref_debug);
 
 	return internal_ao2_container_alloc(c, num_buckets, hash_fn, cmp_fn);
 }
@@ -1127,12 +1127,18 @@ static struct ast_cli_entry cli_astobj2[] = {
 	AST_CLI_DEFINE(handle_astobj2_stats, "Print astobj2 statistics"),
 	AST_CLI_DEFINE(handle_astobj2_test, "Test astobj2"),
 };
+
+static void astobj2_cleanup(void)
+{
+	ast_cli_unregister_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
+}
 #endif /* AO2_DEBUG */
 
 int astobj2_init(void)
 {
 #ifdef AO2_DEBUG
 	ast_cli_register_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
+	ast_register_atexit(astobj2_cleanup);
 #endif
 
 	return 0;
