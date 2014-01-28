@@ -1448,7 +1448,7 @@ AST_TEST_DEFINE(test_cel_attended_transfer_bridges_link)
 
 	/* The following events can not be matched directly since nothing is known
 	 * about the linking local channel.
-	 * local channel ;1 and ;2 creation and ;2 answer */
+	 * ;1 and ;2 CHAN_START and ;2 ANSWER */
 	APPEND_DUMMY_EVENT();
 	APPEND_DUMMY_EVENT();
 	APPEND_DUMMY_EVENT();
@@ -1478,6 +1478,15 @@ AST_TEST_DEFINE(test_cel_attended_transfer_bridges_link)
 	HANGUP_CHANNEL(chan_david, AST_CAUSE_NORMAL, "");
 	do_sleep();
 	HANGUP_CHANNEL(chan_charlie, AST_CAUSE_NORMAL, "");
+	do_sleep();
+
+	/* ;1 and ;2 BRIDGE_EXIT, HANGUP, and CHAN_END */
+	APPEND_DUMMY_EVENT();
+	APPEND_DUMMY_EVENT();
+	APPEND_DUMMY_EVENT();
+	APPEND_DUMMY_EVENT();
+	APPEND_DUMMY_EVENT();
+	APPEND_DUMMY_EVENT();
 
 	return AST_TEST_PASS;
 }
