@@ -818,7 +818,7 @@ static struct ast_cli_entry cli_sounds[] = {
 
 /*! \brief Callback function invoked when formats are registered or unregistered */
 static void format_update_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic, struct stasis_message *message)
+	struct stasis_message *message)
 {
 	sounds_reload();
 }
