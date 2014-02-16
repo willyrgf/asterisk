@@ -200,7 +200,7 @@ static struct ast_sorcery_wizard sounds_file_wizard = {
 static int sounds_bucket_add_child_bucket(struct sounds_pending *pending, struct ast_bucket *parent, const char *parent_path,
 	const char *child_path, const char *child_name)
 {
-	RAII_VAR(struct ast_str *, bucket_uri, ast_str_create(64), ast_free);
+	struct ast_str *bucket_uri = ast_str_create(64);
 
 	if (!bucket_uri) {
 		return -1;
@@ -212,6 +212,8 @@ static int sounds_bucket_add_child_bucket(struct sounds_pending *pending, struct
 
 	/* Also add the full filesystem path so on the next iteration it gets processed */
 	ast_str_container_add(pending->paths, child_path);
+
+	ast_free(bucket_uri);
 
 	return 0;
 }
@@ -226,7 +228,6 @@ static int sounds_bucket_add_file(struct sounds_pending *pending, struct ast_buc
 	const struct ast_format *format;
 	RAII_VAR(struct ast_str *, file_uri, ast_str_create(64), ast_free);
 	RAII_VAR(struct ast_bucket_file *, file, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_bucket_metadata *, formats, NULL, ao2_cleanup);
 
 	if (ast_strlen_zero(file_name_stripped) || !file_uri) {
 		return -1;
@@ -318,11 +319,13 @@ static int sounds_bucket_add_file(struct sounds_pending *pending, struct ast_buc
 		ast_str_container_add(parent->files, ast_str_buffer(file_uri));
 	} else {
 		/* The file already exists so we are appending a new format to it */
-		RAII_VAR(struct ast_bucket_metadata *, formats, ast_bucket_file_metadata_get(file, "formats"), ao2_cleanup);
+		struct ast_bucket_metadata *formats = ast_bucket_file_metadata_get(file, "formats");
 		char formats_str[strlen(formats->value) + strlen(extension) + 2];
 
 		snprintf(formats_str, sizeof(formats_str), "%s %s", formats->value, extension);
 		ast_bucket_file_metadata_set(file, "formats", formats_str);
+
+		ao2_ref(formats, -1);
 	}
 	ao2_cleanup(file);
 
@@ -353,14 +356,21 @@ static int sounds_path_populate_callback(void *obj, void *arg, int flags)
 	char *path = obj;
 	size_t path_len = strlen(path);
 	struct sounds_pending *pending = arg;
-	RAII_VAR(struct ast_str *, bucket_uri, ast_str_create(64), ast_free);
-	RAII_VAR(struct ast_bucket *, bucket, NULL, ao2_cleanup);
+	struct ast_str *bucket_uri;
+	struct ast_bucket *bucket;
 	struct dirent *entry;
 	DIR *directory;
 
 	directory = opendir(path);
 	if (!directory) {
 		ast_log(LOG_ERROR, "Failed to open path '%s'\n", path);
+		pending->error = 1;
+		return CMP_MATCH;
+	}
+
+	bucket_uri = ast_str_create(64);
+	if (!bucket_uri) {
+		ast_log(LOG_ERROR, "Failed to create temporary string for bucket URI\n");
 		pending->error = 1;
 		return CMP_MATCH;
 	}
@@ -374,12 +384,15 @@ static int sounds_path_populate_callback(void *obj, void *arg, int flags)
 			ast_log(LOG_ERROR, "Failed to create bucket for '%s'\n", path);
 			closedir(directory);
 			pending->error = 1;
+			ast_free(bucket_uri);
 			return CMP_MATCH;
 		}
 	} else {
 		ao2_ref(pending->root, +1);
 		bucket = pending->root;
 	}
+
+	ast_free(bucket_uri);
 
 	while ((entry = readdir(directory)) != NULL) {
 		/* Room for / in between and null terminator */
@@ -416,6 +429,8 @@ static int sounds_path_populate_callback(void *obj, void *arg, int flags)
 	if (!pending->error) {
 		ao2_link(pending->snapshot->buckets, bucket);
 	}
+
+	ao2_ref(bucket, -1);
 
 	return CMP_MATCH;
 }
@@ -597,7 +612,7 @@ static int show_buckets_cb(void *obj, void *arg, int flags)
 /*! \brief Show a list of buckets available on the system */
 static char *handle_cli_buckets_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	RAII_VAR(struct sounds_snapshot *, snapshot, NULL, ao2_cleanup);
+	struct sounds_snapshot *snapshot;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -622,6 +637,8 @@ static char *handle_cli_buckets_show(struct ast_cli_entry *e, int cmd, struct as
 	ast_cli(a->fd, "Discovered sound buckets:\n");
 	ao2_callback(snapshot->buckets, OBJ_MULTIPLE | OBJ_NODATA, show_buckets_cb, a);
 
+	ao2_ref(snapshot, -1);
+
 	return CLI_SUCCESS;
 }
 
@@ -637,7 +654,7 @@ static int show_files_cb(void *obj, void *arg, int flags)
 /*! \brief Show a list of files available on the system */
 static char *handle_cli_files_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	RAII_VAR(struct sounds_snapshot *, snapshot, NULL, ao2_cleanup);
+	struct sounds_snapshot *snapshot;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -662,14 +679,16 @@ static char *handle_cli_files_show(struct ast_cli_entry *e, int cmd, struct ast_
 	ast_cli(a->fd, "Discovered sound files:\n");
 	ao2_callback(snapshot->files, OBJ_MULTIPLE | OBJ_NODATA, show_files_cb, a);
 
+	ao2_ref(snapshot, -1);
+
 	return CLI_SUCCESS;
 }
 
 /*! \brief Show information about a specific bucket */
 static char *handle_cli_bucket_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	RAII_VAR(struct sounds_snapshot *, snapshot, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_bucket *, bucket, NULL, ao2_cleanup);
+	struct sounds_snapshot *snapshot;
+	struct ast_bucket *bucket;
 	struct ao2_iterator it_files;
 	char *uri;
 
@@ -703,6 +722,7 @@ static char *handle_cli_bucket_show(struct ast_cli_entry *e, int cmd, struct ast
             ao2_ref(object, -1);
         }
         ao2_iterator_destroy(&it_buckets);
+        ao2_ref(snapshot, -1);
         return match;
 	}
 	}
@@ -720,6 +740,7 @@ static char *handle_cli_bucket_show(struct ast_cli_entry *e, int cmd, struct ast
 	bucket = ao2_find(snapshot->buckets, a->argv[3], OBJ_KEY);
 	if (!bucket) {
 		ast_cli(a->fd, "No bucket found with URI '%s'\n", a->argv[3]);
+		ao2_ref(snapshot, -1);
 		return CLI_FAILURE;
 	}
 
@@ -733,14 +754,17 @@ static char *handle_cli_bucket_show(struct ast_cli_entry *e, int cmd, struct ast
 	}
 	ao2_iterator_destroy(&it_files);
 
+	ao2_ref(bucket, -1);
+	ao2_ref(snapshot, -1);
+
 	return CLI_SUCCESS;
 }
 
 /*! \brief Show information about a specific file */
 static char *handle_cli_file_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	RAII_VAR(struct sounds_snapshot *, snapshot, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_bucket_file *, file, NULL, ao2_cleanup);
+	struct sounds_snapshot *snapshot;
+	struct ast_bucket_file *file;
 	struct ao2_iterator it_metadata;
 	struct ast_bucket_metadata *metadata;
 
@@ -774,6 +798,7 @@ static char *handle_cli_file_show(struct ast_cli_entry *e, int cmd, struct ast_c
             ao2_ref(object, -1);
         }
         ao2_iterator_destroy(&it_files);
+        ao2_ref(snapshot, -1);
         return match;
 	}
 	}
@@ -791,6 +816,7 @@ static char *handle_cli_file_show(struct ast_cli_entry *e, int cmd, struct ast_c
 	file = ao2_find(snapshot->files, a->argv[3], OBJ_KEY);
 	if (!file) {
 		ast_cli(a->fd, "No files found with URI '%s'\n", a->argv[3]);
+		ao2_ref(snapshot, -1);
 		return CLI_FAILURE;
 	}
 
@@ -804,6 +830,9 @@ static char *handle_cli_file_show(struct ast_cli_entry *e, int cmd, struct ast_c
 		ast_cli(a->fd, "\t%s: %s\n", metadata->name, metadata->value);
 	}
 	ao2_iterator_destroy(&it_metadata);
+
+	ao2_ref(file, -1);
+	ao2_ref(snapshot, -1);
 
 	return CLI_SUCCESS;
 }
