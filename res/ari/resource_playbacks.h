@@ -19,7 +19,7 @@
 /*! \file
  *
  * \brief Generated file - declares stubs to be implemented in
- * res/ari/resource_playback.c
+ * res/ari/resource_playbacks.c
  *
  * Playback control resources
  *
@@ -34,13 +34,13 @@
  * template in rest-api-templates/ari_resource.h.mustache
  */
 
-#ifndef _ASTERISK_RESOURCE_PLAYBACK_H
-#define _ASTERISK_RESOURCE_PLAYBACK_H
+#ifndef _ASTERISK_RESOURCE_PLAYBACKS_H
+#define _ASTERISK_RESOURCE_PLAYBACKS_H
 
 #include "asterisk/ari.h"
 
-/*! \brief Argument struct for ast_ari_get_playback() */
-struct ast_get_playback_args {
+/*! \brief Argument struct for ast_ari_playbacks_get() */
+struct ast_ari_playbacks_get_args {
 	/*! \brief Playback's id */
 	const char *playback_id;
 };
@@ -51,9 +51,9 @@ struct ast_get_playback_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_playback(struct ast_variable *headers, struct ast_get_playback_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_stop_playback() */
-struct ast_stop_playback_args {
+void ast_ari_playbacks_get(struct ast_variable *headers, struct ast_ari_playbacks_get_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_playbacks_stop() */
+struct ast_ari_playbacks_stop_args {
 	/*! \brief Playback's id */
 	const char *playback_id;
 };
@@ -64,21 +64,32 @@ struct ast_stop_playback_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_stop_playback(struct ast_variable *headers, struct ast_stop_playback_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_control_playback() */
-struct ast_control_playback_args {
+void ast_ari_playbacks_stop(struct ast_variable *headers, struct ast_ari_playbacks_stop_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_playbacks_control() */
+struct ast_ari_playbacks_control_args {
 	/*! \brief Playback's id */
 	const char *playback_id;
 	/*! \brief Operation to perform on the playback. */
 	const char *operation;
 };
 /*!
- * \brief Get a playback's details.
+ * \brief Body parsing function for /playbacks/{playbackId}/control.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_playbacks_control_parse_body(
+	struct ast_json *body,
+	struct ast_ari_playbacks_control_args *args);
+
+/*!
+ * \brief Control a playback.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_control_playback(struct ast_variable *headers, struct ast_control_playback_args *args, struct ast_ari_response *response);
+void ast_ari_playbacks_control(struct ast_variable *headers, struct ast_ari_playbacks_control_args *args, struct ast_ari_response *response);
 
-#endif /* _ASTERISK_RESOURCE_PLAYBACK_H */
+#endif /* _ASTERISK_RESOURCE_PLAYBACKS_H */

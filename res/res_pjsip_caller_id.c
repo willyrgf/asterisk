@@ -648,6 +648,7 @@ static void caller_id_outgoing_request(struct ast_sip_session *session, pjsip_tx
 
 	connected_id = ast_channel_connected_effective_id(session->channel);
 	if (session->inv_session->state < PJSIP_INV_STATE_CONFIRMED &&
+			ast_strlen_zero(session->endpoint->fromuser) &&
 			(session->endpoint->id.trust_outbound ||
 			((connected_id.name.presentation & AST_PRES_RESTRICTION) == AST_PRES_ALLOWED &&
 			(connected_id.number.presentation & AST_PRES_RESTRICTION) == AST_PRES_ALLOWED))) {
@@ -662,9 +663,6 @@ static void caller_id_outgoing_request(struct ast_sip_session *session, pjsip_tx
 
 		modify_id_header(tdata->pool, from, &connected_id);
 		modify_id_header(dlg->pool, dlg->local.info, &connected_id);
-		if (should_queue_connected_line_update(session, &session->endpoint->id.self)) {
-			queue_connected_line_update(session, &session->endpoint->id.self);
-		}
 	}
 	add_id_headers(session, tdata, &connected_id);
 }
@@ -674,7 +672,7 @@ static void caller_id_outgoing_request(struct ast_sip_session *session, pjsip_tx
  * \brief Session supplement for outgoing INVITE response
  *
  * This will add P-Asserted-Identity and Remote-Party-ID headers if necessary
- * 
+ *
  * \param session The session on which the INVITE response is to be sent
  * \param tdata The outbound INVITE response
  */
@@ -691,7 +689,7 @@ static void caller_id_outgoing_response(struct ast_sip_session *session, pjsip_t
 
 static struct ast_sip_session_supplement caller_id_supplement = {
 	.method = "INVITE,UPDATE",
-	.priority = AST_SIP_SESSION_SUPPLEMENT_PRIORITY_CHANNEL - 1000,
+	.priority = AST_SIP_SUPPLEMENT_PRIORITY_CHANNEL - 1000,
 	.incoming_request = caller_id_incoming_request,
 	.incoming_response = caller_id_incoming_response,
 	.outgoing_request = caller_id_outgoing_request,

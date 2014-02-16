@@ -1139,7 +1139,7 @@ STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_talking_type);
 STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_talk_request_type);
 
 static void meetme_stasis_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic, struct stasis_message *message);
+	struct stasis_message *message);
 
 static void meetme_stasis_cleanup(void)
 {
@@ -1226,7 +1226,7 @@ static int meetme_stasis_init(void)
 }
 
 static void meetme_stasis_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic, struct stasis_message *message)
+	struct stasis_message *message)
 {
 	struct ast_channel_blob *channel_blob = stasis_message_data(message);
 	struct stasis_message_type *message_type;
@@ -1384,7 +1384,9 @@ static void meetme_stasis_generate_msg(struct ast_conference *meetme_conference,
 		}
 	}
 
+	ast_channel_lock(chan);
 	msg = ast_channel_blob_create(chan, message_type, json_object);
+	ast_channel_unlock(chan);
 
 	if (!msg) {
 		return;
@@ -1611,7 +1613,7 @@ static struct ast_conference *build_conf(const char *confno, const char *pin,
 	struct ast_conference *cnf;
 	struct dahdi_confinfo dahdic = { 0, };
 	int confno_int = 0;
-	struct ast_format_cap *cap_slin = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap_slin = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	struct ast_format tmp_fmt;
 
 	AST_LIST_LOCK(&confs);
@@ -2957,7 +2959,8 @@ static void meetme_menu_admin(enum menu_modes *menu_mode, int *dtmf, struct ast_
  * \param recordingtmp character buffer which may hold the name of the conference recording file
  * \param dahdic dahdi configuration info used by the main conference loop
  */
-static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
+
+static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, int recordingtmp_size, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
 {
 	int keepplaying;
 	int playednamerec;
@@ -3078,7 +3081,7 @@ static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, st
 				}
 				ast_channel_unlock(chan);
 				if (!conf->recordingfilename) {
-					snprintf(recordingtmp, sizeof(recordingtmp), "meetme-conf-rec-%s-%s", conf->confno, ast_channel_uniqueid(chan));
+					snprintf(recordingtmp, recordingtmp_size, "meetme-conf-rec-%s-%s", conf->confno, ast_channel_uniqueid(chan));
 					conf->recordingfilename = ast_strdup(recordingtmp);
 				}
 				if (!conf->recordingformat) {
@@ -3141,7 +3144,7 @@ static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, st
  * \param dahdic dahdi configuration info used by the main conference loop
  */
 
-static void meetme_menu(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
+static void meetme_menu(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, int recordingtmp_size, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
 {
 	switch (*menu_mode) {
 	case MENU_DISABLED:
@@ -3156,7 +3159,7 @@ static void meetme_menu(enum menu_modes *menu_mode, int *dtmf, struct ast_confer
 			break;
 		}
 	case MENU_ADMIN_EXTENDED:
-		meetme_menu_admin_extended(menu_mode, dtmf, conf, confflags, chan, user, recordingtmp, dahdic, cap_slin);
+		meetme_menu_admin_extended(menu_mode, dtmf, conf, confflags, chan, user, recordingtmp, recordingtmp_size, dahdic, cap_slin);
 		break;
 	}
 }
@@ -3216,7 +3219,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 	int setusercount = 0;
 	int confsilence = 0, totalsilence = 0;
 	char *mailbox, *context;
-	struct ast_format_cap *cap_slin = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap_slin = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	struct ast_format tmpfmt;
 
 	if (!cap_slin) {
@@ -4207,7 +4210,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 					}
 
 					if (dtmf > 0) {
-						meetme_menu(&menu_mode, &dtmf, conf, confflags, chan, user, recordingtmp, &dahdic, cap_slin);
+						meetme_menu(&menu_mode, &dtmf, conf, confflags, chan, user, recordingtmp, sizeof(recordingtmp), &dahdic, cap_slin);
 					}
 
 					if (musiconhold && !menu_mode) {
@@ -5253,6 +5256,23 @@ static int admin_exec(struct ast_channel *chan, const char *data) {
 			res = -2;
 			goto usernotfound;
 		}
+	} else {
+		/* fail for commands that require a user */
+		switch (*args.command) {
+		case 'm': /* Unmute */
+		case 'M': /* Mute */
+		case 't': /* Lower user's talk volume */
+		case 'T': /* Raise user's talk volume */
+		case 'u': /* Lower user's listen volume */
+		case 'U': /* Raise user's listen volume */
+		case 'r': /* Reset user's volume level */
+		case 'k': /* Kick user */
+			res = -2;
+			ast_log(LOG_NOTICE, "No user specified!\n");
+			goto usernotfound;
+		default:
+			break;
+		}
 	}
 
 	switch (*args.command) {
@@ -5268,21 +5288,22 @@ static int admin_exec(struct ast_channel *chan, const char *data) {
 	case 101: /* e: Eject last user*/
 	{
 		int max_no = 0;
-
-		/* If they passed in a user, disregard it */
-		if (user) {
-			ao2_ref(user, -1);
-		}
+		RAII_VAR(struct ast_conf_user *, eject_user, NULL, ao2_cleanup);
 
 		ao2_callback(cnf->usercontainer, OBJ_NODATA, user_max_cmp, &max_no);
-		user = ao2_find(cnf->usercontainer, &max_no, 0);
-		if (!ast_test_flag64(&user->userflags, CONFFLAG_ADMIN))
-			user->adminflags |= ADMINFLAG_KICKME;
-		else {
+		eject_user = ao2_find(cnf->usercontainer, &max_no, 0);
+		if (!eject_user) {
+			res = -1;
+			ast_log(LOG_NOTICE, "No last user to kick!\n");
+			break;
+		}
+
+		if (!ast_test_flag64(&eject_user->userflags, CONFFLAG_ADMIN)) {
+			eject_user->adminflags |= ADMINFLAG_KICKME;
+		} else {
 			res = -1;
 			ast_log(LOG_NOTICE, "Not kicking last user, is an Admin!\n");
 		}
-		ao2_ref(user, -1);
 		break;
 	}
 	case 77: /* M: Mute */ 
@@ -8121,6 +8142,8 @@ AST_TEST_DEFINE(test_meetme_data_provider)
 		ast_test_status_update(test, "Channel allocation failed\n");
 		return AST_TEST_FAIL;
 	}
+
+	ast_channel_unlock(chan);
 
 	cnf = build_conf("9898", "", "1234", 1, 1, 1, chan, test);
 	if (!cnf) {

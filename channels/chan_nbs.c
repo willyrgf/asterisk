@@ -239,6 +239,7 @@ static struct ast_channel *nbs_new(struct nbs_pvt *i, int state, const char *lin
 		ast_channel_language_set(tmp, "");
 		i->owner = tmp;
 		i->u = ast_module_user_add(tmp);
+		ast_channel_unlock(tmp);
 		if (state != AST_STATE_DOWN) {
 			if (ast_pbx_start(tmp)) {
 				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(tmp));
@@ -281,7 +282,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	ast_format_set(&prefformat, AST_FORMAT_SLINEAR, 0);
-	if (!(nbs_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(nbs_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_format_cap_add(nbs_tech.capabilities, &prefformat);

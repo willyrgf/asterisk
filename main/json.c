@@ -213,13 +213,15 @@ void ast_json_unref(struct ast_json *json)
 	struct json_mem_list *free_list;
 	struct json_mem *mem;
 
+	if (!json) {
+		return;
+	}
+
 	/* Jansson refcounting is non-atomic; lock it. */
 	{
 		SCOPED_JSON_LOCK(json);
-		if (!json) {
-			return;
-		}
-		json_decref((json_t *)json);
+
+		json_decref((json_t *) json);
 	}
 
 	/* Now free any objects that were ast_json_free()'s while the lock was
@@ -338,10 +340,10 @@ struct ast_json *ast_json_vstringf(const char *format, va_list args)
 	json_t *ret = NULL;
 
 	if (format) {
-		int err = vasprintf(&str, format, args);
+		int err = ast_vasprintf(&str, format, args);
 		if (err > 0) {
 			ret = json_string(str);
-			free(str);
+			ast_free(str);
 		}
 	}
 	return (struct ast_json *)ret;
@@ -684,9 +686,15 @@ struct ast_json *ast_json_pack(char const *format, ...)
 }
 struct ast_json *ast_json_vpack(char const *format, va_list ap)
 {
+	json_error_t error;
 	struct ast_json *r = NULL;
 	if (format) {
-		r = (struct ast_json *)json_vpack_ex(NULL, 0, format, ap);
+		r = (struct ast_json *)json_vpack_ex(&error, 0, format, ap);
+		if (!r && !ast_strlen_zero(error.text)) {
+			ast_log(LOG_ERROR,
+				"Error building JSON from '%s': %s.\n",
+				format, error.text);
+		}
 	}
 	return r;
 }

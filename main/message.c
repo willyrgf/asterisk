@@ -122,12 +122,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 			<parameter name="to" required="true">
 				<para>A To URI for the message.</para>
+				<xi:include xpointer="xpointer(/docs/info[@name='PJSIPMessageToInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='SIPMessageToInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='XMPPMessageToInfo'])" />
 			</parameter>
 			<parameter name="from" required="false">
 				<para>A From URI for the message if needed for the
 				message technology being used to send this message.</para>
+				<xi:include xpointer="xpointer(/docs/info[@name='PJSIPMessageFromInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='SIPMessageFromInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='XMPPMessageFromInfo'])" />
 			</parameter>
@@ -165,12 +167,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			<parameter name="To" required="true">
 				<para>The URI the message is to be sent to.</para>
+				<xi:include xpointer="xpointer(/docs/info[@name='PJSIPMessageToInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='SIPMessageToInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='XMPPMessageToInfo'])" />
 			</parameter>
 			<parameter name="From">
 				<para>A From URI for the message if needed for the
 				message technology being used to send this message.</para>
+				<xi:include xpointer="xpointer(/docs/info[@name='PJSIPMessageFromInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='SIPMessageFromInfo'])" />
 				<xi:include xpointer="xpointer(/docs/info[@name='XMPPMessageFromInfo'])" />
 			</parameter>
@@ -674,9 +678,9 @@ static struct ast_channel *create_msg_q_chan(void)
 		return NULL;
 	}
 
-	ast_channel_unlink(chan);
-
 	ast_channel_tech_set(chan, &msg_chan_tech_hack);
+	ast_channel_unlock(chan);
+	ast_channel_unlink(chan);
 
 	if (!(ds = ast_datastore_alloc(&msg_datastore, NULL))) {
 		ast_hangup(chan);

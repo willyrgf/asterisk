@@ -396,6 +396,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; certain transferred calls to use always use video when
                                 ; available. [yes|NO|always]
 
+;textsupport=no                 ; Support for ITU-T T.140 realtime text.
+                                ; The default value is "no".
+
 ;maxcallbitrate=384             ; Maximum bitrate for video calls (default 384 kb/s)
                                 ; Videosupport and maxcallbitrate is settable
                                 ; for peers and users as well
@@ -536,8 +539,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 
 ;
 ;------------------------ TLS settings ------------------------------------------------------------
-;tlscertfile=</path/to/certificate.pem> ; Certificate file (*.pem format only) to use for TLS connections
-                                        ; default is to look for "asterisk.pem" in current directory
+;tlscertfile=</path/to/certificate.pem> ; Certificate chain (*.pem format only) to use for TLS connections
+                                        ; The certificates must be sorted starting with the subject's certificate
+                                        ; and followed by intermediate CA certificates if applicable.
+                                        ; Default is to look for "asterisk.pem" in current directory
 
 ;tlsprivatekey=</path/to/private.pem> ; Private key file (*.pem format only) for TLS connections.
                                       ; If no tlsprivatekey is specified, tlscertfile is searched for
@@ -787,6 +792,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; 0 = continue forever, hammering the other server
                                 ; until it accepts the registration
                                 ; Default is 0 tries, continue forever
+;register_retry_403=yes         ; Treat 403 responses to registrations as if they were
+                                ; 401 responses and continue retrying according to normal
+                                ; retry rules.
 
 ;----------------------------------------- OUTBOUND MWI SUBSCRIPTIONS -------------------------
 ; Asterisk can subscribe to receive the MWI from another SIP server and store it locally for retrieval
@@ -800,7 +808,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;mwi => 1234:password:authuser@myauthprovider.com/1234
 ;mwi => 1234:password:authuser@myauthportprovider.com:6969/1234
 ;
-; MWI received will be stored in the 1234 mailbox of the SIP_Remote context. It can be used by other phones by following the below:
+; MWI received will be stored in the 1234 mailbox of the SIP_Remote context.
+; It can be used by other phones by following the below:
 ; mailbox=1234@SIP_Remote
 ;----------------------------------------- NAT SUPPORT ------------------------
 ;
@@ -1228,6 +1237,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; videosupport
 ; maxcallbitrate
 ; rfc2833compensate
+; Note: app_voicemail mailboxes must be in the form of mailbox@context.
 ; mailbox
 ; session-timers
 ; session-expires
@@ -1447,7 +1457,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;host=dynamic                    ; This peer register with us
 ;dtmfmode=inband                 ; Choices are inband, rfc2833, or info
 ;defaultip=192.168.0.59          ; IP used until peer registers
-;mailbox=1234@context,2345       ; Mailbox(-es) for message waiting indicator
+;mailbox=1234@context,2345@context ; Mailbox(-es) for message waiting indicator
 ;subscribemwi=yes                ; Only send notifications if this phone
                                  ; subscribes for mailbox notification
 ;vmexten=voicemail               ; dialplan extension to reach mailbox

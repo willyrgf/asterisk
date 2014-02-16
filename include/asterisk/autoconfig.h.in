@@ -29,6 +29,12 @@
 /* Define to 1 if using `alloca.c'. */
 #undef C_ALLOCA
 
+/* Use the FreeRADIUS-client library */
+#undef FREERADIUS_CLIENT
+
+/* Define to 1 if anonymous semaphores work. */
+#undef HAS_WORKING_SEMAPHORE
+
 /* Define to 1 if you have the `acos' function. */
 #undef HAVE_ACOS
 
@@ -397,6 +403,9 @@
 /* Define to 1 if you have the LibXSLT library. */
 #undef HAVE_LIBXSLT
 
+/* Define to 1 if LIBXSLT has the LibXSLT Library Cleanup Function feature. */
+#undef HAVE_LIBXSLT_CLEANUP
+
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
 
@@ -562,6 +571,13 @@
 
 /* Define if your system has the PJPROJECT libraries. */
 #undef HAVE_PJPROJECT
+
+/* Define if your system has the PJSIP_REPLACE_MEDIA_STREAM headers. */
+#undef HAVE_PJSIP_REPLACE_MEDIA_STREAM
+
+/* Define to 1 if PJPROJECT has the PJSIP Transaction Group Lock Support
+   feature. */
+#undef HAVE_PJ_TRANSACTION_GRP_LOCK
 
 /* Define to 1 if your system defines IP_PKTINFO. */
 #undef HAVE_PKTINFO

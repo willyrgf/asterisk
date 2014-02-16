@@ -92,9 +92,6 @@ static int ooh323_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance
 static void ooh323_get_codec(struct ast_channel *chan, struct ast_format_cap *result);
 void setup_rtp_remote(ooCallData *call, const char *remoteIp, int remotePort);
 
-static struct ast_udptl *ooh323_get_udptl_peer(struct ast_channel *chan);
-static int ooh323_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl);
-
 static void print_codec_to_cli(int fd, struct ast_codec_pref *pref);
 
 struct ooh323_peer *find_friend(const char *name, int port);
@@ -129,13 +126,6 @@ static struct ast_rtp_glue ooh323_rtp = {
 	.update_peer = ooh323_set_rtp_peer,
 	.get_codec = ooh323_get_codec,
 };
-
-static struct ast_udptl_protocol ooh323_udptl = {
-	.type = "H323",
-	.get_udptl_info = ooh323_get_udptl_peer,
-	.set_udptl_peer = ooh323_set_udptl_peer,
-};
-
 
 
 struct ooh323_user;
@@ -293,8 +283,6 @@ AST_MUTEX_DEFINE_STATIC(h323_reload_lock);
 static int usecnt = 0;
 AST_MUTEX_DEFINE_STATIC(usecnt_lock);
 
-AST_MUTEX_DEFINE_STATIC(ooh323c_cmd_lock);
-
 static long callnumber = 0;
 AST_MUTEX_DEFINE_STATIC(ooh323c_cn_lock);
 
@@ -395,7 +383,6 @@ static struct ast_channel *ooh323_new(struct ooh323_pvt *i, int state,
 	ast_mutex_lock(&i->lock);
 
 	if (ch) {
-		ast_channel_lock(ch);
 		ast_channel_tech_set(ch, &ooh323_tech);
 
 		if (cap)
@@ -521,7 +508,7 @@ static struct ooh323_pvt *ooh323_alloc(int callref, char *callToken)
 		ast_log(LOG_ERROR, "Couldn't allocate private ooh323 structure\n");
 		return NULL;
 	}
-	if (!(pvt->cap = ast_format_cap_alloc_nolock())) {
+	if (!(pvt->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		ast_free(pvt);
 		ast_log(LOG_ERROR, "Couldn't allocate private ooh323 structure\n");
 		return NULL;
@@ -692,7 +679,7 @@ static struct ast_channel *ooh323_request(const char *type, struct ast_format_ca
 			ooh323_destroy(p);
 			ast_mutex_unlock(&iflock);
 			return NULL;
-		} else if (gH323ep.gkClient && gH323ep.gkClient->state != GkClientRegistered) {
+		} else if (!gH323ep.gkClient || (gH323ep.gkClient && gH323ep.gkClient->state != GkClientRegistered)) {
 			ast_log(LOG_ERROR, "Gatekeeper client is configured but not registered\n");
 			*cause = AST_CAUSE_NORMAL_TEMPORARY_FAILURE;
 			return NULL;
@@ -747,7 +734,6 @@ static struct ast_channel *ooh323_request(const char *type, struct ast_format_ca
       		}
 
       		ast_mutex_unlock(&p->lock);
-      		ast_mutex_lock(&ooh323c_cmd_lock);
 		ast_cond_init(&p->rtpcond, NULL);
       		ooMakeCall(data, p->callToken, AST_MAX_EXTENSION, NULL);
 		ast_mutex_lock(&p->lock);
@@ -756,7 +742,6 @@ static struct ast_channel *ooh323_request(const char *type, struct ast_format_ca
 		}
 		ast_mutex_unlock(&p->lock);
 		ast_cond_destroy(&p->rtpcond);
-      		ast_mutex_unlock(&ooh323c_cmd_lock);
 	}
 
 	restart_monitor();
@@ -2153,8 +2138,8 @@ int onCallEstablished(ooCallData *call)
 			}
 
 			ast_queue_control(c, AST_CONTROL_ANSWER);
-   			ast_channel_unlock(p->owner);
 			ast_publish_channel_state(c);
+			ast_channel_unlock(p->owner);
 		}
 		ast_mutex_unlock(&p->lock);
 
@@ -2304,7 +2289,7 @@ static struct ooh323_user *build_user(const char *name, struct ast_variable *v)
    	user = ast_calloc(1,sizeof(struct ooh323_user));
 	if (user) {
 		memset(user, 0, sizeof(struct ooh323_user));
-		if (!(user->cap = ast_format_cap_alloc())) {
+		if (!(user->cap = ast_format_cap_alloc(0))) {
 			ast_free(user);
 			return NULL;
 		}
@@ -2452,7 +2437,7 @@ static struct ooh323_peer *build_peer(const char *name, struct ast_variable *v, 
 	peer = ast_calloc(1, sizeof(*peer));
 	if (peer) {
 		memset(peer, 0, sizeof(struct ooh323_peer));
-		if (!(peer->cap = ast_format_cap_alloc())) {
+		if (!(peer->cap = ast_format_cap_alloc(0))) {
 			ast_free(peer);
 			return NULL;
 		}
@@ -2487,11 +2472,23 @@ static struct ooh323_peer *build_peer(const char *name, struct ast_variable *v, 
 					return NULL;
 				}
 			} else if (!strcasecmp(v->name, "e164")) {
-				if (!(peer->e164 = ast_strdup(v->value))) {
-					ast_log(LOG_ERROR, "Could not allocate memory for e164 of "
+				int valid = 1;
+				const char *tmp;
+				for(tmp = v->value; *tmp; tmp++) {
+					if (!isdigit(*tmp)) {
+						valid = 0;
+						break;
+					}
+				}
+				if (valid) {
+					if (!(peer->e164 = ast_strdup(v->value))) {
+						ast_log(LOG_ERROR, "Could not allocate memory for e164 of "
 											 "peer %s\n", name);
-					ooh323_delete_peer(peer);
-					return NULL;
+						ooh323_delete_peer(peer);
+						return NULL;
+					}
+				} else {
+					ast_log(LOG_ERROR, "Invalid e164: %s for peer %s\n", v->value, name);
 				}
 			} else  if (!strcasecmp(v->name, "email")) {
 				if (!(peer->email = ast_strdup(v->value))) {
@@ -2622,6 +2619,9 @@ static struct ooh323_peer *build_peer(const char *name, struct ast_variable *v, 
 
 static int ooh323_do_reload(void)
 {
+	struct ooAliases * pNewAlias = NULL;
+	struct ooh323_peer *peer = NULL;
+
 	if (gH323Debug) {
 		ast_verb(0, "---   ooh323_do_reload\n");
 	}
@@ -2640,6 +2640,46 @@ static int ooh323_do_reload(void)
 								gGatekeeper : 0, 0);
 		ooGkClientStart(gH323ep.gkClient);
 	}
+
+	/* Set aliases if any */
+	if (gH323Debug) {
+		ast_verb(0, "updating local aliases\n");
+	}
+
+	for (pNewAlias = gAliasList; pNewAlias; pNewAlias = pNewAlias->next) {
+		switch (pNewAlias->type) {
+		case T_H225AliasAddress_h323_ID:
+			ooH323EpAddAliasH323ID(pNewAlias->value);
+			break;
+		case T_H225AliasAddress_dialedDigits:	
+			ooH323EpAddAliasDialedDigits(pNewAlias->value);
+			break;
+		case T_H225AliasAddress_email_ID:	
+			ooH323EpAddAliasEmailID(pNewAlias->value);
+			break;
+		default:
+            		;
+		}
+	}
+
+	ast_mutex_lock(&peerl.lock);
+	peer = peerl.peers;
+	while (peer) {
+		if(peer->h323id) {
+			ooH323EpAddAliasH323ID(peer->h323id);
+		}
+		if(peer->email) {
+			ooH323EpAddAliasEmailID(peer->email);
+		}
+		if(peer->e164) {
+			ooH323EpAddAliasDialedDigits(peer->e164);
+		}
+       		if(peer->url) {
+			ooH323EpAddAliasURLID(peer->url);
+		}
+		peer = peer->next;
+	}
+	ast_mutex_unlock(&peerl.lock);
 
 	if (gH323Debug) {
 		ast_verb(0, "+++   ooh323_do_reload\n");
@@ -2724,6 +2764,7 @@ int reload_config(int reload)
 	  		free(prev);
 		}
 		gAliasList = NULL;
+		ooH323EpClearAllAliases();
 	}
 
 	/* Inintialize everything to default */
@@ -2840,17 +2881,29 @@ int reload_config(int reload)
 			gAliasList = pNewAlias;
 			pNewAlias = NULL;
 		} else if (!strcasecmp(v->name, "e164")) {
-         		pNewAlias = ast_calloc(1, sizeof(struct ooAliases));
-			if (!pNewAlias) {
-				ast_log(LOG_ERROR, "Failed to allocate memory for e164 alias\n");
-				ast_config_destroy(cfg);
-				return 1;
+			int valid = 1;
+			const char *tmp;
+			for(tmp = v->value; *tmp; tmp++) {
+				if (!isdigit(*tmp)) {
+					valid = 0;
+					break;
+				}
 			}
-			pNewAlias->type =  T_H225AliasAddress_dialedDigits;
-			pNewAlias->value = strdup(v->value);
-			pNewAlias->next = gAliasList;
-			gAliasList = pNewAlias;
-			pNewAlias = NULL;
+			if (valid) {
+         			pNewAlias = ast_calloc(1, sizeof(struct ooAliases));
+				if (!pNewAlias) {
+					ast_log(LOG_ERROR, "Failed to allocate memory for e164 alias\n");
+					ast_config_destroy(cfg);
+					return 1;
+				}
+				pNewAlias->type =  T_H225AliasAddress_dialedDigits;
+				pNewAlias->value = strdup(v->value);
+				pNewAlias->next = gAliasList;
+				gAliasList = pNewAlias;
+				pNewAlias = NULL;
+			} else {
+				ast_log(LOG_ERROR, "Invalid e164: %s\n", v->value);
+			}
 		} else if (!strcasecmp(v->name, "email")) {
          		pNewAlias = ast_calloc(1, sizeof(struct ooAliases));
 			if (!pNewAlias) {
@@ -3422,6 +3475,9 @@ static char *handle_cli_ooh323_show_gk(struct ast_cli_entry *e, int cmd, struct 
 	case GkClientFailed:
 		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Failed");
 		break;
+	case GkClientStopped:
+		ast_cli(a->fd, "%-20s%s\n", "GK state:", "Shutdown");
+		break;
 	default:
 		break;
 	}
@@ -3677,10 +3733,10 @@ static int load_module(void)
 		.onModeChanged = onModeChanged,
 		.onMediaChanged = (cb_OnMediaChanged) setup_rtp_remote,
 	};
-	if (!(gCap = ast_format_cap_alloc())) {
+	if (!(gCap = ast_format_cap_alloc(0))) {
 		return 1; 
 	}
-	if (!(ooh323_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(ooh323_tech.capabilities = ast_format_cap_alloc(0))) {
 		return 1;
 	}
 	ast_format_cap_add(gCap, ast_format_set(&tmpfmt, AST_FORMAT_ULAW, 0));
@@ -3714,7 +3770,6 @@ static int load_module(void)
 			return 0;
 		}
 		ast_rtp_glue_register(&ooh323_rtp);
-		ast_udptl_proto_register(&ooh323_udptl);
 		ast_cli_register_multiple(cli_ooh323, sizeof(cli_ooh323) / sizeof(struct ast_cli_entry));
 
 		 /* fire up the H.323 Endpoint */		 
@@ -3846,6 +3901,13 @@ static void *do_monitor(void *data)
 		if (reloading) {
 			ast_verb(1, "Reloading H.323\n");
 			ooh323_do_reload();
+		}
+		if (gH323ep.gkClient && gH323ep.gkClient->state == GkClientStopped) {
+			ooGkClientDestroy();
+			ast_verb(0, "Restart stopped gatekeeper client\n");
+			ooGkClientInit(gRasGkMode, (gRasGkMode == RasUseSpecificGatekeeper) ? 
+									gGatekeeper : 0, 0);
+			ooGkClientStart(gH323ep.gkClient);
 		}
 
 		/* Check for interfaces needing to be killed */
@@ -4128,7 +4190,6 @@ static int unload_module(void)
 	/* First, take us out of the channel loop */
 	ast_cli_unregister_multiple(cli_ooh323, sizeof(cli_ooh323) / sizeof(struct ast_cli_entry));
 	ast_rtp_glue_unregister(&ooh323_rtp);
-	ast_udptl_proto_unregister(&ooh323_udptl);
 	ast_channel_unregister(&ooh323_tech);
 #if 0
 	ast_unregister_atexit(&ast_ooh323c_exit);
@@ -4679,41 +4740,6 @@ void close_rtp_connection(ooCallData *call)
 /*
  udptl handling functions
  */
-
-static struct ast_udptl *ooh323_get_udptl_peer(struct ast_channel *chan)
-{
-	struct ooh323_pvt *p;
-	struct ast_udptl *udptl = NULL;
-
-	p = ast_channel_tech_pvt(chan);
-	if (!p)
-		return NULL;
-
-	ast_mutex_lock(&p->lock);
-	if (p->udptl)
-		udptl = p->udptl;
-	ast_mutex_unlock(&p->lock);
-	return udptl;
-}
-
-static int ooh323_set_udptl_peer(struct ast_channel *chan, struct ast_udptl *udptl)
-{
-	struct ooh323_pvt *p;
-
-	p = ast_channel_tech_pvt(chan);
-	if (!p)
-		return -1;
-	ast_mutex_lock(&p->lock);
-
-	if (udptl) {
-		ast_udptl_get_peer(udptl, &p->udptlredirip);
-	} else
-		memset(&p->udptlredirip, 0, sizeof(p->udptlredirip));
-
-	ast_mutex_unlock(&p->lock);
-	/* free(callToken); */
-	return 0;
-}
 
 void setup_udptl_connection(ooCallData *call, const char *remoteIp, 
 								  int remotePort)

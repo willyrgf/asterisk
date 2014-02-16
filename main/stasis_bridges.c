@@ -40,7 +40,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/bridge.h"
 #include "asterisk/bridge_technology.h"
 
-#define SNAPSHOT_CHANNELS_BUCKETS 13
+/* The container of channel snapshots in a bridge snapshot should always be
+   equivalent to a linked list; otherwise things (like CDRs) that depend on some
+   consistency in the ordering of channels in a bridge will break. */
+#define SNAPSHOT_CHANNELS_BUCKETS 1
 
 /*** DOCUMENTATION
 	<managerEvent language="en_US" name="BlindTransfer">
@@ -130,11 +133,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</managerEvent>
  ***/
 
+static struct ast_json *attended_transfer_to_json(struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize);
 static struct ast_manager_event_blob *attended_transfer_to_ami(struct stasis_message *message);
+static struct ast_json *blind_transfer_to_json(struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize);
 static struct ast_manager_event_blob *blind_transfer_to_ami(struct stasis_message *message);
-static struct ast_json *ast_channel_entered_bridge_to_json(struct stasis_message *msg);
-static struct ast_json *ast_channel_left_bridge_to_json(struct stasis_message *msg);
-static struct ast_json *ast_bridge_merge_message_to_json(struct stasis_message *msg);
+static struct ast_json *ast_channel_entered_bridge_to_json(
+	struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize);
+static struct ast_json *ast_channel_left_bridge_to_json(
+	struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize);
+static struct ast_json *ast_bridge_merge_message_to_json(
+	struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize);
 
 static struct stasis_cp_all *bridge_cache_all;
 
@@ -148,8 +161,12 @@ STASIS_MESSAGE_TYPE_DEFN(ast_channel_entered_bridge_type,
 	.to_json = ast_channel_entered_bridge_to_json);
 STASIS_MESSAGE_TYPE_DEFN(ast_channel_left_bridge_type,
 	.to_json = ast_channel_left_bridge_to_json);
-STASIS_MESSAGE_TYPE_DEFN(ast_blind_transfer_type, .to_ami = blind_transfer_to_ami);
-STASIS_MESSAGE_TYPE_DEFN(ast_attended_transfer_type, .to_ami = attended_transfer_to_ami);
+STASIS_MESSAGE_TYPE_DEFN(ast_blind_transfer_type,
+	.to_json = blind_transfer_to_json,
+	.to_ami = blind_transfer_to_ami);
+STASIS_MESSAGE_TYPE_DEFN(ast_attended_transfer_type,
+	.to_json = attended_transfer_to_json,
+	.to_ami = attended_transfer_to_ami);
 /*! @} */
 
 struct stasis_cache *ast_bridge_cache(void)
@@ -233,6 +250,8 @@ struct ast_bridge_snapshot *ast_bridge_snapshot_create(struct ast_bridge *bridge
 	ast_string_field_set(snapshot, uniqueid, bridge->uniqueid);
 	ast_string_field_set(snapshot, technology, bridge->technology->name);
 	ast_string_field_set(snapshot, subclass, bridge->v_table->name);
+	ast_string_field_set(snapshot, creator, bridge->creator);
+	ast_string_field_set(snapshot, name, bridge->name);
 
 	snapshot->feature_flags = bridge->feature_flags;
 	snapshot->capabilities = bridge->technology->capabilities;
@@ -313,17 +332,25 @@ static struct ast_bridge_merge_message *bridge_merge_message_create(struct ast_b
 	return msg;
 }
 
-static struct ast_json *ast_bridge_merge_message_to_json(struct stasis_message *msg)
+static struct ast_json *ast_bridge_merge_message_to_json(
+	struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize)
 {
-	struct ast_bridge_merge_message *merge;
+	struct ast_bridge_merge_message *merge = stasis_message_data(msg);
+	RAII_VAR(struct ast_json *, json_bridge_to,
+		ast_bridge_snapshot_to_json(merge->to, sanitize), ast_json_unref);
+	RAII_VAR(struct ast_json *, json_bridge_from,
+		ast_bridge_snapshot_to_json(merge->from, sanitize), ast_json_unref);
 
-	merge = stasis_message_data(msg);
+	if (!json_bridge_to || !json_bridge_from) {
+		return NULL;
+	}
 
-        return ast_json_pack("{s: s, s: o, s: o, s: o}",
+        return ast_json_pack("{s: s, s: o, s: O, s: O}",
                 "type", "BridgeMerged",
                 "timestamp", ast_json_timeval(*stasis_message_timestamp(msg), NULL),
-                "bridge", ast_bridge_snapshot_to_json(merge->to),
-                "bridge_from", ast_bridge_snapshot_to_json(merge->from));
+                "bridge", json_bridge_to,
+                "bridge_from", json_bridge_from);
 }
 
 void ast_bridge_publish_merge(struct ast_bridge *to, struct ast_bridge *from)
@@ -380,7 +407,9 @@ struct stasis_message *ast_bridge_blob_create(
 	}
 
 	if (chan) {
+		ast_channel_lock(chan);
 		obj->channel = ast_channel_snapshot_create(chan);
+		ast_channel_unlock(chan);
 		if (obj->channel == NULL) {
 			return NULL;
 		}
@@ -440,45 +469,63 @@ static struct ast_json *simple_bridge_channel_event(
         const char *type,
         struct ast_bridge_snapshot *bridge_snapshot,
         struct ast_channel_snapshot *channel_snapshot,
-        const struct timeval *tv)
+        const struct timeval *tv,
+	const struct stasis_message_sanitizer *sanitize)
 {
-        return ast_json_pack("{s: s, s: o, s: o, s: o}",
+	RAII_VAR(struct ast_json *, json_bridge,
+		ast_bridge_snapshot_to_json(bridge_snapshot, sanitize), ast_json_unref);
+	RAII_VAR(struct ast_json *, json_channel,
+		ast_channel_snapshot_to_json(channel_snapshot, sanitize), ast_json_unref);
+
+	if (!json_bridge || !json_channel) {
+		return NULL;
+	}
+
+        return ast_json_pack("{s: s, s: o, s: O, s: O}",
                 "type", type,
                 "timestamp", ast_json_timeval(*tv, NULL),
-                "bridge", ast_bridge_snapshot_to_json(bridge_snapshot),
-                "channel", ast_channel_snapshot_to_json(channel_snapshot));
+                "bridge", json_bridge,
+                "channel", json_channel);
 }
 
-struct ast_json *ast_channel_entered_bridge_to_json(struct stasis_message *msg)
+struct ast_json *ast_channel_entered_bridge_to_json(
+	struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize)
 {
         struct ast_bridge_blob *obj = stasis_message_data(msg);
 
 	return simple_bridge_channel_event("ChannelEnteredBridge", obj->bridge,
-                obj->channel, stasis_message_timestamp(msg));
+                obj->channel, stasis_message_timestamp(msg), sanitize);
 }
 
-struct ast_json *ast_channel_left_bridge_to_json(struct stasis_message *msg)
+struct ast_json *ast_channel_left_bridge_to_json(
+	struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize)
 {
         struct ast_bridge_blob *obj = stasis_message_data(msg);
 
 	return simple_bridge_channel_event("ChannelLeftBridge", obj->bridge,
-                obj->channel, stasis_message_timestamp(msg));
+                obj->channel, stasis_message_timestamp(msg), sanitize);
 }
 
-typedef struct ast_json *(*json_item_serializer_cb)(void *obj);
-
-static struct ast_json *container_to_json_array(struct ao2_container *items, json_item_serializer_cb item_cb)
+static struct ast_json *container_to_json_array(struct ao2_container *items,
+	const struct stasis_message_sanitizer *sanitize)
 {
 	RAII_VAR(struct ast_json *, json_items, ast_json_array_create(), ast_json_unref);
-	void *item;
+	char *item;
 	struct ao2_iterator it;
 	if (!json_items) {
 		return NULL;
 	}
 
-	it = ao2_iterator_init(items, 0);
-	while ((item = ao2_iterator_next(&it))) {
-		if (ast_json_array_append(json_items, item_cb(item))) {
+	for (it = ao2_iterator_init(items, 0);
+		(item = ao2_iterator_next(&it)); ao2_cleanup(item)) {
+		if (sanitize && sanitize->channel_id && sanitize->channel_id(item)) {
+			continue;
+		}
+
+		if (ast_json_array_append(json_items, ast_json_string_create(item))) {
+			ao2_cleanup(item);
 			ao2_iterator_destroy(&it);
 			return NULL;
 		}
@@ -497,7 +544,9 @@ static const char *capability2str(uint32_t capabilities)
 	}
 }
 
-struct ast_json *ast_bridge_snapshot_to_json(const struct ast_bridge_snapshot *snapshot)
+struct ast_json *ast_bridge_snapshot_to_json(
+	const struct ast_bridge_snapshot *snapshot,
+	const struct stasis_message_sanitizer *sanitize)
 {
 	RAII_VAR(struct ast_json *, json_bridge, NULL, ast_json_unref);
 	struct ast_json *json_channels;
@@ -506,17 +555,18 @@ struct ast_json *ast_bridge_snapshot_to_json(const struct ast_bridge_snapshot *s
 		return NULL;
 	}
 
-	json_channels = container_to_json_array(snapshot->channels,
-		(json_item_serializer_cb)ast_json_string_create);
+	json_channels = container_to_json_array(snapshot->channels, sanitize);
 	if (!json_channels) {
 		return NULL;
 	}
 
-	json_bridge = ast_json_pack("{s: s, s: s, s: s, s: s, s: o}",
+	json_bridge = ast_json_pack("{s: s, s: s, s: s, s: s, s: s, s: s, s: o}",
 		"id", snapshot->uniqueid,
 		"technology", snapshot->technology,
 		"bridge_type", capability2str(snapshot->capabilities),
 		"bridge_class", snapshot->subclass,
+		"creator", snapshot->creator,
+		"name", snapshot->name,
 		"channels", json_channels);
 	if (!json_bridge) {
 		return NULL;
@@ -543,7 +593,9 @@ static int bridge_channel_snapshot_pair_init(struct ast_bridge_channel_pair *pai
 		}
 	}
 
+	ast_channel_lock(pair->channel);
 	snapshot_pair->channel_snapshot = ast_channel_snapshot_create(pair->channel);
+	ast_channel_unlock(pair->channel);
 	if (!snapshot_pair->channel_snapshot) {
 		return -1;
 	}
@@ -569,6 +621,43 @@ static const char *result_strs[] = {
 	[AST_BRIDGE_TRANSFER_NOT_PERMITTED] = "Not Permitted",
 	[AST_BRIDGE_TRANSFER_SUCCESS] = "Success",
 };
+
+static struct ast_json *blind_transfer_to_json(struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize)
+{
+	struct ast_bridge_blob *blob = stasis_message_data(msg);
+	struct ast_json *json_channel, *out;
+	const struct timeval *tv = stasis_message_timestamp(msg);
+
+	json_channel = ast_channel_snapshot_to_json(blob->channel, sanitize);
+	if (!json_channel) {
+		return NULL;
+	}
+
+	out = ast_json_pack("{s: s, s: o, s: o, s: O, s: O, s: s, s: o}",
+		"type", "BridgeBlindTransfer",
+		"timestamp", ast_json_timeval(*tv, NULL),
+		"channel", json_channel,
+		"exten", ast_json_object_get(blob->blob, "exten"),
+		"context", ast_json_object_get(blob->blob, "context"),
+		"result", result_strs[ast_json_integer_get(ast_json_object_get(blob->blob, "result"))],
+		"is_external", ast_json_boolean(ast_json_integer_get(ast_json_object_get(blob->blob, "is_external"))));
+
+	if (!out) {
+		return NULL;
+	}
+
+	if (blob->bridge) {
+		struct ast_json *json_bridge = ast_bridge_snapshot_to_json(blob->bridge, sanitize);
+
+		if (!json_bridge || ast_json_object_set(out, "bridge", json_bridge)) {
+			ast_json_unref(out);
+			return NULL;
+		}
+	}
+
+	return out;
+}
 
 static struct ast_manager_event_blob *blind_transfer_to_ami(struct stasis_message *msg)
 {
@@ -639,6 +728,110 @@ void ast_bridge_publish_blind_transfer(int is_external, enum ast_transfer_result
 	}
 
 	stasis_publish(ast_bridge_topic_all(), msg);
+}
+
+static struct ast_json *attended_transfer_to_json(struct stasis_message *msg,
+	const struct stasis_message_sanitizer *sanitize)
+{
+	struct ast_attended_transfer_message *transfer_msg = stasis_message_data(msg);
+	RAII_VAR(struct ast_json *, out, NULL, ast_json_unref);
+	struct ast_json *json_transferer1, *json_transferer2, *json_bridge, *json_channel;
+	const struct timeval *tv = stasis_message_timestamp(msg);
+	int res = 0;
+
+	json_transferer1 = ast_channel_snapshot_to_json(transfer_msg->to_transferee.channel_snapshot, sanitize);
+	if (!json_transferer1) {
+		return NULL;
+	}
+
+	json_transferer2 = ast_channel_snapshot_to_json(transfer_msg->to_transfer_target.channel_snapshot, sanitize);
+	if (!json_transferer2) {
+		ast_json_unref(json_transferer1);
+		return NULL;
+	}
+
+	out = ast_json_pack("{s: s, s: o, s: o, s: o, s: s, s: o}",
+		"type", "BridgeAttendedTransfer",
+		"timestamp", ast_json_timeval(*tv, NULL),
+		"transferer_first_leg", json_transferer1,
+		"transferer_second_leg", json_transferer2,
+		"result", result_strs[transfer_msg->result],
+		"is_external", ast_json_boolean(transfer_msg->is_external));
+	if (!out) {
+		return NULL;
+	}
+
+	if (transfer_msg->to_transferee.bridge_snapshot) {
+		json_bridge = ast_bridge_snapshot_to_json(transfer_msg->to_transferee.bridge_snapshot, sanitize);
+
+		if (!json_bridge) {
+			return NULL;
+		}
+
+		res |= ast_json_object_set(out, "transferer_first_leg_bridge", json_bridge);
+	}
+
+	if (transfer_msg->to_transfer_target.bridge_snapshot) {
+		json_bridge = ast_bridge_snapshot_to_json(transfer_msg->to_transfer_target.bridge_snapshot, sanitize);
+
+		if (!json_bridge) {
+			return NULL;
+		}
+
+		res |= ast_json_object_set(out, "transferer_second_leg_bridge", json_bridge);
+	}
+
+	switch (transfer_msg->dest_type) {
+	case AST_ATTENDED_TRANSFER_DEST_BRIDGE_MERGE:
+		res |= ast_json_object_set(out, "destination_type", ast_json_string_create("bridge"));
+		res |= ast_json_object_set(out, "destination_bridge", ast_json_string_create(transfer_msg->dest.bridge));
+		break;
+	case AST_ATTENDED_TRANSFER_DEST_APP:
+		res |= ast_json_object_set(out, "destination_type", ast_json_string_create("application"));
+		res |= ast_json_object_set(out, "destination_application", ast_json_string_create(transfer_msg->dest.app));
+		break;
+	case AST_ATTENDED_TRANSFER_DEST_LINK:
+		res |= ast_json_object_set(out, "destination_type", ast_json_string_create("link"));
+
+		json_channel = ast_channel_snapshot_to_json(transfer_msg->dest.links[0], sanitize);
+		if (!json_channel) {
+			return NULL;
+		}
+		res |= ast_json_object_set(out, "destination_link_first_leg", json_channel);
+
+		json_channel = ast_channel_snapshot_to_json(transfer_msg->dest.links[1], sanitize);
+		if (!json_channel) {
+			return NULL;
+		}
+		res |= ast_json_object_set(out, "destination_link_second_leg", json_channel);
+
+		break;
+	case AST_ATTENDED_TRANSFER_DEST_THREEWAY:
+		res |= ast_json_object_set(out, "destination_type", ast_json_string_create("threeway"));
+
+		json_channel = ast_channel_snapshot_to_json(transfer_msg->dest.threeway.channel_snapshot, sanitize);
+		if (!json_channel) {
+			return NULL;
+		}
+		res |= ast_json_object_set(out, "destination_threeway_channel", json_channel);
+
+		json_bridge = ast_bridge_snapshot_to_json(transfer_msg->dest.threeway.bridge_snapshot, sanitize);
+		if (!json_bridge) {
+			return NULL;
+		}
+		res |= ast_json_object_set(out, "destination_threeway_bridge", json_bridge);
+
+		break;
+	case AST_ATTENDED_TRANSFER_DEST_FAIL:
+		res |= ast_json_object_set(out, "destination_type", ast_json_string_create("fail"));
+		break;
+	}
+
+	if (res) {
+		return NULL;
+	}
+
+	return ast_json_ref(out);
 }
 
 static struct ast_manager_event_blob *attended_transfer_to_ami(struct stasis_message *msg)
@@ -879,7 +1072,9 @@ void ast_bridge_publish_attended_transfer_link(int is_external, enum ast_transfe
 
 	transfer_msg->dest_type = AST_ATTENDED_TRANSFER_DEST_LINK;
 	for (i = 0; i < 2; ++i) {
+		ast_channel_lock(locals[i]);
 		transfer_msg->dest.links[i] = ast_channel_snapshot_create(locals[i]);
+		ast_channel_unlock(locals[i]);
 		if (!transfer_msg->dest.links[i]) {
 			return;
 		}

@@ -253,7 +253,7 @@ void ast_ari_response_error(struct ast_ari_response *response,
 void ast_ari_response_ok(struct ast_ari_response *response,
 			     struct ast_json *message)
 {
-	response->message = ast_json_ref(message);
+	response->message = message;
 	response->response_code = 200;
 	response->response_text = "OK";
 }
@@ -275,7 +275,7 @@ void ast_ari_response_alloc_failed(struct ast_ari_response *response)
 void ast_ari_response_created(struct ast_ari_response *response,
 	const char *url, struct ast_json *message)
 {
-	response->message = ast_json_ref(message);
+	response->message = message;
 	response->response_code = 201;
 	response->response_text = "Created";
 	ast_str_append(&response->headers, 0, "Location: %s\r\n", url);
@@ -441,7 +441,7 @@ static void handle_options(struct stasis_rest_handlers *handler,
 	/* CORS 6.2 #9 - "Add one or more Access-Control-Allow-Methods headers
 	 * consisting of (a subset of) the list of methods."
 	 */
-	ast_str_append(&response->headers, 0, "%s: OPTIONS,%s\r\n",
+	ast_str_append(&response->headers, 0, "%s: OPTIONS%s\r\n",
 		       ACA_METHODS, ast_str_buffer(allow));
 
 
@@ -465,7 +465,7 @@ void ast_ari_invoke(struct ast_tcptls_session_instance *ser,
 	RAII_VAR(char *, response_text, NULL, ast_free);
 	RAII_VAR(struct stasis_rest_handlers *, root, NULL, ao2_cleanup);
 	struct stasis_rest_handlers *handler;
-	struct ast_variable *path_vars = NULL;
+	RAII_VAR(struct ast_variable *, path_vars, NULL, ast_variables_destroy);
 	char *path = ast_strdupa(uri);
 	char *path_segment;
 	stasis_rest_callback callback;
@@ -539,7 +539,7 @@ void ast_ari_invoke(struct ast_tcptls_session_instance *ser,
 		return;
 	}
 
-	callback(get_params, path_vars, headers, response);
+	callback(ser, get_params, path_vars, headers, response);
 	if (response->message == NULL && response->response_code == 0) {
 		/* Really should not happen */
 		ast_log(LOG_ERROR, "ARI %s %s not implemented\n",
@@ -554,8 +554,8 @@ void ast_ari_get_docs(const char *uri, struct ast_variable *headers,
 			  struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_str *, absolute_path_builder, NULL, ast_free);
-	RAII_VAR(char *, absolute_api_dirname, NULL, free);
-	RAII_VAR(char *, absolute_filename, NULL, free);
+	RAII_VAR(char *, absolute_api_dirname, NULL, ast_std_free);
+	RAII_VAR(char *, absolute_filename, NULL, ast_std_free);
 	struct ast_json *obj = NULL;
 	struct ast_variable *host = NULL;
 	struct ast_json_error error = {};
@@ -839,13 +839,13 @@ static int ast_ari_callback(struct ast_tcptls_session_instance *ser,
 				struct ast_variable *headers)
 {
 	RAII_VAR(struct ast_ari_conf *, conf, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_str *, response_headers, ast_str_create(40), ast_free);
 	RAII_VAR(struct ast_str *, response_body, ast_str_create(256), ast_free);
 	RAII_VAR(struct ast_ari_conf_user *, user, NULL, ao2_cleanup);
 	struct ast_ari_response response = {};
 	int ret = 0;
+	RAII_VAR(struct ast_variable *, post_vars, NULL, ast_variables_destroy);
 
-	if (!response_headers || !response_body) {
+	if (!response_body) {
 		return -1;
 	}
 
@@ -856,13 +856,52 @@ static int ast_ari_callback(struct ast_tcptls_session_instance *ser,
 
 	conf = ast_ari_config_get();
 	if (!conf || !conf->general) {
+		ast_free(response.headers);
 		return -1;
 	}
 
 	process_cors_request(headers, &response);
 
+	/* Process form data from a POST. It could be mixed with query
+	 * parameters, which seems a bit odd. But it's allowed, so that's okay
+	 * with us.
+	 */
+	post_vars = ast_http_get_post_vars(ser, headers);
+	if (get_params == NULL) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(&response, 413,
+				"Request Entity Too Large",
+				"Request body too large");
+			break;
+		case ENOMEM:
+			ast_ari_response_error(&response, 500,
+				"Internal Server Error",
+				"Error processing request");
+			break;
+		case EIO:
+			ast_ari_response_error(&response, 400,
+				"Bad Request", "Error parsing request body");
+			break;
+		}
+		get_params = post_vars;
+	} else if (get_params && post_vars) {
+		/* Has both post_vars and get_params */
+		struct ast_variable *last_var = post_vars;
+		while (last_var->next) {
+			last_var = last_var->next;
+		}
+		/* The duped get_params will get freed when post_vars gets
+		 * ast_variables_destroyed.
+		 */
+		last_var->next = ast_variables_dup(get_params);
+		get_params = post_vars;
+	}
+
 	user = authenticate_user(get_params, headers);
-	if (!user) {
+	if (response.response_code > 0) {
+		/* POST parameter processing error. Do nothing. */
+	} else if (!user) {
 		/* Per RFC 2617, section 1.2: The 401 (Unauthorized) response
 		 * message is used by an origin server to challenge the
 		 * authorization of a user agent. This response MUST include a
@@ -916,6 +955,7 @@ static int ast_ari_callback(struct ast_tcptls_session_instance *ser,
 	if (response.no_response) {
 		/* The handler indicates no further response is necessary.
 		 * Probably because it already handled it */
+		ast_free(response.headers);
 		return 0;
 	}
 
@@ -925,13 +965,11 @@ static int ast_ari_callback(struct ast_tcptls_session_instance *ser,
 	ast_assert(response.message != NULL);
 	ast_assert(response.response_code > 0);
 
-	ast_str_append(&response_headers, 0, "%s", ast_str_buffer(response.headers));
-
 	/* response.message could be NULL, in which case the empty response_body
 	 * is correct
 	 */
 	if (response.message && !ast_json_is_null(response.message)) {
-		ast_str_append(&response_headers, 0,
+		ast_str_append(&response.headers, 0,
 			       "Content-type: application/json\r\n");
 		if (ast_json_dump_str_format(response.message, &response_body,
 				conf->general->format) != 0) {
@@ -939,16 +977,15 @@ static int ast_ari_callback(struct ast_tcptls_session_instance *ser,
 			response.response_code = 500;
 			response.response_text = "Internal Server Error";
 			ast_str_set(&response_body, 0, "%s", "");
-			ast_str_set(&response_headers, 0, "%s", "");
+			ast_str_set(&response.headers, 0, "%s", "");
 			ret = -1;
 		}
 	}
 
 	ast_http_send(ser, method, response.response_code,
-		      response.response_text, response_headers, response_body,
+		      response.response_text, response.headers, response_body,
 		      0, 0);
 	/* ast_http_send takes ownership, so we don't have to free them */
-	response_headers = NULL;
 	response_body = NULL;
 
 	ast_json_unref(response.message);

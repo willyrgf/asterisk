@@ -77,7 +77,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astdb.h"
 #include "asterisk/features_config.h"
 #include "asterisk/bridge.h"
-
+#include "asterisk/stasis_channels.h"
 
 #define DEFAULTCONTEXT	  "default"
 #define DEFAULTCALLERID	 "Unknown"
@@ -1836,7 +1836,7 @@ static struct unistim_line *unistim_line_alloc(void)
 		return NULL;
 	}
 
-	if (!(l->cap = ast_format_cap_alloc_nolock())) {
+	if (!(l->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		ast_free(l);
 		return NULL;
 	}
@@ -2517,10 +2517,12 @@ static void *unistim_ss(void *data)
 	int res;
 
 	ast_verb(3, "Starting switch on '%s@%s-%d' to %s\n", l->name, l->parent->name, sub->softkey, s->device->phone_number);
+	ast_channel_lock(chan);
 	ast_channel_exten_set(chan, s->device->phone_number);
+	ast_setstate(chan, AST_STATE_RING);
+	ast_channel_unlock(chan);
 	ast_copy_string(s->device->redial_number, s->device->phone_number,
 					sizeof(s->device->redial_number));
-	ast_setstate(chan, AST_STATE_RING);
 	res = ast_pbx_run(chan);
 	if (res) {
 		ast_log(LOG_WARNING, "PBX exited non-zero\n");
@@ -5502,27 +5504,17 @@ static int unistim_sendtext(struct ast_channel *ast, const char *text)
 static int unistim_send_mwi_to_peer(struct unistim_line *peer, unsigned int tick)
 {
 	int new;
-	char *mailbox, *context;
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
-	context = mailbox = ast_strdupa(peer->mailbox);
-	strsep(&context, "@");
-	if (ast_strlen_zero(context)) {
-		context = "default";
-	}
-
-	ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
-
-	msg = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(), ast_str_buffer(uniqueid));
-
+	msg = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(), peer->mailbox);
 	if (msg) {
 		struct ast_mwi_state *mwi_state = stasis_message_data(msg);
 		new = mwi_state->new_msgs;
 	} else { /* Fall back on checking the mailbox directly */
-		new = ast_app_has_voicemail(peer->mailbox, "INBOX");
+		new = ast_app_has_voicemail(peer->mailbox, NULL);
 	}
-	ast_debug(3, "MWI Status for mailbox %s is %d, lastmsgsent:%d\n",mailbox,new,peer->parent->lastmsgssent);
+	ast_debug(3, "MWI Status for mailbox %s is %d, lastmsgsent:%d\n",
+		peer->mailbox, new, peer->parent->lastmsgssent);
 	peer->parent->nextmsgcheck = tick + TIMER_MWI;
 
 	/* Return now if it's the same thing we told them last time */
@@ -5562,6 +5554,8 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
 		return NULL;
 	}
+
+	ast_channel_stage_snapshot(tmp);
 
 	ast_format_cap_copy(ast_channel_nativeformats(tmp), l->cap);
 	if (ast_format_cap_is_empty(ast_channel_nativeformats(tmp))) {
@@ -5623,6 +5617,10 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 		}
 	}
 	ast_channel_priority_set(tmp, 1);
+
+	ast_channel_stage_snapshot_done(tmp);
+	ast_channel_unlock(tmp);
+
 	if (state != AST_STATE_DOWN) {
 		if (unistimdebug) {
 			ast_verb(0, "Starting pbx in unistim_new\n");
@@ -6848,10 +6846,10 @@ int load_module(void)
 {
 	int res;
 	struct ast_format tmpfmt;
-	if (!(global_cap = ast_format_cap_alloc())) {
+	if (!(global_cap = ast_format_cap_alloc(0))) {
 		goto buff_failed;
 	}
-	if (!(unistim_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(unistim_tech.capabilities = ast_format_cap_alloc(0))) {
 		goto buff_failed;
 	}
 

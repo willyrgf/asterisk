@@ -2,7 +2,7 @@
 	"_copyright": "Copyright (C) 2012 - 2013, Digium, Inc.",
 	"_author": "David M. Lee, II <dlee@digium.com>",
 	"_svn_revision": "$Revision$",
-	"apiVersion": "0.0.1",
+	"apiVersion": "1.1.0",
 	"swaggerVersion": "1.1",
 	"basePath": "http://localhost:8088/stasis",
 	"resourcePath": "/api-docs/sounds.{format}",
@@ -14,7 +14,7 @@
 				{
 					"httpMethod": "GET",
 					"summary": "List all sounds.",
-					"nickname": "getSounds",
+					"nickname": "list",
 					"responseClass": "List[Sound]",
 					"parameters": [
 						{
@@ -43,7 +43,7 @@
 				{
 					"httpMethod": "GET",
 					"summary": "Get a sound's details.",
-					"nickname": "getStoredSound",
+					"nickname": "get",
 					"responseClass": "Sound",
 					"parameters": [
 						{

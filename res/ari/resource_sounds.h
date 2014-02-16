@@ -39,13 +39,24 @@
 
 #include "asterisk/ari.h"
 
-/*! \brief Argument struct for ast_ari_get_sounds() */
-struct ast_get_sounds_args {
+/*! \brief Argument struct for ast_ari_sounds_list() */
+struct ast_ari_sounds_list_args {
 	/*! \brief Lookup sound for a specific language. */
 	const char *lang;
 	/*! \brief Lookup sound in a specific format. */
 	const char *format;
 };
+/*!
+ * \brief Body parsing function for /sounds.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_sounds_list_parse_body(
+	struct ast_json *body,
+	struct ast_ari_sounds_list_args *args);
+
 /*!
  * \brief List all sounds.
  *
@@ -53,9 +64,9 @@ struct ast_get_sounds_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_sounds(struct ast_variable *headers, struct ast_get_sounds_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_get_stored_sound() */
-struct ast_get_stored_sound_args {
+void ast_ari_sounds_list(struct ast_variable *headers, struct ast_ari_sounds_list_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_sounds_get() */
+struct ast_ari_sounds_get_args {
 	/*! \brief Sound's id */
 	const char *sound_id;
 };
@@ -66,6 +77,6 @@ struct ast_get_stored_sound_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_stored_sound(struct ast_variable *headers, struct ast_get_stored_sound_args *args, struct ast_ari_response *response);
+void ast_ari_sounds_get(struct ast_variable *headers, struct ast_ari_sounds_get_args *args, struct ast_ari_response *response);
 
 #endif /* _ASTERISK_RESOURCE_SOUNDS_H */

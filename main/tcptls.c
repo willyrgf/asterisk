@@ -48,6 +48,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/options.h"
 #include "asterisk/manager.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/pbx.h"
 
 /*! \brief
  * replacement read/write functions for SSL support.
@@ -163,6 +164,18 @@ static void *handle_tcptls_connection(void *data)
 	int ret;
 	char err[256];
 #endif
+
+	/* TCP/TLS connections are associated with external protocols, and
+	 * should not be allowed to execute 'dangerous' functions. This may
+	 * need to be pushed down into the individual protocol handlers, but
+	 * this seems like a good general policy.
+	 */
+	if (ast_thread_inhibit_escalations()) {
+		ast_log(LOG_ERROR, "Failed to inhibit privilege escalations; killing connection\n");
+		ast_tcptls_close_session_file(tcptls_session);
+		ao2_ref(tcptls_session, -1);
+		return NULL;
+	}
 
 	/*
 	* open a FILE * as appropriate.
@@ -380,7 +393,7 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 
 	if (!ast_strlen_zero(cfg->certfile)) {
 		char *tmpprivate = ast_strlen_zero(cfg->pvtfile) ? cfg->certfile : cfg->pvtfile;
-		if (SSL_CTX_use_certificate_file(cfg->ssl_ctx, cfg->certfile, SSL_FILETYPE_PEM) == 0) {
+		if (SSL_CTX_use_certificate_chain_file(cfg->ssl_ctx, cfg->certfile) == 0) {
 			if (!client) {
 				/* Clients don't need a certificate, but if its setup we can use it */
 				ast_verb(0, "SSL error loading cert file. <%s>\n", cfg->certfile);

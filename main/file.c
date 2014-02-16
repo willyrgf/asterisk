@@ -749,7 +749,7 @@ struct ast_filestream *ast_openstream_full(struct ast_channel *chan, const char 
 	buflen = strlen(preflang) + strlen(filename) + 4;
 	buf = ast_alloca(buflen);
 
-	if (!(file_fmt_cap = ast_format_cap_alloc_nolock())) {
+	if (!(file_fmt_cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		return NULL;
 	}
 	if (!fileexists_core(filename, NULL, preflang, buf, buflen, file_fmt_cap) ||
@@ -797,7 +797,7 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	if (!ast_format_cap_has_type(ast_channel_nativeformats(chan), AST_FORMAT_TYPE_VIDEO)) {
 		return NULL;
 	}
-	if (!(tmp_cap = ast_format_cap_alloc_nolock())) {
+	if (!(tmp_cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		return NULL;
 	}
 	/* Video is supported, so see what video formats exist for this file */
@@ -902,7 +902,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 
 			rate = (unsigned int) roundf(samp_rate / ((float) whennext));
 
-			ast_settimeout(s->owner, rate, ast_fsread_audio, s);
+			ast_settimeout_full(s->owner, rate, ast_fsread_audio, s, 1);
 		} else {
 			ast_channel_streamid_set(s->owner, ast_sched_add(ast_channel_sched(s->owner), whennext / (ast_format_rate(&s->fmt->format) / 1000), ast_fsread_audio, s));
 		}

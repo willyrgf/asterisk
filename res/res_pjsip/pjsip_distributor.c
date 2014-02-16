@@ -134,7 +134,12 @@ static pjsip_dialog *find_dialog(pjsip_rx_data *rdata)
 	}
 
 	dlg = pjsip_tsx_get_dlg(tsx);
+
+#ifdef HAVE_PJ_TRANSACTION_GRP_LOCK
+	pj_grp_lock_release(tsx->grp_lock);
+#else
 	pj_mutex_unlock(tsx->mutex);
+#endif
 
 	if (!dlg) {
 		return NULL;
@@ -232,6 +237,16 @@ struct ast_sip_endpoint *ast_sip_get_artificial_endpoint(void)
 	return artificial_endpoint;
 }
 
+static void log_unidentified_request(pjsip_rx_data *rdata)
+{
+	char from_buf[PJSIP_MAX_URL_SIZE];
+	char callid_buf[PJSIP_MAX_URL_SIZE];
+	pjsip_uri_print(PJSIP_URI_IN_FROMTO_HDR, rdata->msg_info.from->uri, from_buf, PJSIP_MAX_URL_SIZE);
+	ast_copy_pj_str(callid_buf, &rdata->msg_info.cid->id, PJSIP_MAX_URL_SIZE);
+	ast_log(LOG_NOTICE, "Request from '%s' failed for '%s:%d' (callid: %s) - No matching endpoint found\n",
+		from_buf, rdata->pkt_info.src_name, rdata->pkt_info.src_port, callid_buf);
+}
+
 static pj_bool_t endpoint_lookup(pjsip_rx_data *rdata)
 {
 	struct ast_sip_endpoint *endpoint;
@@ -262,6 +277,7 @@ static pj_bool_t endpoint_lookup(pjsip_rx_data *rdata)
 			ast_copy_pj_str(name, &sip_from->user, sizeof(name));
 		}
 
+		log_unidentified_request(rdata);
 		ast_sip_report_invalid_endpoint(name, rdata);
 	}
 	rdata->endpt_info.mod_data[endpoint_mod.id] = endpoint;
@@ -305,7 +321,7 @@ static pj_bool_t authenticate(pjsip_rx_data *rdata)
 
 static pjsip_module auth_mod = {
 	.name = {"Request Authenticator", 21},
-	.priority = PJSIP_MOD_PRIORITY_APPLICATION - 1,
+	.priority = PJSIP_MOD_PRIORITY_APPLICATION - 2,
 	.on_rx_request = authenticate,
 };
 

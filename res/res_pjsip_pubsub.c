@@ -40,6 +40,38 @@
 #include "asterisk/taskprocessor.h"
 #include "asterisk/sched.h"
 #include "asterisk/res_pjsip.h"
+#include "asterisk/callerid.h"
+#include "asterisk/manager.h"
+#include "res_pjsip/include/res_pjsip_private.h"
+
+/*** DOCUMENTATION
+	<manager name="PJSIPShowSubscriptionsInbound" language="en_US">
+		<synopsis>
+			Lists subscriptions.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>
+			Provides a listing of all inbound subscriptions.  An event <literal>InboundSubscriptionDetail</literal>
+			is issued for each subscription object.  Once all detail events are completed an
+			<literal>InboundSubscriptionDetailComplete</literal> event is issued.
+                        </para>
+		</description>
+	</manager>
+	<manager name="PJSIPShowSubscriptionsOutbound" language="en_US">
+		<synopsis>
+			Lists subscriptions.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>
+			Provides a listing of all outbound subscriptions.  An event <literal>OutboundSubscriptionDetail</literal>
+			is issued for each subscription object.  Once all detail events are completed an
+			<literal>OutboundSubscriptionDetailComplete</literal> event is issued.
+                        </para>
+		</description>
+	</manager>
+ ***/
 
 static pj_bool_t pubsub_on_rx_request(pjsip_rx_data *rdata);
 
@@ -48,6 +80,8 @@ static struct pjsip_module pubsub_module = {
 	.priority = PJSIP_MOD_PRIORITY_APPLICATION,
 	.on_rx_request = pubsub_on_rx_request,
 };
+
+#define MOD_DATA_BODY_GENERATOR "sub_body_generator"
 
 static const pj_str_t str_event_name = { "Event", 5 };
 
@@ -163,7 +197,92 @@ struct ast_sip_subscription {
 	pjsip_evsub *evsub;
 	/*! The underlying PJSIP dialog */
 	pjsip_dialog *dlg;
+	/*! Body generaator for NOTIFYs */
+	struct ast_sip_pubsub_body_generator *body_generator;
+	/*! Next item in the list */
+	AST_LIST_ENTRY(ast_sip_subscription) next;
 };
+
+static const char *sip_subscription_roles_map[] = {
+	[AST_SIP_SUBSCRIBER] = "Subscriber",
+	[AST_SIP_NOTIFIER] = "Notifier"
+};
+
+AST_RWLIST_HEAD_STATIC(subscriptions, ast_sip_subscription);
+
+AST_RWLIST_HEAD_STATIC(body_generators, ast_sip_pubsub_body_generator);
+AST_RWLIST_HEAD_STATIC(body_supplements, ast_sip_pubsub_body_supplement);
+
+static void add_subscription(struct ast_sip_subscription *obj)
+{
+	SCOPED_LOCK(lock, &subscriptions, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_RWLIST_INSERT_TAIL(&subscriptions, obj, next);
+	ast_module_ref(ast_module_info->self);
+}
+
+static void remove_subscription(struct ast_sip_subscription *obj)
+{
+	struct ast_sip_subscription *i;
+	SCOPED_LOCK(lock, &subscriptions, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&subscriptions, i, next) {
+		if (i == obj) {
+			AST_RWLIST_REMOVE_CURRENT(next);
+			ast_module_unref(ast_module_info->self);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+}
+
+typedef int (*on_subscription_t)(struct ast_sip_subscription *sub, void *arg);
+
+static int for_each_subscription(on_subscription_t on_subscription, void *arg)
+{
+	int num = 0;
+	struct ast_sip_subscription *i;
+	SCOPED_LOCK(lock, &subscriptions, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
+
+	if (!on_subscription) {
+		return num;
+	}
+
+	AST_RWLIST_TRAVERSE(&subscriptions, i, next) {
+		if (on_subscription(i, arg)) {
+			break;
+		}
+		++num;
+	}
+	return num;
+}
+
+static void sip_subscription_to_ami(struct ast_sip_subscription *sub,
+				    struct ast_str **buf)
+{
+	char str[256];
+	struct ast_sip_endpoint_id_configuration *id = &sub->endpoint->id;
+
+	ast_str_append(buf, 0, "Role: %s\r\n",
+		       sip_subscription_roles_map[sub->role]);
+	ast_str_append(buf, 0, "Endpoint: %s\r\n",
+		       ast_sorcery_object_get_id(sub->endpoint));
+
+	ast_copy_pj_str(str, &sub->dlg->call_id->id, sizeof(str));
+	ast_str_append(buf, 0, "Callid: %s\r\n", str);
+
+	ast_str_append(buf, 0, "State: %s\r\n", pjsip_evsub_get_state_name(
+			       ast_sip_subscription_get_evsub(sub)));
+
+	ast_callerid_merge(str, sizeof(str),
+			   S_COR(id->self.name.valid, id->self.name.str, NULL),
+			   S_COR(id->self.number.valid, id->self.number.str, NULL),
+			   "Unknown");
+
+	ast_str_append(buf, 0, "Callerid: %s\r\n", str);
+
+	if (sub->handler->to_ami) {
+		sub->handler->to_ami(sub, buf);
+	}
+}
 
 #define DATASTORE_BUCKETS 53
 
@@ -191,27 +310,37 @@ static int datastore_cmp(void *obj, void *arg, int flags)
 	return strcmp(datastore1->uid, uid2) ? 0 : CMP_MATCH | CMP_STOP;
 }
 
+static int subscription_remove_serializer(void *obj)
+{
+	struct ast_sip_subscription *sub = obj;
+
+	/* This is why we keep the dialog on the subscription. When the subscription
+	 * is destroyed, there is no guarantee that the underlying dialog is ready
+	 * to be destroyed. Furthermore, there's no guarantee in the opposite direction
+	 * either. The dialog could be destroyed before our subscription is. We fix
+	 * this problem by keeping a reference to the dialog until it is time to
+	 * destroy the subscription. We need to have the dialog available when the
+	 * subscription is destroyed so that we can guarantee that our attempt to
+	 * remove the serializer will be successful.
+	 */
+	ast_sip_dialog_set_serializer(sub->dlg, NULL);
+	pjsip_dlg_dec_session(sub->dlg, &pubsub_module);
+
+	return 0;
+}
+
 static void subscription_destructor(void *obj)
 {
 	struct ast_sip_subscription *sub = obj;
 
 	ast_debug(3, "Destroying SIP subscription\n");
+	remove_subscription(sub);
 
 	ao2_cleanup(sub->datastores);
 	ao2_cleanup(sub->endpoint);
 
 	if (sub->dlg) {
-		/* This is why we keep the dialog on the subscription. When the subscription
-		 * is destroyed, there is no guarantee that the underlying dialog is ready
-		 * to be destroyed. Furthermore, there's no guarantee in the opposite direction
-		 * either. The dialog could be destroyed before our subscription is. We fix
-		 * this problem by keeping a reference to the dialog until it is time to
-		 * destroy the subscription. We need to have the dialog available when the
-		 * subscription is destroyed so that we can guarantee that our attempt to
-		 * remove the serializer will be successful.
-		 */
-		ast_sip_dialog_set_serializer(sub->dlg, NULL);
-		pjsip_dlg_dec_session(sub->dlg, &pubsub_module);
+		ast_sip_push_task_synchronous(NULL, subscription_remove_serializer, sub);
 	}
 	ast_taskprocessor_unreference(sub->serializer);
 }
@@ -244,19 +373,11 @@ static pjsip_evsub *allocate_evsub(const char *event, enum ast_sip_subscription_
 	 * built-in events
 	 */
 	if (role == AST_SIP_NOTIFIER) {
-		if (!strcmp(event, "message-summary")) {
-			pjsip_mwi_create_uas(dlg, &pubsub_cb, rdata, &evsub);
-		} else {
-			pjsip_evsub_create_uas(dlg, &pubsub_cb, rdata, 0, &evsub);
-		}
+		pjsip_evsub_create_uas(dlg, &pubsub_cb, rdata, 0, &evsub);
 	} else {
-		if (!strcmp(event, "message-summary")) {
-			pjsip_mwi_create_uac(dlg, &pubsub_cb, 0, &evsub);
-		} else {
-			pj_str_t pj_event;
-			pj_cstr(&pj_event, event);
-			pjsip_evsub_create_uac(dlg, &pubsub_cb, &pj_event, 0, &evsub);
-		}
+		pj_str_t pj_event;
+		pj_cstr(&pj_event, event);
+		pjsip_evsub_create_uac(dlg, &pubsub_cb, &pj_event, 0, &evsub);
 	}
 	return evsub;
 }
@@ -280,9 +401,11 @@ struct ast_sip_subscription *ast_sip_create_subscription(const struct ast_sip_su
 		ao2_ref(sub, -1);
 		return NULL;
 	}
+	sub->body_generator = ast_sip_mod_data_get(rdata->endpt_info.mod_data,
+			pubsub_module.id, MOD_DATA_BODY_GENERATOR);
 	sub->role = role;
 	if (role == AST_SIP_NOTIFIER) {
-		pjsip_dlg_create_uas(pjsip_ua_instance(), rdata, NULL, &dlg);
+		dlg = ast_sip_create_dialog_uas(endpoint, rdata);
 	} else {
 		RAII_VAR(struct ast_sip_contact *, contact, NULL, ao2_cleanup);
 
@@ -293,7 +416,7 @@ struct ast_sip_subscription *ast_sip_create_subscription(const struct ast_sip_su
 			ao2_ref(sub, -1);
 			return NULL;
 		}
-		dlg = ast_sip_create_dialog(endpoint, contact->uri, NULL);
+		dlg = ast_sip_create_dialog_uac(endpoint, contact->uri, NULL);
 	}
 	if (!dlg) {
 		ast_log(LOG_WARNING, "Unable to create dialog for SIP subscription\n");
@@ -311,6 +434,8 @@ struct ast_sip_subscription *ast_sip_create_subscription(const struct ast_sip_su
 	ao2_ref(endpoint, +1);
 	sub->endpoint = endpoint;
 	sub->handler = handler;
+
+	add_subscription(sub);
 	return sub;
 }
 
@@ -507,31 +632,35 @@ static void sub_add_handler(struct ast_sip_subscription_handler *handler)
 	ast_module_ref(ast_module_info->self);
 }
 
-static int sub_handler_exists_for_event_name(const char *event_name)
+static struct ast_sip_subscription_handler *find_sub_handler_for_event_name(const char *event_name)
 {
 	struct ast_sip_subscription_handler *iter;
 	SCOPED_LOCK(lock, &subscription_handlers, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
 
 	AST_RWLIST_TRAVERSE(&subscription_handlers, iter, next) {
 		if (!strcmp(iter->event_name, event_name)) {
-			return 1;
+			break;
 		}
 	}
-	return 0;
+	return iter;
 }
 
 int ast_sip_register_subscription_handler(struct ast_sip_subscription_handler *handler)
 {
+	pj_str_t event;
 	pj_str_t accept[AST_SIP_MAX_ACCEPT];
+	struct ast_sip_subscription_handler *existing;
 	int i;
 
 	if (ast_strlen_zero(handler->event_name)) {
-		ast_log(LOG_ERROR, "No event package specifief for subscription handler. Cannot register\n");
+		ast_log(LOG_ERROR, "No event package specified for subscription handler. Cannot register\n");
 		return -1;
 	}
 
-	if (ast_strlen_zero(handler->accept[0])) {
-		ast_log(LOG_ERROR, "Subscription handler must supply at least one 'Accept' format\n");
+	existing = find_sub_handler_for_event_name(handler->event_name);
+	if (existing) {
+		ast_log(LOG_ERROR, "Unable to register subscription handler for event %s."
+				"A handler is already registered\n", handler->event_name);
 		return -1;
 	}
 
@@ -539,20 +668,9 @@ int ast_sip_register_subscription_handler(struct ast_sip_subscription_handler *h
 		pj_cstr(&accept[i], handler->accept[i]);
 	}
 
-	if (!sub_handler_exists_for_event_name(handler->event_name)) {
-		pj_str_t event;
+	pj_cstr(&event, handler->event_name);
 
-		pj_cstr(&event, handler->event_name);
-
-		if (!strcmp(handler->event_name, "message-summary")) {
-			pjsip_mwi_init_module(ast_sip_get_pjsip_endpoint(), pjsip_evsub_instance());
-		} else {
-			pjsip_evsub_register_pkg(&pubsub_module, &event, DEFAULT_EXPIRES, i, accept);
-		}
-	} else {
-		pjsip_endpt_add_capability(ast_sip_get_pjsip_endpoint(), &pubsub_module, PJSIP_H_ACCEPT, NULL,
-			i, accept);
-	}
+	pjsip_evsub_register_pkg(&pubsub_module, &event, DEFAULT_EXPIRES, i, accept);
 
 	sub_add_handler(handler);
 	return 0;
@@ -572,48 +690,52 @@ void ast_sip_unregister_subscription_handler(struct ast_sip_subscription_handler
 	AST_RWLIST_TRAVERSE_SAFE_END;
 }
 
-static struct ast_sip_subscription_handler *find_sub_handler(const char *event, char accept[AST_SIP_MAX_ACCEPT][64], size_t num_accept)
+static struct ast_sip_pubsub_body_generator *find_body_generator_type_subtype(const char *content_type,
+		const char *content_subtype)
 {
-	struct ast_sip_subscription_handler *iter;
-	int match = 0;
-	SCOPED_LOCK(lock, &subscription_handlers, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
-	AST_RWLIST_TRAVERSE(&subscription_handlers, iter, next) {
-		int i;
-		int j;
-		if (strcmp(event, iter->event_name)) {
-			ast_debug(3, "Event %s does not match %s\n", event, iter->event_name);
-			continue;
-		}
-		ast_debug(3, "Event name match: %s = %s\n", event, iter->event_name);
-		if (!num_accept && iter->handles_default_accept) {
-			/* The SUBSCRIBE contained no Accept headers, and this subscription handler
-			 * provides the default body type, so it's a match!
-			 */
+	struct ast_sip_pubsub_body_generator *iter;
+	SCOPED_LOCK(lock, &body_generators, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
+
+	AST_LIST_TRAVERSE(&body_generators, iter, list) {
+		if (!strcmp(iter->type, content_type) &&
+				!strcmp(iter->subtype, content_subtype)) {
 			break;
 		}
-		for (i = 0; i < num_accept; ++i) {
-			for (j = 0; j < num_accept; ++j) {
-				if (ast_strlen_zero(iter->accept[i])) {
-					ast_debug(3, "Breaking because subscription handler has run out of 'accept' types\n");
-					break;
-				}
-				if (!strcmp(accept[j], iter->accept[i])) {
-					ast_debug(3, "Accept headers match: %s = %s\n", accept[j], iter->accept[i]);
-					match = 1;
-					break;
-				}
-				ast_debug(3, "Accept %s does not match %s\n", accept[j], iter->accept[i]);
-			}
-			if (match) {
-				break;
-			}
-		}
-		if (match) {
+	};
+
+	return iter;
+}
+
+static struct ast_sip_pubsub_body_generator *find_body_generator_accept(const char *accept)
+{
+	char *accept_copy = ast_strdupa(accept);
+	char *subtype = accept_copy;
+	char *type = strsep(&subtype, "/");
+
+	if (ast_strlen_zero(type) || ast_strlen_zero(subtype)) {
+		return NULL;
+	}
+
+	return find_body_generator_type_subtype(type, subtype);
+}
+
+static struct ast_sip_pubsub_body_generator *find_body_generator(char accept[AST_SIP_MAX_ACCEPT][64],
+		size_t num_accept)
+{
+	int i;
+	struct ast_sip_pubsub_body_generator *generator = NULL;
+
+	for (i = 0; i < num_accept; ++i) {
+		generator = find_body_generator_accept(accept[i]);
+		if (generator) {
+			ast_debug(3, "Body generator %p found for accept type %s\n", generator, accept[i]);
 			break;
+		} else {
+			ast_debug(3, "No body generator found for accept type %s\n", accept[i]);
 		}
 	}
 
-	return iter;
+	return generator;
 }
 
 static pj_bool_t pubsub_on_rx_subscribe_request(pjsip_rx_data *rdata)
@@ -627,6 +749,7 @@ static pj_bool_t pubsub_on_rx_subscribe_request(pjsip_rx_data *rdata)
 	RAII_VAR(struct ast_sip_endpoint *, endpoint, NULL, ao2_cleanup);
 	struct ast_sip_subscription *sub;
 	size_t num_accept_headers;
+	struct ast_sip_pubsub_body_generator *generator;
 
 	endpoint = ast_pjsip_rdata_get_endpoint(rdata);
 	ast_assert(endpoint != NULL);
@@ -654,6 +777,13 @@ static pj_bool_t pubsub_on_rx_subscribe_request(pjsip_rx_data *rdata)
 	}
 	ast_copy_pj_str(event, &event_header->event_type, sizeof(event));
 
+	handler = find_sub_handler_for_event_name(event);
+	if (!handler) {
+		ast_log(LOG_WARNING, "No registered subscribe handler for event %s\n", event);
+		pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 489, NULL, NULL, NULL);
+		return PJ_TRUE;
+	}
+
 	accept_header = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_ACCEPT, rdata->msg_info.msg->hdr.next);
 	if (accept_header) {
 		int i;
@@ -663,15 +793,22 @@ static pj_bool_t pubsub_on_rx_subscribe_request(pjsip_rx_data *rdata)
 		}
 		num_accept_headers = accept_header->count;
 	} else {
-		num_accept_headers = 0;
+		/* If a SUBSCRIBE contains no Accept headers, then we must assume that
+		 * the default accept type for the event package is to be used.
+		 */
+		ast_copy_string(accept[0], handler->default_accept, sizeof(accept[0]));
+		num_accept_headers = 1;
 	}
 
-	handler = find_sub_handler(event, accept, num_accept_headers);
-	if (!handler) {
-		ast_log(LOG_WARNING, "No registered subscribe handler for event %s\n", event);
+	generator = find_body_generator(accept, num_accept_headers);
+	if (!generator) {
 		pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 489, NULL, NULL, NULL);
 		return PJ_TRUE;
 	}
+
+	ast_sip_mod_data_set(rdata->tp_info.pool, rdata->endpt_info.mod_data,
+			pubsub_module.id, MOD_DATA_BODY_GENERATOR, generator);
+
 	sub = handler->new_subscribe(endpoint, rdata);
 	if (!sub) {
 		pjsip_transaction *trans = pjsip_rdata_get_tsx(rdata);
@@ -939,6 +1076,137 @@ pj_status_t ast_sip_publication_send_response(struct ast_sip_publication *pub, p
 	return pjsip_tsx_send_msg(tsx, tdata);
 }
 
+int ast_sip_pubsub_register_body_generator(struct ast_sip_pubsub_body_generator *generator)
+{
+	struct ast_sip_pubsub_body_generator *existing;
+	pj_str_t accept;
+	pj_size_t accept_len;
+
+	existing = find_body_generator_type_subtype(generator->type, generator->subtype);
+	if (existing) {
+		ast_log(LOG_WARNING, "Cannot register body generator of %s/%s."
+				"One is already registered.\n", generator->type, generator->subtype);
+		return -1;
+	}
+
+	AST_RWLIST_WRLOCK(&body_generators);
+	AST_LIST_INSERT_HEAD(&body_generators, generator, list);
+	AST_RWLIST_UNLOCK(&body_generators);
+
+	/* Lengths of type and subtype plus space for a slash. pj_str_t is not
+	 * null-terminated, so there is no need to allocate for the extra null
+	 * byte
+	 */
+	accept_len = strlen(generator->type) + strlen(generator->subtype) + 1;
+
+	accept.ptr = alloca(accept_len);
+	accept.slen = accept_len;
+	/* Safe use of sprintf */
+	sprintf(accept.ptr, "%s/%s", generator->type, generator->subtype);
+	pjsip_endpt_add_capability(ast_sip_get_pjsip_endpoint(), &pubsub_module,
+			PJSIP_H_ACCEPT, NULL, 1, &accept);
+
+	return 0;
+}
+
+void ast_sip_pubsub_unregister_body_generator(struct ast_sip_pubsub_body_generator *generator)
+{
+	struct ast_sip_pubsub_body_generator *iter;
+	SCOPED_LOCK(lock, &body_generators, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&body_generators, iter, list) {
+		if (iter == generator) {
+			AST_LIST_REMOVE_CURRENT(list);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+}
+
+int ast_sip_pubsub_register_body_supplement(struct ast_sip_pubsub_body_supplement *supplement)
+{
+	AST_RWLIST_WRLOCK(&body_supplements);
+	AST_RWLIST_INSERT_TAIL(&body_supplements, supplement, list);
+	AST_RWLIST_UNLOCK(&body_supplements);
+
+	return 0;
+}
+
+void ast_sip_pubsub_unregister_body_supplement(struct ast_sip_pubsub_body_supplement *supplement)
+{
+	struct ast_sip_pubsub_body_supplement *iter;
+	SCOPED_LOCK(lock, &body_supplements, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&body_supplements, iter, list) {
+		if (iter == supplement) {
+			AST_LIST_REMOVE_CURRENT(list);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+}
+
+const char *ast_sip_subscription_get_body_type(struct ast_sip_subscription *sub)
+{
+	return sub->body_generator->type;
+}
+
+const char *ast_sip_subscription_get_body_subtype(struct ast_sip_subscription *sub)
+{
+	return sub->body_generator->subtype;
+}
+
+int ast_sip_pubsub_generate_body_content(const char *type, const char *subtype,
+		void *data, struct ast_str **str)
+{
+	struct ast_sip_pubsub_body_supplement *supplement;
+	struct ast_sip_pubsub_body_generator *generator;
+	int res;
+	void *body;
+
+	generator = find_body_generator_type_subtype(type, subtype);
+	if (!generator) {
+		ast_log(LOG_WARNING, "Unable to find a body generator for %s/%s\n",
+				type, subtype);
+		return -1;
+	}
+
+	body = generator->allocate_body(data);
+	if (!body) {
+		ast_log(LOG_WARNING, "Unable to allocate a NOTIFY body of type %s/%s\n",
+				type, subtype);
+		return -1;
+	}
+
+	if (generator->generate_body_content(body, data)) {
+		res = -1;
+		goto end;
+	}
+
+	AST_RWLIST_RDLOCK(&body_supplements);
+	AST_RWLIST_TRAVERSE(&body_supplements, supplement, list) {
+		if (!strcmp(generator->type, supplement->type) &&
+				!strcmp(generator->subtype, supplement->subtype)) {
+			res = supplement->supplement_body(body, data);
+			if (res) {
+				break;
+			}
+		}
+	}
+	AST_RWLIST_UNLOCK(&body_supplements);
+
+	if (!res) {
+		generator->to_string(body, str);
+	}
+
+end:
+	if (generator->destroy_body) {
+		generator->destroy_body(body);
+	}
+
+	return res;
+}
+
 static pj_bool_t pubsub_on_rx_request(pjsip_rx_data *rdata)
 {
 	if (!pjsip_method_cmp(&rdata->msg_info.msg->line.req.method, pjsip_get_subscribe_method())) {
@@ -1110,9 +1378,83 @@ static void pubsub_on_server_timeout(pjsip_evsub *evsub)
 {
 	struct ast_sip_subscription *sub = pjsip_evsub_get_mod_data(evsub, pubsub_module.id);
 
+	if (!sub) {
+		/* if a subscription has been terminated and the subscription
+		   timeout/expires is less than the time it takes for all pending
+		   transactions to end then the subscription timer will not have
+		   been canceled yet and sub will be null, so do nothing since
+		   the subscription has already been terminated. */
+		return;
+	}
+
 	ao2_ref(sub, +1);
 	ast_sip_push_task(sub->serializer, serialized_pubsub_on_server_timeout, sub);
 }
+
+static int ami_subscription_detail(struct ast_sip_subscription *sub,
+				   struct ast_sip_ami *ami,
+				   const char *event)
+{
+	RAII_VAR(struct ast_str *, buf,
+		 ast_sip_create_ami_event(event, ami), ast_free);
+
+	if (!buf) {
+		return -1;
+	}
+
+	sip_subscription_to_ami(sub, &buf);
+	astman_append(ami->s, "%s\r\n", ast_str_buffer(buf));
+	return 0;
+}
+
+static int ami_subscription_detail_inbound(struct ast_sip_subscription *sub, void *arg)
+{
+	return sub->role == AST_SIP_NOTIFIER ? ami_subscription_detail(
+		sub, arg, "InboundSubscriptionDetail") : 0;
+}
+
+static int ami_subscription_detail_outbound(struct ast_sip_subscription *sub, void *arg)
+{
+	return sub->role == AST_SIP_SUBSCRIBER ? ami_subscription_detail(
+		sub, arg, "OutboundSubscriptionDetail") : 0;
+}
+
+static int ami_show_subscriptions_inbound(struct mansession *s, const struct message *m)
+{
+	struct ast_sip_ami ami = { .s = s, .m = m };
+	int num;
+
+	astman_send_listack(s, m, "Following are Events for "
+			    "each inbound Subscription", "start");
+
+	num = for_each_subscription(ami_subscription_detail_inbound, &ami);
+
+	astman_append(s,
+		      "Event: InboundSubscriptionDetailComplete\r\n"
+		      "EventList: Complete\r\n"
+		      "ListItems: %d\r\n\r\n", num);
+	return 0;
+}
+
+static int ami_show_subscriptions_outbound(struct mansession *s, const struct message *m)
+{
+	struct ast_sip_ami ami = { .s = s, .m = m };
+	int num;
+
+	astman_send_listack(s, m, "Following are Events for "
+			    "each outbound Subscription", "start");
+
+	num = for_each_subscription(ami_subscription_detail_outbound, &ami);
+
+	astman_append(s,
+		      "Event: OutboundSubscriptionDetailComplete\r\n"
+		      "EventList: Complete\r\n"
+		      "ListItems: %d\r\n\r\n", num);
+	return 0;
+}
+
+#define AMI_SHOW_SUBSCRIPTIONS_INBOUND "PJSIPShowSubscriptionsInbound"
+#define AMI_SHOW_SUBSCRIPTIONS_OUTBOUND "PJSIPShowSubscriptionsOutbound"
 
 static int load_module(void)
 {
@@ -1139,11 +1481,19 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
+	ast_manager_register_xml(AMI_SHOW_SUBSCRIPTIONS_INBOUND, EVENT_FLAG_SYSTEM,
+				 ami_show_subscriptions_inbound);
+	ast_manager_register_xml(AMI_SHOW_SUBSCRIPTIONS_OUTBOUND, EVENT_FLAG_SYSTEM,
+				 ami_show_subscriptions_outbound);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
+	ast_manager_unregister(AMI_SHOW_SUBSCRIPTIONS_OUTBOUND);
+	ast_manager_unregister(AMI_SHOW_SUBSCRIPTIONS_INBOUND);
+
 	if (sched) {
 		ast_sched_context_destroy(sched);
 	}

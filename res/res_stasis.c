@@ -103,65 +103,144 @@ struct ao2_container *app_bridges;
 
 struct ao2_container *app_bridges_moh;
 
+const char *stasis_app_name(const struct stasis_app *app)
+{
+	return app_name(app);
+}
+
 /*! AO2 hash function for \ref app */
 static int app_hash(const void *obj, const int flags)
 {
-	const struct app *app = obj;
-	const char *name = flags & OBJ_KEY ? obj : app_name(app);
+	const struct stasis_app *app;
+	const char *key;
 
-	return ast_str_hash(name);
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_KEY:
+		key = obj;
+		break;
+	case OBJ_SEARCH_OBJECT:
+		app = obj;
+		key = stasis_app_name(app);
+		break;
+	default:
+		/* Hash can only work on something with a full key. */
+		ast_assert(0);
+		return 0;
+	}
+	return ast_str_hash(key);
 }
 
 /*! AO2 comparison function for \ref app */
-static int app_compare(void *lhs, void *rhs, int flags)
+static int app_compare(void *obj, void *arg, int flags)
 {
-	const struct app *lhs_app = lhs;
-	const struct app *rhs_app = rhs;
-	const char *lhs_name = app_name(lhs_app);
-	const char *rhs_name = flags & OBJ_KEY ? rhs : app_name(rhs_app);
+	const struct stasis_app *object_left = obj;
+	const struct stasis_app *object_right = arg;
+	const char *right_key = arg;
+	int cmp;
 
-	if (strcmp(lhs_name, rhs_name) == 0) {
-		return CMP_MATCH | CMP_STOP;
-	} else {
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+		right_key = stasis_app_name(object_right);
+		/* Fall through */
+	case OBJ_SEARCH_KEY:
+		cmp = strcmp(stasis_app_name(object_left), right_key);
+		break;
+	case OBJ_SEARCH_PARTIAL_KEY:
+		/*
+		 * We could also use a partial key struct containing a length
+		 * so strlen() does not get called for every comparison instead.
+		 */
+		cmp = strncmp(stasis_app_name(object_left), right_key, strlen(right_key));
+		break;
+	default:
+		/*
+		 * What arg points to is specific to this traversal callback
+		 * and has no special meaning to astobj2.
+		 */
+		cmp = 0;
+		break;
+	}
+	if (cmp) {
 		return 0;
 	}
+	/*
+	 * At this point the traversal callback is identical to a sorted
+	 * container.
+	 */
+	return CMP_MATCH;
 }
 
 /*! AO2 hash function for \ref stasis_app_control */
 static int control_hash(const void *obj, const int flags)
 {
-	const struct stasis_app_control *control = obj;
-	const char *id = flags & OBJ_KEY ?
-		obj : stasis_app_control_get_channel_id(control);
+	const struct stasis_app_control *control;
+	const char *key;
 
-	return ast_str_hash(id);
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_KEY:
+		key = obj;
+		break;
+	case OBJ_SEARCH_OBJECT:
+		control = obj;
+		key = stasis_app_control_get_channel_id(control);
+		break;
+	default:
+		/* Hash can only work on something with a full key. */
+		ast_assert(0);
+		return 0;
+	}
+	return ast_str_hash(key);
 }
 
 /*! AO2 comparison function for \ref stasis_app_control */
-static int control_compare(void *lhs, void *rhs, int flags)
+static int control_compare(void *obj, void *arg, int flags)
 {
-	const struct stasis_app_control *lhs_control = lhs;
-	const struct stasis_app_control *rhs_control = rhs;
-	const char *lhs_id = stasis_app_control_get_channel_id(lhs_control);
-	const char *rhs_id = flags & OBJ_KEY ?
-		rhs : stasis_app_control_get_channel_id(rhs_control);
+	const struct stasis_app_control *object_left = obj;
+	const struct stasis_app_control *object_right = arg;
+	const char *right_key = arg;
+	int cmp;
 
-	if (strcmp(lhs_id, rhs_id) == 0) {
-		return CMP_MATCH | CMP_STOP;
-	} else {
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+		right_key = stasis_app_control_get_channel_id(object_right);
+		/* Fall through */
+	case OBJ_SEARCH_KEY:
+		cmp = strcmp(stasis_app_control_get_channel_id(object_left), right_key);
+		break;
+	case OBJ_SEARCH_PARTIAL_KEY:
+		/*
+		 * We could also use a partial key struct containing a length
+		 * so strlen() does not get called for every comparison instead.
+		 */
+		cmp = strncmp(stasis_app_control_get_channel_id(object_left), right_key, strlen(right_key));
+		break;
+	default:
+		/*
+		 * What arg points to is specific to this traversal callback
+		 * and has no special meaning to astobj2.
+		 */
+		cmp = 0;
+		break;
+	}
+	if (cmp) {
 		return 0;
 	}
+	/*
+	 * At this point the traversal callback is identical to a sorted
+	 * container.
+	 */
+	return CMP_MATCH;
 }
 
 static int cleanup_cb(void *obj, void *arg, int flags)
 {
-	struct app *app = obj;
+	struct stasis_app *app = obj;
 
 	if (!app_is_finished(app)) {
 		return 0;
 	}
 
-	ast_verb(1, "Shutting down application '%s'\n", app_name(app));
+	ast_verb(1, "Shutting down application '%s'\n", stasis_app_name(app));
 	app_shutdown(app);
 
 	return CMP_MATCH;
@@ -196,33 +275,69 @@ struct stasis_app_control *stasis_app_control_find_by_channel(
 struct stasis_app_control *stasis_app_control_find_by_channel_id(
 	const char *channel_id)
 {
-	return ao2_find(app_controls, channel_id, OBJ_KEY);
+	return ao2_find(app_controls, channel_id, OBJ_SEARCH_KEY);
 }
 
 /*! AO2 hash function for bridges container  */
 static int bridges_hash(const void *obj, const int flags)
 {
-	const struct ast_bridge *bridge = obj;
-	const char *id = flags & OBJ_KEY ?
-		obj : bridge->uniqueid;
+	const struct ast_bridge *bridge;
+	const char *key;
 
-	return ast_str_hash(id);
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_KEY:
+		key = obj;
+		break;
+	case OBJ_SEARCH_OBJECT:
+		bridge = obj;
+		key = bridge->uniqueid;
+		break;
+	default:
+		/* Hash can only work on something with a full key. */
+		ast_assert(0);
+		return 0;
+	}
+	return ast_str_hash(key);
 }
 
 /*! AO2 comparison function for bridges container */
-static int bridges_compare(void *lhs, void *rhs, int flags)
+static int bridges_compare(void *obj, void *arg, int flags)
 {
-	const struct ast_bridge *lhs_bridge = lhs;
-	const struct ast_bridge *rhs_bridge = rhs;
-	const char *lhs_id = lhs_bridge->uniqueid;
-	const char *rhs_id = flags & OBJ_KEY ?
-		rhs : rhs_bridge->uniqueid;
+	const struct ast_bridge *object_left = obj;
+	const struct ast_bridge *object_right = arg;
+	const char *right_key = arg;
+	int cmp;
 
-	if (strcmp(lhs_id, rhs_id) == 0) {
-		return CMP_MATCH | CMP_STOP;
-	} else {
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+		right_key = object_right->uniqueid;
+		/* Fall through */
+	case OBJ_SEARCH_KEY:
+		cmp = strcmp(object_left->uniqueid, right_key);
+		break;
+	case OBJ_SEARCH_PARTIAL_KEY:
+		/*
+		 * We could also use a partial key struct containing a length
+		 * so strlen() does not get called for every comparison instead.
+		 */
+		cmp = strncmp(object_left->uniqueid, right_key, strlen(right_key));
+		break;
+	default:
+		/*
+		 * What arg points to is specific to this traversal callback
+		 * and has no special meaning to astobj2.
+		 */
+		cmp = 0;
+		break;
+	}
+	if (cmp) {
 		return 0;
 	}
+	/*
+	 * At this point the traversal callback is identical to a sorted
+	 * container.
+	 */
+	return CMP_MATCH;
 }
 
 /*!
@@ -248,18 +363,20 @@ static int bridges_moh_hash_fn(const void *obj, const int flags)
 	const struct stasis_app_bridge_moh_wrapper *wrapper;
 	const char *key;
 
-	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
-	case OBJ_KEY:
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_KEY:
 		key = obj;
-		return ast_str_hash(key);
-	case OBJ_POINTER:
+		break;
+	case OBJ_SEARCH_OBJECT:
 		wrapper = obj;
-		return ast_str_hash(wrapper->bridge_id);
+		key = wrapper->bridge_id;
+		break;
 	default:
 		/* Hash can only work on something with a full key. */
 		ast_assert(0);
 		return 0;
 	}
+	return ast_str_hash(key);
 }
 
 static int bridges_moh_sort_fn(const void *obj_left, const void *obj_right, const int flags)
@@ -269,14 +386,14 @@ static int bridges_moh_sort_fn(const void *obj_left, const void *obj_right, cons
 	const char *right_key = obj_right;
 	int cmp;
 
-	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
-	case OBJ_POINTER:
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
 		right_key = right->bridge_id;
 		/* Fall through */
-	case OBJ_KEY:
+	case OBJ_SEARCH_KEY:
 		cmp = strcmp(left->bridge_id, right_key);
 		break;
-	case OBJ_PARTIAL_KEY:
+	case OBJ_SEARCH_PARTIAL_KEY:
 		cmp = strncmp(left->bridge_id, right_key, strlen(right_key));
 		break;
 	default:
@@ -291,11 +408,7 @@ static int bridges_moh_sort_fn(const void *obj_left, const void *obj_right, cons
 /*! Removes the bridge to music on hold channel link */
 static void remove_bridge_moh(char *bridge_id)
 {
-	RAII_VAR(struct stasis_app_bridge_moh_wrapper *, moh_wrapper, ao2_find(app_bridges_moh, bridge_id, OBJ_KEY), ao2_cleanup);
-
-	if (moh_wrapper) {
-		ao2_unlink_flags(app_bridges_moh, moh_wrapper, OBJ_NOLOCK);
-	}
+	ao2_find(app_bridges_moh, bridge_id, OBJ_SEARCH_KEY | OBJ_UNLINK | OBJ_NODATA);
 	ast_free(bridge_id);
 }
 
@@ -321,7 +434,7 @@ static struct ast_channel *prepare_bridge_moh_channel(void)
 	RAII_VAR(struct ast_format_cap *, cap, NULL, ast_format_cap_destroy);
 	struct ast_format format;
 
-	cap = ast_format_cap_alloc_nolock();
+	cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	if (!cap) {
 		return NULL;
 	}
@@ -336,7 +449,8 @@ static void *moh_channel_thread(void *data)
 {
 	struct ast_channel *moh_channel = data;
 
-	while (!ast_safe_sleep(moh_channel, 1000));
+	while (!ast_safe_sleep(moh_channel, 1000)) {
+	}
 
 	ast_moh_stop(moh_channel);
 	ast_hangup(moh_channel);
@@ -365,14 +479,16 @@ static struct ast_channel *bridge_moh_create(struct ast_bridge *bridge)
 	}
 
 	chan = prepare_bridge_moh_channel();
-
 	if (!chan) {
 		return NULL;
 	}
 
 	/* The after bridge callback assumes responsibility of the bridge_id. */
-	ast_bridge_set_after_callback(chan, moh_after_bridge_cb, moh_after_bridge_cb_failed, bridge_id);
-
+	if (ast_bridge_set_after_callback(chan,
+		moh_after_bridge_cb, moh_after_bridge_cb_failed, bridge_id)) {
+		ast_hangup(chan);
+		return NULL;
+	}
 	bridge_id = NULL;
 
 	if (ast_unreal_channel_push_to_bridge(chan, bridge,
@@ -381,7 +497,8 @@ static struct ast_channel *bridge_moh_create(struct ast_bridge *bridge)
 		return NULL;
 	}
 
-	new_wrapper = ao2_alloc_options(sizeof(*new_wrapper), stasis_app_bridge_moh_wrapper_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	new_wrapper = ao2_alloc_options(sizeof(*new_wrapper),
+		stasis_app_bridge_moh_wrapper_destructor, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!new_wrapper) {
 		ast_hangup(chan);
 		return NULL;
@@ -391,11 +508,10 @@ static struct ast_channel *bridge_moh_create(struct ast_bridge *bridge)
 		ast_hangup(chan);
 		return NULL;
 	}
-
 	ast_string_field_set(new_wrapper, bridge_id, bridge->uniqueid);
 	ast_string_field_set(new_wrapper, channel_id, ast_channel_uniqueid(chan));
 
-	if (!ao2_link(app_bridges_moh, new_wrapper)) {
+	if (!ao2_link_flags(app_bridges_moh, new_wrapper, OBJ_NOLOCK)) {
 		ast_hangup(chan);
 		return NULL;
 	}
@@ -414,13 +530,13 @@ struct ast_channel *stasis_app_bridge_moh_channel(struct ast_bridge *bridge)
 {
 	RAII_VAR(struct stasis_app_bridge_moh_wrapper *, moh_wrapper, NULL, ao2_cleanup);
 
-	SCOPED_AO2LOCK(lock, app_bridges_moh);
+	{
+		SCOPED_AO2LOCK(lock, app_bridges_moh);
 
-	moh_wrapper = ao2_find(app_bridges_moh, bridge->uniqueid, OBJ_KEY | OBJ_NOLOCK);
-
-	if (!moh_wrapper) {
-		struct ast_channel *bridge_moh_channel = bridge_moh_create(bridge);
-		return bridge_moh_channel;
+		moh_wrapper = ao2_find(app_bridges_moh, bridge->uniqueid, OBJ_SEARCH_KEY | OBJ_NOLOCK);
+		if (!moh_wrapper) {
+			return bridge_moh_create(bridge);
+		}
 	}
 
 	return ast_channel_get_by_name(moh_wrapper->channel_id);
@@ -431,10 +547,7 @@ int stasis_app_bridge_moh_stop(struct ast_bridge *bridge)
 	RAII_VAR(struct stasis_app_bridge_moh_wrapper *, moh_wrapper, NULL, ao2_cleanup);
 	struct ast_channel *chan;
 
-	SCOPED_AO2LOCK(lock, app_bridges_moh);
-
-	moh_wrapper = ao2_find(app_bridges_moh, bridge->uniqueid, OBJ_KEY | OBJ_NOLOCK);
-
+	moh_wrapper = ao2_find(app_bridges_moh, bridge->uniqueid, OBJ_SEARCH_KEY | OBJ_UNLINK);
 	if (!moh_wrapper) {
 		return -1;
 	}
@@ -448,15 +561,13 @@ int stasis_app_bridge_moh_stop(struct ast_bridge *bridge)
 	ast_softhangup(chan, AST_CAUSE_NORMAL_CLEARING);
 	ao2_cleanup(chan);
 
-	ao2_unlink_flags(app_bridges_moh, moh_wrapper, OBJ_NOLOCK);
-
 	return 0;
 }
 
 struct ast_bridge *stasis_app_bridge_find_by_id(
 	const char *bridge_id)
 {
-	return ao2_find(app_bridges, bridge_id, OBJ_KEY);
+	return ao2_find(app_bridges, bridge_id, OBJ_SEARCH_KEY);
 }
 
 
@@ -470,17 +581,17 @@ static void control_unlink(struct stasis_app_control *control)
 		return;
 	}
 
-	ao2_unlink_flags(app_controls, control,
-		OBJ_POINTER | OBJ_UNLINK | OBJ_NODATA);
+	ao2_unlink(app_controls, control);
 	ao2_cleanup(control);
 }
 
-struct ast_bridge *stasis_app_bridge_create(const char *type)
+struct ast_bridge *stasis_app_bridge_create(const char *type, const char *name)
 {
 	struct ast_bridge *bridge;
-	int capabilities, flags = AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM | AST_BRIDGE_FLAG_MERGE_INHIBIT_TO
+	int capabilities;
+	int flags = AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM | AST_BRIDGE_FLAG_MERGE_INHIBIT_TO
 		| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_SWAP_INHIBIT_TO
-		| AST_BRIDGE_FLAG_TRANSFER_PROHIBITED;
+		| AST_BRIDGE_FLAG_TRANSFER_BRIDGE_ONLY;
 
 	if (ast_strlen_zero(type) || !strcmp(type, "mixing")) {
 		capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX |
@@ -493,9 +604,12 @@ struct ast_bridge *stasis_app_bridge_create(const char *type)
 		return NULL;
 	}
 
-	bridge = ast_bridge_base_new(capabilities, flags);
+	bridge = ast_bridge_base_new(capabilities, flags, "Stasis", name);
 	if (bridge) {
-		ao2_link(app_bridges, bridge);
+		if (!ao2_link(app_bridges, bridge)) {
+			ast_bridge_destroy(bridge, 0);
+			bridge = NULL;
+		}
 	}
 	return bridge;
 }
@@ -510,7 +624,7 @@ void stasis_app_bridge_destroy(const char *bridge_id)
 	ast_bridge_destroy(bridge, 0);
 }
 
-static int send_start_msg(struct app *app, struct ast_channel *chan,
+static int send_start_msg(struct stasis_app *app, struct ast_channel *chan,
 	int argc, char *argv[])
 {
 	RAII_VAR(struct ast_json *, msg, NULL, ast_json_unref);
@@ -518,20 +632,28 @@ static int send_start_msg(struct app *app, struct ast_channel *chan,
 
 	struct ast_json *json_args;
 	int i;
+	struct stasis_message_sanitizer *sanitize = stasis_app_get_sanitizer();
 
 	ast_assert(chan != NULL);
 
 	/* Set channel info */
+	ast_channel_lock(chan);
 	snapshot = ast_channel_snapshot_create(chan);
+	ast_channel_unlock(chan);
 	if (!snapshot) {
 		return -1;
+	}
+
+	if (sanitize && sanitize->channel_snapshot
+		&& sanitize->channel_snapshot(snapshot)) {
+		return 0;
 	}
 
 	msg = ast_json_pack("{s: s, s: o, s: [], s: o}",
 		"type", "StasisStart",
 		"timestamp", ast_json_timeval(ast_tvnow(), NULL),
 		"args",
-		"channel", ast_channel_snapshot_to_json(snapshot));
+		"channel", ast_channel_snapshot_to_json(snapshot, NULL));
 	if (!msg) {
 		return -1;
 	}
@@ -552,23 +674,31 @@ static int send_start_msg(struct app *app, struct ast_channel *chan,
 	return 0;
 }
 
-static int send_end_msg(struct app *app, struct ast_channel *chan)
+static int send_end_msg(struct stasis_app *app, struct ast_channel *chan)
 {
 	RAII_VAR(struct ast_json *, msg, NULL, ast_json_unref);
 	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
+	struct stasis_message_sanitizer *sanitize = stasis_app_get_sanitizer();
 
 	ast_assert(chan != NULL);
 
 	/* Set channel info */
+	ast_channel_lock(chan);
 	snapshot = ast_channel_snapshot_create(chan);
+	ast_channel_unlock(chan);
 	if (snapshot == NULL) {
 		return -1;
+	}
+
+	if (sanitize && sanitize->channel_snapshot
+		&& sanitize->channel_snapshot(snapshot)) {
+		return 0;
 	}
 
 	msg = ast_json_pack("{s: s, s: o, s: o}",
 		"type", "StasisEnd",
 		"timestamp", ast_json_timeval(ast_tvnow(), NULL),
-		"channel", ast_channel_snapshot_to_json(snapshot));
+		"channel", ast_channel_snapshot_to_json(snapshot, NULL));
 	if (!msg) {
 		return -1;
 	}
@@ -593,13 +723,14 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 {
 	SCOPED_MODULE_USE(ast_module_info->self);
 
-	RAII_VAR(struct app *, app, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_app *, app, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_app_control *, control, NULL, control_unlink);
+	struct ast_bridge *last_bridge = NULL;
 	int res = 0;
 
 	ast_assert(chan != NULL);
 
-	app = ao2_find(apps_registry, app_name, OBJ_KEY);
+	app = ao2_find(apps_registry, app_name, OBJ_SEARCH_KEY);
 	if (!app) {
 		ast_log(LOG_ERROR,
 			"Stasis app '%s' not registered\n", app_name);
@@ -636,7 +767,6 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 		RAII_VAR(struct ast_frame *, f, NULL, ast_frame_dtor);
 		int r;
 		int command_count;
-		struct ast_bridge *last_bridge = NULL;
 		struct ast_bridge *bridge = NULL;
 
 		/* Check to see if a bridge absorbed our hangup frame */
@@ -717,10 +847,9 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 
 int stasis_app_send(const char *app_name, struct ast_json *message)
 {
-	RAII_VAR(struct app *, app, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_app *, app, NULL, ao2_cleanup);
 
-	app = ao2_find(apps_registry, app_name, OBJ_KEY);
-
+	app = ao2_find(apps_registry, app_name, OBJ_SEARCH_KEY);
 	if (!app) {
 		/* XXX We can do a better job handling late binding, queueing up
 		 * the call for a few seconds to wait for the app to register.
@@ -729,19 +858,55 @@ int stasis_app_send(const char *app_name, struct ast_json *message)
 			"Stasis app '%s' not registered\n", app_name);
 		return -1;
 	}
-
 	app_send(app, message);
 	return 0;
 }
 
+static struct stasis_app *find_app_by_name(const char *app_name)
+{
+	struct stasis_app *res = NULL;
+
+	if (!ast_strlen_zero(app_name)) {
+		res = ao2_find(apps_registry, app_name, OBJ_SEARCH_KEY);
+	}
+
+	if (!res) {
+		ast_log(LOG_WARNING, "Could not find app '%s'\n",
+			app_name ? : "(null)");
+	}
+	return res;
+}
+
+static int append_name(void *obj, void *arg, int flags)
+{
+	struct stasis_app *app = obj;
+	struct ao2_container *apps = arg;
+
+	ast_str_container_add(apps, stasis_app_name(app));
+	return 0;
+}
+
+struct ao2_container *stasis_app_get_all(void)
+{
+	RAII_VAR(struct ao2_container *, apps, NULL, ao2_cleanup);
+
+	apps = ast_str_container_alloc(1);
+	if (!apps) {
+		return NULL;
+	}
+
+	ao2_callback(apps_registry, OBJ_NODATA, append_name, apps);
+
+	return ao2_bump(apps);
+}
+
 int stasis_app_register(const char *app_name, stasis_app_cb handler, void *data)
 {
-	RAII_VAR(struct app *, app, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_app *, app, NULL, ao2_cleanup);
 
 	SCOPED_LOCK(apps_lock, apps_registry, ao2_lock, ao2_unlock);
 
-	app = ao2_find(apps_registry, app_name, OBJ_KEY | OBJ_NOLOCK);
-
+	app = ao2_find(apps_registry, app_name, OBJ_SEARCH_KEY | OBJ_NOLOCK);
 	if (app) {
 		app_update(app, handler, data);
 	} else {
@@ -762,13 +927,13 @@ int stasis_app_register(const char *app_name, stasis_app_cb handler, void *data)
 
 void stasis_app_unregister(const char *app_name)
 {
-	RAII_VAR(struct app *, app, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_app *, app, NULL, ao2_cleanup);
 
 	if (!app_name) {
 		return;
 	}
 
-	app = ao2_find(apps_registry, app_name, OBJ_KEY);
+	app = ao2_find(apps_registry, app_name, OBJ_SEARCH_KEY);
 	if (!app) {
 		ast_log(LOG_ERROR,
 			"Stasis app '%s' not registered\n", app_name);
@@ -783,6 +948,251 @@ void stasis_app_unregister(const char *app_name)
 	cleanup();
 }
 
+/*!
+ * \internal \brief List of registered event sources.
+ */
+AST_RWLIST_HEAD_STATIC(event_sources, stasis_app_event_source);
+
+void stasis_app_register_event_source(struct stasis_app_event_source *obj)
+{
+	SCOPED_LOCK(lock, &event_sources, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_LIST_INSERT_TAIL(&event_sources, obj, next);
+	/* only need to bump the module ref on non-core sources because the
+	   core ones are [un]registered by this module. */
+	if (!stasis_app_is_core_event_source(obj)) {
+		ast_module_ref(ast_module_info->self);
+	}
+}
+
+void stasis_app_unregister_event_source(struct stasis_app_event_source *obj)
+{
+	struct stasis_app_event_source *source;
+	SCOPED_LOCK(lock, &event_sources, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&event_sources, source, next) {
+		if (source == obj) {
+			AST_RWLIST_REMOVE_CURRENT(next);
+			if (!stasis_app_is_core_event_source(obj)) {
+				ast_module_unref(ast_module_info->self);
+			}
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+}
+
+/*!
+ * \internal
+ * \brief Convert event source data to JSON.
+ *
+ * Calls each event source that has a "to_json" handler allowing each
+ * source to add data to the given JSON object.
+ *
+ * \param app application associated with the event source
+ * \param json a json object to "fill"
+ *
+ * \retval The given json object.
+ */
+static struct ast_json *app_event_sources_to_json(
+	const struct stasis_app *app, struct ast_json *json)
+{
+	struct stasis_app_event_source *source;
+	SCOPED_LOCK(lock, &event_sources, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
+	AST_LIST_TRAVERSE(&event_sources, source, next) {
+		if (source->to_json) {
+			source->to_json(app, json);
+		}
+	}
+	return json;
+}
+
+static struct ast_json *stasis_app_object_to_json(struct stasis_app *app)
+{
+	if (!app) {
+		return NULL;
+	}
+
+	return app_event_sources_to_json(app, app_to_json(app));
+}
+
+struct ast_json *stasis_app_to_json(const char *app_name)
+{
+	RAII_VAR(struct stasis_app *, app, find_app_by_name(app_name), ao2_cleanup);
+
+	return stasis_app_object_to_json(app);
+}
+
+/*!
+ * \internal
+ * \brief Finds an event source that matches a uri scheme.
+ *
+ * Uri(s) should begin with a particular scheme that can be matched
+ * against an event source.
+ *
+ * \param uri uri containing a scheme to match
+ *
+ * \retval an event source if found, NULL otherwise.
+ */
+static struct stasis_app_event_source *app_event_source_find(const char *uri)
+{
+	struct stasis_app_event_source *source;
+	SCOPED_LOCK(lock, &event_sources, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
+	AST_LIST_TRAVERSE(&event_sources, source, next) {
+		if (ast_begins_with(uri, source->scheme)) {
+			return source;
+		}
+	}
+	return NULL;
+}
+
+/*!
+ * \internal
+ * \brief Callback for subscription handling
+ *
+ * \param app [un]subscribing application
+ * \param uri scheme:id of an event source
+ * \param event_source being [un]subscribed [from]to
+ *
+ * \retval stasis_app_subscribe_res return code.
+ */
+typedef enum stasis_app_subscribe_res (*app_subscription_handler)(
+	struct stasis_app *app, const char *uri,
+	struct stasis_app_event_source *event_source);
+
+/*!
+ * \internal
+ * \brief Subscriptions handler for application [un]subscribing.
+ *
+ * \param app_name Name of the application to subscribe.
+ * \param event_source_uris URIs for the event sources to subscribe to.
+ * \param event_sources_count Array size of event_source_uris.
+ * \param json Optional output pointer for JSON representation of the app
+ *             after adding the subscription.
+ * \param handler [un]subscribe handler
+ *
+ * \retval stasis_app_subscribe_res return code.
+ */
+static enum stasis_app_subscribe_res app_handle_subscriptions(
+	const char *app_name, const char **event_source_uris,
+	int event_sources_count, struct ast_json **json,
+	app_subscription_handler handler)
+{
+	RAII_VAR(struct stasis_app *, app, find_app_by_name(app_name), ao2_cleanup);
+	int i;
+
+	if (!app) {
+		return STASIS_ASR_APP_NOT_FOUND;
+	}
+
+	for (i = 0; i < event_sources_count; ++i) {
+		const char *uri = event_source_uris[i];
+		enum stasis_app_subscribe_res res = STASIS_ASR_INTERNAL_ERROR;
+		struct stasis_app_event_source *event_source;
+
+		if (!(event_source = app_event_source_find(uri))) {
+			ast_log(LOG_WARNING, "Invalid scheme: %s\n", uri);
+			return STASIS_ASR_EVENT_SOURCE_BAD_SCHEME;
+		}
+
+		if (handler &&
+		    ((res = handler(app, uri, event_source)))) {
+			return res;
+		}
+	}
+
+	if (json) {
+		ast_debug(3, "%s: Successful; setting results\n", app_name);
+		*json = stasis_app_object_to_json(app);
+	}
+
+	return STASIS_ASR_OK;
+}
+
+/*!
+ * \internal
+ * \brief Subscribe an app to an event source.
+ *
+ * \param app subscribing application
+ * \param uri scheme:id of an event source
+ * \param event_source being subscribed to
+ *
+ * \retval stasis_app_subscribe_res return code.
+ */
+static enum stasis_app_subscribe_res app_subscribe(
+	struct stasis_app *app, const char *uri,
+	struct stasis_app_event_source *event_source)
+{
+	const char *app_name = stasis_app_name(app);
+	RAII_VAR(void *, obj, NULL, ao2_cleanup);
+
+	ast_debug(3, "%s: Checking %s\n", app_name, uri);
+
+	if (!event_source->find ||
+	    (!(obj = event_source->find(app, uri + strlen(event_source->scheme))))) {
+		ast_log(LOG_WARNING, "Event source not found: %s\n", uri);
+		return STASIS_ASR_EVENT_SOURCE_NOT_FOUND;
+	}
+
+	ast_debug(3, "%s: Subscribing to %s\n", app_name, uri);
+
+	if (!event_source->subscribe || (event_source->subscribe(app, obj))) {
+		ast_log(LOG_WARNING, "Error subscribing app '%s' to '%s'\n",
+			app_name, uri);
+		return STASIS_ASR_INTERNAL_ERROR;
+	}
+
+	return STASIS_ASR_OK;
+}
+
+enum stasis_app_subscribe_res stasis_app_subscribe(const char *app_name,
+	const char **event_source_uris, int event_sources_count,
+	struct ast_json **json)
+{
+	return app_handle_subscriptions(
+		app_name, event_source_uris, event_sources_count,
+		json, app_subscribe);
+}
+
+/*!
+ * \internal
+ * \brief Unsubscribe an app from an event source.
+ *
+ * \param app application to unsubscribe
+ * \param uri scheme:id of an event source
+ * \param event_source being unsubscribed from
+ *
+ * \retval stasis_app_subscribe_res return code.
+ */
+static enum stasis_app_subscribe_res app_unsubscribe(
+	struct stasis_app *app, const char *uri,
+	struct stasis_app_event_source *event_source)
+{
+	const char *app_name = stasis_app_name(app);
+	const char *id = uri + strlen(event_source->scheme);
+
+	if (!event_source->is_subscribed ||
+	    (!event_source->is_subscribed(app, id))) {
+		return STASIS_ASR_EVENT_SOURCE_NOT_FOUND;
+	}
+
+	ast_debug(3, "%s: Unsubscribing from %s\n", app_name, uri);
+
+	if (!event_source->unsubscribe || (event_source->unsubscribe(app, id))) {
+		ast_log(LOG_WARNING, "Error unsubscribing app '%s' to '%s'\n",
+			app_name, uri);
+		return -1;
+	}
+	return 0;
+}
+
+enum stasis_app_subscribe_res stasis_app_unsubscribe(const char *app_name,
+	const char **event_source_uris, int event_sources_count,
+	struct ast_json **json)
+{
+	return app_handle_subscriptions(
+		app_name, event_source_uris, event_sources_count,
+		json, app_unsubscribe);
+}
+
 void stasis_app_ref(void)
 {
 	ast_module_ref(ast_module_info->self);
@@ -793,36 +1203,10 @@ void stasis_app_unref(void)
 	ast_module_unref(ast_module_info->self);
 }
 
-static int load_module(void)
-{
-	apps_registry =	ao2_container_alloc(APPS_NUM_BUCKETS, app_hash,
-		app_compare);
-	if (apps_registry == NULL) {
-		return AST_MODULE_LOAD_FAILURE;
-	}
-
-	app_controls = ao2_container_alloc(CONTROLS_NUM_BUCKETS, control_hash,
-		control_compare);
-	if (app_controls == NULL) {
-		return AST_MODULE_LOAD_FAILURE;
-	}
-
-        app_bridges = ao2_container_alloc(BRIDGES_NUM_BUCKETS, bridges_hash,
-		bridges_compare);
-
-	app_bridges_moh = ao2_container_alloc_hash(
-		AO2_ALLOC_OPT_LOCK_MUTEX, AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT,
-		37, bridges_moh_hash_fn, bridges_moh_sort_fn, NULL);
-
-	if (!app_bridges_moh) {
-		return AST_MODULE_LOAD_FAILURE;
-	}
-
-	return AST_MODULE_LOAD_SUCCESS;
-}
-
 static int unload_module(void)
 {
+	stasis_app_unregister_event_sources();
+
 	ao2_cleanup(apps_registry);
 	apps_registry = NULL;
 
@@ -836,6 +1220,52 @@ static int unload_module(void)
 	app_bridges_moh = NULL;
 
 	return 0;
+}
+
+/* \brief Sanitization callback for channel snapshots */
+static int channel_snapshot_sanitizer(const struct ast_channel_snapshot *snapshot)
+{
+	if (!snapshot || !(snapshot->tech_properties & AST_CHAN_TP_INTERNAL)) {
+		return 0;
+	}
+	return 1;
+}
+
+/* \brief Sanitization callback for channel unique IDs */
+static int channel_id_sanitizer(const char *id)
+{
+	RAII_VAR(struct ast_channel_snapshot *, snapshot, ast_channel_snapshot_get_latest(id), ao2_cleanup);
+
+	return channel_snapshot_sanitizer(snapshot);
+}
+
+/* \brief Sanitization callbacks for communication to Stasis applications */
+struct stasis_message_sanitizer app_sanitizer = {
+	.channel_id = channel_id_sanitizer,
+	.channel_snapshot = channel_snapshot_sanitizer,
+};
+
+struct stasis_message_sanitizer *stasis_app_get_sanitizer(void)
+{
+	return &app_sanitizer;
+}
+
+static int load_module(void)
+{
+	apps_registry = ao2_container_alloc(APPS_NUM_BUCKETS, app_hash, app_compare);
+	app_controls = ao2_container_alloc(CONTROLS_NUM_BUCKETS, control_hash, control_compare);
+	app_bridges = ao2_container_alloc(BRIDGES_NUM_BUCKETS, bridges_hash, bridges_compare);
+	app_bridges_moh = ao2_container_alloc_hash(
+		AO2_ALLOC_OPT_LOCK_MUTEX, AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT,
+		37, bridges_moh_hash_fn, bridges_moh_sort_fn, NULL);
+	if (!apps_registry || !app_controls || !app_bridges || !app_bridges_moh) {
+		unload_module();
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	stasis_app_register_event_sources();
+
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "Stasis application support",

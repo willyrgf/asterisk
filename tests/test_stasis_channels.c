@@ -73,14 +73,17 @@ AST_TEST_DEFINE(channel_blob_create)
 
 	type = stasis_message_type_create("test-type", NULL);
 	chan = ast_channel_alloc(0, AST_STATE_DOWN, "100", "Alice", "100", "100", "default", NULL, 0, "TEST/Alice");
+	ast_channel_unlock(chan);
 	json = ast_json_pack("{s: s}",
 		     "foo", "bar");
 
 	/* Off nominal creation */
+	ast_channel_lock(chan);
 	ast_test_validate(test, NULL == ast_channel_blob_create(chan, NULL, json));
 
 	/* Test for single channel */
 	msg = ast_channel_blob_create(chan, type, json);
+	ast_channel_unlock(chan);
 	ast_test_validate(test, NULL != msg);
 	blob = stasis_message_data(msg);
 	ast_test_validate(test, NULL != blob);
@@ -125,11 +128,14 @@ AST_TEST_DEFINE(null_blob)
 
 	type = stasis_message_type_create("test-type", NULL);
 	chan = ast_channel_alloc(0, AST_STATE_DOWN, "100", "Alice", "100", "100", "default", NULL, 0, "TEST/Alice");
+	ast_channel_unlock(chan);
 	json = ast_json_pack("{s: s}",
 		     "foo", "bar");
 
 	/* Test for single channel */
+	ast_channel_lock(chan);
 	msg = ast_channel_blob_create(chan, type, NULL);
+	ast_channel_unlock(chan);
 	ast_test_validate(test, NULL != msg);
 	blob = stasis_message_data(msg);
 	ast_test_validate(test, NULL != blob);
@@ -192,13 +198,22 @@ AST_TEST_DEFINE(multi_channel_blob_snapshots)
 	json = ast_json_pack("{s: s}",
 		     "type", "test");
 	chan_alice = ast_channel_alloc(0, AST_STATE_DOWN, "100", "Alice", "100", "100", "default", NULL, 0, "TEST/Alice");
+	ast_channel_unlock(chan_alice);
 	chan_bob = ast_channel_alloc(0, AST_STATE_DOWN, "200", "Bob", "200", "200", "default", NULL, 0, "TEST/Bob");
+	ast_channel_unlock(chan_bob);
 	chan_charlie = ast_channel_alloc(0, AST_STATE_DOWN, "300", "Bob", "300", "300", "default", NULL, 0, "TEST/Charlie");
+	ast_channel_unlock(chan_charlie);
 
 	blob = ast_multi_channel_blob_create(json);
+	ast_channel_lock(chan_alice);
 	ast_multi_channel_blob_add_channel(blob, "Caller", ast_channel_snapshot_create(chan_alice));
+	ast_channel_unlock(chan_alice);
+	ast_channel_lock(chan_bob);
 	ast_multi_channel_blob_add_channel(blob, "Peer", ast_channel_snapshot_create(chan_bob));
+	ast_channel_unlock(chan_bob);
+	ast_channel_lock(chan_charlie);
 	ast_multi_channel_blob_add_channel(blob, "Peer", ast_channel_snapshot_create(chan_charlie));
+	ast_channel_unlock(chan_charlie);
 
 	/* Test for unknown role */
 	ast_test_validate(test, NULL == ast_multi_channel_blob_get_channel(blob, "Foobar"));
@@ -248,14 +263,17 @@ AST_TEST_DEFINE(channel_snapshot_json)
 		break;
 	}
 
-	ast_test_validate(test, NULL == ast_channel_snapshot_to_json(NULL));
+	ast_test_validate(test, NULL == ast_channel_snapshot_to_json(NULL, NULL));
 
 	chan = ast_channel_alloc(0, AST_STATE_DOWN, "cid_num", "cid_name", "acctcode", "exten", "context", NULL, 0, "TEST/name");
+	ast_channel_unlock(chan);
 	ast_test_validate(test, NULL != chan);
+	ast_channel_lock(chan);
 	snapshot = ast_channel_snapshot_create(chan);
+	ast_channel_unlock(chan);
 	ast_test_validate(test, NULL != snapshot);
 
-	actual = ast_channel_snapshot_to_json(snapshot);
+	actual = ast_channel_snapshot_to_json(snapshot, NULL);
 	expected = ast_json_pack("{ s: s, s: s, s: s, s: s,"
 				 "  s: { s: s, s: s, s: i },"
 				 "  s: { s: s, s: s },"

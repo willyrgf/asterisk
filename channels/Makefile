@@ -66,6 +66,7 @@ clean::
 	rm -f dahdi/*.o dahdi/*.i
 	rm -f sip/*.o sip/*.i
 	rm -f iax2/*.o iax2/*.i
+	rm -f pjsip/*.o pjsip/*.i
 	rm -f h323/libchanh323.a h323/Makefile.ast h323/*.o h323/*.dep
 
 dist-clean::
@@ -76,6 +77,9 @@ $(subst .c,.o,$(wildcard iax2/*.c)): _ASTCFLAGS+=$(call MOD_ASTCFLAGS,chan_iax2)
 
 $(if $(filter chan_sip,$(EMBEDDED_MODS)),modules.link,chan_sip.so): $(subst .c,.o,$(wildcard sip/*.c))
 $(subst .c,.o,$(wildcard sip/*.c)): _ASTCFLAGS+=$(call MOD_ASTCFLAGS,chan_sip)
+
+$(if $(filter chan_pjsip,$(EMBEDDED_MODS)),modules.link,chan_pjsip.so): $(subst .c,.o,$(wildcard pjsip/*.c))
+$(subst .c,.o,$(wildcard pjsip/*.c)): _ASTCFLAGS+=$(call MOD_ASTCFLAGS,chan_pjsip)
 
 # Additional objects to combine with chan_dahdi.so
 CHAN_DAHDI_OBJS= \

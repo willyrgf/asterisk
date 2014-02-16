@@ -441,10 +441,18 @@ static int unreal_queue_indicate(struct ast_unreal_pvt *p, struct ast_channel *a
  */
 static int unreal_colp_redirect_indicate(struct ast_unreal_pvt *p, struct ast_channel *ast, int condition)
 {
+	struct ast_channel *my_chan;
+	struct ast_channel *my_owner;
 	struct ast_channel *this_channel;
 	struct ast_channel *the_other_channel;
 	int isoutbound;
 	int res = 0;
+	unsigned char frame_data[1024];
+	struct ast_frame f = {
+		.frametype = AST_FRAME_CONTROL,
+		.subclass.integer = condition,
+		.data.ptr = frame_data,
+	};
 
 	/*
 	 * A connected line update frame may only contain a partial
@@ -458,7 +466,8 @@ static int unreal_colp_redirect_indicate(struct ast_unreal_pvt *p, struct ast_ch
 	 * redirecting information, which is why it is handled here as
 	 * well.
 	 */
-	ao2_lock(p);
+	ast_channel_unlock(ast);
+	ast_unreal_lock_all(p, &my_chan, &my_owner);
 	isoutbound = AST_UNREAL_IS_OUTBOUND(ast, p);
 	if (isoutbound) {
 		this_channel = p->chan;
@@ -468,13 +477,6 @@ static int unreal_colp_redirect_indicate(struct ast_unreal_pvt *p, struct ast_ch
 		the_other_channel = p->chan;
 	}
 	if (the_other_channel) {
-		unsigned char frame_data[1024];
-		struct ast_frame f = {
-			.frametype = AST_FRAME_CONTROL,
-			.subclass.integer = condition,
-			.data.ptr = frame_data,
-		};
-
 		if (condition == AST_CONTROL_CONNECTED_LINE) {
 			ast_connected_line_copy_to_caller(ast_channel_caller(the_other_channel),
 				ast_channel_connected(this_channel));
@@ -484,9 +486,20 @@ static int unreal_colp_redirect_indicate(struct ast_unreal_pvt *p, struct ast_ch
 			f.datalen = ast_redirecting_build_data(frame_data, sizeof(frame_data),
 				ast_channel_redirecting(this_channel), NULL);
 		}
-		res = unreal_queue_frame(p, isoutbound, &f, ast, 1);
+	}
+	if (my_chan) {
+		ast_channel_unlock(my_chan);
+		ast_channel_unref(my_chan);
+	}
+	if (my_owner) {
+		ast_channel_unlock(my_owner);
+		ast_channel_unref(my_owner);
+	}
+	if (the_other_channel) {
+		res = unreal_queue_frame(p, isoutbound, &f, ast, 0);
 	}
 	ao2_unlock(p);
+	ast_channel_lock(ast);
 
 	return res;
 }
@@ -745,7 +758,8 @@ int ast_unreal_channel_push_to_bridge(struct ast_channel *ast, struct ast_bridge
 	ast_set_flag(&features->feature_flags, flags);
 
 	/* Impart the semi2 channel into the bridge */
-	if (ast_bridge_impart(bridge, chan, NULL, features, 1)) {
+	if (ast_bridge_impart(bridge, chan, NULL, features,
+		AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 		ast_bridge_features_destroy(features);
 		ast_channel_unref(chan);
 		return -1;
@@ -892,57 +906,72 @@ struct ast_channel *ast_unreal_new_channels(struct ast_unreal_pvt *p,
 	 */
 	if (!(owner = ast_channel_alloc(1, semi1_state, NULL, NULL, NULL,
 			exten, context, linkedid, 0,
-			"%s/%s-%08x;1", tech->type, p->name, generated_seqno))
-		|| !(chan = ast_channel_alloc(1, semi2_state, NULL, NULL, NULL,
-			exten, context, ast_channel_linkedid(owner), 0,
-			"%s/%s-%08x;2", tech->type, p->name, generated_seqno))) {
-		if (owner) {
-			owner = ast_channel_release(owner);
-		}
-		ast_log(LOG_WARNING, "Unable to allocate channel structure(s)\n");
+			"%s/%s-%08x;1", tech->type, p->name, generated_seqno))) {
+		ast_log(LOG_WARNING, "Unable to allocate owner channel structure\n");
 		return NULL;
 	}
 
 	if (callid) {
 		ast_channel_callid_set(owner, callid);
-		ast_channel_callid_set(chan, callid);
 	}
 
 	ast_channel_tech_set(owner, tech);
-	ast_channel_tech_set(chan, tech);
+	ao2_ref(p, +1);
 	ast_channel_tech_pvt_set(owner, p);
-	ast_channel_tech_pvt_set(chan, p);
 
 	ast_format_cap_copy(ast_channel_nativeformats(owner), p->reqcap);
-	ast_format_cap_copy(ast_channel_nativeformats(chan), p->reqcap);
 
 	/* Determine our read/write format and set it on each channel */
 	ast_best_codec(p->reqcap, &fmt);
 	ast_format_copy(ast_channel_writeformat(owner), &fmt);
-	ast_format_copy(ast_channel_writeformat(chan), &fmt);
 	ast_format_copy(ast_channel_rawwriteformat(owner), &fmt);
-	ast_format_copy(ast_channel_rawwriteformat(chan), &fmt);
 	ast_format_copy(ast_channel_readformat(owner), &fmt);
-	ast_format_copy(ast_channel_readformat(chan), &fmt);
 	ast_format_copy(ast_channel_rawreadformat(owner), &fmt);
-	ast_format_copy(ast_channel_rawreadformat(chan), &fmt);
 
 	ast_set_flag(ast_channel_flags(owner), AST_FLAG_DISABLE_DEVSTATE_CACHE);
-	ast_set_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE);
 
 	ast_jb_configure(owner, &p->jb_conf);
 
 	if (ast_channel_cc_params_init(owner, requestor
 		? ast_channel_get_cc_config_params((struct ast_channel *) requestor) : NULL)) {
+		ao2_ref(p, -1);
+		ast_channel_unlock(owner);
 		ast_channel_release(owner);
-		ast_channel_release(chan);
 		return NULL;
 	}
 
-	/* Give the private a ref for each channel. */
-	ao2_ref(p, +2);
 	p->owner = owner;
+	ast_channel_unlock(owner);
+
+	if (!(chan = ast_channel_alloc(1, semi2_state, NULL, NULL, NULL,
+			exten, context, ast_channel_linkedid(owner), 0,
+			"%s/%s-%08x;2", tech->type, p->name, generated_seqno))) {
+		ast_log(LOG_WARNING, "Unable to allocate chan channel structure\n");
+		ao2_ref(p, -1);
+		ast_channel_release(owner);
+		return NULL;
+	}
+
+	if (callid) {
+		ast_channel_callid_set(chan, callid);
+	}
+
+	ast_channel_tech_set(chan, tech);
+	ao2_ref(p, +1);
+	ast_channel_tech_pvt_set(chan, p);
+
+	ast_format_cap_copy(ast_channel_nativeformats(chan), p->reqcap);
+
+	/* Format was already determined when setting up owner */
+	ast_format_copy(ast_channel_writeformat(chan), &fmt);
+	ast_format_copy(ast_channel_rawwriteformat(chan), &fmt);
+	ast_format_copy(ast_channel_readformat(chan), &fmt);
+	ast_format_copy(ast_channel_rawreadformat(chan), &fmt);
+
+	ast_set_flag(ast_channel_flags(chan), AST_FLAG_DISABLE_DEVSTATE_CACHE);
+
 	p->chan = chan;
+	ast_channel_unlock(chan);
 
 	return owner;
 }

@@ -135,6 +135,13 @@ void ast_copy_ha(const struct ast_ha *from, struct ast_ha *to);
 struct ast_ha *ast_append_ha(const char *sense, const char *stuff, struct ast_ha *path, int *error);
 
 /*!
+ * \brief Convert HAs to a comma separated string value
+ * \param ha the starting ha head
+ * \param buf string buffer to convert data to
+ */
+void ast_ha_join(const struct ast_ha *ha, struct ast_str **buf);
+
+/*!
  * \brief Add a rule to an ACL struct
  *
  * \details
@@ -208,7 +215,7 @@ enum ast_acl_sense ast_apply_acl(struct ast_acl_list *acl_list, const struct ast
  *
  * \param addr The IP address found.  The address family is used
  * as an input parameter to filter the returned addresses.  If
- * it is 0, both IPv4 and IPv6 addresses can be returned.
+ * it is AST_AF_UNSPEC, both IPv4 and IPv6 addresses can be returned.
  * \param hostname The hostname to look up
  *
  * \retval 0 Success

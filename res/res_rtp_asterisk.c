@@ -94,6 +94,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RTCP_PT_PSFB    206
 
 #define RTP_MTU		1200
+#define DTMF_SAMPLE_RATE_MS    8 /*!< DTMF samples per millisecond */
 
 #define DEFAULT_DTMF_TIMEOUT (150 * (8000 / 1000))	/*!< samples */
 
@@ -172,9 +173,6 @@ static int worker_terminate;
 #define TRANSPORT_SOCKET_RTCP 2
 #define TRANSPORT_TURN_RTP 3
 #define TRANSPORT_TURN_RTCP 4
-
-#define COMPONENT_RTP 1
-#define COMPONENT_RTCP 2
 
 /*! \brief RTP learning mode tracking information */
 struct rtp_learning_info {
@@ -541,9 +539,9 @@ static void ast_rtp_ice_start(struct ast_rtp_instance *instance)
 			candidates[cand_cnt].type = PJ_ICE_CAND_TYPE_RELAYED;
 		}
 
-		if (candidate->id == COMPONENT_RTP && rtp->turn_rtp) {
+		if (candidate->id == AST_RTP_ICE_COMPONENT_RTP && rtp->turn_rtp) {
 			pj_turn_sock_set_perm(rtp->turn_rtp, 1, &candidates[cand_cnt].addr, 1);
-		} else if (candidate->id == COMPONENT_RTCP && rtp->turn_rtcp) {
+		} else if (candidate->id == AST_RTP_ICE_COMPONENT_RTCP && rtp->turn_rtcp) {
 			pj_turn_sock_set_perm(rtp->turn_rtcp, 1, &candidates[cand_cnt].addr, 1);
 		}
 
@@ -557,7 +555,17 @@ static void ast_rtp_ice_start(struct ast_rtp_instance *instance)
 		pj_timer_heap_poll(timerheap, NULL);
 		rtp->ice_started = 1;
 		rtp->strict_rtp_state = STRICT_RTP_OPEN;
+		return;
 	}
+
+	/* even though create check list failed don't stop ice as
+	   it might still work */
+	ast_debug(1, "Failed to create ICE session check list\n");
+	/* however we do need to reset remote candidates since
+	   this function may be re-entered */
+	ao2_ref(rtp->remote_candidates, -1);
+	rtp->remote_candidates = NULL;
+	rtp->ice->rcand_cnt = rtp->ice->clist.count = 0;
 }
 
 static void ast_rtp_ice_stop(struct ast_rtp_instance *instance)
@@ -1478,7 +1486,7 @@ static int __rtp_recvfrom(struct ast_rtp_instance *instance, void *buf, size_t s
 
 		pj_sockaddr_parse(pj_AF_UNSPEC(), 0, &combined, &address);
 
-		status = pj_ice_sess_on_rx_pkt(rtp->ice, rtcp ? COMPONENT_RTCP : COMPONENT_RTP,
+		status = pj_ice_sess_on_rx_pkt(rtp->ice, rtcp ? AST_RTP_ICE_COMPONENT_RTCP : AST_RTP_ICE_COMPONENT_RTP,
 			rtcp ? TRANSPORT_SOCKET_RTCP : TRANSPORT_SOCKET_RTP, buf, len, &address,
 			pj_sockaddr_get_len(&address));
 		if (status != PJ_SUCCESS) {
@@ -1530,7 +1538,7 @@ static int __rtp_sendto(struct ast_rtp_instance *instance, void *buf, size_t siz
 	if (rtp->ice) {
 		pj_thread_register_check();
 
-		if (pj_ice_sess_send_data(rtp->ice, rtcp ? COMPONENT_RTCP : COMPONENT_RTP, temp, len) == PJ_SUCCESS) {
+		if (pj_ice_sess_send_data(rtp->ice, rtcp ? AST_RTP_ICE_COMPONENT_RTCP : AST_RTP_ICE_COMPONENT_RTP, temp, len) == PJ_SUCCESS) {
 			*ice = 1;
 			return 0;
 		}
@@ -1661,7 +1669,13 @@ static void rtp_add_candidates_to_ice(struct ast_rtp_instance *instance, struct 
 	unsigned int count = PJ_ARRAY_SIZE(address), pos = 0;
 
 	/* Add all the local interface IP addresses */
-	pj_enum_ip_interface(ast_sockaddr_is_ipv4(addr) ? pj_AF_INET() : pj_AF_INET6(), &count, address);
+	if (ast_sockaddr_is_ipv4(addr)) {
+		pj_enum_ip_interface(pj_AF_INET(), &count, address);
+	} else if (ast_sockaddr_is_any(addr)) {
+		pj_enum_ip_interface(pj_AF_UNSPEC(), &count, address);
+	} else {
+		pj_enum_ip_interface(pj_AF_INET6(), &count, address);
+	}
 
 	for (pos = 0; pos < count; pos++) {
 		pj_sockaddr_set_port(&address[pos], port);
@@ -1719,6 +1733,35 @@ static void rtp_add_candidates_to_ice(struct ast_rtp_instance *instance, struct 
 	}
 }
 #endif
+
+/*!
+ * \internal
+ * \brief Calculates the elapsed time from issue of the first tx packet in an
+ *        rtp session and a specified time
+ *
+ * \param rtp pointer to the rtp struct with the transmitted rtp packet
+ * \param delivery time of delivery - if NULL or zero value, will be ast_tvnow()
+ *
+ * \return time elapsed in milliseconds
+ */
+static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery)
+{
+	struct timeval t;
+	long ms;
+
+	if (ast_tvzero(rtp->txcore)) {
+		rtp->txcore = ast_tvnow();
+		rtp->txcore.tv_usec -= rtp->txcore.tv_usec % 20000;
+	}
+
+	t = (delivery && !ast_tvzero(*delivery)) ? *delivery : ast_tvnow();
+	if ((ms = ast_tvdiff_ms(t, rtp->txcore)) < 0) {
+		ms = 0;
+	}
+	rtp->txcore = t;
+
+	return (unsigned int) ms;
+}
 
 static int ast_rtp_new(struct ast_rtp_instance *instance,
 		       struct ast_sched_context *sched, struct ast_sockaddr *addr,
@@ -1779,7 +1822,7 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 		}
 
 		/* See if we ran out of ports or if the bind actually failed because of something other than the address being in use */
-		if (x == startplace || errno != EADDRINUSE) {
+		if (x == startplace || (errno != EADDRINUSE && errno != EACCES)) {
 			ast_log(LOG_ERROR, "Oh dear... we couldn't allocate a port for RTP instance '%p'\n", instance);
 			close(rtp->s);
 			ast_free(rtp);
@@ -1805,7 +1848,7 @@ static int ast_rtp_new(struct ast_rtp_instance *instance,
 		rtp->ice->user_data = rtp;
 
 		/* Add all of the available candidates to the ICE session */
-		rtp_add_candidates_to_ice(instance, rtp, addr, x, COMPONENT_RTP, TRANSPORT_SOCKET_RTP, &ast_rtp_turn_rtp_sock_cb, &rtp->turn_rtp);
+		rtp_add_candidates_to_ice(instance, rtp, addr, x, AST_RTP_ICE_COMPONENT_RTP, TRANSPORT_SOCKET_RTP, &ast_rtp_turn_rtp_sock_cb, &rtp->turn_rtp);
 	}
 #endif
 
@@ -1951,6 +1994,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 	rtp->send_duration = 160;
+	rtp->lastts += calc_txstamp(rtp, NULL) * DTMF_SAMPLE_RATE_MS;
 	rtp->lastdigitts = rtp->lastts + rtp->send_duration;
 
 	/* Create the actual packet that we will be sending */
@@ -1969,7 +2013,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 				ast_sockaddr_stringify(&remote_address),
 				strerror(errno));
 		}
-		update_address_with_ice_candidate(rtp, COMPONENT_RTP, &remote_address);
+		update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTP, &remote_address);
 		if (rtp_debug_test_addr(&remote_address)) {
 			ast_verbose("Sent RTP DTMF packet to %s%s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
 				    ast_sockaddr_stringify(&remote_address),
@@ -2019,7 +2063,7 @@ static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
 			strerror(errno));
 	}
 
-	update_address_with_ice_candidate(rtp, COMPONENT_RTP, &remote_address);
+	update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTP, &remote_address);
 
 	if (rtp_debug_test_addr(&remote_address)) {
 		ast_verbose("Sent RTP DTMF packet to %s%s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
@@ -2031,6 +2075,7 @@ static int ast_rtp_dtmf_continuation(struct ast_rtp_instance *instance)
 	/* And now we increment some values for the next time we swing by */
 	rtp->seqno++;
 	rtp->send_duration += 160;
+	rtp->lastts += calc_txstamp(rtp, NULL) * DTMF_SAMPLE_RATE_MS;
 
 	return 0;
 }
@@ -2094,7 +2139,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 				strerror(errno));
 		}
 
-		update_address_with_ice_candidate(rtp, COMPONENT_RTP, &remote_address);
+		update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTP, &remote_address);
 
 		if (rtp_debug_test_addr(&remote_address)) {
 			ast_verbose("Sent RTP DTMF packet to %s%s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
@@ -2108,7 +2153,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 	res = 0;
 
 	/* Oh and we can't forget to turn off the stuff that says we are sending DTMF */
-	rtp->lastts += rtp->send_duration;
+	rtp->lastts += calc_txstamp(rtp, NULL) * DTMF_SAMPLE_RATE_MS;
 cleanup:
 	rtp->sending_digit = 0;
 	rtp->send_digit = 0;
@@ -2156,25 +2201,6 @@ static void ast_rtp_change_source(struct ast_rtp_instance *instance)
 	rtp->ssrc = ssrc;
 
 	return;
-}
-
-static unsigned int calc_txstamp(struct ast_rtp *rtp, struct timeval *delivery)
-{
-	struct timeval t;
-	long ms;
-
-	if (ast_tvzero(rtp->txcore)) {
-		rtp->txcore = ast_tvnow();
-		rtp->txcore.tv_usec -= rtp->txcore.tv_usec % 20000;
-	}
-
-	t = (delivery && !ast_tvzero(*delivery)) ? *delivery : ast_tvnow();
-	if ((ms = ast_tvdiff_ms(t, rtp->txcore)) < 0) {
-		ms = 0;
-	}
-	rtp->txcore = t;
-
-	return (unsigned int) ms;
 }
 
 static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw)
@@ -2364,7 +2390,7 @@ static int ast_rtcp_write_report(struct ast_rtp_instance *instance, int sr)
 		rtp->rtcp->rr_count++;
 	}
 
-	update_address_with_ice_candidate(rtp, COMPONENT_RTCP, &remote_address);
+	update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTCP, &remote_address);
 
 	if (rtcp_debug_test_addr(&rtp->rtcp->them)) {
 		ast_verbose("* Sent RTCP %s to %s%s\n", sr ? "SR" : "RR",
@@ -2545,7 +2571,7 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 			}
 		}
 
-		update_address_with_ice_candidate(rtp, COMPONENT_RTP, &remote_address);
+		update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTP, &remote_address);
 
 		if (rtp_debug_test_addr(&remote_address)) {
 			ast_verbose("Sent RTP packet to      %s%s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
@@ -3210,10 +3236,6 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 	int res, packetwords, position = 0;
 	int report_counter = 0;
 	struct ast_rtp_rtcp_report_block *report_block;
-	RAII_VAR(struct ast_rtp_rtcp_report *, rtcp_report,
-			NULL,
-			ao2_cleanup);
-	RAII_VAR(struct ast_json *, message_blob, NULL, ast_json_unref);
 	struct ast_frame *f = &ast_null_frame;
 
 	/* Read in RTCP data from the socket */
@@ -3274,6 +3296,8 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 	while (position < packetwords) {
 		int i, pt, rc;
 		unsigned int length;
+		struct ast_json *message_blob;
+		RAII_VAR(struct ast_rtp_rtcp_report *, rtcp_report, NULL, ao2_cleanup);
 
 		i = position;
 		length = ntohl(rtcpheader[i]);
@@ -3397,6 +3421,7 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 			ast_rtp_publish_rtcp_message(instance, ast_rtp_rtcp_received_type(),
 					rtcp_report,
 					message_blob);
+			ast_json_unref(message_blob);
 			break;
 		case RTCP_PT_FUR:
 		/* Handle RTCP FIR as FUR */
@@ -3507,7 +3532,7 @@ static int bridge_p2p_rtp_write(struct ast_rtp_instance *instance, unsigned int 
 		return 0;
 	}
 
-	update_address_with_ice_candidate(rtp, COMPONENT_RTP, &remote_address);
+	update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTP, &remote_address);
 
 	if (rtp_debug_test_addr(&remote_address)) {
 		ast_verbose("Sent RTP P2P packet to %s%s (type %-2.2d, len %-6.6u)\n",
@@ -3690,8 +3715,16 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		f = ast_frisolate(&srcupdate);
 		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
 
+		rtp->seedrxseqno = 0;
+		rtp->rxcount = 0;
+		rtp->cycles = 0;
+		rtp->lastrxseqno = 0;
 		rtp->last_seqno = 0;
 		rtp->last_end_timestamp = 0;
+		if (rtp->rtcp) {
+			rtp->rtcp->expected_prior = 0;
+			rtp->rtcp->received_prior = 0;
+		}
 	}
 
 	rtp->rxssrc = ssrc;
@@ -3958,7 +3991,7 @@ static void ast_rtp_prop_set(struct ast_rtp_instance *instance, enum ast_rtp_pro
 
 #ifdef HAVE_PJPROJECT
 			if (rtp->ice) {
-				rtp_add_candidates_to_ice(instance, rtp, &rtp->rtcp->us, ast_sockaddr_port(&rtp->rtcp->us), COMPONENT_RTCP, TRANSPORT_SOCKET_RTCP,
+				rtp_add_candidates_to_ice(instance, rtp, &rtp->rtcp->us, ast_sockaddr_port(&rtp->rtcp->us), AST_RTP_ICE_COMPONENT_RTCP, TRANSPORT_SOCKET_RTCP,
 							  &ast_rtp_turn_rtcp_sock_cb, &rtp->turn_rtcp);
 			}
 #endif
@@ -4239,7 +4272,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 		return res;
 	}
 
-	update_address_with_ice_candidate(rtp, COMPONENT_RTP, &remote_address);
+	update_address_with_ice_candidate(rtp, AST_RTP_ICE_COMPONENT_RTP, &remote_address);
 
 	if (rtp_debug_test_addr(&remote_address)) {
 		ast_verbose("Sent Comfort Noise RTP packet to %s%s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6u)\n",
@@ -4536,8 +4569,6 @@ static int load_module(void)
 {
 #ifdef HAVE_PJPROJECT
 	pj_lock_t *lock;
-
-	pj_log_set_level(0);
 
 	if (pj_init() != PJ_SUCCESS) {
 		return AST_MODULE_LOAD_DECLINE;

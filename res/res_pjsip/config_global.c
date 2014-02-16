@@ -22,11 +22,13 @@
 #include <pjlib.h>
 
 #include "asterisk/res_pjsip.h"
+#include "include/res_pjsip_private.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/ast_version.h"
 
 #define DEFAULT_MAX_FORWARDS 70
 #define DEFAULT_USERAGENT_PREFIX "Asterisk PBX"
+#define DEFAULT_OUTBOUND_ENDPOINT "default_outbound_endpoint"
 
 static char default_useragent[128];
 
@@ -34,6 +36,9 @@ struct global_config {
 	SORCERY_OBJECT(details);
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(useragent);
+		AST_STRING_FIELD(default_outbound_endpoint);
+		/*! Debug logging yes|no|host */
+		AST_STRING_FIELD(debug);
 	);
 	/* Value to put in Max-Forwards header */
 	unsigned int max_forwards;
@@ -50,7 +55,7 @@ static void *global_alloc(const char *name)
 {
 	struct global_config *cfg = ast_sorcery_generic_alloc(sizeof(*cfg), global_destructor);
 
-	if (!cfg || ast_string_field_init(cfg, 64)) {
+	if (!cfg || ast_string_field_init(cfg, 80)) {
 		return NULL;
 	}
 
@@ -70,8 +75,49 @@ static int global_apply(const struct ast_sorcery *sorcery, void *obj)
 	return 0;
 }
 
-int ast_sip_initialize_sorcery_global(struct ast_sorcery *sorcery)
+static struct global_config *get_global_cfg(void)
 {
+	RAII_VAR(struct ao2_container *, globals, ast_sorcery_retrieve_by_fields(
+			 ast_sip_get_sorcery(), "global", AST_RETRIEVE_FLAG_MULTIPLE,
+			 NULL), ao2_cleanup);
+
+	if (!globals) {
+		return NULL;
+	}
+
+	return ao2_find(globals, NULL, 0);
+}
+
+char *ast_sip_global_default_outbound_endpoint(void)
+{
+	RAII_VAR(struct global_config *, cfg, get_global_cfg(), ao2_cleanup);
+
+	if (!cfg) {
+		return NULL;
+	}
+
+	return ast_strdup(cfg->default_outbound_endpoint);
+}
+
+char *ast_sip_get_debug(void)
+{
+	char *res;
+	struct global_config *cfg = get_global_cfg();
+
+	if (!cfg) {
+		return ast_strdup("no");
+	}
+
+	res = ast_strdup(cfg->debug);
+	ao2_ref(cfg, -1);
+
+	return res;
+}
+
+int ast_sip_initialize_sorcery_global(void)
+{
+	struct ast_sorcery *sorcery = ast_sip_get_sorcery();
+
 	snprintf(default_useragent, sizeof(default_useragent), "%s %s", DEFAULT_USERAGENT_PREFIX, ast_get_version());
 
 	ast_sorcery_apply_default(sorcery, "global", "config", "pjsip.conf,criteria=type=global");
@@ -81,10 +127,14 @@ int ast_sip_initialize_sorcery_global(struct ast_sorcery *sorcery)
 	}
 
 	ast_sorcery_object_field_register(sorcery, "global", "type", "", OPT_NOOP_T, 0, 0);
-	ast_sorcery_object_field_register(sorcery, "global", "maxforwards", __stringify(DEFAULT_MAX_FORWARDS),
+	ast_sorcery_object_field_register(sorcery, "global", "max_forwards", __stringify(DEFAULT_MAX_FORWARDS),
 			OPT_UINT_T, 0, FLDSET(struct global_config, max_forwards));
-	ast_sorcery_object_field_register(sorcery, "global", "useragent", default_useragent,
+	ast_sorcery_object_field_register(sorcery, "global", "user_agent", default_useragent,
 			OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, useragent));
+	ast_sorcery_object_field_register(sorcery, "global", "default_outbound_endpoint", DEFAULT_OUTBOUND_ENDPOINT,
+			OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, default_outbound_endpoint));
+	ast_sorcery_object_field_register(sorcery, "global", "debug", "no",
+			OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, debug));
 
 	return 0;
 }

@@ -114,27 +114,28 @@ struct ao2_stats {
 static struct ao2_stats ao2;
 #endif
 
-#ifndef HAVE_BKTR	/* backtrace support */
-void ao2_bt(void) {}
-#else
+#ifdef HAVE_BKTR
 #include <execinfo.h>    /* for backtrace */
+#endif
 
 void ao2_bt(void)
 {
-	int c, i;
+#ifdef HAVE_BKTR
+	int depth;
+	int idx;
 #define N1	20
 	void *addresses[N1];
 	char **strings;
 
-	c = backtrace(addresses, N1);
-	strings = ast_bt_get_symbols(addresses,c);
-	ast_verbose("backtrace returned: %d\n", c);
-	for(i = 0; i < c; i++) {
-		ast_verbose("%d: %p %s\n", i, addresses[i], strings[i]);
+	depth = backtrace(addresses, N1);
+	strings = ast_bt_get_symbols(addresses, depth);
+	ast_verbose("backtrace returned: %d\n", depth);
+	for (idx = 0; idx < depth; ++idx) {
+		ast_verbose("%d: %p %s\n", idx, addresses[idx], strings[idx]);
 	}
 	ast_std_free(strings);
-}
 #endif
+}
 
 #define INTERNAL_OBJ_MUTEX(user_data) \
 	((struct astobj2_lock *) (((char *) (user_data)) - sizeof(struct astobj2_lock)))
@@ -477,38 +478,23 @@ static int internal_ao2_ref(void *user_data, int delta, const char *file, int li
 	ast_atomic_fetchadd_int(&ao2.total_objects, -1);
 #endif
 
+	/* In case someone uses an object after it's been freed */
+	obj->priv_data.magic = 0;
+
 	switch (obj->priv_data.options & AO2_ALLOC_OPT_LOCK_MASK) {
 	case AO2_ALLOC_OPT_LOCK_MUTEX:
 		obj_mutex = INTERNAL_OBJ_MUTEX(user_data);
 		ast_mutex_destroy(&obj_mutex->mutex.lock);
 
-		/*
-		 * For safety, zero-out the astobj2_lock header and also the
-		 * first word of the user-data, which we make sure is always
-		 * allocated.
-		 */
-		memset(obj_mutex, '\0', sizeof(*obj_mutex) + sizeof(void *) );
 		ast_free(obj_mutex);
 		break;
 	case AO2_ALLOC_OPT_LOCK_RWLOCK:
 		obj_rwlock = INTERNAL_OBJ_RWLOCK(user_data);
 		ast_rwlock_destroy(&obj_rwlock->rwlock.lock);
 
-		/*
-		 * For safety, zero-out the astobj2_rwlock header and also the
-		 * first word of the user-data, which we make sure is always
-		 * allocated.
-		 */
-		memset(obj_rwlock, '\0', sizeof(*obj_rwlock) + sizeof(void *) );
 		ast_free(obj_rwlock);
 		break;
 	case AO2_ALLOC_OPT_LOCK_NOLOCK:
-		/*
-		 * For safety, zero-out the astobj2 header and also the first
-		 * word of the user-data, which we make sure is always
-		 * allocated.
-		 */
-		memset(obj, '\0', sizeof(*obj) + sizeof(void *) );
 		ast_free(obj);
 		break;
 	default:
@@ -573,14 +559,6 @@ static void *internal_ao2_alloc(size_t data_size, ao2_destructor_fn destructor_f
 	struct astobj2 *obj;
 	struct astobj2_lock *obj_mutex;
 	struct astobj2_rwlock *obj_rwlock;
-
-	if (data_size < sizeof(void *)) {
-		/*
-		 * We always alloc at least the size of a void *,
-		 * for debugging purposes.
-		 */
-		data_size = sizeof(void *);
-	}
 
 	switch (options & AO2_ALLOC_OPT_LOCK_MASK) {
 	case AO2_ALLOC_OPT_LOCK_MUTEX:
@@ -1189,7 +1167,8 @@ void *__ao2_unlink_debug(struct ao2_container *c, void *user_data, int flags,
 		return NULL;
 	}
 
-	flags |= (OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA);
+	flags &= ~OBJ_SEARCH_MASK;
+	flags |= (OBJ_UNLINK | OBJ_SEARCH_OBJECT | OBJ_NODATA);
 	__ao2_callback_debug(c, flags, ao2_match_by_addr, user_data, tag, file, line, func);
 
 	return NULL;
@@ -1203,7 +1182,8 @@ void *__ao2_unlink(struct ao2_container *c, void *user_data, int flags)
 		return NULL;
 	}
 
-	flags |= (OBJ_UNLINK | OBJ_POINTER | OBJ_NODATA);
+	flags &= ~OBJ_SEARCH_MASK;
+	flags |= (OBJ_UNLINK | OBJ_SEARCH_OBJECT | OBJ_NODATA);
 	__ao2_callback(c, flags, ao2_match_by_addr, user_data);
 
 	return NULL;
@@ -1702,6 +1682,11 @@ void *__ao2_iterator_next(struct ao2_iterator *iter)
 	return internal_ao2_iterator_next(iter, NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__);
 }
 
+int ao2_iterator_count(struct ao2_iterator *iter)
+{
+	return ao2_container_count(iter->c);
+}
+
 static void container_destruct(void *_c)
 {
 	struct ao2_container *c = _c;
@@ -2137,7 +2122,7 @@ static struct hash_bucket_node *hash_ao2_new_node(struct ao2_container_hash *sel
 		return NULL;
 	}
 
-	i = abs(self->hash_fn(obj_new, OBJ_POINTER));
+	i = abs(self->hash_fn(obj_new, OBJ_SEARCH_OBJECT));
 	i %= self->n_buckets;
 
 	if (tag) {
@@ -2177,7 +2162,7 @@ static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash 
 	if (options & AO2_CONTAINER_ALLOC_OPT_INSERT_BEGIN) {
 		if (sort_fn) {
 			AST_DLLIST_TRAVERSE_BACKWARDS_SAFE_BEGIN(&bucket->list, cur, links) {
-				cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_POINTER);
+				cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 				if (cmp > 0) {
 					continue;
 				}
@@ -2209,7 +2194,7 @@ static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash 
 	} else {
 		if (sort_fn) {
 			AST_DLLIST_TRAVERSE_SAFE_BEGIN(&bucket->list, cur, links) {
-				cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_POINTER);
+				cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 				if (cmp < 0) {
 					continue;
 				}
@@ -2246,8 +2231,6 @@ static enum ao2_container_insert hash_ao2_insert_node(struct ao2_container_hash 
 struct hash_traversal_state {
 	/*! Active sort function in the traversal if not NULL. */
 	ao2_sort_fn *sort_fn;
-	/*! Node returned in the sorted starting hash bucket if OBJ_CONTINUE flag set. (Reffed) */
-	struct hash_bucket_node *first_node;
 	/*! Saved comparison callback arg pointer. */
 	void *arg;
 	/*! Starting hash bucket */
@@ -2258,8 +2241,6 @@ struct hash_traversal_state {
 	enum search_flags flags;
 	/*! TRUE if it is a descending search */
 	unsigned int descending:1;
-	/*! TRUE if the starting bucket needs to be rechecked because of sorting skips. */
-	unsigned int recheck_starting_bucket:1;
 };
 
 struct hash_traversal_state_check {
@@ -2309,15 +2290,24 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 	 * If lookup by pointer or search key, run the hash and optional
 	 * sort functions.  Otherwise, traverse the whole container.
 	 */
-	if (flags & (OBJ_POINTER | OBJ_KEY)) {
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+	case OBJ_SEARCH_KEY:
 		/* we know hash can handle this case */
-		bucket_cur = abs(self->hash_fn(arg, flags & (OBJ_POINTER | OBJ_KEY)));
+		bucket_cur = abs(self->hash_fn(arg, flags & OBJ_SEARCH_MASK));
 		bucket_cur %= self->n_buckets;
 		state->sort_fn = self->common.sort_fn;
-	} else {
+		break;
+	case OBJ_SEARCH_PARTIAL_KEY:
+		/* scan all buckets for partial key matches */
+		bucket_cur = -1;
+		state->sort_fn = self->common.sort_fn;
+		break;
+	default:
 		/* don't know, let's scan all buckets */
 		bucket_cur = -1;
-		state->sort_fn = (flags & OBJ_PARTIAL_KEY) ? self->common.sort_fn : NULL;
+		state->sort_fn = NULL;
+		break;
 	}
 
 	if (state->descending) {
@@ -2331,12 +2321,6 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 			state->bucket_last = 0;
 		} else {
 			state->bucket_last = bucket_cur;
-		}
-		if (flags & OBJ_CONTINUE) {
-			state->bucket_last = 0;
-			if (state->sort_fn) {
-				state->recheck_starting_bucket = 1;
-			}
 		}
 		state->bucket_start = bucket_cur;
 
@@ -2353,19 +2337,11 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->common.obj, arg,
-						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					cmp = state->sort_fn(node->common.obj, arg, flags & OBJ_SEARCH_MASK);
 					if (cmp > 0) {
 						continue;
 					}
-					if (flags & OBJ_CONTINUE) {
-						/* Remember first node when we wrap around. */
-						__ao2_ref(node, +1);
-						state->first_node = node;
-
-						/* From now on all nodes are matching */
-						state->sort_fn = NULL;
-					} else if (cmp < 0) {
+					if (cmp < 0) {
 						/* No more nodes in this bucket are possible to match. */
 						break;
 					}
@@ -2374,31 +2350,6 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 				/* We have the first traversal node */
 				__ao2_ref(node, +1);
 				return node;
-			}
-
-			/* Was this the starting bucket? */
-			if (bucket_cur == state->bucket_start
-				&& (flags & OBJ_CONTINUE)
-				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
-				/* In case the bucket was empty or none of the nodes matched. */
-				state->sort_fn = NULL;
-			}
-
-			/* Was this the first container bucket? */
-			if (bucket_cur == 0
-				&& (flags & OBJ_CONTINUE)
-				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
-				/* Move to the end to ensure we check every bucket */
-				bucket_cur = self->n_buckets;
-				state->bucket_last = state->bucket_start + 1;
-				if (state->recheck_starting_bucket) {
-					/*
-					 * We have to recheck the first part of the starting bucket
-					 * because of sorting skips.
-					 */
-					state->recheck_starting_bucket = 0;
-					--state->bucket_last;
-				}
 			}
 		}
 	} else {
@@ -2412,12 +2363,6 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 			state->bucket_last = self->n_buckets;
 		} else {
 			state->bucket_last = bucket_cur + 1;
-		}
-		if (flags & OBJ_CONTINUE) {
-			state->bucket_last = self->n_buckets;
-			if (state->sort_fn) {
-				state->recheck_starting_bucket = 1;
-			}
 		}
 		state->bucket_start = bucket_cur;
 
@@ -2434,19 +2379,11 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->common.obj, arg,
-						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					cmp = state->sort_fn(node->common.obj, arg, flags & OBJ_SEARCH_MASK);
 					if (cmp < 0) {
 						continue;
 					}
-					if (flags & OBJ_CONTINUE) {
-						/* Remember first node when we wrap around. */
-						__ao2_ref(node, +1);
-						state->first_node = node;
-
-						/* From now on all nodes are matching */
-						state->sort_fn = NULL;
-					} else if (cmp > 0) {
+					if (cmp > 0) {
 						/* No more nodes in this bucket are possible to match. */
 						break;
 					}
@@ -2455,31 +2392,6 @@ static struct hash_bucket_node *hash_ao2_find_first(struct ao2_container_hash *s
 				/* We have the first traversal node */
 				__ao2_ref(node, +1);
 				return node;
-			}
-
-			/* Was this the starting bucket? */
-			if (bucket_cur == state->bucket_start
-				&& (flags & OBJ_CONTINUE)
-				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
-				/* In case the bucket was empty or none of the nodes matched. */
-				state->sort_fn = NULL;
-			}
-
-			/* Was this the last container bucket? */
-			if (bucket_cur == self->n_buckets - 1
-				&& (flags & OBJ_CONTINUE)
-				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
-				/* Move to the beginning to ensure we check every bucket */
-				bucket_cur = -1;
-				state->bucket_last = state->bucket_start;
-				if (state->recheck_starting_bucket) {
-					/*
-					 * We have to recheck the first part of the starting bucket
-					 * because of sorting skips.
-					 */
-					state->recheck_starting_bucket = 0;
-					++state->bucket_last;
-				}
 			}
 		}
 	}
@@ -2529,11 +2441,6 @@ static struct hash_bucket_node *hash_ao2_find_next(struct ao2_container_hash *se
 			for (node = AST_DLLIST_LAST(&self->buckets[bucket_cur].list);
 				node;
 				node = AST_DLLIST_PREV(node, links)) {
-				if (node == state->first_node) {
-					/* We have wrapped back to the starting point. */
-					__ao2_ref(prev, -1);
-					return NULL;
-				}
 				if (!node->common.obj) {
 					/* Node is empty */
 					continue;
@@ -2541,8 +2448,7 @@ static struct hash_bucket_node *hash_ao2_find_next(struct ao2_container_hash *se
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->common.obj, arg,
-						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					cmp = state->sort_fn(node->common.obj, arg, flags & OBJ_SEARCH_MASK);
 					if (cmp > 0) {
 						continue;
 					}
@@ -2569,23 +2475,6 @@ static struct hash_bucket_node *hash_ao2_find_next(struct ao2_container_hash *se
 
 hash_descending_resume:;
 			}
-
-			/* Was this the first container bucket? */
-			if (bucket_cur == 0
-				&& (flags & OBJ_CONTINUE)
-				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
-				/* Move to the end to ensure we check every bucket */
-				bucket_cur = self->n_buckets;
-				state->bucket_last = state->bucket_start + 1;
-				if (state->recheck_starting_bucket) {
-					/*
-					 * We have to recheck the first part of the starting bucket
-					 * because of sorting skips.
-					 */
-					state->recheck_starting_bucket = 0;
-					--state->bucket_last;
-				}
-			}
 		}
 	} else {
 		goto hash_ascending_resume;
@@ -2596,11 +2485,6 @@ hash_descending_resume:;
 			for (node = AST_DLLIST_FIRST(&self->buckets[bucket_cur].list);
 				node;
 				node = AST_DLLIST_NEXT(node, links)) {
-				if (node == state->first_node) {
-					/* We have wrapped back to the starting point. */
-					__ao2_ref(prev, -1);
-					return NULL;
-				}
 				if (!node->common.obj) {
 					/* Node is empty */
 					continue;
@@ -2608,8 +2492,7 @@ hash_descending_resume:;
 
 				if (state->sort_fn) {
 					/* Filter node through the sort_fn */
-					cmp = state->sort_fn(node->common.obj, arg,
-						flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+					cmp = state->sort_fn(node->common.obj, arg, flags & OBJ_SEARCH_MASK);
 					if (cmp < 0) {
 						continue;
 					}
@@ -2636,45 +2519,12 @@ hash_descending_resume:;
 
 hash_ascending_resume:;
 			}
-
-			/* Was this the last container bucket? */
-			if (bucket_cur == self->n_buckets - 1
-				&& (flags & OBJ_CONTINUE)
-				&& (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY))) {
-				/* Move to the beginning to ensure we check every bucket */
-				bucket_cur = -1;
-				state->bucket_last = state->bucket_start;
-				if (state->recheck_starting_bucket) {
-					/*
-					 * We have to recheck the first part of the starting bucket
-					 * because of sorting skips.
-					 */
-					state->recheck_starting_bucket = 0;
-					++state->bucket_last;
-				}
-			}
 		}
 	}
 
 	/* No more nodes in the container left to traverse. */
 	__ao2_ref(prev, -1);
 	return NULL;
-}
-
-/*!
- * \internal
- * \brief Cleanup the hash container traversal state.
- * \since 12.0.0
- *
- * \param state Traversal state to cleanup.
- *
- * \return Nothing
- */
-static void hash_ao2_find_cleanup(struct hash_traversal_state *state)
-{
-	if (state->first_node) {
-		__ao2_ref(state->first_node, -1);
-	}
 }
 
 /*!
@@ -3042,7 +2892,7 @@ static int hash_ao2_integrity(struct ao2_container_hash *self)
 			++count_obj;
 
 			/* Check container hash key for expected bucket. */
-			bucket_exp = abs(self->hash_fn(node->common.obj, OBJ_POINTER));
+			bucket_exp = abs(self->hash_fn(node->common.obj, OBJ_SEARCH_OBJECT));
 			bucket_exp %= self->n_buckets;
 			if (bucket != bucket_exp) {
 				ast_log(LOG_ERROR, "Bucket %d node hashes to bucket %d!\n",
@@ -3053,7 +2903,7 @@ static int hash_ao2_integrity(struct ao2_container_hash *self)
 			/* Check sort if configured. */
 			if (self->common.sort_fn) {
 				if (obj_last
-					&& self->common.sort_fn(obj_last, node->common.obj, OBJ_POINTER) > 0) {
+					&& self->common.sort_fn(obj_last, node->common.obj, OBJ_SEARCH_OBJECT) > 0) {
 					ast_log(LOG_ERROR, "Bucket %d nodes out of sorted order!\n",
 						bucket);
 					return -1;
@@ -3102,7 +2952,6 @@ static const struct ao2_container_methods v_table_hash = {
 	.insert = (ao2_container_insert_fn) hash_ao2_insert_node,
 	.traverse_first = (ao2_container_find_first_fn) hash_ao2_find_first,
 	.traverse_next = (ao2_container_find_next_fn) hash_ao2_find_next,
-	.traverse_cleanup = (ao2_container_find_cleanup_fn) hash_ao2_find_cleanup,
 	.iterator_next = (ao2_iterator_next_fn) hash_ao2_iterator_next,
 	.destroy = (ao2_container_destroy_fn) hash_ao2_destroy,
 #if defined(AST_DEVMODE)
@@ -3189,7 +3038,8 @@ struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
 	num_buckets = hash_fn ? n_buckets : 1;
 	container_size = sizeof(struct ao2_container_hash) + num_buckets * sizeof(struct hash_bucket);
 
-	self = __ao2_alloc_debug(container_size, container_destruct_debug, ao2_options,
+	self = __ao2_alloc_debug(container_size,
+		ref_debug ? container_destruct_debug : container_destruct, ao2_options,
 		tag, file, line, func, ref_debug);
 	return hash_ao2_container_init(self, container_options, num_buckets, hash_fn,
 		sort_fn, cmp_fn);
@@ -3508,9 +3358,9 @@ enum empty_node_direction {
  * \param sort_fn Sort comparison function for non-empty nodes.
  * \param obj_right pointer to the (user-defined part) of an object.
  * \param flags flags from ao2_callback()
- *   OBJ_POINTER - if set, 'obj_right', is an object.
- *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
- *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
+ *   OBJ_SEARCH_OBJECT - if set, 'obj_right', is an object.
+ *   OBJ_SEARCH_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_SEARCH_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
  * \param bias How to bias search direction for duplicates
  *
  * \return enum empty_node_direction to proceed.
@@ -4258,7 +4108,7 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 	for (;;) {
 		if (!cur->common.obj) {
 			/* Which direction do we go to insert this node? */
-			if (rb_find_empty_direction(cur, sort_fn, node->common.obj, OBJ_POINTER, bias)
+			if (rb_find_empty_direction(cur, sort_fn, node->common.obj, OBJ_SEARCH_OBJECT, bias)
 				== GO_LEFT) {
 				if (cur->left) {
 					cur = cur->left;
@@ -4282,7 +4132,7 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 			rb_insert_fixup(self, node);
 			return AO2_CONTAINER_INSERT_NODE_INSERTED;
 		}
-		cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_POINTER);
+		cmp = sort_fn(cur->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 		if (cmp > 0) {
 			if (cur->left) {
 				cur = cur->left;
@@ -4364,7 +4214,7 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 					/* Reject inserting the same object */
 					return AO2_CONTAINER_INSERT_NODE_REJECTED;
 				}
-				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_POINTER);
+				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 				if (cmp) {
 					break;
 				}
@@ -4380,7 +4230,7 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 					/* Reject inserting the same object */
 					return AO2_CONTAINER_INSERT_NODE_REJECTED;
 				}
-				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_POINTER);
+				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 				if (cmp) {
 					break;
 				}
@@ -4405,7 +4255,7 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 					/* Reject inserting the same object */
 					return AO2_CONTAINER_INSERT_NODE_REJECTED;
 				}
-				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_POINTER);
+				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 				if (cmp) {
 					break;
 				}
@@ -4421,7 +4271,7 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 					/* Reject inserting the same object */
 					return AO2_CONTAINER_INSERT_NODE_REJECTED;
 				}
-				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_POINTER);
+				cmp = sort_fn(next->common.obj, node->common.obj, OBJ_SEARCH_OBJECT);
 				if (cmp) {
 					break;
 				}
@@ -4452,8 +4302,6 @@ static enum ao2_container_insert rb_ao2_insert_node(struct ao2_container_rbtree 
 struct rbtree_traversal_state {
 	/*! Active sort function in the traversal if not NULL. */
 	ao2_sort_fn *sort_fn;
-	/*! First node returned if OBJ_CONTINUE flag set. (Reffed) */
-	struct rbtree_node *first_node;
 	/*! Saved comparison callback arg pointer. */
 	void *arg;
 	/*! Saved search flags to control traversing the container. */
@@ -4498,31 +4346,9 @@ static struct rbtree_node *rb_ao2_find_next(struct ao2_container_rbtree *self, s
 		default:
 		case OBJ_ORDER_ASCENDING:
 			node = rb_node_next(node);
-			if (!node) {
-				if (!state->first_node) {
-					break;
-				}
-				/* Wrap around to the beginning. */
-				node = rb_node_most_left(self->root);
-			}
-			if (node == state->first_node) {
-				/* We have wrapped back to the starting point. */
-				node = NULL;
-			}
 			break;
 		case OBJ_ORDER_DESCENDING:
 			node = rb_node_prev(node);
-			if (!node) {
-				if (!state->first_node) {
-					break;
-				}
-				/* Wrap around to the end. */
-				node = rb_node_most_right(self->root);
-			}
-			if (node == state->first_node) {
-				/* We have wrapped back to the starting point. */
-				node = NULL;
-			}
 			break;
 		case OBJ_ORDER_PRE:
 			node = rb_node_pre(node);
@@ -4542,8 +4368,7 @@ static struct rbtree_node *rb_ao2_find_next(struct ao2_container_rbtree *self, s
 
 		if (state->sort_fn) {
 			/* Filter node through the sort_fn */
-			cmp = state->sort_fn(node->common.obj, arg,
-				flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY));
+			cmp = state->sort_fn(node->common.obj, arg, flags & OBJ_SEARCH_MASK);
 			if (cmp) {
 				/* No more nodes in this container are possible to match. */
 				break;
@@ -4579,10 +4404,9 @@ static struct rbtree_node *rb_ao2_find_next(struct ao2_container_rbtree *self, s
  * \param self Container to operate upon.
  * \param obj_right pointer to the (user-defined part) of an object.
  * \param flags flags from ao2_callback()
- *   OBJ_POINTER - if set, 'obj_right', is an object.
- *   OBJ_KEY - if set, 'obj_right', is a search key item that is not an object.
- *   OBJ_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
- *   OBJ_CONTINUE - if set, return node right before or right after search key if not a match.
+ *   OBJ_SEARCH_OBJECT - if set, 'obj_right', is an object.
+ *   OBJ_SEARCH_KEY - if set, 'obj_right', is a search key item that is not an object.
+ *   OBJ_SEARCH_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
  * \param bias How to bias search direction for duplicates
  *
  * \retval node on success.
@@ -4596,7 +4420,7 @@ static struct rbtree_node *rb_find_initial(struct ao2_container_rbtree *self, vo
 	struct rbtree_node *next = NULL;
 	ao2_sort_fn *sort_fn;
 
-	sort_flags = flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY);
+	sort_flags = flags & OBJ_SEARCH_MASK;
 	sort_fn = self->common.sort_fn;
 
 	/* Find node where normal search would find it. */
@@ -4636,12 +4460,6 @@ static struct rbtree_node *rb_find_initial(struct ao2_container_rbtree *self, vo
 				}
 
 				/* No match found. */
-				if (flags & OBJ_CONTINUE) {
-					next = rb_node_next_full(node);
-					if (!next) {
-						next = rb_node_prev_full(node);
-					}
-				}
 				return next;
 			}
 		} else {
@@ -4692,9 +4510,6 @@ static struct rbtree_node *rb_find_initial(struct ao2_container_rbtree *self, vo
 				}
 
 				/* No match found. */
-				if (flags & OBJ_CONTINUE) {
-					return node;
-				}
 				return NULL;
 			}
 		}
@@ -4729,12 +4544,17 @@ static struct rbtree_node *rb_ao2_find_first(struct ao2_container_rbtree *self, 
 	state->arg = arg;
 	state->flags = flags;
 
-	if (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+	case OBJ_SEARCH_KEY:
+	case OBJ_SEARCH_PARTIAL_KEY:
 		/* We are asked to do a directed search. */
 		state->sort_fn = self->common.sort_fn;
-	} else {
+		break;
+	default:
 		/* Don't know, let's visit all nodes */
 		state->sort_fn = NULL;
+		break;
 	}
 
 	if (!self->root) {
@@ -4762,7 +4582,7 @@ static struct rbtree_node *rb_ao2_find_first(struct ao2_container_rbtree *self, 
 		switch (self->common.options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
 		case AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT:
 		case AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE:
-			if ((flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) != OBJ_PARTIAL_KEY) {
+			if ((flags & OBJ_SEARCH_MASK) != OBJ_SEARCH_PARTIAL_KEY) {
 				/* There are no duplicates allowed. */
 				bias = BIAS_EQUAL;
 				break;
@@ -4797,7 +4617,7 @@ static struct rbtree_node *rb_ao2_find_first(struct ao2_container_rbtree *self, 
 		switch (self->common.options & AO2_CONTAINER_ALLOC_OPT_DUPS_MASK) {
 		case AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT:
 		case AO2_CONTAINER_ALLOC_OPT_DUPS_REPLACE:
-			if ((flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) != OBJ_PARTIAL_KEY) {
+			if ((flags & OBJ_SEARCH_MASK) != OBJ_SEARCH_PARTIAL_KEY) {
 				/* There are no duplicates allowed. */
 				bias = BIAS_EQUAL;
 				break;
@@ -4854,34 +4674,9 @@ static struct rbtree_node *rb_ao2_find_first(struct ao2_container_rbtree *self, 
 		break;
 	}
 
-	if (state->sort_fn && (flags & OBJ_CONTINUE)) {
-		/* Remember first node when we wrap around. */
-		__ao2_ref(node, +1);
-		state->first_node = node;
-
-		/* From now on all nodes are matching */
-		state->sort_fn = NULL;
-	}
-
 	/* We have the first traversal node */
 	__ao2_ref(node, +1);
 	return node;
-}
-
-/*!
- * \internal
- * \brief Cleanup the rbtree container traversal state.
- * \since 12.0.0
- *
- * \param state Traversal state to cleanup.
- *
- * \return Nothing
- */
-static void rb_ao2_find_cleanup(struct rbtree_traversal_state *state)
-{
-	if (state->first_node) {
-		__ao2_ref(state->first_node, -1);
-	}
 }
 
 /*!
@@ -5227,7 +5022,7 @@ static int rb_ao2_integrity(struct ao2_container_rbtree *self)
 			}
 
 			if (obj_last) {
-				if (self->common.sort_fn(obj_last, node->common.obj, OBJ_POINTER) > 0) {
+				if (self->common.sort_fn(obj_last, node->common.obj, OBJ_SEARCH_OBJECT) > 0) {
 					ast_log(LOG_ERROR, "Tree nodes are out of sorted order!\n");
 					return -1;
 				}
@@ -5269,7 +5064,6 @@ static const struct ao2_container_methods v_table_rbtree = {
 	.insert = (ao2_container_insert_fn) rb_ao2_insert_node,
 	.traverse_first = (ao2_container_find_first_fn) rb_ao2_find_first,
 	.traverse_next = (ao2_container_find_next_fn) rb_ao2_find_next,
-	.traverse_cleanup = (ao2_container_find_cleanup_fn) rb_ao2_find_cleanup,
 	.iterator_next = (ao2_iterator_next_fn) rb_ao2_iterator_next,
 	.destroy = (ao2_container_destroy_fn) rb_ao2_destroy,
 #if defined(AST_DEVMODE)
@@ -5336,7 +5130,8 @@ struct ao2_container *__ao2_container_alloc_rbtree_debug(unsigned int ao2_option
 		return NULL;
 	}
 
-	self = __ao2_alloc_debug(sizeof(*self), container_destruct_debug, ao2_options,
+	self = __ao2_alloc_debug(sizeof(*self),
+		ref_debug ? container_destruct_debug : container_destruct, ao2_options,
 		tag, file, line, func, ref_debug);
 	return rb_ao2_container_init(self, container_options, sort_fn, cmp_fn);
 }
@@ -5515,18 +5310,33 @@ static int ao2_reg_sort_cb(const void *obj_left, const void *obj_right, int flag
 	const struct ao2_reg_container *reg_left = obj_left;
 	int cmp;
 
-	if (flags & OBJ_KEY) {
-		const char *name = obj_right;
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+		{
+			const struct ao2_reg_container *reg_right = obj_right;
 
-		cmp = strcasecmp(reg_left->name, name);
-	} else if (flags & OBJ_PARTIAL_KEY) {
-		const struct ao2_reg_partial_key *partial_key = obj_right;
+			cmp = strcasecmp(reg_left->name, reg_right->name);
+		}
+		break;
+	case OBJ_SEARCH_KEY:
+		{
+			const char *name = obj_right;
 
-		cmp = strncasecmp(reg_left->name, partial_key->name, partial_key->len);
-	} else {
-		const struct ao2_reg_container *reg_right = obj_right;
+			cmp = strcasecmp(reg_left->name, name);
+		}
+		break;
+	case OBJ_SEARCH_PARTIAL_KEY:
+		{
+			const struct ao2_reg_partial_key *partial_key = obj_right;
 
-		cmp = strcasecmp(reg_left->name, reg_right->name);
+			cmp = strncasecmp(reg_left->name, partial_key->name, partial_key->len);
+		}
+		break;
+	default:
+		/* Sort can only work on something with a full or partial key. */
+		ast_assert(0);
+		cmp = 0;
+		break;
 	}
 	return cmp;
 }
@@ -5573,7 +5383,7 @@ int ao2_container_register(const char *name, struct ao2_container *self, ao2_prn
 void ao2_container_unregister(const char *name)
 {
 #if defined(AST_DEVMODE)
-	ao2_t_find(reg_containers, name, OBJ_UNLINK | OBJ_NODATA | OBJ_KEY,
+	ao2_t_find(reg_containers, name, OBJ_UNLINK | OBJ_NODATA | OBJ_SEARCH_KEY,
 		"Unregister container");
 #endif	/* defined(AST_DEVMODE) */
 }
@@ -5604,7 +5414,7 @@ static char *complete_container_names(struct ast_cli_args *a)
 	partial_key.name = a->word;
 	which.find_nth = a->n;
 	which.count = 0;
-	reg = ao2_t_callback_data(reg_containers, partial_key.len ? OBJ_PARTIAL_KEY : 0,
+	reg = ao2_t_callback_data(reg_containers, partial_key.len ? OBJ_SEARCH_PARTIAL_KEY : 0,
 		ao2_complete_reg_cb, &partial_key, &which, "Find partial registered container");
 	if (reg) {
 		name = ast_strdup(reg->name);
@@ -5673,7 +5483,7 @@ static char *handle_cli_astobj2_container_dump(struct ast_cli_entry *e, int cmd,
 	}
 
 	name = a->argv[3];
-	reg = ao2_t_find(reg_containers, name, OBJ_KEY, "Find registered container");
+	reg = ao2_t_find(reg_containers, name, OBJ_SEARCH_KEY, "Find registered container");
 	if (reg) {
 		ao2_container_dump(reg->registered, 0, name, (void *) &a->fd, cli_output,
 			reg->prnt_obj);
@@ -5709,7 +5519,7 @@ static char *handle_cli_astobj2_container_stats(struct ast_cli_entry *e, int cmd
 	}
 
 	name = a->argv[3];
-	reg = ao2_t_find(reg_containers, name, OBJ_KEY, "Find registered container");
+	reg = ao2_t_find(reg_containers, name, OBJ_SEARCH_KEY, "Find registered container");
 	if (reg) {
 		ao2_container_stats(reg->registered, 0, name, (void *) &a->fd, cli_output);
 		ao2_t_ref(reg, -1, "Done with registered container object.");
@@ -5744,7 +5554,7 @@ static char *handle_cli_astobj2_container_check(struct ast_cli_entry *e, int cmd
 	}
 
 	name = a->argv[3];
-	reg = ao2_t_find(reg_containers, name, OBJ_KEY, "Find registered container");
+	reg = ao2_t_find(reg_containers, name, OBJ_SEARCH_KEY, "Find registered container");
 	if (reg) {
 		ast_cli(a->fd, "Container check of '%s': %s.\n", name,
 			ao2_container_check(reg->registered, 0) ? "failed" : "OK");
@@ -5771,11 +5581,14 @@ static struct ast_cli_entry cli_astobj2[] = {
 };
 #endif	/* defined(AO2_DEBUG) || defined(AST_DEVMODE) */
 
-#if defined(AST_DEVMODE)
+#if defined(AO2_DEBUG) || defined(AST_DEVMODE)
 static void astobj2_cleanup(void)
 {
+#if defined(AST_DEVMODE)
 	ao2_t_ref(reg_containers, -1, "Releasing container registration container");
 	reg_containers = NULL;
+#endif
+	ast_cli_unregister_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
 }
 #endif
 
@@ -5788,10 +5601,10 @@ int astobj2_init(void)
 	if (!reg_containers) {
 		return -1;
 	}
-	ast_register_atexit(astobj2_cleanup);
 #endif	/* defined(AST_DEVMODE) */
 #if defined(AO2_DEBUG) || defined(AST_DEVMODE)
 	ast_cli_register_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
+	ast_register_atexit(astobj2_cleanup);
 #endif	/* defined(AO2_DEBUG) || defined(AST_DEVMODE) */
 
 	return 0;

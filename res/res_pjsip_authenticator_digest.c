@@ -198,7 +198,7 @@ static int build_nonce(struct ast_str **nonce, const char *timestamp, const pjsi
 {
 	struct ast_str *str = ast_str_alloca(256);
 	RAII_VAR(char *, eid, ao2_global_obj_ref(entity_id), ao2_cleanup);
-	char hash[32];
+	char hash[33];
 
 	ast_str_append(&str, 0, "%s", timestamp);
 	ast_str_append(&str, 0, ":%s", rdata->pkt_info.src_name);
@@ -290,6 +290,8 @@ enum digest_verify_result {
 	AUTH_SUCCESS,
 	/*! Authentication credentials correct but nonce mismatch */
 	AUTH_STALE,
+	/*! Authentication credentials were not provided */
+	AUTH_NOAUTH,
 };
 
 /*!
@@ -330,6 +332,11 @@ static int verify(struct ast_sip_auth *auth, pjsip_rx_data *rdata, pj_pool_t *po
 			return AUTH_SUCCESS;
 		}
 	}
+
+	if (authed == PJSIP_EAUTHNOAUTH) {
+		return AUTH_NOAUTH;
+	}
+
 	return AUTH_FAIL;
 }
 
@@ -376,6 +383,7 @@ static enum ast_sip_check_auth_result digest_check_auth(struct ast_sip_endpoint 
 	enum digest_verify_result *verify_res;
 	enum ast_sip_check_auth_result res;
 	int i;
+	int failures = 0;
 
 	RAII_VAR(struct ast_sip_endpoint *, artificial_endpoint,
 		 ast_sip_get_artificial_endpoint(), ao2_cleanup);
@@ -395,10 +403,16 @@ static enum ast_sip_check_auth_result digest_check_auth(struct ast_sip_endpoint 
 	}
 
 	for (i = 0; i < endpoint->inbound_auths.num; ++i) {
+		if (ast_strlen_zero(auths[i]->realm)) {
+			ast_string_field_set(auths[i], realm, "asterisk");
+		}
 		verify_res[i] = verify(auths[i], rdata, tdata->pool);
 		if (verify_res[i] == AUTH_SUCCESS) {
 			res = AST_SIP_AUTHENTICATION_SUCCESS;
 			goto cleanup;
+		}
+		if (verify_res[i] == AUTH_FAIL) {
+			failures++;
 		}
 	}
 
@@ -406,7 +420,11 @@ static enum ast_sip_check_auth_result digest_check_auth(struct ast_sip_endpoint 
 		challenge(auths[i]->realm, tdata, rdata, verify_res[i] == AUTH_STALE);
 	}
 
-	res = AST_SIP_AUTHENTICATION_CHALLENGE;
+	if (failures == endpoint->inbound_auths.num) {
+		res = AST_SIP_AUTHENTICATION_FAILED;
+	} else {
+		res = AST_SIP_AUTHENTICATION_CHALLENGE;
+	}
 
 cleanup:
 	ast_sip_cleanup_auths(auths, endpoint->inbound_auths.num);

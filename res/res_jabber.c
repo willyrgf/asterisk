@@ -370,9 +370,9 @@ static int aji_delete_node_list(void *data, ikspak* pak);
 static void aji_pubsub_purge_nodes(struct aji_client *client,
 	const char* collection_name);
 static void aji_publish_mwi(struct aji_client *client, const char *mailbox,
-	const char *context, const char *oldmsgs, const char *newmsgs);
-static void aji_devstate_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg);
-static void aji_mwi_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg);
+	const char *oldmsgs, const char *newmsgs);
+static void aji_devstate_cb(void *data, struct stasis_subscription *sub, struct stasis_message *msg);
+static void aji_mwi_cb(void *data, struct stasis_subscription *sub, struct stasis_message *msg);
 static iks* aji_build_publish_skeleton(struct aji_client *client, const char *node,
 				       const char *event_type, unsigned int cachable);
 /* No transports in this version */
@@ -3235,10 +3235,8 @@ int ast_aji_disconnect(struct aji_client *client)
  * \param data void pointer to ast_client structure
  * \return void
  */
-static void aji_mwi_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void aji_mwi_cb(void *data, struct stasis_subscription *sub, struct stasis_message *msg)
 {
-	const char *mailbox;
-	const char *context;
 	char oldmsgs[10];
 	char newmsgs[10];
 	struct aji_client *client = data;
@@ -3255,13 +3253,9 @@ static void aji_mwi_cb(void *data, struct stasis_subscription *sub, struct stasi
 		return;
 	}
 
-	mailbox = mwi_state->mailbox;
-	context = mwi_state->context;
-	snprintf(oldmsgs, sizeof(oldmsgs), "%d",
-		mwi_state->old_msgs);
-	snprintf(newmsgs, sizeof(newmsgs), "%d",
-		mwi_state->new_msgs);
-	aji_publish_mwi(client, mailbox, context, oldmsgs, newmsgs);
+	snprintf(oldmsgs, sizeof(oldmsgs), "%d", mwi_state->old_msgs);
+	snprintf(newmsgs, sizeof(newmsgs), "%d", mwi_state->new_msgs);
+	aji_publish_mwi(client, mwi_state->uniqueid, oldmsgs, newmsgs);
 }
 /*!
  * \brief Callback function for device state events
@@ -3269,7 +3263,7 @@ static void aji_mwi_cb(void *data, struct stasis_subscription *sub, struct stasi
  * \param data void pointer to ast_client structure
  * \return void
  */
-static void aji_devstate_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void aji_devstate_cb(void *data, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	struct aji_client *client = data;
 	struct ast_device_state_message *dev_state;
@@ -3291,7 +3285,7 @@ static int cached_devstate_cb(void *obj, void *arg, int flags)
 {
 	struct stasis_message *msg = obj;
 	struct aji_client *client = arg;
-	aji_devstate_cb(client, device_state_sub, NULL, msg);
+	aji_devstate_cb(client, device_state_sub, msg);
 	return 0;
 }
 
@@ -3330,7 +3324,7 @@ static void aji_init_event_distribution(struct aji_client *client)
  */
 static int aji_handle_pubsub_event(void *data, ikspak *pak)
 {
-	char *item_id, *device_state, *context, *cachable_str;
+	char *item_id, *device_state, *mailbox, *cachable_str;
 	int oldmsgs, newmsgs;
 	iks *item, *item_content;
 	struct ast_eid pubsub_eid;
@@ -3359,11 +3353,11 @@ static int aji_handle_pubsub_event(void *data, ikspak *pak)
 						&pubsub_eid);
 		return IKS_FILTER_EAT;
 	} else if (!strcasecmp(iks_name(item_content), "mailbox")) {
-		context = strsep(&item_id, "@");
+		mailbox = strsep(&item_id, "@");
 		sscanf(iks_find_cdata(item_content, "OLDMSGS"), "%10d", &oldmsgs);
 		sscanf(iks_find_cdata(item_content, "NEWMSGS"), "%10d", &newmsgs);
 
-		ast_publish_mwi_state_full(item_id, context, newmsgs, oldmsgs, NULL, &pubsub_eid);
+		ast_publish_mwi_state_full(mailbox, item_id, newmsgs, oldmsgs, NULL, &pubsub_eid);
 
 		return IKS_FILTER_EAT;
 	} else {
@@ -3514,20 +3508,18 @@ static void aji_publish_device_state(struct aji_client *client, const char *devi
 /*!
  * \brief Publish MWI to a PubSub node
  * \param client the configured XMPP client we use to connect to a XMPP server
- * \param mailbox The mailbox
- * \param context The context
+ * \param mailbox The mailbox identifier
  * \param oldmsgs Old messages
  * \param newmsgs New messages
  * \return void
  */
 static void aji_publish_mwi(struct aji_client *client, const char *mailbox,
-	const char *context, const char *oldmsgs, const char *newmsgs)
+	const char *oldmsgs, const char *newmsgs)
 {
-	char full_mailbox[AST_MAX_EXTENSION+AST_MAX_CONTEXT];
 	char eid_str[20];
 	iks *mailbox_node, *request;
-	snprintf(full_mailbox, sizeof(full_mailbox), "%s@%s", mailbox, context);
-	request = aji_build_publish_skeleton(client, full_mailbox, "message_waiting", 1);
+
+	request = aji_build_publish_skeleton(client, mailbox, "message_waiting", 1);
 	ast_eid_to_str(eid_str, sizeof(eid_str), &ast_eid_default);
 	mailbox_node = iks_insert(request, "mailbox");
 	iks_insert_attrib(mailbox_node, "xmlns", "http://asterisk.org");
@@ -3565,7 +3557,7 @@ static int aji_handle_pubsub_error(void *data, ikspak *pak)
 	iks *orig_pubsub = iks_find(pak->x, "pubsub");
 	struct aji_client *client;
 	if (!orig_pubsub) {
-		ast_log(LOG_ERROR, "Error isn't a PubSub error, why are we here?\n");
+		ast_debug(1, "Error isn't a PubSub error, why are we here?\n");
 		return IKS_FILTER_EAT;
 	}
 	orig_request = iks_child(orig_pubsub);

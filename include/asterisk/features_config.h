@@ -69,11 +69,11 @@ struct ast_features_xfer_config {
 		/*! DTMF sequence used to swap which party the transferer is talking to */
 		AST_STRING_FIELD(atxferswap);
 	);
-	/*! Milliseconds allowed between digit presses when dialing transfer destination */
+	/*! Seconds allowed between digit presses when dialing transfer destination */
 	unsigned int transferdigittimeout;
-	/*! Milliseconds to wait for the transfer target to answer a transferred call */
+	/*! Seconds to wait for the transfer target to answer a transferred call */
 	unsigned int atxfernoanswertimeout;
-	/*! Milliseconds to wait before attempting to re-dial the transfer target */
+	/*! Seconds to wait before attempting to re-dial the transfer target */
 	unsigned int atxferloopdelay;
 	/*! Number of times to re-attempt dialing the transfer target */
 	unsigned int atxfercallbackretries;

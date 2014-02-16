@@ -766,6 +766,8 @@ static void *do_notify(void *data)
 	/* clear native formats and set to slinear. write format is signlear so just use that to set it */
 	ast_format_cap_set(ast_channel_nativeformats(chan), ast_channel_writeformat(chan));
 
+	ast_channel_unlock(chan);
+
 	if (!(datastore = ast_datastore_alloc(&event_notification_datastore, NULL))) {
 		ast_log(LOG_ERROR, "Could not allocate datastore, notification not being sent!\n");
 		goto notify_cleanup;
@@ -775,7 +777,10 @@ static void *do_notify(void *data)
 	datastore->inheritance = DATASTORE_INHERIT_FOREVER;
 
 	ao2_ref(event, +1);
+
+	ast_channel_lock(chan);
 	res = ast_channel_datastore_add(chan, datastore);
+	ast_channel_unlock(chan);
 
 	if (!(tmpstr = ast_str_create(32))) {
 		goto notify_cleanup;

@@ -333,7 +333,7 @@ struct fax_module {
 };
 static AST_RWLIST_HEAD_STATIC(faxmodules, fax_module);
 
-#define RES_FAX_MINRATE 2400
+#define RES_FAX_MINRATE 4800
 #define RES_FAX_MAXRATE 14400
 #define RES_FAX_STATUSEVENTS 0
 #define RES_FAX_MODEM (AST_FAX_MODEM_V17 | AST_FAX_MODEM_V27 | AST_FAX_MODEM_V29)
@@ -708,7 +708,7 @@ static int check_modem_rate(enum ast_fax_modems modems, unsigned int rate)
 {
 	switch (rate) {
 	case 2400:
-		if (!(modems & (AST_FAX_MODEM_V27 | AST_FAX_MODEM_V34))) {
+		if (!(modems & (AST_FAX_MODEM_V34))) {
 			return 1;
 		}
 		break;
@@ -718,8 +718,12 @@ static int check_modem_rate(enum ast_fax_modems modems, unsigned int rate)
 		}
 		break;
 	case 7200:
-	case 9600:
 		if (!(modems & (AST_FAX_MODEM_V17 | AST_FAX_MODEM_V29 | AST_FAX_MODEM_V34))) {
+			return 1;
+		}
+		break;
+	case 9600:
+		if (!(modems & (AST_FAX_MODEM_V17 | AST_FAX_MODEM_V27 | AST_FAX_MODEM_V29 | AST_FAX_MODEM_V34))) {
 			return 1;
 		}
 		break;
@@ -3057,12 +3061,12 @@ static struct ast_frame *fax_gateway_framehook(struct ast_channel *chan, struct 
 
 			ast_channel_unlock(chan);
 			peer = ast_channel_bridge_peer(chan);
-			ast_channel_lock(chan);
 			if (peer) {
 				ast_set_read_format(peer, &gateway->peer_read_format);
 				ast_set_read_format(peer, &gateway->peer_write_format);
 				ast_channel_make_compatible(chan, peer);
 			}
+			ast_channel_lock(chan);
 		}
 		return NULL;
 	}
@@ -3084,7 +3088,7 @@ static struct ast_frame *fax_gateway_framehook(struct ast_channel *chan, struct 
 		return f;
 	}
 
-	if (!gateway->bridged && peer) {
+	if (!gateway->bridged) {
 		/* don't start a gateway if neither channel can handle T.38 */
 		if (ast_channel_get_t38_state(chan) == T38_STATE_UNAVAILABLE && ast_channel_get_t38_state(peer) == T38_STATE_UNAVAILABLE) {
 			ast_debug(1, "not starting gateway for %s and %s; neither channel supports T.38\n", ast_channel_name(chan), ast_channel_name(peer));
@@ -3113,10 +3117,12 @@ static struct ast_frame *fax_gateway_framehook(struct ast_channel *chan, struct 
 		ast_set_read_format_by_id(chan, AST_FORMAT_SLINEAR);
 		ast_set_write_format_by_id(chan, AST_FORMAT_SLINEAR);
 
+		ast_channel_unlock(chan);
 		ast_set_read_format_by_id(peer, AST_FORMAT_SLINEAR);
 		ast_set_write_format_by_id(peer, AST_FORMAT_SLINEAR);
 
 		ast_channel_make_compatible(chan, peer);
+		ast_channel_lock(chan);
 		gateway->bridged = 1;
 	}
 
@@ -3381,10 +3387,10 @@ static struct ast_frame *fax_detect_framehook(struct ast_channel *chan, struct a
 		ast_set_read_format(chan, &faxdetect->orig_format);
 		ast_channel_unlock(chan);
 		peer = ast_channel_bridge_peer(chan);
-		ast_channel_lock(chan);
 		if (peer) {
 			ast_channel_make_compatible(chan, peer);
 		}
+		ast_channel_lock(chan);
 		return NULL;
 	case AST_FRAMEHOOK_EVENT_READ:
 		if (f) {
@@ -3410,7 +3416,7 @@ static struct ast_frame *fax_detect_framehook(struct ast_channel *chan, struct a
 	case AST_FRAME_VOICE:
 		/* we have no DSP this means we not detecting CNG */
 		if (!faxdetect->dsp) {
-			break;
+			return f;
 		}
 		/* We can only process some formats*/
 		switch (f->subclass.format.id) {

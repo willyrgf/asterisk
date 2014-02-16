@@ -76,6 +76,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/xmpp.h"
+#include "asterisk/stasis_channels.h"
 
 /*** DOCUMENTATION
 	<configInfo name="chan_motif" language="en_US">
@@ -518,7 +519,7 @@ static void *jingle_endpoint_alloc(const char *cat)
 
 	ast_string_field_set(endpoint, name, cat);
 
-	endpoint->cap = ast_format_cap_alloc_nolock();
+	endpoint->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	endpoint->transport = JINGLE_TRANSPORT_ICE_UDP;
 
 	return endpoint;
@@ -740,9 +741,9 @@ static struct jingle_session *jingle_alloc(struct jingle_endpoint *endpoint, con
 	session->connection = endpoint->connection;
 	session->transport = endpoint->transport;
 
-	if (!(session->cap = ast_format_cap_alloc_nolock()) ||
-	    !(session->jointcap = ast_format_cap_alloc_nolock()) ||
-	    !(session->peercap = ast_format_cap_alloc_nolock()) ||
+	if (!(session->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
+	    !(session->jointcap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
+	    !(session->peercap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
 	    !session->callid) {
 		ao2_ref(session, -1);
 		return NULL;
@@ -784,6 +785,8 @@ static struct ast_channel *jingle_new(struct jingle_endpoint *endpoint, struct j
 	if (!(chan = ast_channel_alloc(1, state, S_OR(title, ""), S_OR(cid_name, ""), "", "", "", linkedid, 0, "Motif/%s-%04lx", str, ast_random() & 0xffff))) {
 		return NULL;
 	}
+
+	ast_channel_stage_snapshot(chan);
 
 	ast_channel_tech_set(chan, &jingle_tech);
 	ast_channel_tech_pvt_set(chan, session);
@@ -847,6 +850,9 @@ static struct ast_channel *jingle_new(struct jingle_endpoint *endpoint, struct j
 	ast_channel_priority_set(chan, 1);
 
 	ao2_unlock(endpoint);
+
+	ast_channel_stage_snapshot_done(chan);
+	ast_channel_unlock(chan);
 
 	return chan;
 }
@@ -2407,7 +2413,9 @@ static void jingle_action_session_initiate(struct jingle_endpoint *endpoint, str
 
 	ao2_link(endpoint->state->sessions, session);
 
+	ast_channel_lock(chan);
 	ast_setstate(chan, AST_STATE_RING);
+	ast_channel_unlock(chan);
 	res = ast_pbx_start(chan);
 
 	switch (res) {
@@ -2702,7 +2710,7 @@ static int custom_transport_handler(const struct aco_option *opt, struct ast_var
  */
 static int load_module(void)
 {
-	if (!(jingle_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(jingle_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 

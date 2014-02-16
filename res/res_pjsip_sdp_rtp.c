@@ -205,8 +205,8 @@ static int set_caps(struct ast_sip_session *session, struct ast_sip_session_medi
 	int direct_media_enabled = !ast_sockaddr_isnull(&session_media->direct_media_addr) &&
 		!ast_format_cap_is_empty(session->direct_media_cap);
 
-	if (!(caps = ast_format_cap_alloc_nolock()) ||
-	    !(peer = ast_format_cap_alloc_nolock())) {
+	if (!(caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
+	    !(peer = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		ast_log(LOG_ERROR, "Failed to allocate %s capabilities\n", session_media->stream_type);
 		return -1;
 	}
@@ -274,6 +274,7 @@ static pjmedia_sdp_attr* generate_rtpmap_attr(pjmedia_sdp_media *media, pj_pool_
 	rtpmap.clock_rate = ast_rtp_lookup_sample_rate2(asterisk_format, format, code);
 	pj_strdup2(pool, &rtpmap.enc_name, ast_rtp_lookup_mime_subtype2(asterisk_format, format, code, 0));
 	rtpmap.param.slen = 0;
+	rtpmap.param.ptr = NULL;
 
 	pjmedia_sdp_rtpmap_to_attr(pool, &rtpmap, &attr);
 
@@ -889,7 +890,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	/* Add connection level details */
 	if (direct_media_enabled) {
 		ast_copy_string(hostip, ast_sockaddr_stringify_fmt(&session_media->direct_media_addr, AST_SOCKADDR_STR_ADDR), sizeof(hostip));
-	} else if (ast_strlen_zero(session->endpoint->media.external_address)) {
+	} else if (ast_strlen_zero(session->endpoint->media.address)) {
 		pj_sockaddr localaddr;
 
 		if (pj_gethostip(session->endpoint->media.rtp.ipv6 ? pj_AF_INET6() : pj_AF_INET(), &localaddr)) {
@@ -897,7 +898,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 		}
 		pj_sockaddr_print(&localaddr, hostip, sizeof(hostip), 2);
 	} else {
-		ast_copy_string(hostip, session->endpoint->media.external_address, sizeof(hostip));
+		ast_copy_string(hostip, session->endpoint->media.address, sizeof(hostip));
 	}
 
 	media->conn->net_type = STR_IN;
@@ -910,7 +911,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	/* Add ICE attributes and candidates */
 	add_ice_to_stream(session, session_media, pool, media);
 
-	if (!(caps = ast_format_cap_alloc_nolock())) {
+	if (!(caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		ast_log(LOG_ERROR, "Failed to allocate %s capabilities\n", session_media->stream_type);
 		return -1;
 	}
@@ -935,7 +936,8 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 		}
 
 		if ((rtp_code = ast_rtp_codecs_payload_code(ast_rtp_instance_get_codecs(session_media->rtp), 1, &format, 0)) == -1) {
-			return -1;
+			ast_log(LOG_WARNING,"Unable to get rtp codec payload code for %s\n",ast_getformatname(&format));
+			continue;
 		}
 
 		if (!(attr = generate_rtpmap_attr(media, pool, rtp_code, 1, &format, 0))) {
@@ -980,6 +982,11 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 				media->attr[media->attr_count++] = attr;
 			}
 		}
+	}
+
+	/* If no formats were actually added to the media stream don't add it to the SDP */
+	if (!media->desc.fmt_count) {
+		return 1;
 	}
 
 	/* If ptime is set add it as an attribute */
@@ -1096,6 +1103,11 @@ static void change_outgoing_sdp_stream_media_address(pjsip_tx_data *tdata, struc
 {
 	char host[NI_MAXHOST];
 	struct ast_sockaddr addr = { { 0, } };
+
+	/* If the stream has been rejected there will be no connection line */
+	if (!stream->conn) {
+		return;
+	}
 
 	ast_copy_pj_str(host, &stream->conn->addr, sizeof(host));
 	ast_sockaddr_parse(&addr, host, PARSE_PORT_FORBID);

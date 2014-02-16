@@ -39,19 +39,19 @@
 
 #include "asterisk/ari.h"
 
-/*! \brief Argument struct for ast_ari_get_channels() */
-struct ast_get_channels_args {
+/*! \brief Argument struct for ast_ari_channels_list() */
+struct ast_ari_channels_list_args {
 };
 /*!
- * \brief List active channels.
+ * \brief List all active channels in Asterisk.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_channels(struct ast_variable *headers, struct ast_get_channels_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_originate() */
-struct ast_originate_args {
+void ast_ari_channels_list(struct ast_variable *headers, struct ast_ari_channels_list_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_originate() */
+struct ast_ari_channels_originate_args {
 	/*! \brief Endpoint to call. */
 	const char *endpoint;
 	/*! \brief The extension to dial after the endpoint answers */
@@ -60,7 +60,7 @@ struct ast_originate_args {
 	const char *context;
 	/*! \brief The priority to dial after the endpoint answers. If omitted, uses 1 */
 	long priority;
-	/*! \brief The application name to pass to the Stasis application. */
+	/*! \brief The application that is subscribed to the originated channel, and passed to the Stasis application. */
 	const char *app;
 	/*! \brief The application arguments to pass to the Stasis application. */
 	const char *app_args;
@@ -68,17 +68,32 @@ struct ast_originate_args {
 	const char *caller_id;
 	/*! \brief Timeout (in seconds) before giving up dialing, or -1 for no timeout. */
 	int timeout;
+	/*! \brief The 'variables' key in the body object holds variable key/value pairs to set on the channel on creation. Other keys in the body object are interpreted as query parameters. Ex. { 'endpoint': 'SIP/Alice', 'variables': { 'CALLERID(name)': 'Alice' } } */
+	struct ast_json *variables;
 };
 /*!
+ * \brief Body parsing function for /channels.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_originate_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_originate_args *args);
+
+/*!
  * \brief Create a new channel (originate).
+ *
+ * The new channel is created immediately and a snapshot of it returned. If a Stasis application is provided it will be automatically subscribed to the originated channel for further events and updates.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_originate(struct ast_variable *headers, struct ast_originate_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_get_channel() */
-struct ast_get_channel_args {
+void ast_ari_channels_originate(struct ast_variable *headers, struct ast_ari_channels_originate_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_get() */
+struct ast_ari_channels_get_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 };
@@ -89,12 +104,25 @@ struct ast_get_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_channel(struct ast_variable *headers, struct ast_get_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_delete_channel() */
-struct ast_delete_channel_args {
+void ast_ari_channels_get(struct ast_variable *headers, struct ast_ari_channels_get_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_hangup() */
+struct ast_ari_channels_hangup_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
+	/*! \brief Reason for hanging up the channel */
+	const char *reason;
 };
+/*!
+ * \brief Body parsing function for /channels/{channelId}.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_hangup_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_hangup_args *args);
+
 /*!
  * \brief Delete (i.e. hangup) a channel.
  *
@@ -102,30 +130,9 @@ struct ast_delete_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_delete_channel(struct ast_variable *headers, struct ast_delete_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_dial() */
-struct ast_dial_args {
-	/*! \brief Channel's id */
-	const char *channel_id;
-	/*! \brief Endpoint to call. If not specified, dial is routed via dialplan */
-	const char *endpoint;
-	/*! \brief Extension to dial */
-	const char *extension;
-	/*! \brief When routing via dialplan, the context use. If omitted, uses 'default' */
-	const char *context;
-	/*! \brief Timeout (in seconds) before giving up dialing, or -1 for no timeout. */
-	int timeout;
-};
-/*!
- * \brief Create a new channel (originate) and bridge to this channel.
- *
- * \param headers HTTP headers
- * \param args Swagger parameters
- * \param[out] response HTTP response
- */
-void ast_ari_dial(struct ast_variable *headers, struct ast_dial_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_continue_in_dialplan() */
-struct ast_continue_in_dialplan_args {
+void ast_ari_channels_hangup(struct ast_variable *headers, struct ast_ari_channels_hangup_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_continue_in_dialplan() */
+struct ast_ari_channels_continue_in_dialplan_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief The context to continue to. */
@@ -136,15 +143,26 @@ struct ast_continue_in_dialplan_args {
 	int priority;
 };
 /*!
+ * \brief Body parsing function for /channels/{channelId}/continue.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_continue_in_dialplan_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_continue_in_dialplan_args *args);
+
+/*!
  * \brief Exit application; continue execution in the dialplan.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_continue_in_dialplan(struct ast_variable *headers, struct ast_continue_in_dialplan_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_answer_channel() */
-struct ast_answer_channel_args {
+void ast_ari_channels_continue_in_dialplan(struct ast_variable *headers, struct ast_ari_channels_continue_in_dialplan_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_answer() */
+struct ast_ari_channels_answer_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 };
@@ -155,14 +173,85 @@ struct ast_answer_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_answer_channel(struct ast_variable *headers, struct ast_answer_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_mute_channel() */
-struct ast_mute_channel_args {
+void ast_ari_channels_answer(struct ast_variable *headers, struct ast_ari_channels_answer_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_ring() */
+struct ast_ari_channels_ring_args {
+	/*! \brief Channel's id */
+	const char *channel_id;
+};
+/*!
+ * \brief Indicate ringing to a channel.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_channels_ring(struct ast_variable *headers, struct ast_ari_channels_ring_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_ring_stop() */
+struct ast_ari_channels_ring_stop_args {
+	/*! \brief Channel's id */
+	const char *channel_id;
+};
+/*!
+ * \brief Stop ringing indication on a channel if locally generated.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_channels_ring_stop(struct ast_variable *headers, struct ast_ari_channels_ring_stop_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_send_dtmf() */
+struct ast_ari_channels_send_dtmf_args {
+	/*! \brief Channel's id */
+	const char *channel_id;
+	/*! \brief DTMF To send. */
+	const char *dtmf;
+	/*! \brief Amount of time to wait before DTMF digits (specified in milliseconds) start. */
+	int before;
+	/*! \brief Amount of time in between DTMF digits (specified in milliseconds). */
+	int between;
+	/*! \brief Length of each DTMF digit (specified in milliseconds). */
+	int duration;
+	/*! \brief Amount of time to wait after DTMF digits (specified in milliseconds) end. */
+	int after;
+};
+/*!
+ * \brief Body parsing function for /channels/{channelId}/dtmf.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_send_dtmf_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_send_dtmf_args *args);
+
+/*!
+ * \brief Send provided DTMF to a given channel.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_channels_send_dtmf(struct ast_variable *headers, struct ast_ari_channels_send_dtmf_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_mute() */
+struct ast_ari_channels_mute_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief Direction in which to mute audio */
 	const char *direction;
 };
+/*!
+ * \brief Body parsing function for /channels/{channelId}/mute.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_mute_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_mute_args *args);
+
 /*!
  * \brief Mute a channel.
  *
@@ -170,14 +259,25 @@ struct ast_mute_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_mute_channel(struct ast_variable *headers, struct ast_mute_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_unmute_channel() */
-struct ast_unmute_channel_args {
+void ast_ari_channels_mute(struct ast_variable *headers, struct ast_ari_channels_mute_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_unmute() */
+struct ast_ari_channels_unmute_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief Direction in which to unmute audio */
 	const char *direction;
 };
+/*!
+ * \brief Body parsing function for /channels/{channelId}/mute.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_unmute_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_unmute_args *args);
+
 /*!
  * \brief Unmute a channel.
  *
@@ -185,9 +285,9 @@ struct ast_unmute_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_unmute_channel(struct ast_variable *headers, struct ast_unmute_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_hold_channel() */
-struct ast_hold_channel_args {
+void ast_ari_channels_unmute(struct ast_variable *headers, struct ast_ari_channels_unmute_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_hold() */
+struct ast_ari_channels_hold_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 };
@@ -198,9 +298,9 @@ struct ast_hold_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_hold_channel(struct ast_variable *headers, struct ast_hold_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_unhold_channel() */
-struct ast_unhold_channel_args {
+void ast_ari_channels_hold(struct ast_variable *headers, struct ast_ari_channels_hold_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_unhold() */
+struct ast_ari_channels_unhold_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 };
@@ -211,26 +311,37 @@ struct ast_unhold_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_unhold_channel(struct ast_variable *headers, struct ast_unhold_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_moh_start_channel() */
-struct ast_moh_start_channel_args {
+void ast_ari_channels_unhold(struct ast_variable *headers, struct ast_ari_channels_unhold_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_start_moh() */
+struct ast_ari_channels_start_moh_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief Music on hold class to use */
 	const char *moh_class;
 };
 /*!
+ * \brief Body parsing function for /channels/{channelId}/moh.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_start_moh_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_start_moh_args *args);
+
+/*!
  * \brief Play music on hold to a channel.
  *
- * Using media operations such as playOnChannel on a channel playing MOH in this manner will suspend MOH without resuming automatically. If continuing music on hold is desired, the stasis application must reinitiate music on hold.
+ * Using media operations such as /play on a channel playing MOH in this manner will suspend MOH without resuming automatically. If continuing music on hold is desired, the stasis application must reinitiate music on hold.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_moh_start_channel(struct ast_variable *headers, struct ast_moh_start_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_moh_stop_channel() */
-struct ast_moh_stop_channel_args {
+void ast_ari_channels_start_moh(struct ast_variable *headers, struct ast_ari_channels_start_moh_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_stop_moh() */
+struct ast_ari_channels_stop_moh_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 };
@@ -241,9 +352,37 @@ struct ast_moh_stop_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_moh_stop_channel(struct ast_variable *headers, struct ast_moh_stop_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_play_on_channel() */
-struct ast_play_on_channel_args {
+void ast_ari_channels_stop_moh(struct ast_variable *headers, struct ast_ari_channels_stop_moh_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_start_silence() */
+struct ast_ari_channels_start_silence_args {
+	/*! \brief Channel's id */
+	const char *channel_id;
+};
+/*!
+ * \brief Play silence to a channel.
+ *
+ * Using media operations such as /play on a channel playing silence in this manner will suspend silence without resuming automatically.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_channels_start_silence(struct ast_variable *headers, struct ast_ari_channels_start_silence_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_stop_silence() */
+struct ast_ari_channels_stop_silence_args {
+	/*! \brief Channel's id */
+	const char *channel_id;
+};
+/*!
+ * \brief Stop playing silence to a channel.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_channels_stop_silence(struct ast_variable *headers, struct ast_ari_channels_stop_silence_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_play() */
+struct ast_ari_channels_play_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief Media's URI to play. */
@@ -256,17 +395,28 @@ struct ast_play_on_channel_args {
 	int skipms;
 };
 /*!
+ * \brief Body parsing function for /channels/{channelId}/play.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_play_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_play_args *args);
+
+/*!
  * \brief Start playback of media.
  *
- * The media URI may be any of a number of URI's. You may use http: and https: URI's, as well as sound: and recording: URI's. This operation creates a playback resource that can be used to control the playback of media (pause, rewind, fast forward, etc.)
+ * The media URI may be any of a number of URI's. Currently sound: and recording: URI's are supported. This operation creates a playback resource that can be used to control the playback of media (pause, rewind, fast forward, etc.)
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_play_on_channel(struct ast_variable *headers, struct ast_play_on_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_record_channel() */
-struct ast_record_channel_args {
+void ast_ari_channels_play(struct ast_variable *headers, struct ast_ari_channels_play_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_record() */
+struct ast_ari_channels_record_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief Recording's filename */
@@ -285,6 +435,17 @@ struct ast_record_channel_args {
 	const char *terminate_on;
 };
 /*!
+ * \brief Body parsing function for /channels/{channelId}/record.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_record_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_record_args *args);
+
+/*!
  * \brief Start a recording.
  *
  * Record audio from a channel. Note that this will not capture audio sent to the channel. The bridge itself has a record feature if that's what you want.
@@ -293,14 +454,25 @@ struct ast_record_channel_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_record_channel(struct ast_variable *headers, struct ast_record_channel_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_get_channel_var() */
-struct ast_get_channel_var_args {
+void ast_ari_channels_record(struct ast_variable *headers, struct ast_ari_channels_record_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_get_channel_var() */
+struct ast_ari_channels_get_channel_var_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief The channel variable or function to get */
 	const char *variable;
 };
+/*!
+ * \brief Body parsing function for /channels/{channelId}/variable.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_get_channel_var_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_get_channel_var_args *args);
+
 /*!
  * \brief Get the value of a channel variable or function.
  *
@@ -308,9 +480,9 @@ struct ast_get_channel_var_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_channel_var(struct ast_variable *headers, struct ast_get_channel_var_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_set_channel_var() */
-struct ast_set_channel_var_args {
+void ast_ari_channels_get_channel_var(struct ast_variable *headers, struct ast_ari_channels_get_channel_var_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_set_channel_var() */
+struct ast_ari_channels_set_channel_var_args {
 	/*! \brief Channel's id */
 	const char *channel_id;
 	/*! \brief The channel variable or function to set */
@@ -319,12 +491,57 @@ struct ast_set_channel_var_args {
 	const char *value;
 };
 /*!
+ * \brief Body parsing function for /channels/{channelId}/variable.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_set_channel_var_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_set_channel_var_args *args);
+
+/*!
  * \brief Set the value of a channel variable or function.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_set_channel_var(struct ast_variable *headers, struct ast_set_channel_var_args *args, struct ast_ari_response *response);
+void ast_ari_channels_set_channel_var(struct ast_variable *headers, struct ast_ari_channels_set_channel_var_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_channels_snoop_channel() */
+struct ast_ari_channels_snoop_channel_args {
+	/*! \brief Channel's id */
+	const char *channel_id;
+	/*! \brief Direction of audio to spy on */
+	const char *spy;
+	/*! \brief Direction of audio to whisper into */
+	const char *whisper;
+	/*! \brief Application the snooping channel is placed into */
+	const char *app;
+	/*! \brief The application arguments to pass to the Stasis application */
+	const char *app_args;
+};
+/*!
+ * \brief Body parsing function for /channels/{channelId}/snoop.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_channels_snoop_channel_parse_body(
+	struct ast_json *body,
+	struct ast_ari_channels_snoop_channel_args *args);
+
+/*!
+ * \brief Start snooping.
+ *
+ * Snoop (spy/whisper) on a specific channel.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_channels_snoop_channel(struct ast_variable *headers, struct ast_ari_channels_snoop_channel_args *args, struct ast_ari_response *response);
 
 #endif /* _ASTERISK_RESOURCE_CHANNELS_H */

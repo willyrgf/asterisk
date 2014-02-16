@@ -249,6 +249,7 @@ static void sorcery_astdb_retrieve_regex(const struct ast_sorcery *sorcery, void
 			!(objset = sorcery_json_to_objectset(json)) ||
 			!(object = ast_sorcery_alloc(sorcery, type, key)) ||
 			ast_sorcery_objectset_apply(sorcery, object, objset)) {
+			regfree(&expression);
 			return;
 		}
 

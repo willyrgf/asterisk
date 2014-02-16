@@ -153,6 +153,8 @@ struct stasis_message_type *ast_channel_snapshot_type(void);
  * \brief Generate a snapshot of the channel state. This is an ao2 object, so
  * ao2_cleanup() to deallocate.
  *
+ * \pre chan is locked
+ *
  * \param chan The channel from which to generate a snapshot
  *
  * \retval pointer on success (must be unreffed)
@@ -191,6 +193,8 @@ struct ast_channel_snapshot *ast_channel_snapshot_get_latest_by_name(const char 
  *
  * The given \a blob should be treated as immutable and not modified after it is
  * put into the message.
+ *
+ * \pre chan is locked
  *
  * \param chan Channel blob is associated with, or \c NULL for global/all channels.
  * \param type Message type for this blob.
@@ -305,6 +309,8 @@ void ast_multi_channel_blob_add_channel(struct ast_multi_channel_blob *obj,
  * \brief Publish a channel blob message.
  * \since 12.0.0
  *
+ * \pre chan is locked
+ *
  * \param chan Channel publishing the blob.
  * \param type Type of stasis message.
  * \param blob The blob being published. (NULL if no blob)
@@ -316,7 +322,29 @@ void ast_channel_publish_blob(struct ast_channel *chan, struct stasis_message_ty
 
 /*!
  * \since 12
+ * \brief Set flag to indicate channel snapshot is being staged.
+ *
+ * \pre chan is locked
+ *
+ * \param chan Channel being staged.
+ */
+void ast_channel_stage_snapshot(struct ast_channel *chan);
+
+/*!
+ * \since 12
+ * \brief Clear flag to indicate channel snapshot is being staged, and publish snapshot.
+ *
+ * \pre chan is locked
+ *
+ * \param chan Channel being staged.
+ */
+void ast_channel_stage_snapshot_done(struct ast_channel *chan);
+
+/*!
+ * \since 12
  * \brief Publish a \ref ast_channel_snapshot for a channel.
+ *
+ * \pre chan is locked
  *
  * \param chan Channel to publish.
  */
@@ -325,6 +353,8 @@ void ast_channel_publish_snapshot(struct ast_channel *chan);
 /*!
  * \since 12
  * \brief Publish a \ref ast_channel_varset for a channel.
+ *
+ * \pre chan is locked
  *
  * \param chan Channel to publish the event for, or \c NULL for 'none'.
  * \param variable Name of the variable being set
@@ -502,12 +532,14 @@ void ast_channel_publish_dial(struct ast_channel *caller,
  *
  * \param caller The channel performing the dial operation
  * \param peer The channel being dialed
+ * \param forwarded The channel created as a result of the call forwarding
  * \param dialstring The information passed to the dialing application when beginning a dial
  * \param dialstatus The current status of the dial operation
  * \param forward The call forward string provided by the dialed channel
  */
 void ast_channel_publish_dial_forward(struct ast_channel *caller,
 		struct ast_channel *peer,
+		struct ast_channel *forwarded,
 		const char *dialstring,
 		const char *dialstatus,
 		const char *forward);
@@ -517,6 +549,8 @@ void ast_channel_publish_dial_forward(struct ast_channel *caller,
  * \brief Publish in the \ref ast_channel_topic a \ref ast_channel_snapshot
  * message indicating a change in channel state
  *
+ * \pre chan is locked
+ *
  * \param chan The channel whose state has changed
  */
 void ast_publish_channel_state(struct ast_channel *chan);
@@ -525,10 +559,15 @@ void ast_publish_channel_state(struct ast_channel *chan);
 
 /*!
  * \brief Build a JSON object from a \ref ast_channel_snapshot.
+ *
+ * \param snapshot The snapshot to convert to JSON
+ * \param sanitize The message sanitizer to use on the snapshot
+ *
  * \return JSON object representing channel snapshot.
  * \return \c NULL on error
  */
-struct ast_json *ast_channel_snapshot_to_json(const struct ast_channel_snapshot *snapshot);
+struct ast_json *ast_channel_snapshot_to_json(const struct ast_channel_snapshot *snapshot,
+	const struct stasis_message_sanitizer *sanitize);
 
 /*!
  * \brief Compares the context, exten and priority of two snapshots.

@@ -247,6 +247,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/stasis_endpoints.h"
 #include "asterisk/stasis_system.h"
 #include "asterisk/security_events.h"
+#include "asterisk/endpoints.h"
 
 #include "../defaults.h"
 
@@ -318,6 +319,9 @@ int daemon(int, int);  /* defined in libresolv of all places */
 struct ast_flags ast_options = { AST_DEFAULT_OPTIONS };
 struct ast_flags ast_compat = { 0 };
 
+/*! Maximum active system verbosity level. */
+int ast_verb_sys_level;
+
 int option_verbose;				/*!< Verbosity level */
 int option_debug;				/*!< Debug level */
 double ast_option_maxload;			/*!< Max load avg on system */
@@ -346,6 +350,8 @@ struct console {
 	int uid;			/*!< Remote user ID. */
 	int gid;			/*!< Remote group ID. */
 	int levels[NUMLOGLEVELS];	/*!< Which log levels are enabled for the console */
+	/*! Verbosity level of this console. */
+	int option_verbose;
 };
 
 struct ast_atexit {
@@ -608,7 +614,8 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 		ast_cli(a->fd, "  Maximum open file handles:   %d\n", ast_option_maxfiles);
 	else
 		ast_cli(a->fd, "  Maximum open file handles:   Not set\n");
-	ast_cli(a->fd, "  Verbosity:                   %d\n", option_verbose);
+	ast_cli(a->fd, "  Root console verbosity:      %d\n", option_verbose);
+	ast_cli(a->fd, "  Current console verbosity:   %d\n", ast_verb_console_get());
 	ast_cli(a->fd, "  Debug level:                 %d\n", option_debug);
 	ast_cli(a->fd, "  Maximum load average:        %lf\n", ast_option_maxload);
 #if defined(HAVE_SYSINFO)
@@ -1331,29 +1338,33 @@ void ast_console_toggle_mute(int fd, int silent)
 }
 
 /*!
- * \brief log the string to all attached console clients
+ * \brief log the string to all attached network console clients
  */
 static void ast_network_puts_mutable(const char *string, int level)
 {
 	int x;
-	for (x = 0;x < AST_MAX_CONNECTS; x++) {
-		if (consoles[x].mute)
+
+	for (x = 0; x < AST_MAX_CONNECTS; ++x) {
+		if (consoles[x].fd < 0
+			|| consoles[x].mute
+			|| consoles[x].levels[level]) {
 			continue;
-		if (consoles[x].fd > -1) {
-			if (!consoles[x].levels[level])
-				fdprint(consoles[x].p[1], string);
 		}
+		fdprint(consoles[x].p[1], string);
 	}
 }
 
 /*!
- * \brief log the string to the console, and all attached
- * console clients
+ * \brief log the string to the root console, and all attached
+ * network console clients
  */
 void ast_console_puts_mutable(const char *string, int level)
 {
+	/* Send to the root console */
 	fputs(string, stdout);
 	fflush(stdout);
+
+	/* Send to any network console clients */
 	ast_network_puts_mutable(string, level);
 }
 
@@ -1363,26 +1374,45 @@ void ast_console_puts_mutable(const char *string, int level)
 static void ast_network_puts(const char *string)
 {
 	int x;
-	for (x = 0; x < AST_MAX_CONNECTS; x++) {
-		if (consoles[x].fd > -1)
-			fdprint(consoles[x].p[1], string);
+
+	for (x = 0; x < AST_MAX_CONNECTS; ++x) {
+		if (consoles[x].fd < 0) {
+			continue;
+		}
+		fdprint(consoles[x].p[1], string);
 	}
 }
 
 /*!
- * \brief write the string to the console, and all attached
- * console clients
+ * \brief write the string to the root console, and all attached
+ * network console clients
  */
 void ast_console_puts(const char *string)
 {
+	/* Send to the root console */
 	fputs(string, stdout);
 	fflush(stdout);
+
+	/* Send to any network console clients */
 	ast_network_puts(string);
 }
 
-static void network_verboser(const char *s)
+static void network_verboser(const char *string)
 {
-	ast_network_puts_mutable(s, __LOG_VERBOSE);
+	int x;
+	int verb_level;
+
+	/* Send to any network console clients if client verbocity allows. */
+	verb_level = VERBOSE_MAGIC2LEVEL(string);
+	for (x = 0; x < AST_MAX_CONNECTS; ++x) {
+		if (consoles[x].fd < 0
+			|| consoles[x].mute
+			|| consoles[x].levels[__LOG_VERBOSE]
+			|| consoles[x].option_verbose < verb_level) {
+			continue;
+		}
+		fdprint(consoles[x].p[1], string);
+	}
 }
 
 static pthread_t lthread;
@@ -1446,6 +1476,7 @@ static int read_credentials(int fd, char *buffer, size_t size, struct console *c
 	return result;
 }
 
+/* This is the thread running the remote console on the main process. */
 static void *netconsole(void *vconsole)
 {
 	struct console *con = vconsole;
@@ -1461,6 +1492,7 @@ static void *netconsole(void *vconsole)
 		ast_copy_string(hostname, "<Unknown>", sizeof(hostname));
 	snprintf(outbuf, sizeof(outbuf), "%s/%ld/%s\n", hostname, (long)ast_mainpid, ast_get_version());
 	fdprint(con->fd, outbuf);
+	ast_verb_console_register(&con->option_verbose);
 	for (;;) {
 		fds[0].fd = con->fd;
 		fds[0].events = POLLIN;
@@ -1523,6 +1555,7 @@ static void *netconsole(void *vconsole)
 				break;
 		}
 	}
+	ast_verb_console_unregister();
 	if (!ast_opt_hide_connect) {
 		ast_verb(3, "Remote UNIX connection disconnected\n");
 	}
@@ -1575,24 +1608,25 @@ static void *listener(void *unused)
 					}
 					if (socketpair(AF_LOCAL, SOCK_STREAM, 0, consoles[x].p)) {
 						ast_log(LOG_ERROR, "Unable to create pipe: %s\n", strerror(errno));
-						consoles[x].fd = -1;
 						fdprint(s, "Server failed to create pipe\n");
 						close(s);
 						break;
 					}
 					flags = fcntl(consoles[x].p[1], F_GETFL);
 					fcntl(consoles[x].p[1], F_SETFL, flags | O_NONBLOCK);
-					consoles[x].fd = s;
 					consoles[x].mute = 1; /* Default is muted, we will un-mute if necessary */
 					/* Default uid and gid to -2, so then in cli.c/cli_has_permissions() we will be able
 					   to know if the user didn't send the credentials. */
 					consoles[x].uid = -2;
 					consoles[x].gid = -2;
+					/* Server default of remote console verbosity level is OFF. */
+					consoles[x].option_verbose = 0;
+					consoles[x].fd = s;
 					if (ast_pthread_create_detached_background(&consoles[x].t, NULL, netconsole, &consoles[x])) {
+						consoles[x].fd = -1;
 						ast_log(LOG_ERROR, "Unable to spawn thread to handle connection: %s\n", strerror(errno));
 						close(consoles[x].p[0]);
 						close(consoles[x].p[1]);
-						consoles[x].fd = -1;
 						fdprint(s, "Server failed to spawn thread\n");
 						close(s);
 					}
@@ -1974,11 +2008,17 @@ static void really_quit(int num, shutdown_nice_t niceness, int restart)
 		close(ast_socket);
 		ast_socket = -1;
 		unlink(ast_config_AST_SOCKET);
+		pthread_kill(lthread, SIGURG);
+		pthread_join(lthread, NULL);
 	}
 	if (ast_consock > -1)
 		close(ast_consock);
 	if (!ast_opt_remote)
 		unlink(ast_config_AST_PID);
+	if (sig_alert_pipe[0])
+		close(sig_alert_pipe[0]);
+	if (sig_alert_pipe[1])
+		close(sig_alert_pipe[1]);
 	printf("%s", term_quit());
 	if (restart) {
 		int i;
@@ -2056,62 +2096,52 @@ static const char *fix_header(char *outbuf, int maxout, const char *s, char leve
 }
 
 struct console_state_data {
-	int newline;
 	char verbose_line_level;
 };
 
 static int console_state_init(void *ptr)
 {
 	struct console_state_data *state = ptr;
-	state->newline = 1;
 	state->verbose_line_level = 0;
 	return 0;
 }
 
 AST_THREADSTORAGE_CUSTOM(console_state, console_state_init, ast_free_ptr);
 
-/* These gymnastics are due to platforms which designate char as unsigned by
- * default. Level is the negative character -- offset by 1, because \0 is the
- * EOS delimiter. */
-#define VERBOSE_MAGIC2LEVEL(x) (((char) -*(signed char *) (x)) - 1)
-#define VERBOSE_HASMAGIC(x)	(*(signed char *) (x) < 0)
-
-static int console_log_verbose(const char *s)
+static int console_print(const char *s, int local)
 {
-	/* verbose level of 0 evaluates to a magic of -1, 1 to -2, etc...
-	   search up to -7 (level = 6) as this is currently the largest
-	   level used */
-	static const char find_set[9] = { -1, -2, -3, -4, -5, -6, -7, '\n'};
-
 	struct console_state_data *state =
 		ast_threadstorage_get(&console_state, sizeof(*state));
 
 	char prefix[80];
-	const char *c = s;
+	const char *c;
 	int num, res = 0;
+	unsigned int newline;
 
 	do {
 		if (VERBOSE_HASMAGIC(s)) {
-			/* if it has one always use the given line's level,
-			   otherwise we'll use the last line's level */
+			/* always use the given line's level, otherwise
+			   we'll use the last line's level */
 			state->verbose_line_level = VERBOSE_MAGIC2LEVEL(s);
 			/* move past magic */
 			s++;
-		}
 
-		c = fix_header(prefix, sizeof(prefix), s,
-			       state->verbose_line_level);
-
-		if (!state->newline) {
-			/* don't use the prefix if line continuation */
+			if (local) {
+				s = fix_header(prefix, sizeof(prefix), s,
+					       state->verbose_line_level);
+			}
+		} else {
 			*prefix = '\0';
 		}
+		c = s;
 
-		/* for a given line separate on verbose magic and newlines */
-		if (!(s = strpbrk(c, find_set))) {
-			s = strchr(c, '\0');
-		} else if (*s == '\n') {
+		/* for a given line separate on verbose magic, newline, and eol */
+		if ((s = strchr(c, '\n'))) {
 			++s;
+			newline = 1;
+		} else {
+			s = strchr(c, '\0');
+			newline = 0;
 		}
 
 		/* check if we should write this line after calculating begin/end
@@ -2121,8 +2151,7 @@ static int console_log_verbose(const char *s)
 			continue;
 		}
 
-		state->newline = *(s - 1) == '\n';
-		if (!ast_strlen_zero(prefix)) {
+		if (local && !ast_strlen_zero(prefix)) {
 			fputs(prefix, stdout);
 		}
 
@@ -2136,8 +2165,13 @@ static int console_log_verbose(const char *s)
 			   we'll want to return true */
 			res = 1;
 		}
-		c = s;
 	} while (*s);
+
+	if (newline) {
+		/* if ending on a newline then reset last level to zero
+		    since what follows may be not be logging output */
+		state->verbose_line_level = 0;
+	}
 
 	if (res) {
 		fflush(stdout);
@@ -2148,7 +2182,7 @@ static int console_log_verbose(const char *s)
 
 static void console_verboser(const char *s)
 {
-	if (!console_log_verbose(s)) {
+	if (!console_print(s, 1)) {
 		return;
 	}
 
@@ -2168,6 +2202,7 @@ static int ast_all_zeros(char *s)
 	return 1;
 }
 
+/* This is the main console CLI command handler.  Run by the main() thread. */
 static void consolehandler(char *s)
 {
 	printf("%s", term_end());
@@ -2205,38 +2240,56 @@ static int remoteconsolehandler(char *s)
 		else
 			ast_safe_system(getenv("SHELL") ? getenv("SHELL") : "/bin/sh");
 		ret = 1;
-	} else if (strncasecmp(s, "core set verbose ", 17) == 0) {
-		int old_verbose = option_verbose;
-		if (strncasecmp(s + 17, "atleast ", 8) == 0) {
-			int tmp;
-			if (sscanf(s + 25, "%d", &tmp) != 1) {
-				fprintf(stderr, "Usage: core set verbose [atleast] <level>\n");
-			} else {
-				if (tmp > option_verbose) {
-					option_verbose = tmp;
-				}
-				if (old_verbose != option_verbose) {
-					fprintf(stdout, "Set remote console verbosity from %d to %d\n", old_verbose, option_verbose);
-				} else {
-					fprintf(stdout, "Verbosity level unchanged.\n");
-				}
-			}
-		} else {
-			if (sscanf(s + 17, "%d", &option_verbose) != 1) {
-				fprintf(stderr, "Usage: core set verbose [atleast] <level>\n");
-			} else {
-				if (old_verbose != option_verbose) {
-					fprintf(stdout, "Set remote console verbosity to %d\n", option_verbose);
-				} else {
-					fprintf(stdout, "Verbosity level unchanged.\n");
-				}
-			}
-		}
-		ret = 1;
 	} else if ((strncasecmp(s, "quit", 4) == 0 || strncasecmp(s, "exit", 4) == 0) &&
 	    (s[4] == '\0' || isspace(s[4]))) {
 		quit_handler(0, SHUTDOWN_FAST, 0);
 		ret = 1;
+	} else if (s[0]) {
+		char *shrunk = ast_strdupa(s);
+		char *cur;
+		char *prev;
+
+		/*
+		 * Remove duplicate spaces from shrunk for matching purposes.
+		 *
+		 * shrunk has at least one character in it to start with or we
+		 * couldn't get here.
+		 */
+		for (prev = shrunk, cur = shrunk + 1; *cur; ++cur) {
+			if (*prev == ' ' && *cur == ' ') {
+				/* Skip repeated space delimiter. */
+				continue;
+			}
+			*++prev = *cur;
+		}
+		*++prev = '\0';
+
+		if (strncasecmp(shrunk, "core set verbose ", 17) == 0) {
+			/*
+			 * We need to still set the rasterisk option_verbose in case we are
+			 * talking to an earlier version which doesn't prefilter verbose
+			 * levels.  This is really a compromise as we should always take
+			 * whatever the server sends.
+			 */
+
+			if (!strncasecmp(shrunk + 17, "off", 3)) {
+				ast_verb_console_set(0);
+			} else {
+				int verbose_new;
+				int atleast;
+
+				atleast = 8;
+				if (strncasecmp(shrunk + 17, "atleast ", atleast)) {
+					atleast = 0;
+				}
+
+				if (sscanf(shrunk + 17 + atleast, "%30d", &verbose_new) == 1) {
+					if (!atleast || ast_verb_console_get() < verbose_new) {
+						ast_verb_console_set(verbose_new);
+					}
+				}
+			}
+		}
 	}
 
 	return ret;
@@ -2558,6 +2611,31 @@ static struct ast_cli_entry cli_asterisk[] = {
 #endif /* ! LOW_MEMORY */
 };
 
+static void send_rasterisk_connect_commands(void)
+{
+	char buf[80];
+
+	/*
+	 * Tell the server asterisk instance about the verbose level
+	 * initially desired.
+	 */
+	if (option_verbose) {
+		snprintf(buf, sizeof(buf), "core set verbose atleast %d silent", option_verbose);
+		fdsend(ast_consock, buf);
+	}
+
+	if (option_debug) {
+		snprintf(buf, sizeof(buf), "core set debug atleast %d", option_debug);
+		fdsend(ast_consock, buf);
+	}
+
+	if (!ast_opt_mute) {
+		fdsend(ast_consock, "logger mute silent");
+	} else {
+		printf("log and verbose output currently muted ('logger mute' to unmute)\n");
+	}
+}
+
 static int ast_el_read_char(EditLine *editline, char *cp)
 {
 	int num_read = 0;
@@ -2611,10 +2689,7 @@ static int ast_el_read_char(EditLine *editline, char *cp)
 							fprintf(stderr, "Reconnect succeeded after %.3f seconds\n", 1.0 / reconnects_per_second * tries);
 							printf("%s", term_quit());
 							WELCOME_MESSAGE;
-							if (!ast_opt_mute)
-								fdsend(ast_consock, "logger mute silent");
-							else
-								printf("log and verbose output currently muted ('logger mute' to unmute)\n");
+							send_rasterisk_connect_commands();
 							break;
 						} else
 							usleep(1000000 / reconnects_per_second);
@@ -2635,7 +2710,7 @@ static int ast_el_read_char(EditLine *editline, char *cp)
 				}
 			}
 
-			console_log_verbose(buf);
+			console_print(buf, 0);
 
 			if ((res < EL_BUF_SIZE - 1) && ((buf[res-1] == '\n') || (buf[res-2] == '\n'))) {
 				*cp = CC_REFRESH;
@@ -2777,45 +2852,62 @@ static char *cli_prompt(EditLine *editline)
 	return ast_str_buffer(prompt);
 }
 
+static void destroy_match_list(char **match_list, int matches)
+{
+	if (match_list) {
+		int idx;
+
+		for (idx = 0; idx < matches; ++idx) {
+			ast_free(match_list[idx]);
+		}
+		ast_free(match_list);
+	}
+}
+
 static char **ast_el_strtoarr(char *buf)
 {
-	char **match_list = NULL, **match_list_tmp, *retstr;
-	size_t match_list_len;
+	char *retstr;
+	char **match_list = NULL;
+	char **new_list;
+	size_t match_list_len = 1;
 	int matches = 0;
 
-	match_list_len = 1;
-	while ( (retstr = strsep(&buf, " ")) != NULL) {
-
-		if (!strcmp(retstr, AST_CLI_COMPLETE_EOF))
+	while ((retstr = strsep(&buf, " "))) {
+		if (!strcmp(retstr, AST_CLI_COMPLETE_EOF)) {
 			break;
+		}
 		if (matches + 1 >= match_list_len) {
 			match_list_len <<= 1;
-			if ((match_list_tmp = ast_realloc(match_list, match_list_len * sizeof(char *)))) {
-				match_list = match_list_tmp;
-			} else {
-				if (match_list)
-					ast_free(match_list);
-				return (char **) NULL;
+			new_list = ast_realloc(match_list, match_list_len * sizeof(char *));
+			if (!new_list) {
+				destroy_match_list(match_list, matches);
+				return NULL;
 			}
+			match_list = new_list;
 		}
 
-		match_list[matches++] = ast_strdup(retstr);
+		retstr = ast_strdup(retstr);
+		if (!retstr) {
+			destroy_match_list(match_list, matches);
+			return NULL;
+		}
+		match_list[matches++] = retstr;
 	}
 
-	if (!match_list)
-		return (char **) NULL;
+	if (!match_list) {
+		return NULL;
+	}
 
 	if (matches >= match_list_len) {
-		if ((match_list_tmp = ast_realloc(match_list, (match_list_len + 1) * sizeof(char *)))) {
-			match_list = match_list_tmp;
-		} else {
-			if (match_list)
-				ast_free(match_list);
-			return (char **) NULL;
+		new_list = ast_realloc(match_list, (match_list_len + 1) * sizeof(char *));
+		if (!new_list) {
+			destroy_match_list(match_list, matches);
+			return NULL;
 		}
+		match_list = new_list;
 	}
 
-	match_list[matches] = (char *) NULL;
+	match_list[matches] = NULL;
 
 	return match_list;
 }
@@ -2916,7 +3008,9 @@ static char *cli_complete(EditLine *editline, int ch)
 
 		if (nummatches > 0) {
 			char *mbuf;
+			char *new_mbuf;
 			int mlen = 0, maxmbuf = 2048;
+
 			/* Start with a 2048 byte buffer */
 			if (!(mbuf = ast_malloc(maxmbuf))) {
 				*((char *) lf->cursor) = savechr;
@@ -2930,10 +3024,13 @@ static char *cli_complete(EditLine *editline, int ch)
 				if (mlen + 1024 > maxmbuf) {
 					/* Every step increment buffer 1024 bytes */
 					maxmbuf += 1024;
-					if (!(mbuf = ast_realloc(mbuf, maxmbuf))) {
+					new_mbuf = ast_realloc(mbuf, maxmbuf);
+					if (!new_mbuf) {
+						ast_free(mbuf);
 						*((char *) lf->cursor) = savechr;
 						return (char *)(CC_ERROR);
 					}
+					mbuf = new_mbuf;
 				}
 				/* Only read 1024 bytes at a time */
 				res = read(ast_consock, mbuf + mlen, 1024);
@@ -3143,11 +3240,7 @@ static void ast_remotecontrol(char *data)
 	else
 		pid = -1;
 	if (!data) {
-		if (!ast_opt_mute) {
-			fdsend(ast_consock, "logger mute silent");
-		} else {
-			printf("log and verbose output currently muted ('logger mute' to unmute)\n");
-		}
+		send_rasterisk_connect_commands();
 	}
 
 	if (ast_opt_exec && data) {  /* hack to print output then exit if asterisk -rx is used */
@@ -3304,6 +3397,8 @@ static void ast_readconfig(void)
 		unsigned int dbdir:1;
 		unsigned int keydir:1;
 	} found = { 0, 0 };
+	/* Default to false for security */
+	int live_dangerously = 0;
 
 	/* Set default value */
 	option_dtmfminduration = AST_MIN_DTMF_DURATION;
@@ -3537,7 +3632,12 @@ static void ast_readconfig(void)
 					v->value);
 				ast_clear_flag(&ast_options, AST_OPT_FLAG_STDEXTEN_MACRO);
 			}
+		} else if (!strcasecmp(v->name, "live_dangerously")) {
+			live_dangerously = ast_true(v->value);
 		}
+	}
+	if (!ast_opt_remote) {
+		pbx_live_dangerously(live_dangerously);
 	}
 	for (v = ast_variable_browse(cfg, "compat"); v; v = v->next) {
 		float version;
@@ -3617,6 +3717,7 @@ static void canary_exit(void)
 		kill(canary_pid, SIGKILL);
 }
 
+/* Execute CLI commands on startup.  Run by main() thread. */
 static void run_startup_commands(void)
 {
 	int fd;
@@ -4047,6 +4148,9 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	/* Initial value of the maximum active system verbosity level. */
+	ast_verb_sys_level = option_verbose;
+
 	if (ast_tryconnect()) {
 		/* One is already running */
 		if (ast_opt_remote) {
@@ -4317,6 +4421,11 @@ int main(int argc, char *argv[])
 	}
 
 	ast_channels_init();
+
+	if (ast_endpoint_init()) {
+		printf ("%s", term_quit());
+		exit(1);
+	}
 
 	if ((moduleresult = load_modules(1))) {		/* Load modules, pre-load only */
 		printf("%s", term_quit());

@@ -125,7 +125,7 @@ static void parker_parked_call_message_response(struct ast_parked_call_payload *
 	}
 }
 
-static void parker_update_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message)
+static void parker_update_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
 {
 	if (stasis_subscription_final_message(sub, message)) {
 		ast_free(data);
@@ -220,7 +220,7 @@ static struct ast_channel *park_local_transfer(struct ast_channel *parker, const
 	/* We need to have the parker subscribe to the new local channel before hand. */
 	create_parked_subscription(parker, ast_channel_uniqueid(parkee_side_2));
 
-	pbx_builtin_setvar_helper(parkee_side_2, "BLINDTRANSFER", ast_channel_name(parker));
+	ast_bridge_set_transfer_variables(parkee_side_2, ast_channel_name(parker), 0);
 
 	ast_channel_unref(parkee_side_2);
 
@@ -316,7 +316,8 @@ static int parking_blind_transfer_park(struct ast_bridge_channel *bridge_channel
 			return -1;
 		}
 
-		if (ast_bridge_impart(bridge_channel->bridge, transfer_chan, NULL, NULL, 1)) {
+		if (ast_bridge_impart(bridge_channel->bridge, transfer_chan, NULL, NULL,
+			AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 			ast_hangup(transfer_chan);
 			return -1;
 		}
@@ -374,7 +375,7 @@ static int parking_park_bridge_channel(struct ast_bridge_channel *bridge_channel
 		return -1;
 	}
 
-	pbx_builtin_setvar_helper(bridge_channel->chan, "BLINDTRANSFER", ast_channel_name(parker));
+	ast_bridge_set_transfer_variables(bridge_channel->chan, ast_channel_name(parker), 0);
 
 	/* bridge_channel must be locked so we can get a reference to the bridge it is currently on */
 	ao2_lock(bridge_channel);
@@ -451,6 +452,43 @@ static int feature_park_call(struct ast_bridge_channel *bridge_channel, void *ho
 	return parking_park_call(bridge_channel, NULL, 0);
 }
 
+/*!
+ * \internal
+ * \brief Setup the caller features for when that channel is dialed.
+ * \since 12.0.0
+ *
+ * \param chan Parked channel leaving the parking lot.
+ * \param cfg Parking lot configuration.
+ *
+ * \return Nothing
+ */
+static void parking_timeout_set_caller_features(struct ast_channel *chan, struct parking_lot_cfg *cfg)
+{
+	char features[5];
+	char *pos;
+
+	/*
+	 * We are setting the callee Dial flag values because in the
+	 * timeout case, the caller is who is being called back.
+	 */
+	pos = features;
+	if (cfg->parkedcalltransfers & AST_FEATURE_FLAG_BYCALLER) {
+		*pos++ = 't';
+	}
+	if (cfg->parkedcallreparking & AST_FEATURE_FLAG_BYCALLER) {
+		*pos++ = 'k';
+	}
+	if (cfg->parkedcallhangup & AST_FEATURE_FLAG_BYCALLER) {
+		*pos++ = 'h';
+	}
+	if (cfg->parkedcallrecording & AST_FEATURE_FLAG_BYCALLER) {
+		*pos++ = 'x';
+	}
+	*pos = '\0';
+
+	pbx_builtin_setvar_helper(chan, "BRIDGE_FEATURES", features);
+}
+
 /*! \internal
  * \brief Interval hook. Pulls a parked call from the parking bridge after the timeout is passed and sets the resolution to timeout.
  *
@@ -480,25 +518,28 @@ static int parking_duration_callback(struct ast_bridge_channel *bridge_channel, 
 		ao2_unlock(user);
 		return -1;
 	}
-
 	user->resolution = PARK_TIMEOUT;
 	ao2_unlock(user);
 
 	ast_bridge_channel_leave_bridge(bridge_channel, BRIDGE_CHANNEL_STATE_END_NO_DISSOLVE,
 		AST_CAUSE_NORMAL_CLEARING);
 
-	/* Set parking timeout channel variables */
-	snprintf(parking_space, sizeof(parking_space), "%d", user->parking_space);
-	pbx_builtin_setvar_helper(chan, "PARKING_SPACE", parking_space);
-	pbx_builtin_setvar_helper(chan, "PARKINGSLOT", parking_space); /* Deprecated version of PARKING_SPACE */
-	pbx_builtin_setvar_helper(chan, "PARKEDLOT", user->lot->name);
-
 	dial_string = user->parker_dial_string;
 	dial_string_flat = ast_strdupa(dial_string);
 	flatten_dial_string(dial_string_flat);
 
+	/* Set parking timeout channel variables */
+	snprintf(parking_space, sizeof(parking_space), "%d", user->parking_space);
+	ast_channel_lock(chan);
+	ast_channel_stage_snapshot(chan);
+	pbx_builtin_setvar_helper(chan, "PARKING_SPACE", parking_space);
+	pbx_builtin_setvar_helper(chan, "PARKINGSLOT", parking_space); /* Deprecated version of PARKING_SPACE */
+	pbx_builtin_setvar_helper(chan, "PARKEDLOT", user->lot->name);
 	pbx_builtin_setvar_helper(chan, "PARKER", dial_string);
 	pbx_builtin_setvar_helper(chan, "PARKER_FLAT", dial_string_flat);
+	parking_timeout_set_caller_features(chan, user->lot->cfg);
+	ast_channel_stage_snapshot_done(chan);
+	ast_channel_unlock(chan);
 
 	/* Dialplan generation for park-dial extensions */
 
@@ -531,7 +572,6 @@ static int parking_duration_callback(struct ast_bridge_channel *bridge_channel, 
 		user->lot->cfg->comebackdialtime);
 
 	duplicate_returnexten = ast_strdup(returnexten);
-
 	if (!duplicate_returnexten) {
 		ast_log(LOG_ERROR, "Failed to create parking redial parker extension %s@%s - Dial(%s)\n",
 			dial_string_flat, PARK_DIAL_CONTEXT, returnexten);

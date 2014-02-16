@@ -39,22 +39,35 @@
 
 #include "asterisk/ari.h"
 
-/*! \brief Argument struct for ast_ari_get_bridges() */
-struct ast_get_bridges_args {
+/*! \brief Argument struct for ast_ari_bridges_list() */
+struct ast_ari_bridges_list_args {
 };
 /*!
- * \brief List active bridges.
+ * \brief List all active bridges in Asterisk.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_bridges(struct ast_variable *headers, struct ast_get_bridges_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_new_bridge() */
-struct ast_new_bridge_args {
+void ast_ari_bridges_list(struct ast_variable *headers, struct ast_ari_bridges_list_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_create() */
+struct ast_ari_bridges_create_args {
 	/*! \brief Type of bridge to create. */
 	const char *type;
+	/*! \brief Name to give to the bridge being created. */
+	const char *name;
 };
+/*!
+ * \brief Body parsing function for /bridges.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_create_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_create_args *args);
+
 /*!
  * \brief Create a new bridge.
  *
@@ -64,9 +77,9 @@ struct ast_new_bridge_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_new_bridge(struct ast_variable *headers, struct ast_new_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_get_bridge() */
-struct ast_get_bridge_args {
+void ast_ari_bridges_create(struct ast_variable *headers, struct ast_ari_bridges_create_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_get() */
+struct ast_ari_bridges_get_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 };
@@ -77,9 +90,9 @@ struct ast_get_bridge_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_get_bridge(struct ast_variable *headers, struct ast_get_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_delete_bridge() */
-struct ast_delete_bridge_args {
+void ast_ari_bridges_get(struct ast_variable *headers, struct ast_ari_bridges_get_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_destroy() */
+struct ast_ari_bridges_destroy_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 };
@@ -92,9 +105,9 @@ struct ast_delete_bridge_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_delete_bridge(struct ast_variable *headers, struct ast_delete_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_add_channel_to_bridge() */
-struct ast_add_channel_to_bridge_args {
+void ast_ari_bridges_destroy(struct ast_variable *headers, struct ast_ari_bridges_destroy_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_add_channel() */
+struct ast_ari_bridges_add_channel_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 	/*! \brief Array of Ids of channels to add to bridge */
@@ -107,15 +120,26 @@ struct ast_add_channel_to_bridge_args {
 	const char *role;
 };
 /*!
+ * \brief Body parsing function for /bridges/{bridgeId}/addChannel.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_add_channel_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_add_channel_args *args);
+
+/*!
  * \brief Add a channel to a bridge.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_add_channel_to_bridge(struct ast_variable *headers, struct ast_add_channel_to_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_remove_channel_from_bridge() */
-struct ast_remove_channel_from_bridge_args {
+void ast_ari_bridges_add_channel(struct ast_variable *headers, struct ast_ari_bridges_add_channel_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_remove_channel() */
+struct ast_ari_bridges_remove_channel_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 	/*! \brief Array of Ids of channels to remove from bridge */
@@ -126,20 +150,42 @@ struct ast_remove_channel_from_bridge_args {
 	char *channel_parse;
 };
 /*!
+ * \brief Body parsing function for /bridges/{bridgeId}/removeChannel.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_remove_channel_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_remove_channel_args *args);
+
+/*!
  * \brief Remove a channel from a bridge.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_remove_channel_from_bridge(struct ast_variable *headers, struct ast_remove_channel_from_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_moh_start_bridge() */
-struct ast_moh_start_bridge_args {
+void ast_ari_bridges_remove_channel(struct ast_variable *headers, struct ast_ari_bridges_remove_channel_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_start_moh() */
+struct ast_ari_bridges_start_moh_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 	/*! \brief Channel's id */
 	const char *moh_class;
 };
+/*!
+ * \brief Body parsing function for /bridges/{bridgeId}/moh.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_start_moh_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_start_moh_args *args);
+
 /*!
  * \brief Play music on hold to a bridge or change the MOH class that is playing.
  *
@@ -147,24 +193,24 @@ struct ast_moh_start_bridge_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_moh_start_bridge(struct ast_variable *headers, struct ast_moh_start_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_moh_stop_bridge() */
-struct ast_moh_stop_bridge_args {
+void ast_ari_bridges_start_moh(struct ast_variable *headers, struct ast_ari_bridges_start_moh_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_stop_moh() */
+struct ast_ari_bridges_stop_moh_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 };
 /*!
  * \brief Stop playing music on hold to a bridge.
  *
- * This will only stop music on hold being played via bridges/{bridgeId}/mohStart.
+ * This will only stop music on hold being played via POST bridges/{bridgeId}/moh.
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_moh_stop_bridge(struct ast_variable *headers, struct ast_moh_stop_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_play_on_bridge() */
-struct ast_play_on_bridge_args {
+void ast_ari_bridges_stop_moh(struct ast_variable *headers, struct ast_ari_bridges_stop_moh_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_play() */
+struct ast_ari_bridges_play_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 	/*! \brief Media's URI to play. */
@@ -177,17 +223,28 @@ struct ast_play_on_bridge_args {
 	int skipms;
 };
 /*!
+ * \brief Body parsing function for /bridges/{bridgeId}/play.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_play_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_play_args *args);
+
+/*!
  * \brief Start playback of media on a bridge.
  *
- * The media URI may be any of a number of URI's. You may use http: and https: URI's, as well as sound: and recording: URI's. This operation creates a playback resource that can be used to control the playback of media (pause, rewind, fast forward, etc.)
+ * The media URI may be any of a number of URI's. Currently sound: and recording: URI's are supported. This operation creates a playback resource that can be used to control the playback of media (pause, rewind, fast forward, etc.)
  *
  * \param headers HTTP headers
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_play_on_bridge(struct ast_variable *headers, struct ast_play_on_bridge_args *args, struct ast_ari_response *response);
-/*! \brief Argument struct for ast_ari_record_bridge() */
-struct ast_record_bridge_args {
+void ast_ari_bridges_play(struct ast_variable *headers, struct ast_ari_bridges_play_args *args, struct ast_ari_response *response);
+/*! \brief Argument struct for ast_ari_bridges_record() */
+struct ast_ari_bridges_record_args {
 	/*! \brief Bridge's id */
 	const char *bridge_id;
 	/*! \brief Recording's filename */
@@ -206,6 +263,17 @@ struct ast_record_bridge_args {
 	const char *terminate_on;
 };
 /*!
+ * \brief Body parsing function for /bridges/{bridgeId}/record.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_record_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_record_args *args);
+
+/*!
  * \brief Start a recording.
  *
  * This records the mixed audio from all channels participating in this bridge.
@@ -214,6 +282,6 @@ struct ast_record_bridge_args {
  * \param args Swagger parameters
  * \param[out] response HTTP response
  */
-void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridge_args *args, struct ast_ari_response *response);
+void ast_ari_bridges_record(struct ast_variable *headers, struct ast_ari_bridges_record_args *args, struct ast_ari_response *response);
 
 #endif /* _ASTERISK_RESOURCE_BRIDGES_H */

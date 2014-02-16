@@ -41,11 +41,23 @@ res_ari_sounds.so: ari/resource_sounds.o
 
 ari/resource_sounds.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_sounds)
 
-res_ari_playback.so: ari/resource_playback.o
+res_ari_playbacks.so: ari/resource_playbacks.o
 
-ari/resource_playback.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_playback)
+ari/resource_playbacks.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_playbacks)
+
+res_ari_device_states.so: ari/resource_device_states.o
+
+ari/resource_device_states.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_device_states)
+
+res_ari_mailboxes.so: ari/resource_mailboxes.o
+
+ari/resource_mailboxes.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_mailboxes)
 
 res_ari_events.so: ari/resource_events.o
 
 ari/resource_events.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_events)
+
+res_ari_applications.so: ari/resource_applications.o
+
+ari/resource_applications.o: _ASTCFLAGS+=$(call MOD_ASTCFLAGS,res_ari_applications)
 

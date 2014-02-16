@@ -28,12 +28,12 @@
 #include <pjsip_ua.h>
 
 #include "asterisk/res_pjsip.h"
+#include "asterisk/res_pjsip_session.h"
 #include "asterisk/module.h"
 #include "asterisk/acl.h"
 
-static pj_bool_t nat_on_rx_request(pjsip_rx_data *rdata)
+static pj_bool_t handle_rx_message(struct ast_sip_endpoint *endpoint, pjsip_rx_data *rdata)
 {
-	RAII_VAR(struct ast_sip_endpoint *, endpoint, ast_pjsip_rdata_get_endpoint(rdata), ao2_cleanup);
 	pjsip_contact_hdr *contact;
 
 	if (!endpoint) {
@@ -41,11 +41,19 @@ static pj_bool_t nat_on_rx_request(pjsip_rx_data *rdata)
 	}
 
 	if (endpoint->nat.rewrite_contact && (contact = pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_CONTACT, NULL)) &&
-		(PJSIP_URI_SCHEME_IS_SIP(contact->uri) || PJSIP_URI_SCHEME_IS_SIPS(contact->uri))) {
+		!contact->star && (PJSIP_URI_SCHEME_IS_SIP(contact->uri) || PJSIP_URI_SCHEME_IS_SIPS(contact->uri))) {
 		pjsip_sip_uri *uri = pjsip_uri_get_uri(contact->uri);
+		pjsip_dialog *dlg = pjsip_rdata_get_dlg(rdata);
 
 		pj_cstr(&uri->host, rdata->pkt_info.src_name);
 		uri->port = rdata->pkt_info.src_port;
+
+		/* rewrite the session target since it may have already been pulled from the contact header */
+		if (dlg && (!dlg->remote.contact
+			|| pjsip_uri_cmp(PJSIP_URI_IN_REQ_URI, dlg->remote.contact->uri, contact->uri))) {
+			dlg->remote.contact = (pjsip_contact_hdr*)pjsip_hdr_clone(dlg->pool, contact);
+			dlg->target = dlg->remote.contact->uri;
+		}
 	}
 
 	if (endpoint->nat.force_rport) {
@@ -53,6 +61,12 @@ static pj_bool_t nat_on_rx_request(pjsip_rx_data *rdata)
 	}
 
 	return PJ_FALSE;
+}
+
+static pj_bool_t nat_on_rx_message(pjsip_rx_data *rdata)
+{
+	RAII_VAR(struct ast_sip_endpoint *, endpoint, ast_pjsip_rdata_get_endpoint(rdata), ao2_cleanup);
+	return handle_rx_message(endpoint, rdata);
 }
 
 /*! \brief Structure which contains information about a transport */
@@ -213,21 +227,67 @@ static pjsip_module nat_module = {
 	.name = { "NAT", 3 },
 	.id = -1,
 	.priority = PJSIP_MOD_PRIORITY_TSX_LAYER - 2,
-	.on_rx_request = nat_on_rx_request,
+	.on_rx_request = nat_on_rx_message,
+	.on_rx_response = nat_on_rx_message,
 	.on_tx_request = nat_on_tx_message,
 	.on_tx_response = nat_on_tx_message,
 };
 
-static int load_module(void)
+/*! \brief Function called when an INVITE goes out */
+static int nat_incoming_invite_request(struct ast_sip_session *session, struct pjsip_rx_data *rdata)
 {
-	ast_sip_register_service(&nat_module);
-	return AST_MODULE_LOAD_SUCCESS;
+	if (session->inv_session->state == PJSIP_INV_STATE_INCOMING) {
+		pjsip_dlg_add_usage(session->inv_session->dlg, &nat_module, NULL);
+	}
+
+	return 0;
 }
+
+/*! \brief Function called when an INVITE response comes in */
+static void nat_incoming_invite_response(struct ast_sip_session *session, struct pjsip_rx_data *rdata)
+{
+	handle_rx_message(session->endpoint, rdata);
+}
+
+/*! \brief Function called when an INVITE comes in */
+static void nat_outgoing_invite_request(struct ast_sip_session *session, struct pjsip_tx_data *tdata)
+{
+	if (session->inv_session->state == PJSIP_INV_STATE_NULL) {
+		pjsip_dlg_add_usage(session->inv_session->dlg, &nat_module, NULL);
+	}
+}
+
+/*! \brief Supplement for adding NAT functionality to dialog */
+static struct ast_sip_session_supplement nat_supplement = {
+	.method = "INVITE",
+	.priority = AST_SIP_SUPPLEMENT_PRIORITY_FIRST + 1,
+	.incoming_request = nat_incoming_invite_request,
+	.outgoing_request = nat_outgoing_invite_request,
+	.incoming_response = nat_incoming_invite_response,
+};
+
 
 static int unload_module(void)
 {
+	ast_sip_session_unregister_supplement(&nat_supplement);
 	ast_sip_unregister_service(&nat_module);
 	return 0;
+}
+
+static int load_module(void)
+{
+	if (ast_sip_register_service(&nat_module)) {
+		ast_log(LOG_ERROR, "Could not register NAT module for incoming and outgoing requests\n");
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (ast_sip_session_register_supplement(&nat_supplement)) {
+		ast_log(LOG_ERROR, "Could not register NAT session supplement for incoming and outgoing INVITE requests\n");
+		unload_module();
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "PJSIP NAT Support",

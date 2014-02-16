@@ -784,6 +784,12 @@ static int peek_read(struct ast_channel *chan, const char *cmd, char *data, char
 	}
 
 	AST_STANDARD_RAW_ARGS(args, data);
+
+	if (ast_strlen_zero(args.n) || ast_strlen_zero(args.name)) {
+		ast_log(LOG_ERROR, "LOCAL_PEEK requires parameters n and varname\n");
+		return -1;
+	}
+
 	n = atoi(args.n);
 	*buf = '\0';
 
@@ -822,6 +828,11 @@ static int stackpeek_read(struct ast_channel *chan, const char *cmd, char *data,
 
 	data = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, data);
+
+	if (ast_strlen_zero(args.n) || ast_strlen_zero(args.which)) {
+		ast_log(LOG_ERROR, "STACK_PEEK requires parameters n and which\n");
+		return -1;
+	}
 
 	n = atoi(args.n);
 	if (n <= 0) {
@@ -1215,8 +1226,7 @@ static int handle_gosub(struct ast_channel *chan, AGI *agi, int argc, const char
 		ast_agi_send(agi->fd, chan, "200 result=%d Gosub failed\n", res);
 	}
 
-	/* Must use free because the memory was allocated by asprintf(). */
-	free(gosub_args);
+	ast_free(gosub_args);
 
 	ast_channel_lock(chan);
 	ast_debug(4, "%s Ending location: %s,%s,%d\n", ast_channel_name(chan),

@@ -31,10 +31,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/astobj2.h"
 #include "asterisk/stasis.h"
+#include "asterisk/stasis_app.h"
 #include "asterisk/stasis_endpoints.h"
+#include "asterisk/channel.h"
 
-void ast_ari_get_endpoints(struct ast_variable *headers,
-	struct ast_get_endpoints_args *args,
+void ast_ari_endpoints_list(struct ast_variable *headers,
+	struct ast_ari_endpoints_list_args *args,
 	struct ast_ari_response *response)
 {
 	RAII_VAR(struct stasis_cache *, cache, NULL, ao2_cleanup);
@@ -68,9 +70,18 @@ void ast_ari_get_endpoints(struct ast_variable *headers,
 	while ((obj = ao2_iterator_next(&i))) {
 		RAII_VAR(struct stasis_message *, msg, obj, ao2_cleanup);
 		struct ast_endpoint_snapshot *snapshot = stasis_message_data(msg);
-		int r = ast_json_array_append(
-			json, ast_endpoint_snapshot_to_json(snapshot));
+		struct ast_json *json_endpoint = ast_endpoint_snapshot_to_json(snapshot, stasis_app_get_sanitizer());
+		int r;
+
+		if (!json_endpoint) {
+			ao2_iterator_destroy(&i);
+			return;
+		}
+
+		r = ast_json_array_append(
+			json, json_endpoint);
 		if (r != 0) {
+			ao2_iterator_destroy(&i);
 			ast_ari_response_alloc_failed(response);
 			return;
 		}
@@ -79,8 +90,8 @@ void ast_ari_get_endpoints(struct ast_variable *headers,
 
 	ast_ari_response_ok(response, ast_json_ref(json));
 }
-void ast_ari_get_endpoints_by_tech(struct ast_variable *headers,
-	struct ast_get_endpoints_by_tech_args *args,
+void ast_ari_endpoints_list_by_tech(struct ast_variable *headers,
+	struct ast_ari_endpoints_list_by_tech_args *args,
 	struct ast_ari_response *response)
 {
 	RAII_VAR(struct stasis_cache *, cache, NULL, ao2_cleanup);
@@ -89,7 +100,11 @@ void ast_ari_get_endpoints_by_tech(struct ast_variable *headers,
 	struct ao2_iterator i;
 	void *obj;
 
-	/* TODO - if tech isn't a recognized type of endpoint, it should 404 */
+	if (!ast_get_channel_tech(args->tech)) {
+		ast_ari_response_error(response, 404, "Not Found",
+				       "No Endpoints found - invalid tech %s", args->tech);
+		return;
+	}
 
 	cache = ast_endpoint_cache();
 	if (!cache) {
@@ -116,42 +131,48 @@ void ast_ari_get_endpoints_by_tech(struct ast_variable *headers,
 	while ((obj = ao2_iterator_next(&i))) {
 		RAII_VAR(struct stasis_message *, msg, obj, ao2_cleanup);
 		struct ast_endpoint_snapshot *snapshot = stasis_message_data(msg);
+		struct ast_json *json_endpoint;
 		int r;
 
-		if (strcmp(args->tech, snapshot->tech) != 0) {
+		if (strcasecmp(args->tech, snapshot->tech) != 0) {
+			continue;
+		}
+
+		json_endpoint = ast_endpoint_snapshot_to_json(snapshot, stasis_app_get_sanitizer());
+		if (!json_endpoint) {
 			continue;
 		}
 
 		r = ast_json_array_append(
-			json, ast_endpoint_snapshot_to_json(snapshot));
+			json, json_endpoint);
 		if (r != 0) {
+			ao2_iterator_destroy(&i);
 			ast_ari_response_alloc_failed(response);
 			return;
 		}
 	}
 	ao2_iterator_destroy(&i);
-
 	ast_ari_response_ok(response, ast_json_ref(json));
 }
-void ast_ari_get_endpoint(struct ast_variable *headers,
-	struct ast_get_endpoint_args *args,
+void ast_ari_endpoints_get(struct ast_variable *headers,
+	struct ast_ari_endpoints_get_args *args,
 	struct ast_ari_response *response)
 {
-	RAII_VAR(struct ast_json *, json, NULL, ast_json_unref);
+	struct ast_json *json;
 	RAII_VAR(struct ast_endpoint_snapshot *, snapshot, NULL, ao2_cleanup);
 
-	snapshot = ast_endpoint_latest_snapshot(args->tech, args->resource, 0);
+	snapshot = ast_endpoint_latest_snapshot(args->tech, args->resource);
 	if (!snapshot) {
 		ast_ari_response_error(response, 404, "Not Found",
 			"Endpoint not found");
 		return;
 	}
 
-	json = ast_endpoint_snapshot_to_json(snapshot);
+	json = ast_endpoint_snapshot_to_json(snapshot, stasis_app_get_sanitizer());
 	if (!json) {
 		ast_ari_response_alloc_failed(response);
 		return;
 	}
 
-	ast_ari_response_ok(response, ast_json_ref(json));
+	ast_ari_response_ok(response, json);
 }

@@ -422,7 +422,7 @@ static struct ast_manager_event_blob *local_message_to_ami(struct stasis_message
 	struct ast_channel_snapshot *local_snapshot_two;
 	RAII_VAR(struct ast_str *, local_channel_one, NULL, ast_free);
 	RAII_VAR(struct ast_str *, local_channel_two, NULL, ast_free);
-	struct ast_str *event_buffer = ast_str_alloca(128);
+	RAII_VAR(struct ast_str *, event_buffer, NULL, ast_free);
 	const char *event;
 
 	local_snapshot_one = ast_multi_channel_blob_get_channel(obj, "1");
@@ -431,9 +431,10 @@ static struct ast_manager_event_blob *local_message_to_ami(struct stasis_message
 		return NULL;
 	}
 
+	event_buffer = ast_str_create(1024);
 	local_channel_one = ast_manager_build_channel_state_string_prefix(local_snapshot_one, "LocalOne");
 	local_channel_two = ast_manager_build_channel_state_string_prefix(local_snapshot_two, "LocalTwo");
-	if (!local_channel_one || !local_channel_two) {
+	if (!event_buffer || !local_channel_one || !local_channel_two) {
 		return NULL;
 	}
 
@@ -497,29 +498,32 @@ static void publish_local_bridge_message(struct local_pvt *p)
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_channel_snapshot *, one_snapshot, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_channel_snapshot *, two_snapshot, NULL, ao2_cleanup);
-	SCOPED_AO2LOCK(lock, p);
+	struct ast_channel *owner;
+	struct ast_channel *chan;
+
+	ast_unreal_lock_all(&p->base, &chan, &owner);
 
 	blob = ast_json_pack("{s: s, s: s, s: b}",
 		"context", p->context,
 		"exten", p->exten,
 		"can_optimize", !ast_test_flag(&p->base, AST_UNREAL_NO_OPTIMIZATION));
 	if (!blob) {
-		return;
+		goto end;
 	}
 
 	multi_blob = ast_multi_channel_blob_create(blob);
 	if (!multi_blob) {
-		return;
+		goto end;
 	}
 
-	one_snapshot = ast_channel_snapshot_create(p->base.owner);
+	one_snapshot = ast_channel_snapshot_create(owner);
 	if (!one_snapshot) {
-		return;
+		goto end;
 	}
 
-	two_snapshot = ast_channel_snapshot_create(p->base.chan);
+	two_snapshot = ast_channel_snapshot_create(chan);
 	if (!two_snapshot) {
-		return;
+		goto end;
 	}
 
 	ast_multi_channel_blob_add_channel(multi_blob, "1", one_snapshot);
@@ -527,10 +531,19 @@ static void publish_local_bridge_message(struct local_pvt *p)
 
 	msg = stasis_message_create(ast_local_bridge_type(), multi_blob);
 	if (!msg) {
-		return;
+		goto end;
 	}
 
-	stasis_publish(ast_channel_topic(p->base.owner), msg);
+	stasis_publish(ast_channel_topic(owner), msg);
+
+end:
+	ast_channel_unlock(owner);
+	ast_channel_unref(owner);
+
+	ast_channel_unlock(chan);
+	ast_channel_unref(chan);
+
+	ao2_unlock(&p->base);
 }
 
 int ast_local_setup_bridge(struct ast_channel *ast, struct ast_bridge *bridge, struct ast_channel *swap, struct ast_bridge_features *features)
@@ -686,7 +699,7 @@ static int local_call(struct ast_channel *ast, const char *dest, int timeout)
 		publish_local_bridge_message(p);
 		ast_answer(chan);
 		res = ast_bridge_impart(p->action.bridge.join, chan, p->action.bridge.swap,
-			p->action.bridge.features, 1);
+			p->action.bridge.features, AST_BRIDGE_IMPART_CHAN_INDEPENDENT);
 		ao2_ref(p->action.bridge.join, -1);
 		p->action.bridge.join = NULL;
 		ao2_cleanup(p->action.bridge.swap);
@@ -1017,7 +1030,7 @@ int ast_local_init(void)
 		return -1;
 	}
 
-	if (!(local_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(local_tech.capabilities = ast_format_cap_alloc(0))) {
 		return -1;
 	}
 	ast_format_cap_add_all(local_tech.capabilities);

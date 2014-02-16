@@ -18,7 +18,7 @@
 
 /*! \file
  *
- * \brief /api-docs/playback.{format} implementation- Playback control resources
+ * \brief /api-docs/playbacks.{format} implementation- Playback control resources
  *
  * \author David M. Lee, II <dlee@digium.com>
  */
@@ -28,14 +28,14 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/stasis_app_playback.h"
-#include "resource_playback.h"
+#include "resource_playbacks.h"
 
-void ast_ari_get_playback(struct ast_variable *headers,
-	struct ast_get_playback_args *args,
+void ast_ari_playbacks_get(struct ast_variable *headers,
+	struct ast_ari_playbacks_get_args *args,
 	struct ast_ari_response *response)
 {
 	RAII_VAR(struct stasis_app_playback *, playback, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_json *, json, NULL, ast_json_unref);
+	struct ast_json *json;
 
 	playback = stasis_app_playback_find_by_id(args->playback_id);
 	if (playback == NULL) {
@@ -51,10 +51,10 @@ void ast_ari_get_playback(struct ast_variable *headers,
 		return;
 	}
 
-	ast_ari_response_ok(response, ast_json_ref(json));
+	ast_ari_response_ok(response, json);
 }
-void ast_ari_stop_playback(struct ast_variable *headers,
-	struct ast_stop_playback_args *args,
+void ast_ari_playbacks_stop(struct ast_variable *headers,
+	struct ast_ari_playbacks_stop_args *args,
 	struct ast_ari_response *response)
 {
 	RAII_VAR(struct stasis_app_playback *, playback, NULL, ao2_cleanup);
@@ -68,7 +68,6 @@ void ast_ari_stop_playback(struct ast_variable *headers,
 	}
 
 	res = stasis_app_playback_operation(playback, STASIS_PLAYBACK_STOP);
-
 	switch (res) {
 	case STASIS_PLAYBACK_OPER_OK:
 		ast_ari_response_no_content(response);
@@ -85,14 +84,19 @@ void ast_ari_stop_playback(struct ast_variable *headers,
 		return;
 	}
 }
-void ast_ari_control_playback(struct ast_variable *headers,
-	struct ast_control_playback_args *args,
+void ast_ari_playbacks_control(struct ast_variable *headers,
+	struct ast_ari_playbacks_control_args *args,
 	struct ast_ari_response *response)
 {
 	RAII_VAR(struct stasis_app_playback *, playback, NULL, ao2_cleanup);
 	enum stasis_app_playback_media_operation oper;
 	enum stasis_playback_oper_results res;
 
+	if (!args->operation) {
+		ast_ari_response_error(response, 400,
+			"Bad Request", "Missing operation");
+		return;
+	}
 	if (strcmp(args->operation, "unpause") == 0) {
 		oper = STASIS_PLAYBACK_UNPAUSE;
 	} else if (strcmp(args->operation, "pause") == 0) {
@@ -108,7 +112,6 @@ void ast_ari_control_playback(struct ast_variable *headers,
 			"Bad Request", "Invalid operation %s",
 			args->operation);
 		return;
-
 	}
 
 	playback = stasis_app_playback_find_by_id(args->playback_id);
@@ -119,7 +122,6 @@ void ast_ari_control_playback(struct ast_variable *headers,
 	}
 
 	res = stasis_app_playback_operation(playback, oper);
-
 	switch (res) {
 	case STASIS_PLAYBACK_OPER_OK:
 		ast_ari_response_no_content(response);

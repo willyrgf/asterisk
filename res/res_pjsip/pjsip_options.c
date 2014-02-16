@@ -34,7 +34,7 @@
 #define DEFAULT_ENCODING "text/plain"
 #define QUALIFIED_BUCKETS 211
 
-static int qualify_contact(struct ast_sip_contact *contact);
+static int qualify_contact(struct ast_sip_endpoint *endpoint, struct ast_sip_contact *contact);
 
 /*!
  * \internal
@@ -186,7 +186,7 @@ static int on_endpoint(void *obj, void *arg, int flags)
  * \internal
  * \brief Find endpoints associated with the given contact.
  */
-static struct ao2_container *find_endpoints(struct ast_sip_contact *contact)
+static struct ao2_iterator *find_endpoints(struct ast_sip_contact *contact)
 {
 	RAII_VAR(struct ao2_container *, endpoints,
 		 ast_sip_get_endpoints(), ao2_cleanup);
@@ -201,43 +201,15 @@ static struct ao2_container *find_endpoints(struct ast_sip_contact *contact)
 static void qualify_contact_cb(void *token, pjsip_event *e)
 {
 	RAII_VAR(struct ast_sip_contact *, contact, token, ao2_cleanup);
-	RAII_VAR(struct ao2_container *, endpoints, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_sip_endpoint *, endpoint, NULL, ao2_cleanup);
-
-	pjsip_transaction *tsx = e->body.tsx_state.tsx;
-	pjsip_rx_data *challenge = e->body.tsx_state.src.rdata;
-	pjsip_tx_data *tdata;
 
 	switch(e->body.tsx_state.type) {
 	case PJSIP_EVENT_TRANSPORT_ERROR:
 	case PJSIP_EVENT_TIMER:
 		update_contact_status(contact, UNAVAILABLE);
-		return;
-	default:
 		break;
-	}
-
-	if (!contact->authenticate_qualify || (tsx->status_code != 401 &&
-					       tsx->status_code != 407)) {
+	default:
 		update_contact_status(contact, AVAILABLE);
-		return;
-	}
-
-	/* try to find endpoints that are associated with the contact */
-	if (!(endpoints = find_endpoints(contact))) {
-		ast_log(LOG_ERROR, "No endpoints found for contact %s, cannot authenticate",
-			contact->uri);
-		return;
-	}
-
-	/* find "first" endpoint in order to authenticate - actually any
-	   endpoint should do that matched on the contact */
-	endpoint = ao2_callback(endpoints, 0, NULL, NULL);
-
-	if (!ast_sip_create_request_with_auth(&endpoint->outbound_auths,
-					      challenge, tsx, &tdata)) {
-		pjsip_endpt_send_request(ast_sip_get_pjsip_endpoint(), tdata,
-					 -1, NULL, NULL);
+		break;
 	}
 }
 
@@ -248,12 +220,35 @@ static void qualify_contact_cb(void *token, pjsip_event *e)
  * \detail Sends a SIP OPTIONS request to the given contact in order to make
  *         sure that contact is available.
  */
-static int qualify_contact(struct ast_sip_contact *contact)
+static int qualify_contact(struct ast_sip_endpoint *endpoint, struct ast_sip_contact *contact)
 {
 	pjsip_tx_data *tdata;
+	RAII_VAR(struct ast_sip_endpoint *, endpoint_local, ao2_bump(endpoint), ao2_cleanup);
 
-	if (ast_sip_create_request("OPTIONS", NULL, NULL, contact->uri, &tdata)) {
+
+	if (!endpoint_local) {
+		struct ao2_iterator *endpoint_iterator = find_endpoints(contact);
+
+		/* try to find endpoints that are associated with the contact */
+		if (endpoint_iterator) {
+			/* find "first" endpoint in order to authenticate - actually any
+			   endpoint should do that matched on the contact */
+			endpoint_local = ao2_iterator_next(endpoint_iterator);
+			ao2_iterator_destroy(endpoint_iterator);
+		}
+	}
+
+	if (ast_sip_create_request("OPTIONS", NULL, NULL, NULL, contact, &tdata)) {
 		ast_log(LOG_ERROR, "Unable to create request to qualify contact %s\n",
+			contact->uri);
+		return -1;
+	}
+
+	/* If an outbound proxy is specified set it on this request */
+	if (!ast_strlen_zero(contact->outbound_proxy) &&
+		ast_sip_set_outbound_proxy(tdata, contact->outbound_proxy)) {
+		pjsip_tx_data_dec_ref(tdata);
+		ast_log(LOG_ERROR, "Unable to apply outbound proxy on request to qualify contact %s\n",
 			contact->uri);
 		return -1;
 	}
@@ -261,12 +256,11 @@ static int qualify_contact(struct ast_sip_contact *contact)
 	init_start_time(contact);
 
 	ao2_ref(contact, +1);
-	if (pjsip_endpt_send_request(ast_sip_get_pjsip_endpoint(),
-				     tdata, -1, contact, qualify_contact_cb) != PJ_SUCCESS) {
-		pjsip_tx_data_dec_ref(tdata);
+	if (ast_sip_send_request(tdata, NULL, endpoint_local, contact,
+		qualify_contact_cb) != PJ_SUCCESS) {
+		/* The callback will be called so we don't need to drop the contact ref*/
 		ast_log(LOG_ERROR, "Unable to send request to qualify contact %s\n",
 			contact->uri);
-		ao2_ref(contact, -1);
 		return -1;
 	}
 
@@ -331,7 +325,7 @@ static struct sched_data *sched_data_create(struct ast_sip_contact *contact)
 static int qualify_contact_task(void *obj)
 {
 	RAII_VAR(struct ast_sip_contact *, contact, obj, ao2_cleanup);
-	return qualify_contact(contact);
+	return qualify_contact(NULL, contact);
 }
 
 /*!
@@ -442,7 +436,7 @@ static void contact_deleted(const void *obj)
 	}
 }
 
-struct ast_sorcery_observer contact_observer = {
+static const struct ast_sorcery_observer contact_observer = {
 	.created = contact_created,
 	.deleted = contact_deleted
 };
@@ -481,8 +475,7 @@ static pj_status_t send_options_response(pjsip_rx_data *rdata, int code)
 	pj_status_t status;
 
 	/* Make the response object */
-	if ((status = pjsip_endpt_create_response(
-		     endpt, rdata, code, NULL, &tdata) != PJ_SUCCESS)) {
+	if ((status = ast_sip_create_response(rdata, code, NULL, &tdata) != PJ_SUCCESS)) {
 		ast_log(LOG_ERROR, "Unable to create response (%d)\n", status);
 		return status;
 	}
@@ -519,8 +512,8 @@ static pj_status_t send_options_response(pjsip_rx_data *rdata, int code)
 			pjsip_tx_data_dec_ref(tdata);
 			return status;
 		}
-		status = pjsip_endpt_send_response(endpt, &res_addr, tdata,
-						   NULL, NULL);
+		status = ast_sip_send_response(&res_addr, tdata,
+						   ast_pjsip_rdata_get_endpoint(rdata));
 	}
 
 	if (status != PJ_SUCCESS) {
@@ -578,28 +571,63 @@ static pjsip_module options_module = {
  * \internal
  * \brief Send qualify request to the given contact.
  */
-static int cli_on_contact(void *obj, void *arg, int flags)
+static int cli_on_contact(void *obj, void *arg, void *data, int flags)
 {
 	struct ast_sip_contact *contact = obj;
-	struct ast_cli_args *a = arg;
-	ast_cli(a->fd, " contact %s\n", contact->uri);
-	qualify_contact(contact);
+	struct ast_sip_endpoint *endpoint = data;
+	int *cli_fd = arg;
+
+	ast_cli(*cli_fd, " contact %s\n", contact->uri);
+	qualify_contact(endpoint, contact);
 	return 0;
+}
+
+/*!
+ * \brief Data pushed to threadpool to qualify endpoints from the CLI
+ */
+struct qualify_data {
+	/*! Endpoint that is being qualified */
+	struct ast_sip_endpoint *endpoint;
+	/*! CLI File descriptor for printing messages */
+	int cli_fd;
+};
+
+static struct qualify_data *qualify_data_alloc(struct ast_sip_endpoint *endpoint, int cli_fd)
+{
+	struct qualify_data *qual_data;
+
+	qual_data = ast_malloc(sizeof(*qual_data));
+	if (!qual_data) {
+		return NULL;
+	}
+
+	qual_data->endpoint = ao2_bump(endpoint);
+	qual_data->cli_fd = cli_fd;
+	return qual_data;
+}
+
+static void qualify_data_destroy(struct qualify_data *qual_data)
+{
+	ao2_cleanup(qual_data->endpoint);
+	ast_free(qual_data);
 }
 
 /*!
  * \internal
  * \brief For an endpoint iterate over and qualify all aors/contacts
  */
-static void cli_qualify_contacts(struct ast_cli_args *a, const char *endpoint_name,
-				 struct ast_sip_endpoint *endpoint)
+static int cli_qualify_contacts(void *data)
 {
 	char *aor_name, *aors;
+	RAII_VAR(struct qualify_data *, qual_data, data, qualify_data_destroy);
+	struct ast_sip_endpoint *endpoint = qual_data->endpoint;
+	int cli_fd = qual_data->cli_fd;
+	const char *endpoint_name = ast_sorcery_object_get_id(endpoint);
 
 	if (ast_strlen_zero(endpoint->aors)) {
-		ast_cli(a->fd, "Endpoint %s has no AoR's configured\n",
+		ast_cli(cli_fd, "Endpoint %s has no AoR's configured\n",
 			endpoint_name);
-		return;
+		return 0;
 	}
 
 	aors = ast_strdupa(endpoint->aors);
@@ -613,15 +641,17 @@ static void cli_qualify_contacts(struct ast_cli_args *a, const char *endpoint_na
 			continue;
 		}
 
-		ast_cli(a->fd, "Sending qualify to endpoint %s\n", endpoint_name);
-		ao2_callback(contacts, OBJ_NODATA, cli_on_contact, a);
+		ast_cli(cli_fd, "Sending qualify to endpoint %s\n", endpoint_name);
+		ao2_callback_data(contacts, OBJ_NODATA, cli_on_contact, &cli_fd, endpoint);
 	}
+	return 0;
 }
 
 static char *cli_qualify(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	RAII_VAR(struct ast_sip_endpoint *, endpoint, NULL, ao2_cleanup);
 	const char *endpoint_name;
+	struct qualify_data *qual_data;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -646,8 +676,15 @@ static char *cli_qualify(struct ast_cli_entry *e, int cmd, struct ast_cli_args *
 		return CLI_FAILURE;
 	}
 
-	/* send a qualify for all contacts registered with the endpoint */
-	cli_qualify_contacts(a, endpoint_name, endpoint);
+	qual_data = qualify_data_alloc(endpoint, a->fd);
+	if (!qual_data) {
+		return CLI_FAILURE;
+	}
+
+	if (ast_sip_push_task(NULL, cli_qualify_contacts, qual_data)) {
+		qualify_data_destroy(qual_data);
+		return CLI_FAILURE;
+	}
 
 	return CLI_SUCCESS;
 }
@@ -729,8 +766,10 @@ static int sched_qualifies_cmp_fn(void *obj, void *arg, int flags)
 		       ast_sorcery_object_get_id(arg));
 }
 
-int ast_sip_initialize_sorcery_qualify(struct ast_sorcery *sorcery)
+int ast_sip_initialize_sorcery_qualify(void)
 {
+	struct ast_sorcery *sorcery = ast_sip_get_sorcery();
+
 	/* initialize sorcery ast_sip_contact_status resource */
 	ast_sorcery_apply_default(sorcery, CONTACT_STATUS, "memory", NULL);
 
@@ -754,6 +793,7 @@ static int qualify_and_schedule_cb(void *obj, void *arg, int flags)
 	struct ast_sip_aor *aor = arg;
 
 	contact->qualify_frequency = aor->qualify_frequency;
+
 	qualify_and_schedule(contact);
 
 	return 0;
@@ -761,12 +801,12 @@ static int qualify_and_schedule_cb(void *obj, void *arg, int flags)
 
 /*!
  * \internal
- * \brief Qualify and schedule an endpoint's permanent contacts
+ * \brief Qualify and schedule an endpoint's contacts
  *
  * \detail For the given endpoint retrieve its list of aors, qualify all
- *         permanent contacts, and schedule for checks if configured.
+ *         contacts, and schedule for checks if configured.
  */
-static int qualify_and_schedule_permanent_cb(void *obj, void *arg, int flags)
+static int qualify_and_schedule_all_cb(void *obj, void *arg, int flags)
 {
 	struct ast_sip_endpoint *endpoint = obj;
 	char *aor_name, *aors;
@@ -780,31 +820,39 @@ static int qualify_and_schedule_permanent_cb(void *obj, void *arg, int flags)
 	while ((aor_name = strsep(&aors, ","))) {
 		RAII_VAR(struct ast_sip_aor *, aor,
 			 ast_sip_location_retrieve_aor(aor_name), ao2_cleanup);
+		struct ao2_container *contacts;
 
-		if (!aor || !aor->permanent_contacts) {
+		if (!aor || !(contacts = ast_sip_location_retrieve_aor_contacts(aor))) {
 			continue;
 		}
-		ao2_callback(aor->permanent_contacts, OBJ_NODATA, qualify_and_schedule_cb, aor);
+
+		ao2_callback(contacts, OBJ_NODATA, qualify_and_schedule_cb, aor);
+		ao2_ref(contacts, -1);
 	}
 
 	return 0;
 }
 
-static void qualify_and_schedule_permanent(void)
+static void qualify_and_schedule_all(void)
 {
-	RAII_VAR(struct ao2_container *, endpoints,
-		 ast_sip_get_endpoints(), ao2_cleanup);
+	struct ao2_container *endpoints = ast_sip_get_endpoints();
+
+	if (!endpoints) {
+		return;
+	}
 
 	ao2_callback(endpoints, OBJ_NODATA,
-		     qualify_and_schedule_permanent_cb, NULL);
+		     qualify_and_schedule_all_cb, NULL);
+	ao2_ref(endpoints, -1);
 }
 
 int ast_res_pjsip_init_options_handling(int reload)
 {
 	const pj_str_t STR_OPTIONS = { "OPTIONS", 7 };
 
-	if (sched_qualifies) {
-		ao2_t_ref(sched_qualifies, -1, "Remove old scheduled qualifies");
+	if (reload) {
+		qualify_and_schedule_all();
+		return 0;
 	}
 
 	if (!(sched_qualifies = ao2_t_container_alloc(
@@ -812,11 +860,6 @@ int ast_res_pjsip_init_options_handling(int reload)
 		"Create container for scheduled qualifies"))) {
 
 		return -1;
-	}
-
-	if (reload) {
-		qualify_and_schedule_permanent();
-		return 0;
 	}
 
 	if (pjsip_endpt_register_module(ast_sip_get_pjsip_endpoint(), &options_module) != PJ_SUCCESS) {
@@ -834,7 +877,7 @@ int ast_res_pjsip_init_options_handling(int reload)
 		return -1;
 	}
 
-	qualify_and_schedule_permanent();
+	qualify_and_schedule_all();
 	ast_cli_register_multiple(cli_options, ARRAY_LEN(cli_options));
 	ast_manager_register2("PJSIPQualify", EVENT_FLAG_SYSTEM | EVENT_FLAG_REPORTING, ami_sip_qualify, NULL, NULL, NULL);
 

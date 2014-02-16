@@ -20,7 +20,130 @@
 === UPGRADE-11.txt  -- Upgrade info for 10 to 11
 ===
 ===========================================================
+From 12.0.0 to 12.1.0:
+* The sound_place_into_conference sound used in Confbridge is now deprecated
+  and is no longer functional since it has been broken since its inception
+  and the fix involved using a different method to achieve the same goal. The
+  new method to achieve this functionality is by using sound_begin to play
+  a sound to the conference when waitmarked users are moved into the conference.
 
+- The per console verbose level feature as previously implemented caused a
+  large performance penalty.  The fix required some minor incompatibilities
+  if the new rasterisk is used to connect to an earlier version.  If the new
+  rasterisk connects to an older Asterisk version then the root console verbose
+  level is always affected by the "core set verbose" command of the remote
+  console even though it may appear to only affect the current console.  If
+  an older version of rasterisk connects to the new version then the
+  "core set verbose" command will have no effect.
+
+ARI:
+ - The ARI version has been changed from 1.0.0 to 1.1.0. This is to reflect
+   the backwards compatible changes listed below.
+
+ - Added a new ARI resource 'mailboxes' which allows the creation and
+   modification of mailboxes managed by external MWI. Modules res_mwi_external
+   and res_stasis_mailbox must be enabled to use this resource.
+
+ - Added new events for externally initiated transfers. The event
+   BridgeBlindTransfer is now raised when a channel initiates a blind transfer
+   of a bridge in the ARI controlled application to the dialplan; the
+   BridgeAttendedTransfer event is raised when a channel initiates an
+   attended transfer of a bridge in the ARI controlled application to the
+   dialplan.
+
+ - Channel variables may now be specified as a body parameter to the
+   POST /channels operation. The 'variables' key in the JSON is interpreted
+   as a sequence of key/value pairs that will be added to the created channel
+   as channel variables. Other parameters in the JSON body are treated as
+   query parameters of the same name.
+
+ - Subscribing to the same device state twice now responds with success
+   instead of returning error on the second attempt.
+
+AMI:
+ - The AMI version has been changed from 2.0.0 to 2.1.0. This is to reflect
+   the backwards compatible changes listed below.
+
+ - The DialStatus field in the DialEnd event can now have additional values.
+   This includes ABORT, CONTINUE, and GOTO.
+
+ - The res_mwi_external_ami module can, if loaded, provide additional AMI
+   actions and events that convey MWI state within Asterisk. This includes
+   the MWIGet, MWIUpdate, and MWIDelete actions, as well as the MWIGet and
+   MWIGetComplete events that occur in response to an MWIGet action.
+
+ - AMI now contains a new class authorization, 'security'. This is used with
+   the following new events: FailedACL, InvalidAccountID, SessionLimit,
+   MemoryLimit, LoadAverageLimit, RequestNotAllowed, AuthMethodNotAllowed,
+   RequestBadFormat, SuccessfulAuth, UnexpectedAddress, ChallengeResponseFailed,
+   InvalidPassword, ChallengeSent, and InvalidTransport.
+
+ - Bridge related events now have two additional fields: BridgeName and
+   BridgeCreator. BridgeName is a descriptive name for the bridge;
+   BridgeCreator is the name of the entity that created the bridge. This
+   affects the following events: ConfbridgeStart, ConfbridgeEnd,
+   ConfbridgeJoin, ConfbridgeLeave, ConfbridgeRecord, ConfbridgeStopRecord,
+   ConfbridgeMute, ConfbridgeUnmute, ConfbridgeTalking, BlindTransfer,
+   AttendedTransfer, BridgeCreate, BridgeDestroy, BridgeEnter, BridgeLeave
+
+CDRs:
+ - The "endbeforehexten" setting now defaults to "yes", instead of "no".
+   When set to "no", yhis setting will cause a new CDR to be generated when a
+   channel enters into hangup logic (either the 'h' extension or a hangup
+   handler subroutine). In general, this is not the preferred default: this
+   causes extra CDRs to be generated for a channel in many common dialplans.
+
+CLI commands:
+ - "core show settings" now lists the current console verbosity in addition
+   to the root console verbosity.
+
+ - "core set verbose" has not been able to support the by module verbose
+   logging levels since verbose logging levels were made per console.  That
+   syntax is now removed and a silence option added in its place.
+
+Configuration Files:
+ - The 'verbose' setting in logger.conf still takes an optional argument,
+   specifying the verbosity level for each logging destination.  However,
+   the default is now to once again follow the current root console level.
+   As a result, using the AMI Command action with "core set verbose" could
+   again set the root console verbose level and affect the verbose level
+   logged.
+
+ - res_fax now returns the correct rates for V.27ter (4800 or 9600 bit/s).
+   Because of this the default settings would not load, so the minrate (minimum
+   transmission rate) option in res_fax.conf was changed to default to 4800
+   since that is the minimum rate for v.27 which is included in the default
+   modem options.
+
+Realtime Configuration:
+ - WARNING: The database migration script that adds the 'extensions' table for
+   realtime had to be modified due to an error when installing for MySQL.  The
+   'extensions' table's 'id' column was changed to be a primary key.  This could
+   potentially cause a migration problem.  If so, it may be necessary to
+   manually alter the affected table/column to bring it back in line with the
+   migration scripts.
+
+ - New columns have been added to realtime tables for 'support_path' on
+   ps_registrations and ps_aors and for 'path' on ps_contacts for the new
+   SIP Path support in chan_pjsip.
+
+ - The following new tables have been added for pjsip realtime: 'ps_systems',
+   'ps_globals', 'ps_tranports', 'ps_registrations'.
+
+ - The following columns were added to the 'ps_aors' realtime table:
+   'maximum_expiration', 'outbound_proxy', and 'support_path'.
+
+ - The following columns were added to the 'ps_contacts' realtime table:
+   'outbound_proxy' and 'path'.
+
+ - New columns have been added to the ps_endpoints realtime table for the
+   'media_address', 'redirect_method' and 'set_var' options.  Also the
+   'mwi_fromuser' column was renamed to 'mwi_from_user'.
+
+ - A new column was added to the 'ps_globals' realtime table for the 'debug'
+   option.
+
+From 11 to 12:
 There are many significant architectural changes in Asterisk 12. It is
 recommended that you not only read through this document for important
 changes that affect an upgrade, but that you also read through the CHANGES
@@ -101,9 +224,18 @@ AgentMonitorOutgoing
  - This application has been removed. It was a holdover from when
    AgentCallbackLogin was removed.
 
+Answer
+ - It is no longer possible to bypass updating the CDR when answering a
+   channel. CDRs are based on the channel state and will be updated when
+   the channel is Answered.
+
 ControlPlayback
  - The channel variable CPLAYBACKSTATUS may now return the value
    'REMOTESTOPPED' when playback is stopped by an external entity.
+
+DISA
+ - This application now has a dependency on the app_cdr module. It uses this
+   module to hide the CDR created prior to execution of the DISA application.
 
 DumpChan:
  - The output of DumpChan no longer includes the DirectBridge or IndirectBridge
@@ -172,6 +304,12 @@ SetAMAFlags
  - This application is deprecated in favor of CHANNEL(amaflags).
 
 VoiceMail:
+ - Mailboxes defined by app_voicemail MUST be referenced by the rest of the
+   system as mailbox@context.  The rest of the system cannot add @default
+   to mailbox identifiers for app_voicemail that do not specify a context
+   any longer.  It is a mailbox identifier format that should only be
+   interpreted by app_voicemail.
+
  - The voicemail.conf configuration file now has an 'alias' configuration
    parameter for use with the Directory application. The voicemail realtime
    database table schema has also been updated with an 'alias' column. Systems
@@ -198,6 +336,12 @@ chan_dahdi:
  - The CLI command 'dahdi destroy channel' is now 'dahdi destroy channels'.
    A range of channels can be specified to be destroyed. Note that this command
    should only be used if you understand the risks it entails.
+
+ - The script specified by the chan_dahdi.conf mwimonitornotify option now gets
+   the exact configured mailbox name.  For app_voicemail mailboxes this is
+   mailbox@context.
+
+ - Added mwi_vm_boxes that also must be configured for ISDN MWI to be enabled.
 
 chan_local:
  - The /b option has been removed.
@@ -337,6 +481,9 @@ CDR (Call Detail Records)
    associated with the current CDR for the channel, as opposed to a cumulative
    measurement of all CDRs for that channel.
 
+ - CDR backends can no longer be unloaded while billing data is in flight. This
+   helps to prevent loss of billing data during restarts and shutdowns.
+
 CEL:
  - The Uniqueid field for a channel is now a stable identifier, and will not
    change due to transfers, parking, etc.
@@ -350,6 +497,18 @@ CEL:
      events have been replaced by BRIDGE_ENTER/BRIDGE_EXIT.
    - BLINDTRANSFER/ATTENDEDTRANSFER events now report the peer as NULL and
      additional information in the extra string field.
+
+Dialplan Functions:
+
+ - Certain dialplan functions have been marked as 'dangerous', and may only be
+   executed from the dialplan. Execution from extenal sources (AMI's GetVar and
+   SetVar actions; etc.) may be inhibited by setting live_dangerously in the
+   [options] section of asterisk.conf to no. SHELL(), channel locking, and
+   direct file read/write functions are marked as dangerous. DB_DELETE() and
+   REALTIME_DESTROY() are marked as dangerous for reads, but can now safely
+   accept writes (which ignore the provided value).
+ - The default value for live_dangerously was changed from yes (in Asterisk 11
+   and earlier) to no (in Asterisk 12 and greater).
 
 Dialplan:
  - All channel and global variable names are evaluated in a case-sensitive
@@ -422,6 +581,13 @@ CDR: (function)
 
  - The 's' option has been removed, as LOCKED semantics no longer exist in the
    CDR engine.
+
+VMCOUNT:
+ - Mailboxes defined by app_voicemail MUST be referenced by the rest of the
+   system as mailbox@context.  The rest of the system cannot add @default
+   to mailbox identifiers for app_voicemail that do not specify a context
+   any longer.  It is a mailbox identifier format that should only be
+   interpreted by app_voicemail.
 
 res_rtp_asterisk:
  - ICE/STUN/TURN support in res_rtp_asterisk has been made optional. To enable

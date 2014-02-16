@@ -257,6 +257,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						will be used.
 					</para></description>
 				</configOption>
+				<configOption name="language" default="en">
+					<synopsis>The language used for announcements to the conference.</synopsis>
+					<description><para>
+						By default, announcements to a conference use English.  Which means
+						the prompts played to all users within the conference will be
+						English.  By changing the language of a bridge, this will change
+						the language of the prompts played to all users.
+					</para></description>
+				</configOption>
 				<configOption name="mixing_interval">
 					<synopsis>Sets the internal mixing interval in milliseconds for the bridge</synopsis>
 					<description><para>
@@ -418,6 +427,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					is passed in to ConfBridge as an argument in the dialplan.</para>
 					<para>Below is a list of menu actions that can be assigned to a DTMF sequence.</para>
 					<note><para>
+						To have the first DTMF digit in a sequence be the '#' character, you need to
+						escape it.  If it is not escaped then normal config file processing will
+						think it is a directive like #include.  For example: The mute setting is
+						toggled when <literal>#1</literal> is pressed.</para>
+						<para><literal>\#1=toggle_mute</literal></para>
+					</note>
+					<note><para>
 					A single DTMF sequence can have multiple actions associated with it. This is
 					accomplished by stringing the actions together and using a <literal>,</literal> as the
 					delimiter.  Example:  Both listening and talking volume is reset when <literal>5</literal> is
@@ -441,7 +457,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<enum name="toggle_mute"><para>
 							Toggle turning on and off mute.  Mute will make the user silent
 							to everyone else, but the user will still be able to listen in.
-							continue to collect the dtmf sequence.</para></enum>
+							</para></enum>
 						<enum name="no_op"><para>
 							This action does nothing (No Operation). Its only real purpose exists for
 							being able to reserve a sequence in the config as a menu exit sequence.</para></enum>
@@ -851,6 +867,12 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 	} else if (!strcasecmp(sound_name, "sound_other_in_party")) {
 		ast_string_field_set(sounds, otherinparty, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_place_into_conference")) {
+		static int deprecation_warning = 1;
+		if (deprecation_warning) {
+			ast_log(LOG_WARNING, "sound_place_into_conference is deprecated"
+				" and unused. Use sound_begin for similar functionality.");
+			deprecation_warning = 0;
+		}
 		ast_string_field_set(sounds, placeintoconf, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_wait_for_leader")) {
 		ast_string_field_set(sounds, waitforleader, sound_file);
@@ -876,6 +898,8 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 		ast_string_field_set(sounds, participantsmuted, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_participants_unmuted")) {
 		ast_string_field_set(sounds, participantsunmuted, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_begin")) {
+		ast_string_field_set(sounds, begin, sound_file);
 	} else {
 		return -1;
 	}
@@ -1417,6 +1441,7 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 
 	ast_cli(a->fd,"--------------------------------------------\n");
 	ast_cli(a->fd,"Name:                 %s\n", b_profile.name);
+	ast_cli(a->fd,"Language:             %s\n", b_profile.language);
 
 	if (b_profile.internal_sample_rate) {
 		snprintf(tmp, sizeof(tmp), "%d", b_profile.internal_sample_rate);
@@ -1492,6 +1517,7 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 	ast_cli(a->fd,"sound_leave:          %s\n", conf_get_sound(CONF_SOUND_LEAVE, b_profile.sounds));
 	ast_cli(a->fd,"sound_participants_muted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_MUTED, b_profile.sounds));
 	ast_cli(a->fd,"sound_participants_unmuted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_UNMUTED, b_profile.sounds));
+	ast_cli(a->fd,"sound_begin:          %s\n", conf_get_sound(CONF_SOUND_BEGIN, b_profile.sounds));
 	ast_cli(a->fd,"\n");
 
 	conf_bridge_profile_destroy(&b_profile);
@@ -1834,6 +1860,7 @@ static int bridge_template_handler(const struct aco_option *opt, struct ast_vari
 	ast_string_field_set(sounds, leave, b_profile->sounds->leave);
 	ast_string_field_set(sounds, participantsmuted, b_profile->sounds->participantsmuted);
 	ast_string_field_set(sounds, participantsunmuted, b_profile->sounds->participantsunmuted);
+	ast_string_field_set(sounds, begin, b_profile->sounds->begin);
 
 	ao2_ref(b_profile->sounds, -1); /* sounds struct copied over to it from the template by reference only. */
 	ao2_ref(oldsounds, -1);    /* original sounds struct we don't need anymore */
@@ -1875,7 +1902,7 @@ static int verify_default_profiles(void)
 		ao2_link(cfg->bridge_profiles, bridge_profile);
 	}
 
-	user_profile = ao2_find(cfg->bridge_profiles, DEFAULT_USER_PROFILE, OBJ_KEY);
+	user_profile = ao2_find(cfg->user_profiles, DEFAULT_USER_PROFILE, OBJ_KEY);
 	if (!user_profile) {
 		user_profile = user_profile_alloc(DEFAULT_USER_PROFILE);
 		if (!user_profile) {
@@ -1934,6 +1961,7 @@ int conf_load_config(void)
 	aco_option_register(&cfg_info, "record_file_append", ACO_EXACT, bridge_types, "yes", OPT_BOOLFLAG_T, 1, FLDSET(struct bridge_profile, flags), BRIDGE_OPT_RECORD_FILE_APPEND);
 	aco_option_register(&cfg_info, "max_members", ACO_EXACT, bridge_types, "0", OPT_UINT_T, 0, FLDSET(struct bridge_profile, max_members));
 	aco_option_register(&cfg_info, "record_file", ACO_EXACT, bridge_types, NULL, OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct bridge_profile, rec_file));
+	aco_option_register(&cfg_info, "language", ACO_EXACT, bridge_types, "en", OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct bridge_profile, language));
 	aco_option_register_custom(&cfg_info, "^sound_", ACO_REGEX, bridge_types, NULL, sound_option_handler, 0);
 	/* This option should only be used with the CONFBRIDGE dialplan function */
 	aco_option_register_custom(&cfg_info, "template", ACO_EXACT, bridge_types, NULL, bridge_template_handler, 0);

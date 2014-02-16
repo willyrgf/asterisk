@@ -121,7 +121,7 @@ struct logchannel {
 	int disabled;
 	/*! syslog facility */
 	int facility;
-	/*! Verbosity level */
+	/*! Verbosity level. (-1 if use option_verbose for the level.) */
 	int verbosity;
 	/*! Type of log channel */
 	enum logtypes type;
@@ -240,33 +240,48 @@ AST_THREADSTORAGE(log_buf);
 
 static void logger_queue_init(void);
 
-static unsigned int make_components(const char *s, int lineno, int *verbosity)
+static void make_components(struct logchannel *chan)
 {
 	char *w;
-	unsigned int res = 0;
-	char *stringp = ast_strdupa(s);
+	unsigned int logmask = 0;
+	char *stringp = ast_strdupa(chan->components);
 	unsigned int x;
+	int verb_level;
 
-	*verbosity = 3;
+	/* Default to using option_verbose as the verbosity level of the logging channel.  */
+	verb_level = -1;
 
 	while ((w = strsep(&stringp, ","))) {
-		w = ast_skip_blanks(w);
-
+		w = ast_strip(w);
+		if (ast_strlen_zero(w)) {
+			continue;
+		}
 		if (!strcmp(w, "*")) {
-			res = 0xFFFFFFFF;
-			break;
-		} else if (!strncasecmp(w, "verbose(", 8) && sscanf(w + 8, "%d)", verbosity) == 1) {
-			res |= (1 << __LOG_VERBOSE);
-			break;
-		} else for (x = 0; x < ARRAY_LEN(levels); x++) {
-			if (levels[x] && !strcasecmp(w, levels[x])) {
-				res |= (1 << x);
-				break;
+			logmask = 0xFFFFFFFF;
+		} else if (!strncasecmp(w, "verbose(", 8)) {
+			if (levels[__LOG_VERBOSE] && sscanf(w + 8, "%30u)", &verb_level) == 1) {
+				logmask |= (1 << __LOG_VERBOSE);
+			}
+		} else {
+			for (x = 0; x < ARRAY_LEN(levels); ++x) {
+				if (levels[x] && !strcasecmp(w, levels[x])) {
+					logmask |= (1 << x);
+					break;
+				}
 			}
 		}
 	}
-
-	return res;
+	if (chan->type == LOGTYPE_CONSOLE) {
+		/*
+		 * Force to use the root console verbose level so if the
+		 * user specified any verbose level then it does not interfere
+		 * with calculating the ast_verb_sys_level value.
+		 */
+		chan->verbosity = -1;
+	} else {
+		chan->verbosity = verb_level;
+	}
+	chan->logmask = logmask;
 }
 
 static struct logchannel *make_logchannel(const char *channel, const char *components, int lineno)
@@ -307,13 +322,22 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 		ast_copy_string(chan->filename, channel, sizeof(chan->filename));
 		openlog("asterisk", LOG_PID, chan->facility);
 	} else {
-		if (!ast_strlen_zero(hostname)) {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s",
-				 channel[0] != '/' ? ast_config_AST_LOG_DIR : "", channel, hostname);
-		} else {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s",
-				 channel[0] != '/' ? ast_config_AST_LOG_DIR : "", channel);
+		const char *log_dir_prefix = "";
+		const char *log_dir_separator = "";
+
+		if (channel[0] != '/') {
+			log_dir_prefix = ast_config_AST_LOG_DIR;
+			log_dir_separator = "/";
 		}
+
+		if (!ast_strlen_zero(hostname)) {
+			snprintf(chan->filename, sizeof(chan->filename), "%s%s%s.%s",
+				log_dir_prefix, log_dir_separator, channel, hostname);
+		} else {
+			snprintf(chan->filename, sizeof(chan->filename), "%s%s%s",
+				log_dir_prefix, log_dir_separator, channel);
+		}
+
 		if (!(chan->fileptr = fopen(chan->filename, "a"))) {
 			/* Can't do real logging here since we're called with a lock
 			 * so log to any attached consoles */
@@ -336,7 +360,7 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 		}
 		chan->type = LOGTYPE_FILE;
 	}
-	chan->logmask = make_components(chan->components, lineno, &chan->verbosity);
+	make_components(chan);
 
 	return chan;
 }
@@ -841,10 +865,12 @@ static int reload_logger(int rotate, const char *altconf)
 	if (logfiles.queue_log) {
 		res = logger_queue_restart(queue_rotate);
 		AST_RWLIST_UNLOCK(&logchannels);
+		ast_verb_update();
 		ast_queue_log("NONE", "NONE", "NONE", "CONFIGRELOAD", "%s", "");
 		ast_verb(1, "Asterisk Queue Logger restarted\n");
 	} else {
 		AST_RWLIST_UNLOCK(&logchannels);
+		ast_verb_update();
 	}
 
 	return res;
@@ -990,7 +1016,7 @@ static struct ast_cli_entry cli_logger[] = {
 	AST_CLI_DEFINE(handle_logger_show_channels, "List configured log channels"),
 	AST_CLI_DEFINE(handle_logger_reload, "Reopens the log files"),
 	AST_CLI_DEFINE(handle_logger_rotate, "Rotates and reopens the log files"),
-	AST_CLI_DEFINE(handle_logger_set_level, "Enables/Disables a specific logging level for this console")
+	AST_CLI_DEFINE(handle_logger_set_level, "Enables/Disables a specific logging level for this console"),
 };
 
 static void _handle_SIGXFSZ(int sig)
@@ -1029,12 +1055,6 @@ static void ast_log_vsyslog(struct logmsg *msg)
 	syslog(syslog_level, "%s", buf);
 }
 
-/* These gymnastics are due to platforms which designate char as unsigned by
- * default. Level is the negative character -- offset by 1, because \0 is the
- * EOS delimiter. */
-#define VERBOSE_MAGIC2LEVEL(x) (((char) -*(signed char *) (x)) - 1)
-#define VERBOSE_HASMAGIC(x)	(*(signed char *) (x) < 0)
-
 /*! \brief Print a normal log message to the channels */
 static void logger_print_normal(struct logmsg *logmsg)
 {
@@ -1045,7 +1065,9 @@ static void logger_print_normal(struct logmsg *logmsg)
 
 	if (logmsg->level == __LOG_VERBOSE) {
 		char *tmpmsg = ast_strdupa(logmsg->message + 1);
+
 		level = VERBOSE_MAGIC2LEVEL(logmsg->message);
+
 		/* Iterate through the list of verbosers and pass them the log message string */
 		AST_RWLIST_RDLOCK(&verbosers);
 		AST_RWLIST_TRAVERSE(&verbosers, v, list)
@@ -1071,7 +1093,8 @@ static void logger_print_normal(struct logmsg *logmsg)
 			if (chan->disabled) {
 				continue;
 			}
-			if (logmsg->level == __LOG_VERBOSE && level > chan->verbosity) {
+			if (logmsg->level == __LOG_VERBOSE
+				&& (((chan->verbosity < 0) ? option_verbose : chan->verbosity)) < level) {
 				continue;
 			}
 
@@ -1247,6 +1270,7 @@ int init_logger(void)
 
 	/* create log channels */
 	init_logger_chain(0 /* locked */, NULL);
+	ast_verb_update();
 	logger_initialized = 1;
 
 	return 0;
@@ -1305,7 +1329,7 @@ struct ast_callid *ast_create_callid(void)
 {
 	struct ast_callid *call;
 
-	call = ao2_alloc_options(sizeof(struct ast_callid), NULL, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	call = ao2_alloc_options(sizeof(*call), NULL, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!call) {
 		ast_log(LOG_ERROR, "Could not allocate callid struct.\n");
 		return NULL;
@@ -1321,7 +1345,8 @@ struct ast_callid *ast_create_callid(void)
 struct ast_callid *ast_read_threadstorage_callid(void)
 {
 	struct ast_callid **callid;
-	callid = ast_threadstorage_get(&unique_callid, sizeof(struct ast_callid **));
+
+	callid = ast_threadstorage_get(&unique_callid, sizeof(*callid));
 	if (callid && *callid) {
 		ast_callid_ref(*callid);
 		return *callid;
@@ -1333,8 +1358,7 @@ struct ast_callid *ast_read_threadstorage_callid(void)
 
 int ast_callid_threadassoc_change(struct ast_callid *callid)
 {
-	struct ast_callid **id =
-		ast_threadstorage_get(&unique_callid, sizeof(struct ast_callid **));
+	struct ast_callid **id = ast_threadstorage_get(&unique_callid, sizeof(*id));
 
 	if (!id) {
 		ast_log(LOG_ERROR, "Failed to allocate thread storage.\n");
@@ -1364,7 +1388,8 @@ int ast_callid_threadassoc_change(struct ast_callid *callid)
 int ast_callid_threadassoc_add(struct ast_callid *callid)
 {
 	struct ast_callid **pointing;
-	pointing = ast_threadstorage_get(&unique_callid, sizeof(struct ast_callid **));
+
+	pointing = ast_threadstorage_get(&unique_callid, sizeof(*pointing));
 	if (!(pointing)) {
 		ast_log(LOG_ERROR, "Failed to allocate thread storage.\n");
 		return -1;
@@ -1388,7 +1413,8 @@ int ast_callid_threadassoc_add(struct ast_callid *callid)
 int ast_callid_threadassoc_remove(void)
 {
 	struct ast_callid **pointing;
-	pointing = ast_threadstorage_get(&unique_callid, sizeof(struct ast_callid **));
+
+	pointing = ast_threadstorage_get(&unique_callid, sizeof(*pointing));
 	if (!(pointing)) {
 		ast_log(LOG_ERROR, "Failed to allocate thread storage.\n");
 		return -1;
@@ -1603,10 +1629,11 @@ void ast_log_backtrace(void)
 
 void __ast_verbose_ap(const char *file, int line, const char *func, int level, struct ast_callid *callid, const char *fmt, va_list ap)
 {
-	struct ast_str *buf = NULL;
+	const char *p;
+	struct ast_str *prefixed, *buf = NULL;
 	int res = 0;
 	const char *prefix = level >= 4 ? VERBOSE_PREFIX_4 : level == 3 ? VERBOSE_PREFIX_3 : level == 2 ? VERBOSE_PREFIX_2 : level == 1 ? VERBOSE_PREFIX_1 : "";
-	signed char magic = level > 127 ? -128 : -level - 1; /* 0 => -1, 1 => -2, etc.  Can't pass NUL, as it is EOS-delimiter */
+	signed char magic = level > 9 ? -10 : -level - 1; /* 0 => -1, 1 => -2, etc.  Can't pass NUL, as it is EOS-delimiter */
 
 	/* For compatibility with modules still calling ast_verbose() directly instead of using ast_verb() */
 	if (level < 0) {
@@ -1623,37 +1650,43 @@ void __ast_verbose_ap(const char *file, int line, const char *func, int level, s
 		}
 	}
 
-	if (!(buf = ast_str_thread_get(&verbose_buf, VERBOSE_BUF_INIT_SIZE))) {
+	if (!(prefixed = ast_str_thread_get(&verbose_buf, VERBOSE_BUF_INIT_SIZE)) ||
+	    !(buf = ast_str_create(VERBOSE_BUF_INIT_SIZE))) {
 		return;
 	}
 
-	if (ast_opt_timestamp) {
-		struct timeval now;
-		struct ast_tm tm;
-		char date[40];
-		char *datefmt;
-
-		now = ast_tvnow();
-		ast_localtime(&now, &tm, NULL);
-		ast_strftime(date, sizeof(date), dateformat, &tm);
-		datefmt = ast_alloca(strlen(date) + 3 + strlen(prefix) + strlen(fmt) + 1);
-		sprintf(datefmt, "%c[%s] %s%s", (char) magic, date, prefix, fmt);
-		fmt = datefmt;
-	} else {
-		char *tmp = ast_alloca(strlen(prefix) + strlen(fmt) + 2);
-		sprintf(tmp, "%c%s%s", (char) magic, prefix, fmt);
-		fmt = tmp;
-	}
-
-	/* Build string */
 	res = ast_str_set_va(&buf, 0, fmt, ap);
-
 	/* If the build failed then we can drop this allocated message */
 	if (res == AST_DYNSTR_BUILD_FAILED) {
+		ast_free(buf);
 		return;
 	}
 
-	ast_log_callid(__LOG_VERBOSE, file, line, func, callid, "%s", ast_str_buffer(buf));
+	ast_str_reset(prefixed);
+	/* for every newline found in the buffer add verbose prefix data */
+	fmt = ast_str_buffer(buf);
+	do {
+		if (!(p = strchr(fmt, '\n'))) {
+			p = strchr(fmt, '\0') - 1;
+		}
+		++p;
+
+		if (ast_opt_timestamp) {
+			struct ast_tm tm;
+			char date[40];
+			struct timeval now = ast_tvnow();
+			ast_localtime(&now, &tm, NULL);
+			ast_strftime(date, sizeof(date), dateformat, &tm);
+			ast_str_append(&prefixed, 0, "%c[%s] %s", (char) magic, date, prefix);
+		} else {
+			ast_str_append(&prefixed, 0, "%c%s", (char) magic, prefix);
+		}
+		ast_str_append_substr(&prefixed, 0, fmt, p - fmt);
+		fmt = p;
+	} while (p && *p);
+
+	ast_log_callid(__LOG_VERBOSE, file, line, func, callid, "%s", ast_str_buffer(prefixed));
+	ast_free(buf);
 }
 
 void __ast_verbose(const char *file, int line, const char *func, int level, const char *fmt, ...)
@@ -1699,6 +1732,148 @@ void ast_verbose(const char *fmt, ...)
 	}
 }
 
+/*! Console verbosity level node. */
+struct verb_console {
+	/*! List node link */
+	AST_LIST_ENTRY(verb_console) node;
+	/*! Console verbosity level. */
+	int *level;
+};
+
+/*! Registered console verbosity levels */
+static AST_RWLIST_HEAD_STATIC(verb_consoles, verb_console);
+
+/*! ast_verb_update() reentrancy protection lock. */
+AST_MUTEX_DEFINE_STATIC(verb_update_lock);
+
+void ast_verb_update(void)
+{
+	struct logchannel *log;
+	struct verb_console *console;
+	int verb_level;
+
+	ast_mutex_lock(&verb_update_lock);
+
+	AST_RWLIST_RDLOCK(&verb_consoles);
+
+	/* Default to the root console verbosity. */
+	verb_level = option_verbose;
+
+	/* Determine max remote console level. */
+	AST_LIST_TRAVERSE(&verb_consoles, console, node) {
+		if (verb_level < *console->level) {
+			verb_level = *console->level;
+		}
+	}
+	AST_RWLIST_UNLOCK(&verb_consoles);
+
+	/* Determine max logger channel level. */
+	AST_RWLIST_RDLOCK(&logchannels);
+	AST_RWLIST_TRAVERSE(&logchannels, log, list) {
+		if (verb_level < log->verbosity) {
+			verb_level = log->verbosity;
+		}
+	}
+	AST_RWLIST_UNLOCK(&logchannels);
+
+	ast_verb_sys_level = verb_level;
+
+	ast_mutex_unlock(&verb_update_lock);
+}
+
+/*!
+ * \internal
+ * \brief Unregister a console verbose level.
+ *
+ * \param console Which console to unregister.
+ *
+ * \return Nothing
+ */
+static void verb_console_unregister(struct verb_console *console)
+{
+	AST_RWLIST_WRLOCK(&verb_consoles);
+	console = AST_RWLIST_REMOVE(&verb_consoles, console, node);
+	AST_RWLIST_UNLOCK(&verb_consoles);
+	if (console) {
+		ast_verb_update();
+	}
+}
+
+static void verb_console_free(void *v_console)
+{
+	struct verb_console *console = v_console;
+
+	verb_console_unregister(console);
+	ast_free(console);
+}
+
+/*! Thread specific console verbosity level node. */
+AST_THREADSTORAGE_CUSTOM(my_verb_console, NULL, verb_console_free);
+
+void ast_verb_console_register(int *level)
+{
+	struct verb_console *console;
+
+	console = ast_threadstorage_get(&my_verb_console, sizeof(*console));
+	if (!console || !level) {
+		return;
+	}
+	console->level = level;
+
+	AST_RWLIST_WRLOCK(&verb_consoles);
+	AST_RWLIST_INSERT_HEAD(&verb_consoles, console, node);
+	AST_RWLIST_UNLOCK(&verb_consoles);
+	ast_verb_update();
+}
+
+void ast_verb_console_unregister(void)
+{
+	struct verb_console *console;
+
+	console = ast_threadstorage_get(&my_verb_console, sizeof(*console));
+	if (!console) {
+		return;
+	}
+	verb_console_unregister(console);
+}
+
+int ast_verb_console_get(void)
+{
+	struct verb_console *console;
+	int verb_level;
+
+	console = ast_threadstorage_get(&my_verb_console, sizeof(*console));
+	AST_RWLIST_RDLOCK(&verb_consoles);
+	if (!console) {
+		verb_level = 0;
+	} else if (console->level) {
+		verb_level = *console->level;
+	} else {
+		verb_level = option_verbose;
+	}
+	AST_RWLIST_UNLOCK(&verb_consoles);
+	return verb_level;
+}
+
+void ast_verb_console_set(int verb_level)
+{
+	struct verb_console *console;
+
+	console = ast_threadstorage_get(&my_verb_console, sizeof(*console));
+	if (!console) {
+		return;
+	}
+
+	AST_RWLIST_WRLOCK(&verb_consoles);
+	if (console->level) {
+		*console->level = verb_level;
+	} else {
+		option_verbose = verb_level;
+	}
+	AST_RWLIST_UNLOCK(&verb_consoles);
+	ast_verb_update();
+}
+
 int ast_register_verbose(void (*v)(const char *string))
 {
 	struct verb *verb;
@@ -1742,7 +1917,7 @@ static void update_logchannels(void)
 	global_logmask = 0;
 
 	AST_RWLIST_TRAVERSE(&logchannels, cur, list) {
-		cur->logmask = make_components(cur->components, cur->lineno, &cur->verbosity);
+		make_components(cur);
 		global_logmask |= cur->logmask;
 	}
 

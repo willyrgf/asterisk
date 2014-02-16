@@ -578,18 +578,17 @@ static int native_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chann
 	bridge_channel->tech_pvt = tech_pvt;
 	native_request_start(bridge);
 
+	/*
+	 * Make the channels compatible in case the native bridge did
+	 * not start for some reason and we need to fallback to 1-1
+	 * bridging.
+	 */
 	c0 = AST_LIST_FIRST(&bridge->channels)->chan;
 	c1 = AST_LIST_LAST(&bridge->channels)->chan;
-	if (c0 != c1) {
-		/*
-		 * Make the channels compatible in case the native bridge did
-		 * not start for some reason and we need to fallback to 1-1
-		 * bridging.
-		 */
-		ast_channel_make_compatible(c0, c1);
+	if (c0 == c1) {
+		return 0;
 	}
-
-	return 0;
+	return ast_channel_make_compatible(c0, c1);
 }
 
 /*!
@@ -911,7 +910,7 @@ int dahdi_native_load(struct ast_module *mod, const struct ast_channel_tech *tec
 
 	dahdi_tech = tech;
 
-	native_bridge.format_capabilities = ast_format_cap_alloc();
+	native_bridge.format_capabilities = ast_format_cap_alloc(0);
 	if (!native_bridge.format_capabilities) {
 		return -1;
 	}

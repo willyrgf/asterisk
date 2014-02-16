@@ -415,6 +415,7 @@ AST_LIBCURL_CHECK_CONFIG([], [7.10.1])
 AST_EXT_LIB_SETUP([LIBEDIT], [NetBSD Editline library], [libedit], [, use 'internal' Editline otherwise])
 AST_EXT_LIB_SETUP([LIBXML2], [LibXML2], [libxml2])
 AST_EXT_LIB_SETUP([LIBXSLT], [LibXSLT], [libxslt])
+AST_EXT_LIB_SETUP_OPTIONAL([LIBXSLT_CLEANUP], [LibXSLT Library Cleanup Function], [LIBXSLT], [libxslt])
 AST_EXT_LIB_SETUP([LTDL], [libtool], [ltdl])
 AST_EXT_LIB_SETUP([LUA], [Lua], [lua])
 AST_EXT_LIB_SETUP([MISDN], [mISDN user], [misdn])
@@ -432,6 +433,8 @@ AST_EXT_LIB_SETUP([OSS], [Open Sound System], [oss])
 AST_EXT_LIB_SETUP([PGSQL], [PostgreSQL], [postgres])
 AST_EXT_LIB_SETUP([PJPROJECT], [PJPROJECT], [pjproject])
 AST_EXT_LIB_SETUP([POPT], [popt], [popt])
+AST_EXT_LIB_SETUP_OPTIONAL([PJ_TRANSACTION_GRP_LOCK], [PJSIP Transaction Group Lock Support], [PJPROJECT], [pjsip])
+AST_EXT_LIB_SETUP_OPTIONAL([PJSIP_REPLACE_MEDIA_STREAM], [PJSIP Media Stream Replacement Support], [PJPROJECT], [pjsip])
 AST_EXT_LIB_SETUP([PORTAUDIO], [PortAudio], [portaudio])
 AST_EXT_LIB_SETUP([PRI], [ISDN PRI], [pri])
 AST_EXT_LIB_SETUP_OPTIONAL([PRI_L2_PERSISTENCE], [ISDN Layer 2 persistence option], [PRI], [pri])
@@ -570,6 +573,7 @@ if test "${disable_xmldoc}" != "yes"; then
 	fi
 
         AST_EXT_LIB_CHECK([LIBXSLT], [xslt], [xsltLoadStylesheetPI], [libxslt/xsltInternals.h], [${LIBXML2_LIB}], [${LIBXML2_INCLUDE}])
+        AST_EXT_LIB_CHECK([LIBXSLT_CLEANUP], [xslt], [xsltCleanupGlobals], [libxslt/xsltInternals.h], [${LIBXML2_LIB}], [${LIBXML2_INCLUDE}])
 
 fi
 
@@ -808,11 +812,12 @@ AC_DEFINE([HAVE_PTHREAD_MUTEX_RECURSIVE_NP], 1, [Define to 1 if your system defi
 AC_MSG_RESULT(no)
 )
 
-AC_MSG_CHECKING(for pthread_rwlock_timedwrlock() in pthread.h)
 save_LIBS="$LIBS"
 save_CFLAGS="$CFLAGS"
 LIBS="$PTHREAD_LIBS $LIBS"
 CFLAGS="$CFLAGS $PTHREAD_CFLAGS"
+
+AC_MSG_CHECKING(for pthread_rwlock_timedwrlock() in pthread.h)
 AC_LINK_IFELSE(
   [AC_LANG_PROGRAM(
     [#include <pthread.h>
@@ -826,6 +831,17 @@ AC_LINK_IFELSE(
     ac_cv_pthread_rwlock_timedwrlock="no"
   ]
 )
+
+# Some platforms define sem_init(), but only support sem_open(). joyous.
+AC_MSG_CHECKING(for working unnamed semaphores)
+AC_RUN_IFELSE(
+	[AC_LANG_PROGRAM([#include <semaphore.h>],
+		[sem_t sem; return sem_init(&sem, 0, 0);])],
+	AC_MSG_RESULT(yes)
+	AC_DEFINE([HAS_WORKING_SEMAPHORE], 1, [Define to 1 if anonymous semaphores work.]),
+	AC_MSG_RESULT(no)
+)
+
 LIBS="$save_LIBS"
 CFLAGS="$save_CFLAGS"
 if test "${ac_cv_pthread_rwlock_timedwrlock}" = "yes"; then
@@ -1213,6 +1229,11 @@ AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_openr], [bfd.h])
 if test "${PBX_BFD}" = "0"; then
   # Fedora/RedHat/CentOS require extra libraries
   AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_check_format], [bfd.h], [-ldl -liberty])
+fi
+
+if test "${PBX_BFD}" = "0"; then
+  # openSUSE requires -lz
+  AST_EXT_LIB_CHECK([BFD], [bfd], [bfd_check_format], [bfd.h], [-ldl -liberty -lz])
 fi
 
 if test "x${OSARCH}" = "xlinux-gnu" ; then
@@ -1996,6 +2017,10 @@ fi
 
 AST_PKG_CONFIG_CHECK([PJPROJECT], [libpjproject])
 
+AST_EXT_LIB_CHECK([PJ_TRANSACTION_GRP_LOCK], [pjsip], [pjsip_tsx_create_uac2], [pjsip.h])
+
+AST_C_COMPILE_CHECK([PJSIP_REPLACE_MEDIA_STREAM], [pjmedia_mod_offer_flag flag = PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE], [pjmedia.h])
+
 AST_EXT_LIB_CHECK([POPT], [popt], [poptStrerror], [popt.h])
 
 AST_EXT_LIB_CHECK([PORTAUDIO], [portaudio], [Pa_GetDeviceCount], [portaudio.h])
@@ -2088,6 +2113,15 @@ if test "${PBX_PWLIB}" = "1" -a "${USE_OPENH323}" != "no" ; then
 		[${PWLIB_INCLUDE}], [${PWLIB_LIB}])
 fi
 
+AST_EXT_LIB_CHECK([LUA], [lua5.2], [luaL_newstate], [lua5.2/lua.h], [-lm])
+if test "x${PBX_LUA}" = "x1" ; then
+	if test x"${LUA_DIR}" = x; then
+		LUA_INCLUDE="${LUA_INCLUDE} -I/usr/include/lua5.2"
+	else
+		LUA_INCLUDE="${LUA_INCLUDE} -I${LUA_DIR}/lua5.2"
+	fi
+fi
+
 AST_EXT_LIB_CHECK([LUA], [lua5.1], [luaL_newstate], [lua5.1/lua.h], [-lm])
 if test "x${PBX_LUA}" = "x1" ; then
 	if test x"${LUA_DIR}" = x; then
@@ -2098,9 +2132,16 @@ if test "x${PBX_LUA}" = "x1" ; then
 fi
 
 # Some distributions (like SuSE) remove the 5.1 suffix.
-AST_EXT_LIB_CHECK([LUA], [lua], [luaL_register], [lua.h], [-lm])
+AST_EXT_LIB_CHECK([LUA], [lua], [luaL_openlib], [lua.h], [-lm])
 
-AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
+# Accept either RADIUS client library, their APIs are fully compatible,
+# just different header filenames and different SONAMEs
+AST_EXT_LIB_CHECK([RADIUS], [freeradius-client], [rc_read_config], [freeradius-client.h])
+if test "x${PBX_RADIUS}" = "x1"; then
+	AC_DEFINE(FREERADIUS_CLIENT, [], [Use the FreeRADIUS-client library])
+else
+	AST_EXT_LIB_CHECK([RADIUS], [radiusclient-ng], [rc_read_config], [radiusclient-ng.h])
+fi
 
 AST_EXT_LIB_CHECK([COROSYNC], [cpg], [cpg_join], [corosync/cpg.h], [-lcfg])
 AST_EXT_LIB_CHECK([COROSYNC_CFG_STATE_TRACK], [cfg], [corosync_cfg_state_track], [corosync/cfg.h], [-lcfg])
@@ -2431,6 +2472,15 @@ echo "   \$\$\$\$\$\$\$.           .7\$\$\$\$\$\$  \$\$      "
 echo "     \$\$\$\$\$\$\$\$\$\$\$\$7\$\$\$\$\$\$\$\$\$.\$\$\$\$\$\$      "
 echo "       \$\$\$\$\$\$\$\$\$\$\$\$\$\$\$\$.                "
 echo
+fi
+
+if test "x${AST_IODBC_FOUND}" = "xyes"; then
+	echo "WARNING: iodbc libs/headers found!"
+	echo
+	echo "  If you plan to use ODBC functionality, you should consider"
+	echo "  switching to unixodbc instead."
+	echo "  See: https://issues.asterisk.org/jira/browse/ASTERISK-22459"
+	echo
 fi
 
 AC_MSG_NOTICE(Package configured for: )

@@ -70,6 +70,7 @@ struct documentation_tree {
 
 static char *xmldoc_get_syntax_cmd(struct ast_xml_node *fixnode, const char *name, int printname);
 static int xmldoc_parse_enumlist(struct ast_xml_node *fixnode, const char *tabs, struct ast_str **buffer);
+static void xmldoc_parse_parameter(struct ast_xml_node *fixnode, const char *tabs, struct ast_str **buffer);
 static int xmldoc_parse_info(struct ast_xml_node *node, const char *tabs, const char *posttabs, struct ast_str **buffer);
 static int xmldoc_parse_para(struct ast_xml_node *node, const char *tabs, const char *posttabs, struct ast_str **buffer);
 static int xmldoc_parse_specialtags(struct ast_xml_node *fixnode, const char *tabs, const char *posttabs, struct ast_str **buffer);
@@ -607,8 +608,11 @@ static struct ast_xml_node *xmldoc_get_node(const char *type, const char *name, 
  */
 static void __attribute__((format(printf, 4, 5))) xmldoc_reverse_helper(int reverse, int *len, char **syntax, const char *fmt, ...)
 {
-	int totlen, tmpfmtlen;
-	char *tmpfmt, tmp;
+	int totlen;
+	int tmpfmtlen;
+	char *tmpfmt;
+	char *new_syntax;
+	char tmp;
 	va_list ap;
 
 	va_start(ap, fmt);
@@ -621,12 +625,12 @@ static void __attribute__((format(printf, 4, 5))) xmldoc_reverse_helper(int reve
 	tmpfmtlen = strlen(tmpfmt);
 	totlen = *len + tmpfmtlen + 1;
 
-	*syntax = ast_realloc(*syntax, totlen);
-
-	if (!*syntax) {
+	new_syntax = ast_realloc(*syntax, totlen);
+	if (!new_syntax) {
 		ast_free(tmpfmt);
 		return;
 	}
+	*syntax = new_syntax;
 
 	if (reverse) {
 		memmove(*syntax + tmpfmtlen, *syntax, *len);
@@ -1489,58 +1493,6 @@ static int xmldoc_parse_specialtags(struct ast_xml_node *fixnode, const char *ta
 
 /*!
  * \internal
- * \brief Parse an 'info' tag inside an element.
- *
- * \param node A pointer to the 'info' xml node.
- * \param tabs A string to be appended at the beginning of each line being printed
- *             inside 'buffer'
- * \param posttabs Add this string after the content of the <para> element, if one exists
- * \param String buffer to put values found inide the info element.
- *
- * \retval 2 if the information contained a para element, and it returned a value of 2
- * \retval 1 if information was put into the buffer
- * \retval 0 if no information was put into the buffer or error
- */
-static int xmldoc_parse_info(struct ast_xml_node *node, const char *tabs, const char *posttabs, struct ast_str **buffer)
-{
-	const char *tech;
-	char *internaltabs;
-	int internal_ret;
-	int ret = 0;
-
-	if (strcasecmp(ast_xml_node_get_name(node), "info")) {
-		return ret;
-	}
-
-	ast_asprintf(&internaltabs, "%s    ", tabs);
-	if (!internaltabs) {
-		return ret;
-	}
-
-	tech = ast_xml_get_attribute(node, "tech");
-	if (tech) {
-		ast_str_append(buffer, 0, "%s<note>Technology: %s</note>\n", internaltabs, tech);
-		ast_xml_free_attr(tech);
-	}
-
-	ret = 1;
-
-	for (node = ast_xml_node_get_children(node); node; node = ast_xml_node_get_next(node)) {
-		if (!strcasecmp(ast_xml_node_get_name(node), "enumlist")) {
-			xmldoc_parse_enumlist(node, internaltabs, buffer);
-		} else if ((internal_ret = xmldoc_parse_common_elements(node, internaltabs, posttabs, buffer))) {
-			if (internal_ret > ret) {
-				ret = internal_ret;
-			}
-		}
-	}
-	ast_free(internaltabs);
-
-	return ret;
-}
-
-/*!
- * \internal
  * \brief Parse an <argument> element from the xml documentation.
  *
  * \param fixnode Pointer to the 'argument' xml node.
@@ -1826,6 +1778,7 @@ static int xmldoc_parse_enum(struct ast_xml_node *fixnode, const char *tabs, str
 		}
 
 		xmldoc_parse_enumlist(node, optiontabs, buffer);
+		xmldoc_parse_parameter(node, optiontabs, buffer);
 	}
 
 	ast_free(optiontabs);
@@ -2050,6 +2003,60 @@ static void xmldoc_parse_parameter(struct ast_xml_node *fixnode, const char *tab
 
 /*!
  * \internal
+ * \brief Parse an 'info' tag inside an element.
+ *
+ * \param node A pointer to the 'info' xml node.
+ * \param tabs A string to be appended at the beginning of each line being printed
+ *             inside 'buffer'
+ * \param posttabs Add this string after the content of the <para> element, if one exists
+ * \param String buffer to put values found inide the info element.
+ *
+ * \retval 2 if the information contained a para element, and it returned a value of 2
+ * \retval 1 if information was put into the buffer
+ * \retval 0 if no information was put into the buffer or error
+ */
+static int xmldoc_parse_info(struct ast_xml_node *node, const char *tabs, const char *posttabs, struct ast_str **buffer)
+{
+	const char *tech;
+	char *internaltabs;
+	int internal_ret;
+	int ret = 0;
+
+	if (strcasecmp(ast_xml_node_get_name(node), "info")) {
+		return ret;
+	}
+
+	ast_asprintf(&internaltabs, "%s    ", tabs);
+	if (!internaltabs) {
+		return ret;
+	}
+
+	tech = ast_xml_get_attribute(node, "tech");
+	if (tech) {
+		ast_str_append(buffer, 0, "%s<note>Technology: %s</note>\n", internaltabs, tech);
+		ast_xml_free_attr(tech);
+	}
+
+	ret = 1;
+
+	for (node = ast_xml_node_get_children(node); node; node = ast_xml_node_get_next(node)) {
+		if (!strcasecmp(ast_xml_node_get_name(node), "enumlist")) {
+			xmldoc_parse_enumlist(node, internaltabs, buffer);
+		} else if (!strcasecmp(ast_xml_node_get_name(node), "parameter")) {
+			xmldoc_parse_parameter(node, internaltabs, buffer);
+		} else if ((internal_ret = xmldoc_parse_common_elements(node, internaltabs, posttabs, buffer))) {
+			if (internal_ret > ret) {
+				ret = internal_ret;
+			}
+		}
+	}
+	ast_free(internaltabs);
+
+	return ret;
+}
+
+/*!
+ * \internal
  * \brief Build the arguments for an item
  *
  * \param node	The arguments node to parse
@@ -2183,7 +2190,6 @@ static char *_xmldoc_build_field(struct ast_xml_node *node, const char *var, int
 	node = ast_xml_find_element(ast_xml_node_get_children(node), var, NULL, NULL);
 
 	if (!node || !ast_xml_node_get_children(node)) {
-		ast_debug(1, "Cannot find variable '%s' in tree\n", var);
 		return ret;
 	}
 

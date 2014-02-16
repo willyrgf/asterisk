@@ -70,6 +70,7 @@ static char *extconfig_conf = "extconfig.conf";
 
 static struct ao2_container *cfg_hooks;
 static void config_hook_exec(const char *filename, const char *module, struct ast_config *cfg);
+inline struct ast_variable *variable_list_switch(struct ast_variable *l1, struct ast_variable *l2);
 
 /*! \brief Structure to keep comments for rewriting configuration files */
 struct ast_comment {
@@ -579,6 +580,39 @@ struct ast_variable *ast_variable_browse(const struct ast_config *config, const 
 	}
 
 	return (cat) ? cat->root : NULL;
+}
+
+inline struct ast_variable *variable_list_switch(struct ast_variable *l1, struct ast_variable *l2)
+{
+    l1->next = l2->next;
+    l2->next = l1;
+    return l2;
+}
+
+struct ast_variable *ast_variable_list_sort(struct ast_variable *start)
+{
+	struct ast_variable *p, *q, *top;
+	int changed = 1;
+	top = ast_calloc(1, sizeof(struct ast_variable));
+	top->next = start;
+	if (start != NULL && start->next != NULL) {
+		while (changed) {
+			changed = 0;
+			q = top;
+			p = top->next;
+			while (p->next != NULL) {
+				if (p->next != NULL && strcmp(p->name, p->next->name) > 0) {
+					q->next = variable_list_switch(p, p->next);
+
+					changed = 1;
+				}
+				q = p;
+				if (p->next != NULL)
+					p = p->next;
+			}
+		}
+	}
+	return top->next;
 }
 
 const char *ast_config_option(struct ast_config *cfg, const char *cat, const char *var)
@@ -1419,14 +1453,26 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 	} else {
 		/* Just a line (variable = value) */
 		int object = 0;
+		int is_escaped;
+
 		if (!(*cat)) {
 			ast_log(LOG_WARNING,
 				"parse error: No category context for line %d of %s\n", lineno, configfile);
 			return -1;
 		}
-		c = strchr(cur, '=');
 
-		if (c && c > cur && (*(c - 1) == '+')) {
+		is_escaped = cur[0] == '\\';
+		if (is_escaped) {
+			/* First character is escaped. */
+			++cur;
+			if (cur[0] < 33) {
+				ast_log(LOG_ERROR, "Invalid escape in line %d of %s\n", lineno, configfile);
+				return -1;
+			}
+		}
+		c = strchr(cur + is_escaped, '=');
+
+		if (c && c > cur + is_escaped && (*(c - 1) == '+')) {
 			struct ast_variable *var, *replace = NULL;
 			struct ast_str **str = ast_threadstorage_get(&appendbuf, sizeof(*str));
 
@@ -1462,8 +1508,11 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 				object = 1;
 				c++;
 			}
+			cur = ast_strip(cur);
 set_new_variable:
-			if ((v = ast_variable_new(ast_strip(cur), ast_strip(c), S_OR(suggested_include_file, cfg->include_level == 1 ? "" : configfile)))) {
+			if (ast_strlen_zero(cur)) {
+				ast_log(LOG_WARNING, "No variable name in line %d of %s\n", lineno, configfile);
+			} else if ((v = ast_variable_new(cur, ast_strip(c), S_OR(suggested_include_file, cfg->include_level == 1 ? "" : configfile)))) {
 				v->lineno = lineno;
 				v->object = object;
 				*last_cat = 0;
@@ -2274,7 +2323,6 @@ int read_config_maps(void)
 		ast_log(LOG_ERROR, "Unable to allocate memory for new config\n");
 		return -1;
 	}
-	configtmp->max_include_level = 1;
 	config = ast_config_internal_load(extconfig_conf, configtmp, flags, "", "extconfig");
 	if (config == CONFIG_STATUS_FILEINVALID) {
 		return -1;
@@ -2521,10 +2569,53 @@ struct ast_config *ast_config_load2(const char *filename, const char *who_asked,
 	return result;
 }
 
-static struct ast_variable *realtime_arguments_to_fields(va_list ap)
+#define realtime_arguments_to_fields(ap) realtime_arguments_to_fields2(ap, 0)
+
+static struct ast_variable *realtime_arguments_to_fields2(va_list ap, int skip)
 {
 	struct ast_variable *first, *fields = NULL;
-	const char *newparam = va_arg(ap, const char *), *newval = va_arg(ap, const char *);
+	const char *newparam;
+	const char *newval;
+
+	/*
+	 * Previously we would do:
+	 *
+	 *     va_start(ap, last);
+	 *     x = realtime_arguments_to_fields(ap);
+	 *     y = realtime_arguments_to_fields(ap);
+	 *     va_end(ap);
+	 *
+	 * While this works on generic amd64 machines (2014), it doesn't on the
+	 * raspberry PI. The va_arg() manpage says:
+	 *
+	 *     If ap is passed to a function that uses va_arg(ap,type) then
+	 *     the value of ap is undefined after the return of that function.
+	 *
+	 * On the raspberry, ap seems to get reset after the call: the contents
+	 * of y would be equal to the contents of x.
+	 *
+	 * So, instead we allow the caller to skip past earlier argument sets
+	 * using the skip parameter:
+	 *
+	 *     va_start(ap, last);
+	 *     x = realtime_arguments_to_fields(ap);
+	 *     va_end(ap);
+	 *     va_start(ap, last);
+	 *     y = realtime_arguments_to_fields2(ap, 1);
+	 *     va_end(ap);
+	 */
+	while (skip--) {
+		/* There must be at least one argument. */
+		newparam = va_arg(ap, const char *);
+		newval = va_arg(ap, const char *);
+		while ((newparam = va_arg(ap, const char *))) {
+			newval = va_arg(ap, const char *);
+		}
+	}
+
+	/* Load up the first vars. */
+	newparam = va_arg(ap, const char *);
+	newval = va_arg(ap, const char *);
 
 	if (!(first = ast_variable_new(newparam, newval, ""))) {
 		return NULL;
@@ -2632,6 +2723,10 @@ struct ast_variable *ast_load_realtime(const char *family, ...)
 	fields = realtime_arguments_to_fields(ap);
 	va_end(ap);
 
+	if (!fields) {
+		return NULL;
+	}
+
 	return ast_load_realtime_fields(family, fields);
 }
 
@@ -2734,6 +2829,10 @@ struct ast_config *ast_load_realtime_multientry(const char *family, ...)
 	fields = realtime_arguments_to_fields(ap);
 	va_end(ap);
 
+	if (!fields) {
+		return NULL;
+	}
+
 	return ast_load_realtime_multientry_fields(family, fields);
 }
 
@@ -2767,6 +2866,10 @@ int ast_update_realtime(const char *family, const char *keyfield, const char *lo
 	fields = realtime_arguments_to_fields(ap);
 	va_end(ap);
 
+	if (!fields) {
+		return -1;
+	}
+
 	return ast_update_realtime_fields(family, keyfield, lookup, fields);
 }
 
@@ -2797,9 +2900,19 @@ int ast_update2_realtime(const char *family, ...)
 	va_list ap;
 
 	va_start(ap, family);
+	/* XXX: If we wanted to pass no lookup fields (select all), we'd be
+	 * out of luck. realtime_arguments_to_fields expects at least one key
+	 * value pair. */
 	lookup_fields = realtime_arguments_to_fields(ap);
-	update_fields = realtime_arguments_to_fields(ap);
 	va_end(ap);
+
+	va_start(ap, family);
+	update_fields = realtime_arguments_to_fields2(ap, 1);
+	va_end(ap);
+
+	if (!lookup_fields || !update_fields) {
+		return -1;
+	}
 
 	return ast_update2_realtime_fields(family, lookup_fields, update_fields);
 }
@@ -2834,6 +2947,10 @@ int ast_store_realtime(const char *family, ...)
 	fields = realtime_arguments_to_fields(ap);
 	va_end(ap);
 
+	if (!fields) {
+		return -1;
+	}
+
 	return ast_store_realtime_fields(family, fields);
 }
 
@@ -2865,6 +2982,10 @@ int ast_destroy_realtime(const char *family, const char *keyfield, const char *l
 	va_start(ap, lookup);
 	fields = realtime_arguments_to_fields(ap);
 	va_end(ap);
+
+	if (!fields) {
+		return -1;
+	}
 
 	return ast_destroy_realtime_fields(family, keyfield, lookup, fields);
 }

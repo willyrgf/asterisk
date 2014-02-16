@@ -102,6 +102,9 @@ extern "C" {
 /*! \brief Maximum size of an object type */
 #define MAX_OBJECT_TYPE 64
 
+/*! \brief Maximum length of an object field name */
+#define MAX_OBJECT_FIELD 128
+
 /*!
  * \brief Retrieval flags
  */
@@ -346,6 +349,7 @@ int __ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, c
  * \param sorcery Pointer to a sorcery structure
  * \param type Type of object
  * \param hidden All objects of this type are internal and should not be manipulated by users
+ * \param reloadable All objects of this type are reloadable
  * \param alloc Required object allocation callback
  * \param transform Optional transformation callback
  * \param apply Optional object set apply callback
@@ -686,7 +690,7 @@ int ast_sorcery_observer_add(const struct ast_sorcery *sorcery, const char *type
  * \retval 0 success
  * \retval -1 failure
  */
-void ast_sorcery_observer_remove(const struct ast_sorcery *sorcery, const char *type, struct ast_sorcery_observer *callbacks);
+void ast_sorcery_observer_remove(const struct ast_sorcery *sorcery, const char *type, const struct ast_sorcery_observer *callbacks);
 
 /*!
  * \brief Create and potentially persist an object using an available wizard
@@ -717,7 +721,7 @@ void *ast_sorcery_retrieve_by_id(const struct ast_sorcery *sorcery, const char *
  * \param sorcery Pointer to a sorcery structure
  * \param type Type of object to retrieve
  * \param flags Flags to control behavior
- * \param fields Optional jbject fields and values to match against
+ * \param fields Optional object fields and values to match against
  *
  * \retval non-NULL if found
  * \retval NULL if not found
@@ -818,6 +822,12 @@ const char *ast_sorcery_object_get_extended(const void *object, const char *name
  * \note If the extended field already exists it will be overwritten with the new value.
  */
 int ast_sorcery_object_set_extended(const void *object, const char *name, const char *value);
+
+/*!
+ * \brief Sorcery object comparator based on id.
+ */
+int ast_sorcery_object_id_compare(const void *obj_left, const void *obj_right, int flags);
+
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

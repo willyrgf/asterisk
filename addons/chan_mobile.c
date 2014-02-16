@@ -878,6 +878,7 @@ static struct ast_channel *mbl_new(int state, struct mbl_pvt *pvt, char *cid_num
 	if (pvt->sco_socket != -1) {
 		ast_channel_set_fd(chn, 0, pvt->sco_socket);
 	}
+	ast_channel_unlock(chn);
 
 	return chn;
 
@@ -4705,7 +4706,7 @@ static int load_module(void)
 
 	int dev_id, s;
 
-	if (!(mbl_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(mbl_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_set(&prefformat, DEVICE_FRAME_FORMAT, 0);

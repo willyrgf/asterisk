@@ -37,9 +37,9 @@ extern "C" {
  * ever include socket.h.
  */
 enum {
-	AST_AF_UNSPEC	= 0,
-	AST_AF_INET	= 2,
-	AST_AF_INET6	= 10,
+	AST_AF_UNSPEC = AF_UNSPEC,
+	AST_AF_INET   = AF_INET,
+	AST_AF_INET6  = AF_INET6,
 };
 
 enum ast_transport {
@@ -49,6 +49,18 @@ enum ast_transport {
 	AST_TRANSPORT_WS    = 1 << 3,
 	AST_TRANSPORT_WSS   = 1 << 4,
 };
+
+/*!
+ * \brief
+ * Isolate a 32-bit section of an IPv6 address
+ *
+ * An IPv6 address can be divided into 4 32-bit chunks. This gives
+ * easy access to one of these chunks.
+ *
+ * \param sin6 A pointer to a struct sockaddr_in6
+ * \param index Which 32-bit chunk to operate on. Must be in the range 0-3.
+ */
+#define V6_WORD(sin6, index) ((uint32_t *)&((sin6)->sin6_addr))[(index)]
 
 /*!
  * \brief Socket address structure.
@@ -398,6 +410,23 @@ int ast_sockaddr_parse(struct ast_sockaddr *addr, const char *str, int flags);
  */
 int ast_sockaddr_resolve(struct ast_sockaddr **addrs, const char *str,
 			 int flags, int family);
+
+/*!
+ * \brief
+ * Apply a netmask to an address and store the result in a separate structure.
+ *
+ * When dealing with IPv6 addresses, one cannot apply a netmask with a simple
+ * logical AND operation.  Futhermore, the incoming address may be an IPv4
+ * address and needs to be mapped properly before attempting to apply a rule.
+ *
+ * \param addr The IP address to apply the mask to.
+ * \param netmask The netmask configured in the host access rule.
+ * \param result The resultant address after applying the netmask to the given address
+ * \retval 0 Successfully applied netmask
+ * \retval -1 Failed to apply netmask
+ */
+int ast_sockaddr_apply_netmask(const struct ast_sockaddr *addr, const struct ast_sockaddr *netmask,
+		struct ast_sockaddr *result);
 
 /*!
  * \since 1.8

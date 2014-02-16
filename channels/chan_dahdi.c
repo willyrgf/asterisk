@@ -553,7 +553,7 @@ static int restart_monitor(void);
 
 static int dahdi_sendtext(struct ast_channel *c, const char *text);
 
-static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	/* This module does not handle MWI in an event-based manner.  However, it
 	 * subscribes to MWI for each mailbox that is configured so that the core
@@ -1219,11 +1219,8 @@ static int my_get_callerid(void *pvt, char *namebuf, char *numbuf, enum analog_e
 		 * a failure and die, and returning 2 means no event was received. */
 		res = read(p->subs[index].dfd, buf, sizeof(buf));
 		if (res < 0) {
-			if (errno != ELAST) {
-				ast_log(LOG_WARNING, "read returned error: %s\n", strerror(errno));
-				callerid_free(p->cs);
-				return -1;
-			}
+			ast_log(LOG_WARNING, "read returned error: %s\n", strerror(errno));
+			return -1;
 		}
 
 		if (analog_p->ringt > 0) {
@@ -1670,7 +1667,9 @@ static void publish_dahdichannel(struct ast_channel *chan, int span, const char 
 		return;
 	}
 
+	ast_channel_lock(chan);
 	ast_channel_publish_blob(chan, dahdichannel_type(), blob);
+	ast_channel_unlock(chan);
 }
 
 /*!
@@ -3130,9 +3129,9 @@ struct sig_ss7_callback sig_ss7_callbacks =
 /*!
  * \brief Send MWI state change
  *
- * \arg mailbox_full This is the mailbox associated with the FXO line that the
+ * \param mailbox This is the mailbox associated with the FXO line that the
  *      MWI state has changed on.
- * \arg thereornot This argument should simply be set to 1 or 0, to indicate
+ * \param thereornot This argument should simply be set to 1 or 0, to indicate
  *      whether there are messages waiting or not.
  *
  *  \return nothing
@@ -3145,20 +3144,16 @@ struct sig_ss7_callback sig_ss7_callbacks =
  * 2) It runs the script specified by the mwimonitornotify option to allow
  *    some custom handling of the state change.
  */
-static void notify_message(char *mailbox_full, int thereornot)
+static void notify_message(char *mailbox, int thereornot)
 {
 	char s[sizeof(mwimonitornotify) + 80];
-	char *mailbox, *context;
 
-	/* Strip off @default */
-	context = mailbox = ast_strdupa(mailbox_full);
-	strsep(&context, "@");
-	if (ast_strlen_zero(context))
-		context = "default";
+	if (ast_strlen_zero(mailbox)) {
+		return;
+	}
 
-	ast_publish_mwi_state(mailbox, context, thereornot, thereornot);
-
-	if (!ast_strlen_zero(mailbox) && !ast_strlen_zero(mwimonitornotify)) {
+	ast_publish_mwi_state(mailbox, NULL, thereornot, thereornot);
+	if (!ast_strlen_zero(mwimonitornotify)) {
 		snprintf(s, sizeof(s), "%s %s %d", mwimonitornotify, mailbox, thereornot);
 		ast_safe_system(s);
 	}
@@ -4827,19 +4822,9 @@ static int send_cwcidspill(struct dahdi_pvt *p)
 static int has_voicemail(struct dahdi_pvt *p)
 {
 	int new_msgs;
-	char *mailbox, *context;
 	RAII_VAR(struct stasis_message *, mwi_message, NULL, ao2_cleanup);
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
-	mailbox = context = ast_strdupa(p->mailbox);
-	strsep(&context, "@");
-	if (ast_strlen_zero(context)) {
-		context = "default";
-	}
-
-	ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
-	mwi_message = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(), ast_str_buffer(uniqueid));
-
+	mwi_message = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(), p->mailbox);
 	if (mwi_message) {
 		struct ast_mwi_state *mwi_state = stasis_message_data(mwi_message);
 		new_msgs = mwi_state->new_msgs;
@@ -8910,6 +8895,8 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 		return NULL;
 	}
 
+	ast_channel_stage_snapshot(tmp);
+
 	if (callid) {
 		ast_channel_callid_set(tmp, callid);
 	}
@@ -9086,6 +9073,10 @@ static struct ast_channel *dahdi_new(struct dahdi_pvt *i, int state, int startpb
 
 	for (v = i->vars ; v ; v = v->next)
 		pbx_builtin_setvar_helper(tmp, v->name, v->value);
+
+	ast_channel_stage_snapshot_done(tmp);
+
+	ast_channel_unlock(tmp);
 
 	ast_module_ref(ast_module_info->self);
 
@@ -9604,6 +9595,7 @@ static void *analog_ss_thread(void *data)
 						getforward = 0;
 					} else {
 						res = tone_zone_play_tone(p->subs[idx].dfd, -1);
+						ast_channel_lock(chan);
 						ast_channel_exten_set(chan, exten);
 						if (!ast_strlen_zero(p->cid_num)) {
 							if (!p->hidecallerid)
@@ -9616,6 +9608,7 @@ static void *analog_ss_thread(void *data)
 								ast_set_callerid(chan, NULL, p->cid_name, NULL);
 						}
 						ast_setstate(chan, AST_STATE_RING);
+						ast_channel_unlock(chan);
 						dahdi_ec_enable(p);
 						res = ast_pbx_run(chan);
 						if (res) {
@@ -9722,16 +9715,34 @@ static void *analog_ss_thread(void *data)
 				getforward = 0;
 				memset(exten, 0, sizeof(exten));
 				len = 0;
-			} else if ((p->transfer || p->canpark) && is_exten_parking &&
-						p->subs[SUB_THREEWAY].owner) {
-				RAII_VAR(struct ast_bridge_channel *, bridge_channel, NULL, ao2_cleanup);
-				/* This is a three way call, the main call being a real channel,
-					and we're parking the first call. */
-				ast_channel_lock(chan);
-				bridge_channel = ast_channel_get_bridge_channel(chan);
-				ast_channel_unlock(chan);
-				if (bridge_channel && !ast_parking_blind_transfer_park(bridge_channel, ast_channel_context(chan), exten)) {
-					ast_verb(3, "Parking call to '%s'\n", ast_channel_name(chan));
+			} else if ((p->transfer || p->canpark) && is_exten_parking
+				&& p->subs[SUB_THREEWAY].owner) {
+				struct ast_bridge_channel *bridge_channel;
+
+				/*
+				 * This is a three way call, the main call being a real channel,
+				 * and we're parking the first call.
+				 */
+				ast_channel_lock(p->subs[SUB_THREEWAY].owner);
+				bridge_channel = ast_channel_get_bridge_channel(p->subs[SUB_THREEWAY].owner);
+				ast_channel_unlock(p->subs[SUB_THREEWAY].owner);
+				if (bridge_channel) {
+					if (!ast_parking_blind_transfer_park(bridge_channel, ast_channel_context(chan), exten)) {
+						/*
+						 * Swap things around between the three-way and real call so we
+						 * can hear where the channel got parked.
+						 */
+						ast_mutex_lock(&p->lock);
+						p->owner = p->subs[SUB_THREEWAY].owner;
+						swap_subs(p, SUB_THREEWAY, SUB_REAL);
+						ast_mutex_unlock(&p->lock);
+
+						ast_verb(3, "%s: Parked call\n", ast_channel_name(chan));
+						ast_hangup(chan);
+						ao2_ref(bridge_channel, -1);
+						goto quit;
+					}
+					ao2_ref(bridge_channel, -1);
 				}
 				break;
 			} else if (p->hidecallerid && !strcmp(exten, "*82")) {
@@ -10361,8 +10372,10 @@ static void *analog_ss_thread(void *data)
 
 		my_handle_notify_message(chan, p, flags, -1);
 
+		ast_channel_lock(chan);
 		ast_setstate(chan, AST_STATE_RING);
 		ast_channel_rings_set(chan, 1);
+		ast_channel_unlock(chan);
 		p->ringt = p->ringt_base;
 		res = ast_pbx_run(chan);
 		if (res) {
@@ -10805,7 +10818,6 @@ static int dahdi_create_channel_range(int start, int end)
 	struct dahdi_chan_conf default_conf = dahdi_chan_conf_default();
 	struct dahdi_chan_conf base_conf = dahdi_chan_conf_default();
 	struct dahdi_chan_conf conf = dahdi_chan_conf_default();
-	int i, x;
 	int ret = RESULT_FAILURE; /* be pessimistic */
 
 	ast_debug(1, "channel range caps: %d - %d\n", start, end);
@@ -10818,31 +10830,34 @@ static int dahdi_create_channel_range(int start, int end)
 			goto out;
 		}
 	}
-	for (x = 0; x < NUM_SPANS; x++) {
 #ifdef HAVE_PRI
-		struct dahdi_pri *pri = pris + x;
+	{
+		int i, x;
+		for (x = 0; x < NUM_SPANS; x++) {
+			struct dahdi_pri *pri = pris + x;
 
-		if (!pris[x].pri.pvts[0]) {
-			break;
-		}
-		for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
-			int channo = pri->dchannels[i];
-
-			if (!channo) {
+			if (!pris[x].pri.pvts[0]) {
 				break;
 			}
-			if (!pri->pri.fds[i]) {
-				break;
-			}
-			if (channo >= start && channo <= end) {
-				ast_log(LOG_ERROR,
-						"channel range %d-%d is occupied by span %d\n",
-						start, end, x + 1);
-				goto out;
+			for (i = 0; i < SIG_PRI_NUM_DCHANS; i++) {
+				int channo = pri->dchannels[i];
+
+				if (!channo) {
+					break;
+				}
+				if (!pri->pri.fds[i]) {
+					break;
+				}
+				if (channo >= start && channo <= end) {
+					ast_log(LOG_ERROR,
+							"channel range %d-%d is occupied by span %d\n",
+							start, end, x + 1);
+					goto out;
+				}
 			}
 		}
-#endif
 	}
+#endif
 	if (!default_conf.chan.cc_params || !base_conf.chan.cc_params ||
 		!conf.chan.cc_params) {
 		goto out;
@@ -11124,6 +11139,11 @@ static struct dahdi_pvt *handle_init_event(struct dahdi_pvt *i, int event)
 	return NULL;
 }
 
+static void monitor_pfds_clean(void *arg) {
+	struct pollfd **pfds = arg;
+	ast_free(*pfds);
+}
+
 static void *do_monitor(void *data)
 {
 	int count, res, res2, spoint, pollres=0;
@@ -11147,6 +11167,7 @@ static void *do_monitor(void *data)
 #endif
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
+	pthread_cleanup_push(monitor_pfds_clean, &pfds);
 	for (;;) {
 		/* Lock the interface list */
 		ast_mutex_lock(&iflock);
@@ -11402,6 +11423,7 @@ static void *do_monitor(void *data)
 		ast_mutex_unlock(&iflock);
 	}
 	/* Never reached */
+	pthread_cleanup_pop(1);
 	return NULL;
 
 }
@@ -12129,6 +12151,9 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 						ast_copy_string(pris[span].pri.mwi_mailboxes,
 							conf->pri.pri.mwi_mailboxes,
 							sizeof(pris[span].pri.mwi_mailboxes));
+						ast_copy_string(pris[span].pri.mwi_vm_boxes,
+							conf->pri.pri.mwi_vm_boxes,
+							sizeof(pris[span].pri.mwi_vm_boxes));
 						ast_copy_string(pris[span].pri.mwi_vm_numbers,
 							conf->pri.pri.mwi_vm_numbers,
 							sizeof(pris[span].pri.mwi_vm_numbers));
@@ -12391,18 +12416,9 @@ static struct dahdi_pvt *mkintf(int channel, const struct dahdi_chan_conf *conf,
 		tmp->cid_subaddr[0] = '\0';
 		ast_copy_string(tmp->mailbox, conf->chan.mailbox, sizeof(tmp->mailbox));
 		if (channel != CHAN_PSEUDO && !ast_strlen_zero(tmp->mailbox)) {
-			char *mailbox, *context;
-			struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 			struct stasis_topic *mailbox_specific_topic;
 
-			mailbox = context = ast_strdupa(tmp->mailbox);
-			strsep(&context, "@");
-			if (ast_strlen_zero(context))
-				context = "default";
-
-			ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
-
-			mailbox_specific_topic = ast_mwi_topic(ast_str_buffer(uniqueid));
+			mailbox_specific_topic = ast_mwi_topic(tmp->mailbox);
 			if (mailbox_specific_topic) {
 				tmp->mwi_event_sub = stasis_subscribe(mailbox_specific_topic, mwi_event_cb, NULL);
 			}
@@ -14120,6 +14136,7 @@ static void pri_destroy_span(struct sig_pri_span *pri)
 	}
 
 	cancel_code = pthread_cancel(master);
+	pthread_kill(master, SIGURG);
 	ast_debug(4,
 		"Waiting to join thread of span %d "
 		"with pid=%p cancel_code=%d\n",
@@ -14895,8 +14912,8 @@ static int action_dahdirestart(struct mansession *s, const struct message *m)
 
 static char *dahdi_show_channels(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-#define FORMAT "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s %-32.32s\n"
-#define FORMAT2 "%7s %-10.10s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s %-32.32s\n"
+#define FORMAT "%7s %-15.15s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s %-32.32s\n"
+#define FORMAT2 "%7s %-15.15s %-15.15s %-10.10s %-20.20s %-10.10s %-10.10s %-32.32s\n"
 	ast_group_t targetnum = 0;
 	int filtertype = 0;
 	struct dahdi_pvt *tmp = NULL;
@@ -15333,15 +15350,20 @@ static char *dahdi_set_hwgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "dahdi set hwgain";
+		e->command = "dahdi set hwgain {rx|tx}";
 		e->usage =
 			"Usage: dahdi set hwgain <rx|tx> <chan#> <gain>\n"
-			"	Sets the hardware gain on a a given channel, overriding the\n"
-			"   value provided at module loadtime, whether the channel is in\n"
-			"   use or not.  Changes take effect immediately.\n"
+			"   Sets the hardware gain on a given channel.  Changes take effect\n"
+			"   immediately whether the channel is in use or not.\n"
+			"\n"
 			"   <rx|tx> which direction do you want to change (relative to our module)\n"
 			"   <chan num> is the channel number relative to the device\n"
-			"   <gain> is the gain in dB (e.g. -3.5 for -3.5dB)\n";
+			"   <gain> is the gain in dB (e.g. -3.5 for -3.5dB)\n"
+			"\n"
+			"   Please note:\n"
+			"   * This is currently the only way to set hwgain by the channel driver.\n"
+			"   * hwgain is only supportable by hardware with analog ports because\n"
+			"     hwgain works on the analog side of an analog-digital conversion.\n";
 		return NULL;
 	case CLI_GENERATE:
 		return NULL;
@@ -15402,12 +15424,13 @@ static char *dahdi_set_swgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 	switch (cmd) {
 	case CLI_INIT:
-		e->command = "dahdi set swgain";
+		e->command = "dahdi set swgain {rx|tx}";
 		e->usage =
 			"Usage: dahdi set swgain <rx|tx> <chan#> <gain>\n"
-			"	Sets the software gain on a a given channel, overriding the\n"
-			"   value provided at module loadtime, whether the channel is in\n"
-			"   use or not.  Changes take effect immediately.\n"
+			"   Sets the software gain on a given channel and overrides the\n"
+			"   value provided at module loadtime.  Changes take effect\n"
+			"   immediately whether the channel is in use or not.\n"
+			"\n"
 			"   <rx|tx> which direction do you want to change (relative to our module)\n"
 			"   <chan num> is the channel number relative to the device\n"
 			"   <gain> is the gain in dB (e.g. -3.5 for -3.5dB)\n";
@@ -15451,6 +15474,12 @@ static char *dahdi_set_swgain(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 
 		ast_cli(a->fd, "software %s gain set to %.1f on channel %d\n",
 			tx ? "tx" : "rx", gain, channel);
+
+		if (tx) {
+			tmp->txgain = gain;
+		} else {
+			tmp->rxgain = gain;
+		}
 		break;
 	}
 	ast_mutex_unlock(&iflock);
@@ -16424,8 +16453,10 @@ static int __unload_module(void)
 
 #ifdef HAVE_PRI
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (pris[i].pri.master != AST_PTHREADT_NULL)
+		if (pris[i].pri.master != AST_PTHREADT_NULL) {
 			pthread_cancel(pris[i].pri.master);
+			pthread_kill(pris[i].pri.master, SIGURG);
+		}
 	}
 	ast_cli_unregister_multiple(dahdi_pri_cli, ARRAY_LEN(dahdi_pri_cli));
 	ast_unregister_application(dahdi_send_keypad_facility_app);
@@ -16435,9 +16466,11 @@ static int __unload_module(void)
 #endif
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (linksets[i].ss7.master != AST_PTHREADT_NULL)
+		if (linksets[i].ss7.master != AST_PTHREADT_NULL) {
 			pthread_cancel(linksets[i].ss7.master);
+			pthread_kill(linksets[i].ss7.master, SIGURG);
 		}
+	}
 	ast_cli_unregister_multiple(dahdi_ss7_cli, ARRAY_LEN(dahdi_ss7_cli));
 #endif	/* defined(HAVE_SS7) */
 #if defined(HAVE_OPENR2)
@@ -16481,8 +16514,9 @@ static int __unload_module(void)
 
 #if defined(HAVE_PRI)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (pris[i].pri.master && (pris[i].pri.master != AST_PTHREADT_NULL))
+		if (pris[i].pri.master && (pris[i].pri.master != AST_PTHREADT_NULL)) {
 			pthread_join(pris[i].pri.master, NULL);
+		}
 		for (j = 0; j < SIG_PRI_NUM_DCHANS; j++) {
 			dahdi_close_pri_fd(&(pris[i]), j);
 		}
@@ -16497,8 +16531,9 @@ static int __unload_module(void)
 
 #if defined(HAVE_SS7)
 	for (i = 0; i < NUM_SPANS; i++) {
-		if (linksets[i].ss7.master && (linksets[i].ss7.master != AST_PTHREADT_NULL))
+		if (linksets[i].ss7.master && (linksets[i].ss7.master != AST_PTHREADT_NULL)) {
 			pthread_join(linksets[i].ss7.master, NULL);
+		}
 		for (j = 0; j < SIG_SS7_NUM_DCHANS; j++) {
 			dahdi_close_ss7_fd(&(linksets[i]), j);
 		}
@@ -16907,7 +16942,16 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 			ast_copy_string(confp->chan.description, v->value, sizeof(confp->chan.description));
 		} else if (!strcasecmp(v->name, "hasvoicemail")) {
 			if (ast_true(v->value) && ast_strlen_zero(confp->chan.mailbox)) {
-				ast_copy_string(confp->chan.mailbox, cat, sizeof(confp->chan.mailbox));
+				/*
+				 * hasvoicemail is a users.conf legacy voicemail enable method.
+				 * hasvoicemail is only going to work for app_voicemail mailboxes.
+				 */
+				if (strchr(cat, '@')) {
+					ast_copy_string(confp->chan.mailbox, cat, sizeof(confp->chan.mailbox));
+				} else {
+					snprintf(confp->chan.mailbox, sizeof(confp->chan.mailbox),
+						"%s@default", cat);
+				}
 			}
 		} else if (!strcasecmp(v->name, "adsi")) {
 			confp->chan.adsi = ast_true(v->value);
@@ -17577,6 +17621,9 @@ static int process_dahdi(struct dahdi_chan_conf *confp, const char *cat, struct 
 			} else if (!strcasecmp(v->name, "mwi_mailboxes")) {
 				ast_copy_string(confp->pri.pri.mwi_mailboxes, v->value,
 					sizeof(confp->pri.pri.mwi_mailboxes));
+			} else if (!strcasecmp(v->name, "mwi_vm_boxes")) {
+				ast_copy_string(confp->pri.pri.mwi_vm_boxes, v->value,
+					sizeof(confp->pri.pri.mwi_vm_boxes));
 			} else if (!strcasecmp(v->name, "mwi_vm_numbers")) {
 				ast_copy_string(confp->pri.pri.mwi_vm_numbers, v->value,
 					sizeof(confp->pri.pri.mwi_vm_numbers));
@@ -18521,7 +18568,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	if (!(dahdi_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(dahdi_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_format_cap_add(dahdi_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));

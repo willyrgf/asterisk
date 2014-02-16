@@ -42,11 +42,11 @@
 				<configOption name="recordingfailsound">
 					<synopsis>Sound to play when automon or automixmon is attempted but fails to start</synopsis>
 				</configOption>
-				<configOption name="transferdigittimeout" default="3000">
-					<synopsis>Milliseconds allowed between digit presses when dialing a transfer destination</synopsis>
+				<configOption name="transferdigittimeout" default="3">
+					<synopsis>Seconds allowed between digit presses when dialing a transfer destination</synopsis>
 				</configOption>
-				<configOption name="atxfernoanswertimeout" default="15000">
-					<synopsis>Milliseconds to wait for attended transfer destination to answer</synopsis>
+				<configOption name="atxfernoanswertimeout" default="15">
+					<synopsis>Seconds to wait for attended transfer destination to answer</synopsis>
 				</configOption>
 				<configOption name="atxferdropcall" default="no">
 					<synopsis>Hang up the call entirely if the attended transfer fails</synopsis>
@@ -62,8 +62,8 @@
 						hang up all channels involved in the transfer.</para>
 					</description>
 				</configOption>
-				<configOption name="atxferloopdelay" default="10000">
-					<synopsis>Milliseconds to wait between attempts to re-dial transfer destination</synopsis>
+				<configOption name="atxferloopdelay" default="10">
+					<synopsis>Seconds to wait between attempts to re-dial transfer destination</synopsis>
 					<see-also><ref type="configOption">atxferdropcall</ref></see-also>
 				</configOption>
 				<configOption name="atxfercallbackretries" default="2">
@@ -355,10 +355,10 @@
 #define DEFAULT_RECORDING_FAIL_SOUND                ""
 
 /*! Default xfer options */
-#define DEFAULT_TRANSFER_DIGIT_TIMEOUT              3000
-#define DEFAULT_NOANSWER_TIMEOUT_ATTENDED_TRANSFER  15000
+#define DEFAULT_TRANSFER_DIGIT_TIMEOUT              3
+#define DEFAULT_NOANSWER_TIMEOUT_ATTENDED_TRANSFER  15
 #define DEFAULT_ATXFER_DROP_CALL                    0
-#define DEFAULT_ATXFER_LOOP_DELAY                   10000
+#define DEFAULT_ATXFER_LOOP_DELAY                   10
 #define DEFAULT_ATXFER_CALLBACK_RETRIES             2
 #define DEFAULT_XFERSOUND                           "beep"
 #define DEFAULT_XFERFAILSOUND                       "beeperr"
@@ -622,6 +622,7 @@ static void features_config_destructor(void *obj)
 
 	ao2_cleanup(cfg->global);
 	ao2_cleanup(cfg->featuremap);
+	ao2_cleanup(cfg->parkinglots);
 	ao2_cleanup(cfg->applicationmap);
 	ao2_cleanup(cfg->featuregroups);
 }
@@ -720,7 +721,7 @@ static struct features_config *__features_config_alloc(int allocate_applicationm
 		return NULL;
 	}
 
-	cfg->global = global_config_alloc();;
+	cfg->global = global_config_alloc();
 	if (!cfg->global) {
 		return NULL;
 	}
@@ -1348,6 +1349,11 @@ static int applicationmap_handler(const struct aco_option *opt,
 		*slash = '\0';
 	}
 
+	/* Some applications do not require arguments. */
+	if (!args.app_data) {
+		args.app_data = "";
+	}
+
 	/* Two syntaxes allowed for applicationmap:
 	 * Old: foo = *1,self,NoOp,Boo!,default
 	 * New: foo = *1,self,NoOp(Boo!),default
@@ -1748,7 +1754,7 @@ static int load_config(void)
 		}
 
 		ast_log(LOG_NOTICE, "Could not load features config; using defaults\n");
-		ao2_global_obj_replace(globals, features_cfg);
+		ao2_global_obj_replace_unref(globals, features_cfg);
 	}
 
 	return 0;
@@ -1862,6 +1868,9 @@ void ast_features_config_shutdown(void)
 
 int ast_features_config_reload(void)
 {
+	/* Rearm the parking config options have moved warning. */
+	parking_warning = 0;
+
 	if (aco_process_config(&cfg_info, 1) == ACO_PROCESS_ERROR) {
 		return -1;
 	}

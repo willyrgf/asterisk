@@ -1106,6 +1106,7 @@ static int timestampevents;
 static int httptimeout = 60;
 static int broken_events_action = 0;
 static int manager_enabled = 0;
+static int subscribed = 0;
 static int webmanager_enabled = 0;
 static int manager_debug = 0;	/*!< enable some debugging code in the manager */
 static int authtimeout;
@@ -1126,7 +1127,10 @@ static struct stasis_topic *manager_topic;
 static struct stasis_message_router *stasis_router;
 
 /*! \brief The \ref stasis_subscription for forwarding the RTP topic to the AMI topic */
-static struct stasis_subscription *rtp_topic_forwarder;
+static struct stasis_forward *rtp_topic_forwarder;
+
+/*! \brief The \ref stasis_subscription for forwarding the Security topic to the AMI topic */
+static struct stasis_forward *security_topic_forwarder;
 
 #define MGR_SHOW_TERMINAL_WIDTH 80
 
@@ -1151,7 +1155,7 @@ static const struct {
 	{{ "restart", "gracefully", NULL }},
 };
 
-static void acl_change_stasis_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message);
+static void acl_change_stasis_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message);
 
 static void acl_change_stasis_subscribe(void)
 {
@@ -1253,7 +1257,8 @@ struct mansession {
 	ast_mutex_t lock;
 };
 
-static struct ao2_container *sessions = NULL;
+/*! Active manager connection sessions container. */
+static AO2_GLOBAL_OBJ_STATIC(mgr_sessions);
 
 /*! \brief user descriptor, as read from the config file.
  *
@@ -1288,7 +1293,7 @@ static AST_RWLIST_HEAD_STATIC(actions, manager_action);
 static AST_RWLIST_HEAD_STATIC(manager_hooks, manager_custom_hook);
 
 /*! \brief A container of event documentation nodes */
-AO2_GLOBAL_OBJ_STATIC(event_docs);
+static AO2_GLOBAL_OBJ_STATIC(event_docs);
 
 static enum add_filter_result manager_add_filter(const char *filter_pattern, struct ao2_container *whitefilters, struct ao2_container *blackfilters);
 
@@ -1427,7 +1432,6 @@ struct ast_str *ast_manager_str_from_json_object(struct ast_json *blob, key_excl
 }
 
 static void manager_default_msg_cb(void *data, struct stasis_subscription *sub,
-				    struct stasis_topic *topic,
 				    struct stasis_message *message)
 {
 	RAII_VAR(struct ast_manager_event_blob *, ev, NULL, ao2_cleanup);
@@ -1444,7 +1448,6 @@ static void manager_default_msg_cb(void *data, struct stasis_subscription *sub,
 }
 
 static void manager_generic_msg_cb(void *data, struct stasis_subscription *sub,
-				    struct stasis_topic *topic,
 				    struct stasis_message *message)
 {
 	struct ast_json_payload *payload = stasis_message_data(message);
@@ -1594,6 +1597,7 @@ static const struct permalias {
 	{ EVENT_FLAG_CC, "cc" },
 	{ EVENT_FLAG_AOC, "aoc" },
 	{ EVENT_FLAG_TEST, "test" },
+	{ EVENT_FLAG_SECURITY, "security" },
 	{ EVENT_FLAG_MESSAGE, "message" },
 	{ INT_MAX, "all" },
 	{ 0, "none" },
@@ -1737,7 +1741,7 @@ static struct mansession_session *unref_mansession(struct mansession_session *s)
 	if (manager_debug) {
 		ast_debug(1, "Mansession: %p refcount now %d\n", s, refcount - 1);
 	}
-	return s;
+	return NULL;
 }
 
 static void event_filter_destructor(void *obj)
@@ -1769,32 +1773,29 @@ static void session_destructor(void *obj)
 	}
 
 	if (session->whitefilters) {
-		ao2_t_callback(session->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
-		ao2_t_ref(session->whitefilters, -1 , "decrement ref for white container, should be last one");
+		ao2_t_ref(session->whitefilters, -1, "decrement ref for white container, should be last one");
 	}
 
 	if (session->blackfilters) {
-		ao2_t_callback(session->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
-		ao2_t_ref(session->blackfilters, -1 , "decrement ref for black container, should be last one");
+		ao2_t_ref(session->blackfilters, -1, "decrement ref for black container, should be last one");
 	}
 }
 
 /*! \brief Allocate manager session structure and add it to the list of sessions */
 static struct mansession_session *build_mansession(const struct ast_sockaddr *addr)
 {
+	struct ao2_container *sessions;
 	struct mansession_session *newsession;
 
-	if (!(newsession = ao2_alloc(sizeof(*newsession), session_destructor))) {
+	newsession = ao2_alloc(sizeof(*newsession), session_destructor);
+	if (!newsession) {
 		return NULL;
 	}
 
-	if (!(newsession->whitefilters = ao2_container_alloc(1, NULL, NULL))) {
+	newsession->whitefilters = ao2_container_alloc(1, NULL, NULL);
+	newsession->blackfilters = ao2_container_alloc(1, NULL, NULL);
+	if (!newsession->whitefilters || !newsession->blackfilters) {
 		ao2_ref(newsession, -1);
-		return NULL;
-	}
-
-	if (!(newsession->blackfilters = ao2_container_alloc(1, NULL, NULL))) {
-		ao2_ref(newsession, -1); /* session_destructor will cleanup the other filter */
 		return NULL;
 	}
 
@@ -1804,7 +1805,11 @@ static struct mansession_session *build_mansession(const struct ast_sockaddr *ad
 	newsession->send_events = -1;
 	ast_sockaddr_copy(&newsession->addr, addr);
 
-	ao2_link(sessions, newsession);
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (sessions) {
+		ao2_link(sessions, newsession);
+		ao2_ref(sessions, -1);
+	}
 
 	return newsession;
 }
@@ -1818,19 +1823,31 @@ static int mansession_cmp_fn(void *obj, void *arg, int flags)
 
 static void session_destroy(struct mansession_session *s)
 {
+	struct ao2_container *sessions;
+
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (sessions) {
+		ao2_unlink(sessions, s);
+		ao2_ref(sessions, -1);
+	}
 	unref_mansession(s);
-	ao2_unlink(sessions, s);
 }
 
 
 static int check_manager_session_inuse(const char *name)
 {
-	struct mansession_session *session = ao2_find(sessions, (char *) name, 0);
+	struct ao2_container *sessions;
+	struct mansession_session *session;
 	int inuse = 0;
 
-	if (session) {
-		inuse = 1;
-		unref_mansession(session);
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (sessions) {
+		session = ao2_find(sessions, (char *) name, 0);
+		ao2_ref(sessions, -1);
+		if (session) {
+			unref_mansession(session);
+			inuse = 1;
+		}
 	}
 	return inuse;
 }
@@ -1857,13 +1874,13 @@ static struct ast_manager_user *get_manager_by_name_locked(const char *name)
  *  \param session manager session to get parameter from.
  *  \return displayconnects config option value.
  */
-static int manager_displayconnects (struct mansession_session *session)
+static int manager_displayconnects(struct mansession_session *session)
 {
 	struct ast_manager_user *user = NULL;
 	int ret = 0;
 
 	AST_RWLIST_RDLOCK(&users);
-	if ((user = get_manager_by_name_locked (session->username))) {
+	if ((user = get_manager_by_name_locked(session->username))) {
 		ret = user->displayconnects;
 	}
 	AST_RWLIST_UNLOCK(&users);
@@ -2136,6 +2153,7 @@ static char *handle_showmancmds(struct ast_cli_entry *e, int cmd, struct ast_cli
 /*! \brief CLI command manager list connected */
 static char *handle_showmanconn(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
+	struct ao2_container *sessions;
 	struct mansession_session *session;
 	time_t now = time(NULL);
 #define HSMCONN_FORMAT1 "  %-15.15s  %-55.55s  %-10.10s  %-10.10s  %-8.8s  %-8.8s  %-5.5s  %-5.5s\n"
@@ -2157,15 +2175,26 @@ static char *handle_showmanconn(struct ast_cli_entry *e, int cmd, struct ast_cli
 
 	ast_cli(a->fd, HSMCONN_FORMAT1, "Username", "IP Address", "Start", "Elapsed", "FileDes", "HttpCnt", "Read", "Write");
 
-	i = ao2_iterator_init(sessions, 0);
-	while ((session = ao2_iterator_next(&i))) {
-		ao2_lock(session);
-		ast_cli(a->fd, HSMCONN_FORMAT2, session->username, ast_sockaddr_stringify_addr(&session->addr), (int)(session->sessionstart), (int)(now - session->sessionstart), session->fd, session->inuse, session->readperm, session->writeperm);
-		count++;
-		ao2_unlock(session);
-		unref_mansession(session);
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (sessions) {
+		i = ao2_iterator_init(sessions, 0);
+		ao2_ref(sessions, -1);
+		while ((session = ao2_iterator_next(&i))) {
+			ao2_lock(session);
+			ast_cli(a->fd, HSMCONN_FORMAT2, session->username,
+				ast_sockaddr_stringify_addr(&session->addr),
+				(int) (session->sessionstart),
+				(int) (now - session->sessionstart),
+				session->fd,
+				session->inuse,
+				session->readperm,
+				session->writeperm);
+			count++;
+			ao2_unlock(session);
+			unref_mansession(session);
+		}
+		ao2_iterator_destroy(&i);
 	}
-	ao2_iterator_destroy(&i);
 	ast_cli(a->fd, "%d users connected.\n", count);
 
 	return CLI_SUCCESS;
@@ -3627,7 +3656,8 @@ static int action_hangup(struct mansession *s, const struct message *m)
 
 	if (name_or_regex[0] != '/') {
 		if (!(c = ast_channel_get_by_name(name_or_regex))) {
-			ast_log(LOG_NOTICE, "!!!!!!!!!! Can't find channel to hang up!\n");
+			ast_log(LOG_NOTICE, "Request to hangup non-existent channel: %s\n",
+				name_or_regex);
 			astman_send_error(s, m, "No such channel");
 			return 0;
 		}
@@ -3933,6 +3963,7 @@ static int action_status(struct mansession *s, const struct message *m)
 		ast_free(built);
 
 		if (!all) {
+			ao2_ref(msg, -1);
 			break;
 		}
 	}
@@ -4684,13 +4715,14 @@ static int action_originate(struct mansession *s, const struct message *m)
 	int reason = 0;
 	char tmp[256];
 	char tmp2[256];
-	struct ast_format_cap *cap = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	struct ast_format tmp_fmt;
 	pthread_t th;
 	int bridge_early = 0;
 
 	if (!cap) {
 		astman_send_error(s, m, "Internal Error. Memory allocation failure.");
+		return 0;
 	}
 	ast_format_cap_add(cap, ast_format_set(&tmp_fmt, AST_FORMAT_SLINEAR, 0));
 
@@ -5090,8 +5122,8 @@ static enum add_filter_result manager_add_filter(const char *filter_pattern, str
 		is_blackfilter = 0;
 	}
 
-	if (regcomp(new_filter, filter_pattern, 0)) {
-		ao2_t_ref(new_filter, -1, "failed to make regx");
+	if (regcomp(new_filter, filter_pattern, 0)) { /* XXX: the only place we use non-REG_EXTENDED */
+		ao2_t_ref(new_filter, -1, "failed to make regex");
 		return FILTER_COMPILE_FAIL;
 	}
 
@@ -5872,19 +5904,23 @@ done:
 /*! \brief remove at most n_max stale session from the list. */
 static void purge_sessions(int n_max)
 {
+	struct ao2_container *sessions;
 	struct mansession_session *session;
 	time_t now = time(NULL);
 	struct ao2_iterator i;
 
+	sessions = ao2_global_obj_ref(mgr_sessions);
 	if (!sessions) {
 		return;
 	}
-
 	i = ao2_iterator_init(sessions, 0);
+	ao2_ref(sessions, -1);
 	while ((session = ao2_iterator_next(&i)) && n_max > 0) {
 		ao2_lock(session);
 		if (session->sessiontimeout && (now > session->sessiontimeout) && !session->inuse) {
-			if (session->authenticated && manager_displayconnects(session)) {
+			if (session->authenticated
+				&& VERBOSITY_ATLEAST(2)
+				&& manager_displayconnects(session)) {
 				ast_verb(2, "HTTP Manager '%s' timed out from %s\n",
 					session->username, ast_sockaddr_stringify_addr(&session->addr));
 			}
@@ -5934,6 +5970,10 @@ static void append_channel_vars(struct ast_str **pbuf, struct ast_channel *chan)
 
 	vars = ast_channel_get_manager_vars(chan);
 
+	if (!vars) {
+		return;
+	}
+
 	AST_LIST_TRAVERSE(vars, var, entries) {
 		ast_str_append(pbuf, 0, "ChanVariable(%s): %s=%s\r\n", ast_channel_name(chan), var->name, var->value);
 	}
@@ -5943,9 +5983,11 @@ static void append_channel_vars(struct ast_str **pbuf, struct ast_channel *chan)
 AST_THREADSTORAGE(manager_event_buf);
 #define MANAGER_EVENT_BUF_INITSIZE   256
 
-int __ast_manager_event_multichan(int category, const char *event, int chancount, struct
-	ast_channel **chans, const char *file, int line, const char *func, const char *fmt, ...)
+int __ast_manager_event_multichan(int category, const char *event, int chancount,
+	struct ast_channel **chans, const char *file, int line, const char *func,
+	const char *fmt, ...)
 {
+	RAII_VAR(struct ao2_container *, sessions, ao2_global_obj_ref(mgr_sessions), ao2_cleanup);
 	struct mansession_session *session;
 	struct manager_custom_hook *hook;
 	struct ast_str *auth = ast_str_alloca(80);
@@ -6069,20 +6111,47 @@ static int manager_state_cb(char *context, char *exten, struct ast_state_cb_info
 {
 	/* Notify managers of change */
 	char hint[512];
-	int state = info->exten_state;
-
-	/* only interested in device state for this right now */
-	if (info->reason !=  AST_HINT_UPDATE_DEVICE) {
-		return 0;
-	}
 
 	ast_get_hint(hint, sizeof(hint), NULL, 0, NULL, context, exten);
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when an extension state has changed.</synopsis>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "ExtensionStatus", "Exten: %s\r\nContext: %s\r\nHint: %s\r\nStatus: %d\r\n", exten, context, hint, state);
+
+	switch(info->reason) {
+	case AST_HINT_UPDATE_DEVICE:
+		/*** DOCUMENTATION
+			<managerEventInstance>
+				<synopsis>Raised when an extension state has changed.</synopsis>
+			</managerEventInstance>
+		***/
+		manager_event(EVENT_FLAG_CALL, "ExtensionStatus",
+			"Exten: %s\r\n"
+			"Context: %s\r\n"
+			"Hint: %s\r\n"
+			"Status: %d\r\n",
+			exten,
+			context,
+			hint,
+			info->exten_state);
+		break;
+	case AST_HINT_UPDATE_PRESENCE:
+		/*** DOCUMENTATION
+			<managerEventInstance>
+				<synopsis>Raised when a presence state has changed.</synopsis>
+			</managerEventInstance>
+		***/
+		manager_event(EVENT_FLAG_CALL, "PresenceStatus",
+			"Exten: %s\r\n"
+			"Context: %s\r\n"
+			"Hint: %s\r\n"
+			"Status: %s\r\n"
+			"Subtype: %s\r\n"
+			"Message: %s\r\n",
+			exten,
+			context,
+			hint,
+			ast_presence_state2str(info->presence_state),
+			info->presence_subtype,
+			info->presence_message);
+		break;
+	}
 	return 0;
 }
 
@@ -6234,6 +6303,7 @@ static const char * const contenttype[] = {
  */
 static struct mansession_session *find_session(uint32_t ident, int incinuse)
 {
+	struct ao2_container *sessions;
 	struct mansession_session *session;
 	struct ao2_iterator i;
 
@@ -6241,7 +6311,12 @@ static struct mansession_session *find_session(uint32_t ident, int incinuse)
 		return NULL;
 	}
 
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (!sessions) {
+		return NULL;
+	}
 	i = ao2_iterator_init(sessions, 0);
+	ao2_ref(sessions, -1);
 	while ((session = ao2_iterator_next(&i))) {
 		ao2_lock(session);
 		if (session->managerid == ident && !session->needdestroy) {
@@ -6268,13 +6343,19 @@ static struct mansession_session *find_session(uint32_t ident, int incinuse)
 static struct mansession_session *find_session_by_nonce(const char *username, unsigned long nonce, int *stale)
 {
 	struct mansession_session *session;
+	struct ao2_container *sessions;
 	struct ao2_iterator i;
 
 	if (nonce == 0 || username == NULL || stale == NULL) {
 		return NULL;
 	}
 
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (!sessions) {
+		return NULL;
+	}
 	i = ao2_iterator_init(sessions, 0);
+	ao2_ref(sessions, -1);
 	while ((session = ao2_iterator_next(&i))) {
 		ao2_lock(session);
 		if (!strcasecmp(session->username, username) && session->managerid == nonce) {
@@ -6288,6 +6369,7 @@ static struct mansession_session *find_session_by_nonce(const char *username, un
 		unref_mansession(session);
 	}
 	ao2_iterator_destroy(&i);
+
 	return session;
 }
 
@@ -6311,13 +6393,19 @@ int astman_verify_session_readpermissions(uint32_t ident, int perm)
 {
 	int result = 0;
 	struct mansession_session *session;
+	struct ao2_container *sessions;
 	struct ao2_iterator i;
 
 	if (ident == 0) {
 		return 0;
 	}
 
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (!sessions) {
+		return 0;
+	}
 	i = ao2_iterator_init(sessions, 0);
+	ao2_ref(sessions, -1);
 	while ((session = ao2_iterator_next(&i))) {
 		ao2_lock(session);
 		if ((session->managerid == ident) && (session->readperm & perm)) {
@@ -6330,6 +6418,7 @@ int astman_verify_session_readpermissions(uint32_t ident, int perm)
 		unref_mansession(session);
 	}
 	ao2_iterator_destroy(&i);
+
 	return result;
 }
 
@@ -6337,13 +6426,19 @@ int astman_verify_session_writepermissions(uint32_t ident, int perm)
 {
 	int result = 0;
 	struct mansession_session *session;
+	struct ao2_container *sessions;
 	struct ao2_iterator i;
 
 	if (ident == 0) {
 		return 0;
 	}
 
+	sessions = ao2_global_obj_ref(mgr_sessions);
+	if (!sessions) {
+		return 0;
+	}
 	i = ao2_iterator_init(sessions, 0);
+	ao2_ref(sessions, -1);
 	while ((session = ao2_iterator_next(&i))) {
 		ao2_lock(session);
 		if ((session->managerid == ident) && (session->writeperm & perm)) {
@@ -6356,6 +6451,7 @@ int astman_verify_session_writepermissions(uint32_t ident, int perm)
 		unref_mansession(session);
 	}
 	ao2_iterator_destroy(&i);
+
 	return result;
 }
 
@@ -6719,6 +6815,20 @@ static int generic_http_callback(struct ast_tcptls_session_instance *ser,
 		params = ast_http_get_post_vars(ser, headers);
 	}
 
+	if (!params) {
+		switch (errno) {
+		case EFBIG:
+			ast_http_send(ser, AST_HTTP_POST, 413, "Request Entity Too Large", NULL, NULL, 0, 0);
+			break;
+		case ENOMEM:
+			ast_http_send(ser, AST_HTTP_POST, 500, "Internal Server Error", NULL, NULL, 0, 0);
+			break;
+		case EIO:
+			ast_http_send(ser, AST_HTTP_POST, 400, "Bad Request", NULL, NULL, 0, 0);
+			break;
+		}
+	}
+
 	for (v = params; v && m.hdrcount < ARRAY_LEN(m.headers); v = v->next) {
 		hdrlen = strlen(v->name) + strlen(v->value) + 3;
 		m.headers[m.hdrcount] = ast_malloc(hdrlen);
@@ -6827,12 +6937,8 @@ generic_callback_out:
 	if (method == AST_HTTP_POST && params) {
 		ast_variables_destroy(params);
 	}
-	if (http_header) {
-		ast_free(http_header);
-	}
-	if (out) {
-		ast_free(out);
-	}
+	ast_free(http_header);
+	ast_free(out);
 
 	if (session && blastaway) {
 		session_destroy(session);
@@ -7318,7 +7424,13 @@ static int function_amiclient(struct ast_channel *chan, const char *cmd, char *d
 
 	if (!strcasecmp(args.param, "sessions")) {
 		int no_sessions = 0;
-		ao2_callback_data(sessions, 0, get_manager_sessions_cb, /*login name*/ data, &no_sessions);
+		struct ao2_container *sessions;
+
+		sessions = ao2_global_obj_ref(mgr_sessions);
+		if (sessions) {
+			ao2_callback_data(sessions, 0, get_manager_sessions_cb, /*login name*/ data, &no_sessions);
+			ao2_ref(sessions, -1);
+		}
 		snprintf(buf, len, "%d", no_sessions);
 	} else {
 		ast_log(LOG_ERROR, "Invalid arguments provided to function AMI_CLIENT: %s\n", args.param);
@@ -7337,7 +7449,6 @@ static struct ast_custom_function managerclient_function = {
 	.read_max = 12,
 };
 
-static int registered = 0;
 static int webregged = 0;
 
 /*! \brief cleanup code called at each iteration of server_root,
@@ -7636,7 +7747,6 @@ static void load_channelvars(struct ast_variable *var)
 #ifdef TEST_FRAMEWORK
 
 static void test_suite_event_cb(void *data, struct stasis_subscription *sub,
-		struct stasis_topic *topic,
 		struct stasis_message *message)
 {
 	struct ast_test_suite_message_payload *payload;
@@ -7683,16 +7793,14 @@ static void test_suite_event_cb(void *data, struct stasis_subscription *sub,
  */
 static void manager_free_user(struct ast_manager_user *user)
 {
-	if (user->a1_hash) {
-		ast_free(user->a1_hash);
+	ast_free(user->a1_hash);
+	ast_free(user->secret);
+	if (user->whitefilters) {
+		ao2_t_ref(user->whitefilters, -1, "decrement ref for white container, should be last one");
 	}
-	if (user->secret) {
-		ast_free(user->secret);
+	if (user->blackfilters) {
+		ao2_t_ref(user->blackfilters, -1, "decrement ref for black container, should be last one");
 	}
-	ao2_t_callback(user->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
-	ao2_t_callback(user->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
-	ao2_t_ref(user->whitefilters, -1, "decrement ref for white container, should be last one");
-	ao2_t_ref(user->blackfilters, -1, "decrement ref for black container, should be last one");
 	user->acl = ast_free_acl_list(user->acl);
 	ast_variables_destroy(user->chanvars);
 	ast_free(user);
@@ -7706,46 +7814,44 @@ static void manager_shutdown(void)
 {
 	struct ast_manager_user *user;
 
-	if (registered) {
-		ast_manager_unregister("Ping");
-		ast_manager_unregister("Events");
-		ast_manager_unregister("Logoff");
-		ast_manager_unregister("Login");
-		ast_manager_unregister("Challenge");
-		ast_manager_unregister("Hangup");
-		ast_manager_unregister("Status");
-		ast_manager_unregister("Setvar");
-		ast_manager_unregister("Getvar");
-		ast_manager_unregister("GetConfig");
-		ast_manager_unregister("GetConfigJSON");
-		ast_manager_unregister("UpdateConfig");
-		ast_manager_unregister("CreateConfig");
-		ast_manager_unregister("ListCategories");
-		ast_manager_unregister("Redirect");
-		ast_manager_unregister("Atxfer");
-		ast_manager_unregister("Originate");
-		ast_manager_unregister("Command");
-		ast_manager_unregister("ExtensionState");
-		ast_manager_unregister("PresenceState");
-		ast_manager_unregister("AbsoluteTimeout");
-		ast_manager_unregister("MailboxStatus");
-		ast_manager_unregister("MailboxCount");
-		ast_manager_unregister("ListCommands");
-		ast_manager_unregister("SendText");
-		ast_manager_unregister("UserEvent");
-		ast_manager_unregister("WaitEvent");
-		ast_manager_unregister("CoreSettings");
-		ast_manager_unregister("CoreStatus");
-		ast_manager_unregister("Reload");
-		ast_manager_unregister("CoreShowChannels");
-		ast_manager_unregister("ModuleLoad");
-		ast_manager_unregister("ModuleCheck");
-		ast_manager_unregister("AOCMessage");
-		ast_manager_unregister("Filter");
-		ast_manager_unregister("BlindTransfer");
-		ast_custom_function_unregister(&managerclient_function);
-		ast_cli_unregister_multiple(cli_manager, ARRAY_LEN(cli_manager));
-	}
+	ast_manager_unregister("Ping");
+	ast_manager_unregister("Events");
+	ast_manager_unregister("Logoff");
+	ast_manager_unregister("Login");
+	ast_manager_unregister("Challenge");
+	ast_manager_unregister("Hangup");
+	ast_manager_unregister("Status");
+	ast_manager_unregister("Setvar");
+	ast_manager_unregister("Getvar");
+	ast_manager_unregister("GetConfig");
+	ast_manager_unregister("GetConfigJSON");
+	ast_manager_unregister("UpdateConfig");
+	ast_manager_unregister("CreateConfig");
+	ast_manager_unregister("ListCategories");
+	ast_manager_unregister("Redirect");
+	ast_manager_unregister("Atxfer");
+	ast_manager_unregister("Originate");
+	ast_manager_unregister("Command");
+	ast_manager_unregister("ExtensionState");
+	ast_manager_unregister("PresenceState");
+	ast_manager_unregister("AbsoluteTimeout");
+	ast_manager_unregister("MailboxStatus");
+	ast_manager_unregister("MailboxCount");
+	ast_manager_unregister("ListCommands");
+	ast_manager_unregister("SendText");
+	ast_manager_unregister("UserEvent");
+	ast_manager_unregister("WaitEvent");
+	ast_manager_unregister("CoreSettings");
+	ast_manager_unregister("CoreStatus");
+	ast_manager_unregister("Reload");
+	ast_manager_unregister("CoreShowChannels");
+	ast_manager_unregister("ModuleLoad");
+	ast_manager_unregister("ModuleCheck");
+	ast_manager_unregister("AOCMessage");
+	ast_manager_unregister("Filter");
+	ast_manager_unregister("BlindTransfer");
+	ast_custom_function_unregister(&managerclient_function);
+	ast_cli_unregister_multiple(cli_manager, ARRAY_LEN(cli_manager));
 
 #ifdef AST_XML_DOCS
 	ao2_t_global_obj_release(event_docs, "Dispose of event_docs");
@@ -7755,8 +7861,10 @@ static void manager_shutdown(void)
 		stasis_message_router_unsubscribe_and_join(stasis_router);
 		stasis_router = NULL;
 	}
-	stasis_unsubscribe_and_join(rtp_topic_forwarder);
+	stasis_forward_cancel(rtp_topic_forwarder);
 	rtp_topic_forwarder = NULL;
+	stasis_forward_cancel(security_topic_forwarder);
+	security_topic_forwarder = NULL;
 	ao2_cleanup(manager_topic);
 	manager_topic = NULL;
 	STASIS_MESSAGE_TYPE_CLEANUP(ast_manager_get_generic_type);
@@ -7764,23 +7872,14 @@ static void manager_shutdown(void)
 	ast_tcptls_server_stop(&ami_desc);
 	ast_tcptls_server_stop(&amis_desc);
 
-	if (ami_tls_cfg.certfile) {
-		ast_free(ami_tls_cfg.certfile);
-		ami_tls_cfg.certfile = NULL;
-	}
-	if (ami_tls_cfg.pvtfile) {
-		ast_free(ami_tls_cfg.pvtfile);
-		ami_tls_cfg.pvtfile = NULL;
-	}
-	if (ami_tls_cfg.cipher) {
-		ast_free(ami_tls_cfg.cipher);
-		ami_tls_cfg.cipher = NULL;
-	}
+	ast_free(ami_tls_cfg.certfile);
+	ami_tls_cfg.certfile = NULL;
+	ast_free(ami_tls_cfg.pvtfile);
+	ami_tls_cfg.pvtfile = NULL;
+	ast_free(ami_tls_cfg.cipher);
+	ami_tls_cfg.cipher = NULL;
 
-	if (sessions) {
-		ao2_ref(sessions, -1);
-		sessions = NULL;
-	}
+	ao2_global_obj_release(mgr_sessions);
 
 	while ((user = AST_LIST_REMOVE_HEAD(&users, list))) {
 		manager_free_user(user);
@@ -7793,18 +7892,15 @@ static void manager_shutdown(void)
  */
 static int manager_subscriptions_init(void)
 {
-	int res;
+	int res = 0;
 
-	res = STASIS_MESSAGE_TYPE_INIT(ast_manager_get_generic_type);
-	if (res != 0) {
-		return -1;
-	}
-	manager_topic = stasis_topic_create("manager_topic");
-	if (!manager_topic) {
-		return -1;
-	}
 	rtp_topic_forwarder = stasis_forward_all(ast_rtp_topic(), manager_topic);
 	if (!rtp_topic_forwarder) {
+		return -1;
+	}
+
+	security_topic_forwarder = stasis_forward_all(ast_security_topic(), manager_topic);
+	if (!security_topic_forwarder) {
 		return -1;
 	}
 
@@ -7825,12 +7921,63 @@ static int manager_subscriptions_init(void)
 	return 0;
 }
 
+static int subscribe_all(void)
+{
+	if (manager_subscriptions_init()) {
+		ast_log(AST_LOG_ERROR, "Failed to initialize manager subscriptions\n");
+		return -1;
+	}
+	if (manager_system_init()) {
+		ast_log(AST_LOG_ERROR, "Failed to initialize manager system handling\n");
+		return -1;
+	}
+	if (manager_channels_init()) {
+		ast_log(AST_LOG_ERROR, "Failed to initialize manager channel handling\n");
+		return -1;
+	}
+	if (manager_mwi_init()) {
+		ast_log(AST_LOG_ERROR, "Failed to initialize manager MWI handling\n");
+		return -1;
+	}
+	if (manager_bridging_init()) {
+		return -1;
+	}
+	if (manager_endpoints_init()) {
+		ast_log(AST_LOG_ERROR, "Failed to initialize manager endpoints handling\n");
+		return -1;
+	}
+
+	subscribed = 1;
+	return 0;
+}
+
+static void manager_set_defaults(void)
+{
+	manager_enabled = 0;
+	displayconnects = 1;
+	broken_events_action = 0;
+	authtimeout = 30;
+	authlimit = 50;
+	manager_debug = 0;		/* Debug disabled by default */
+
+	/* default values */
+	ast_copy_string(global_realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM),
+		sizeof(global_realm));
+	ast_sockaddr_setnull(&ami_desc.local_address);
+	ast_sockaddr_setnull(&amis_desc.local_address);
+
+	ami_tls_cfg.enabled = 0;
+	ast_free(ami_tls_cfg.certfile);
+	ami_tls_cfg.certfile = ast_strdup(AST_CERTFILE);
+	ast_free(ami_tls_cfg.pvtfile);
+	ami_tls_cfg.pvtfile = ast_strdup("");
+	ast_free(ami_tls_cfg.cipher);
+	ami_tls_cfg.cipher = ast_strdup("");
+}
+
 static int __init_manager(int reload, int by_external_config)
 {
 	struct ast_config *ucfg = NULL, *cfg = NULL;
-#ifdef AST_XML_DOCS
-	struct ao2_container *temp_event_docs;
-#endif
 	const char *val;
 	char *cat = NULL;
 	int newhttptimeout = 60;
@@ -7844,35 +7991,24 @@ static int __init_manager(int reload, int by_external_config)
 	int tls_was_enabled = 0;
 	int acl_subscription_flag = 0;
 
-	manager_enabled = 0;
-
 	if (!reload) {
-		if (manager_subscriptions_init()) {
-			ast_log(AST_LOG_ERROR, "Failed to initialize manager subscriptions\n");
-			return -1;
-		}
-		if (manager_system_init()) {
-			ast_log(AST_LOG_ERROR, "Failed to initialize manager system handling\n");
-			return -1;
-		}
-		if (manager_channels_init()) {
-			ast_log(AST_LOG_ERROR, "Failed to initialize manager channel handling\n");
-			return -1;
-		}
-		if (manager_mwi_init()) {
-			ast_log(AST_LOG_ERROR, "Failed to initialize manager MWI handling\n");
-			return -1;
-		}
-		if (manager_bridging_init()) {
-			return -1;
-		}
-		if (manager_endpoints_init()) {
-			ast_log(AST_LOG_ERROR, "Failed to initialize manager endpoints handling\n");
-			return -1;
-		}
-	}
+		struct ao2_container *sessions;
+#ifdef AST_XML_DOCS
+		struct ao2_container *temp_event_docs;
+#endif
+		int res;
 
-	if (!registered) {
+		ast_register_atexit(manager_shutdown);
+
+		res = STASIS_MESSAGE_TYPE_INIT(ast_manager_get_generic_type);
+		if (res != 0) {
+			return -1;
+		}
+		manager_topic = stasis_topic_create("manager_topic");
+		if (!manager_topic) {
+			return -1;
+		}
+
 		/* Register default actions */
 		ast_manager_register_xml_core("Ping", 0, action_ping);
 		ast_manager_register_xml_core("Events", 0, action_events);
@@ -7918,33 +8054,37 @@ static int __init_manager(int reload, int by_external_config)
 		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
 		__ast_custom_function_register(&managerclient_function, NULL);
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
-		registered = 1;
+
 		/* Append placeholder event so master_eventq never runs dry */
-		append_event("Event: Placeholder\r\n\r\n", 0);
-	}
+		if (append_event("Event: Placeholder\r\n\r\n", 0)) {
+			return -1;
+		}
 
 #ifdef AST_XML_DOCS
-	temp_event_docs = ast_xmldoc_build_documentation("managerEvent");
-	if (temp_event_docs) {
-		ao2_t_global_obj_replace_unref(event_docs, temp_event_docs, "Toss old event docs");
-		ao2_t_ref(temp_event_docs, -1, "Remove creation ref - container holds only ref now");
-	}
+		temp_event_docs = ast_xmldoc_build_documentation("managerEvent");
+		if (temp_event_docs) {
+			ao2_t_global_obj_replace_unref(event_docs, temp_event_docs, "Toss old event docs");
+			ao2_t_ref(temp_event_docs, -1, "Remove creation ref - container holds only ref now");
+		}
 #endif
 
-	ast_register_atexit(manager_shutdown);
+		/* If you have a NULL hash fn, you only need a single bucket */
+		sessions = ao2_container_alloc(1, NULL, mansession_cmp_fn);
+		if (!sessions) {
+			return -1;
+		}
+		ao2_global_obj_replace_unref(mgr_sessions, sessions);
+		ao2_ref(sessions, -1);
 
-	if ((cfg = ast_config_load2("manager.conf", "manager", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
-		return 0;
+		/* Initialize all settings before first configuration load. */
+		manager_set_defaults();
 	}
 
-	displayconnects = 1;
-	broken_events_action = 0;
-	authtimeout = 30;
-	authlimit = 50;
-	manager_debug = 0;		/* Debug disabled by default */
-
-	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
-		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf, or configuration is invalid. Asterisk management interface (AMI) disabled.\n");
+	cfg = ast_config_load2("manager.conf", "manager", config_flags);
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
+		return 0;
+	} else if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf, or configuration is invalid.\n");
 		return 0;
 	}
 
@@ -7953,29 +8093,14 @@ static int __init_manager(int reload, int by_external_config)
 		acl_change_stasis_unsubscribe();
 	}
 
-	/* default values */
-	ast_copy_string(global_realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM), sizeof(global_realm));
-	ast_sockaddr_setnull(&ami_desc.local_address);
-	ast_sockaddr_setnull(&amis_desc.local_address);
+	if (reload) {
+		/* Reset all settings before reloading configuration */
+		tls_was_enabled = ami_tls_cfg.enabled;
+		manager_set_defaults();
+	}
 
 	ast_sockaddr_parse(&ami_desc_local_address_tmp, "[::]", 0);
 	ast_sockaddr_set_port(&ami_desc_local_address_tmp, DEFAULT_MANAGER_PORT);
-
-	tls_was_enabled = (reload && ami_tls_cfg.enabled);
-
-	ami_tls_cfg.enabled = 0;
-	if (ami_tls_cfg.certfile) {
-		ast_free(ami_tls_cfg.certfile);
-	}
-	ami_tls_cfg.certfile = ast_strdup(AST_CERTFILE);
-	if (ami_tls_cfg.pvtfile) {
-		ast_free(ami_tls_cfg.pvtfile);
-	}
-	ami_tls_cfg.pvtfile = ast_strdup("");
-	if (ami_tls_cfg.cipher) {
-		ast_free(ami_tls_cfg.cipher);
-	}
-	ami_tls_cfg.cipher = ast_strdup("");
 
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
 		val = var->value;
@@ -8052,6 +8177,13 @@ static int __init_manager(int reload, int by_external_config)
 		} else {
 			ast_log(LOG_NOTICE, "Invalid keyword <%s> = <%s> in manager.conf [general]\n",
 				var->name, val);
+		}
+	}
+
+	if (manager_enabled && !subscribed) {
+		if (subscribe_all() != 0) {
+			ast_log(LOG_ERROR, "Manager subscription error\n");
+			return -1;
 		}
 	}
 
@@ -8141,9 +8273,7 @@ static int __init_manager(int reload, int by_external_config)
 				}
 
 				if (!ast_strlen_zero(user_secret)) {
-					if (user->secret) {
-						ast_free(user->secret);
-					}
+					ast_free(user->secret);
 					user->secret = ast_strdup(user_secret);
 				}
 
@@ -8199,6 +8329,10 @@ static int __init_manager(int reload, int by_external_config)
 			user->writetimeout = 100;
 			user->whitefilters = ao2_container_alloc(1, NULL, NULL);
 			user->blackfilters = ao2_container_alloc(1, NULL, NULL);
+			if (!user->whitefilters || !user->blackfilters) {
+				manager_free_user(user);
+				break;
+			}
 
 			/* Insert into list */
 			AST_RWLIST_INSERT_TAIL(&users, user, list);
@@ -8216,9 +8350,7 @@ static int __init_manager(int reload, int by_external_config)
 		var = ast_variable_browse(cfg, cat);
 		for (; var; var = var->next) {
 			if (!strcasecmp(var->name, "secret")) {
-				if (user->secret) {
-					ast_free(user->secret);
-				}
+				ast_free(user->secret);
 				user->secret = ast_strdup(var->value);
 			} else if (!strcasecmp(var->name, "deny") ||
 				       !strcasecmp(var->name, "permit") ||
@@ -8280,9 +8412,7 @@ static int __init_manager(int reload, int by_external_config)
 			/* Calculate A1 for Digest auth */
 			snprintf(a1, sizeof(a1), "%s:%s:%s", user->username, global_realm, user->secret);
 			ast_md5_hash(a1_hash,a1);
-			if (user->a1_hash) {
-				ast_free(user->a1_hash);
-			}
+			ast_free(user->a1_hash);
 			user->a1_hash = ast_strdup(a1_hash);
 			continue;
 		}
@@ -8295,14 +8425,8 @@ static int __init_manager(int reload, int by_external_config)
 
 	AST_RWLIST_UNLOCK(&users);
 
-	if (!reload) {
-		/* If you have a NULL hash fn, you only need a single bucket */
-		sessions = ao2_container_alloc(1, NULL, mansession_cmp_fn);
-	}
-
 	if (webmanager_enabled && manager_enabled) {
 		if (!webregged) {
-
 			ast_http_uri_link(&rawmanuri);
 			ast_http_uri_link(&manageruri);
 			ast_http_uri_link(&managerxmluri);
@@ -8340,7 +8464,7 @@ static int __init_manager(int reload, int by_external_config)
 }
 
 static void acl_change_stasis_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic, struct stasis_message *message)
+	struct stasis_message *message)
 {
 	if (stasis_message_type(message) != ast_named_acl_change_type()) {
 		return;

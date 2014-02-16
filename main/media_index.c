@@ -67,7 +67,7 @@ static struct media_variant *media_variant_alloc(const char *variant_str)
 		return NULL;
 	}
 
-	variant->formats = ast_format_cap_alloc();
+	variant->formats = ast_format_cap_alloc(0);
 	if (!variant->formats) {
 		return NULL;
 	}
@@ -394,7 +394,7 @@ static int process_description_file(struct ast_media_index *index,
 	}
 	f = fopen(ast_str_buffer(description_file_path), "r");
 	if (!f) {
-		ast_log(LOG_WARNING, "Could not open media description file '%s'\n", ast_str_buffer(description_file_path));
+		ast_log(LOG_WARNING, "Could not open media description file '%s': %s\n", ast_str_buffer(description_file_path), strerror(errno));
 		return -1;
 	}
 
@@ -402,7 +402,7 @@ static int process_description_file(struct ast_media_index *index,
 		char *file_identifier, *description;
 		if (!fgets(buf, sizeof(buf), f)) {
 			if (ferror(f)) {
-				ast_log(LOG_ERROR, "Error reading from file %s\n", ast_str_buffer(description_file_path));
+				ast_log(LOG_ERROR, "Error reading from file %s: %s\n", ast_str_buffer(description_file_path), strerror(errno));
 			}
 			continue;
 		}
@@ -416,7 +416,7 @@ static int process_description_file(struct ast_media_index *index,
 				}
 			}
 			if (ferror(f)) {
-				ast_log(LOG_ERROR, "Error reading from file %s\n", ast_str_buffer(description_file_path));
+				ast_log(LOG_ERROR, "Error reading from file %s: %s\n", ast_str_buffer(description_file_path), strerror(errno));
 			}
 			continue;
 		}
@@ -439,6 +439,7 @@ static int process_description_file(struct ast_media_index *index,
 			/* if there's text in cumulative_description, archive it and start anew */
 			if (file_id_persist && !ast_strlen_zero(ast_str_buffer(cumulative_description))) {
 				RAII_VAR(struct media_variant *, variant, NULL, ao2_cleanup);
+
 				variant = find_variant(index, file_id_persist, variant_str);
 				if (!variant) {
 					variant = alloc_variant(index, file_id_persist, variant_str);
@@ -451,11 +452,10 @@ static int process_description_file(struct ast_media_index *index,
 				ast_string_field_set(variant, description, ast_str_buffer(cumulative_description));
 
 				ast_str_reset(cumulative_description);
-				ast_free(file_id_persist);
-				file_id_persist = NULL;
 			}
 
-			file_id_persist = strdup(file_identifier);
+			ast_free(file_id_persist);
+			file_id_persist = ast_strdup(file_identifier);
 			description = ast_skip_blanks(description);
 			ast_str_set(&cumulative_description, 0, "%s", description);
 		}
@@ -464,6 +464,7 @@ static int process_description_file(struct ast_media_index *index,
 	/* handle the last one */
 	if (file_id_persist && !ast_strlen_zero(ast_str_buffer(cumulative_description))) {
 		RAII_VAR(struct media_variant *, variant, NULL, ao2_cleanup);
+
 		variant = find_variant(index, file_id_persist, variant_str);
 		if (!variant) {
 			variant = alloc_variant(index, file_id_persist, variant_str);
@@ -471,12 +472,12 @@ static int process_description_file(struct ast_media_index *index,
 
 		if (variant) {
 			ast_string_field_set(variant, description, ast_str_buffer(cumulative_description));
-			ast_free(file_id_persist);
 		} else {
 			res = -1;
 		}
 	}
 
+	ast_free(file_id_persist);
 	fclose(f);
 	return res;
 }
@@ -535,7 +536,7 @@ static int media_index_update(struct ast_media_index *index,
 
 	srcdir = opendir(ast_str_buffer(index_dir));
 	if (srcdir == NULL) {
-		ast_log(LOG_ERROR, "Failed to open %s\n", ast_str_buffer(index_dir));
+		ast_log(LOG_ERROR, "Failed to open %s: %s\n", ast_str_buffer(index_dir), strerror(errno));
 		return -1;
 	}
 
@@ -550,9 +551,8 @@ static int media_index_update(struct ast_media_index *index,
 		ast_str_set(&statfile, 0, "%s/%s", ast_str_buffer(index_dir), dent->d_name);
 
 		if (stat(ast_str_buffer(statfile), &st) < 0) {
-			ast_log(LOG_ERROR, "Failed to stat %s\n", ast_str_buffer(statfile));
-			res = -1;
-			break;
+			ast_log(LOG_WARNING, "Failed to stat %s: %s\n", ast_str_buffer(statfile), strerror(errno));
+			continue;
 		}
 
 		if (S_ISDIR(st.st_mode)) {

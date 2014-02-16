@@ -238,6 +238,7 @@ static void clear_mock_cdr_backend(void)
 	ast_channel_set_caller((channel_var), (caller_id), NULL); \
 	ast_copy_string((expected_record)->uniqueid, ast_channel_uniqueid((channel_var)), sizeof((expected_record)->uniqueid)); \
 	ast_copy_string((expected_record)->linkedid, ast_channel_linkedid((channel_var)), sizeof((expected_record)->linkedid)); \
+	ast_channel_unlock((channel_var)); \
 	} while (0)
 
 /*! \brief Create a \ref test_cdr_chan_tech for Bob, and set the expected
@@ -247,6 +248,7 @@ static void clear_mock_cdr_backend(void)
 	ast_channel_set_caller((channel_var), (caller_id), NULL); \
 	ast_copy_string((expected_record)->uniqueid, ast_channel_uniqueid((channel_var)), sizeof((expected_record)->uniqueid)); \
 	ast_copy_string((expected_record)->linkedid, ast_channel_linkedid((channel_var)), sizeof((expected_record)->linkedid)); \
+	ast_channel_unlock((channel_var)); \
 	} while (0)
 
 /*! \brief Create a \ref test_cdr_chan_tech for Charlie, and set the expected
@@ -256,6 +258,7 @@ static void clear_mock_cdr_backend(void)
 	ast_channel_set_caller((channel_var), (caller_id), NULL); \
 	ast_copy_string((expected_record)->uniqueid, ast_channel_uniqueid((channel_var)), sizeof((expected_record)->uniqueid)); \
 	ast_copy_string((expected_record)->linkedid, ast_channel_linkedid((channel_var)), sizeof((expected_record)->linkedid)); \
+	ast_channel_unlock((channel_var)); \
 	} while (0)
 
 /*! \brief Create a \ref test_cdr_chan_tech for Charlie, and set the expected
@@ -265,6 +268,7 @@ static void clear_mock_cdr_backend(void)
 	ast_channel_set_caller((channel_var), (caller_id), NULL); \
 	ast_copy_string((expected_record)->uniqueid, ast_channel_uniqueid((channel_var)), sizeof((expected_record)->uniqueid)); \
 	ast_copy_string((expected_record)->linkedid, ast_channel_linkedid((channel_var)), sizeof((expected_record)->linkedid)); \
+	ast_channel_unlock((channel_var)); \
 	} while (0)
 
 /*! \brief Emulate a channel entering into an application */
@@ -272,9 +276,11 @@ static void clear_mock_cdr_backend(void)
 	if ((priority) > 0) { \
 		ast_channel_priority_set((channel), (priority)); \
 	} \
+	ast_channel_lock((channel)); \
 	ast_channel_appl_set((channel), (application)); \
 	ast_channel_data_set((channel), (data)); \
 	ast_channel_publish_snapshot((channel)); \
+	ast_channel_unlock((channel)); \
 	} while (0)
 
 /*! \brief Hang up a test channel safely */
@@ -312,7 +318,8 @@ static enum ast_test_result_state verify_mock_cdr_record(struct ast_test *test, 
 			ast_test_status_update(test, "CDRs recorded where no record expected\n");
 			return AST_TEST_FAIL;
 		}
-
+		ast_test_debug(test, "Verifying expected record %s, %s\n",
+			expected->channel, S_OR(expected->dstchannel, "<none>"));
 		VERIFY_STRING_FIELD(accountcode, actual, expected);
 		VERIFY_NUMERIC_FIELD(amaflags, actual, expected);
 		VERIFY_STRING_FIELD(channel, actual, expected);
@@ -351,6 +358,20 @@ static void safe_channel_release(struct ast_channel *chan)
 		return;
 	}
 	ast_channel_release(chan);
+}
+
+static void safe_bridge_destroy(struct ast_bridge *bridge)
+{
+	if (!bridge) {
+		return;
+	}
+	ast_bridge_destroy(bridge, 0);
+}
+
+static void do_sleep(struct timespec *to_sleep)
+{
+	while ((nanosleep(to_sleep, to_sleep) == -1) && (errno == EINTR)) {
+	}
 }
 
 AST_TEST_DEFINE(test_cdr_channel_creation)
@@ -499,7 +520,7 @@ AST_TEST_DEFINE(test_cdr_outbound_bridged_call)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -557,11 +578,12 @@ AST_TEST_DEFINE(test_cdr_outbound_bridged_call)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, 0);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
 	chan_bob = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_alice), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_bob);
 	ast_copy_string(bob_expected.linkedid, ast_channel_linkedid(chan_bob), sizeof(bob_expected.linkedid));
 	ast_copy_string(bob_expected.uniqueid, ast_channel_uniqueid(chan_bob), sizeof(bob_expected.uniqueid));
 	ast_set_flag(ast_channel_flags(chan_bob), AST_FLAG_OUTGOING);
@@ -574,11 +596,11 @@ AST_TEST_DEFINE(test_cdr_outbound_bridged_call)
 
 	ast_channel_state_set(chan_bob, AST_STATE_UP);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, 0);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_bob);
 	ast_bridge_depart(chan_alice);
@@ -629,9 +651,11 @@ AST_TEST_DEFINE(test_cdr_single_party)
 	SWAP_CONFIG(config, debug_cdr_config);
 	CREATE_ALICE_CHANNEL(chan, &caller, &expected);
 
+	ast_channel_lock(chan);
 	EMULATE_APP_DATA(chan, 1, "Answer", "");
 	ast_setstate(chan, AST_STATE_UP);
 	EMULATE_APP_DATA(chan, 2, "VoiceMailMain", "1");
+	ast_channel_unlock(chan);
 
 	HANGUP_CHANNEL(chan, AST_CAUSE_NORMAL);
 
@@ -643,7 +667,7 @@ AST_TEST_DEFINE(test_cdr_single_party)
 AST_TEST_DEFINE(test_cdr_single_bridge)
 {
 	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -678,17 +702,19 @@ AST_TEST_DEFINE(test_cdr_single_bridge)
 	SWAP_CONFIG(config, debug_cdr_config);
 	CREATE_ALICE_CHANNEL(chan, &caller, &expected);
 
+	ast_channel_lock(chan);
 	EMULATE_APP_DATA(chan, 1, "Answer", "");
 	ast_setstate(chan, AST_STATE_UP);
 	EMULATE_APP_DATA(chan, 2, "Bridge", "");
+	ast_channel_unlock(chan);
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_bridge_impart(bridge, chan, NULL, NULL, 0);
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan);
 
@@ -702,8 +728,7 @@ AST_TEST_DEFINE(test_cdr_single_bridge)
 AST_TEST_DEFINE(test_cdr_single_bridge_continue)
 {
 	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge_one, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_bridge *, bridge_two, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -753,17 +778,19 @@ AST_TEST_DEFINE(test_cdr_single_bridge_continue)
 	CREATE_ALICE_CHANNEL(chan, &caller, &expected_one);
 	COPY_IDS(chan, &expected_two);
 
+	ast_channel_lock(chan);
 	EMULATE_APP_DATA(chan, 1, "Answer", "");
 	ast_setstate(chan, AST_STATE_UP);
 	EMULATE_APP_DATA(chan, 2, "Bridge", "");
+	ast_channel_unlock(chan);
 
-	bridge_one = ast_bridge_basic_new();
-	ast_test_validate(test, bridge_one != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	bridge = ast_bridge_basic_new();
+	ast_test_validate(test, bridge != NULL);
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge_one, chan, NULL, NULL, 0);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan);
 
@@ -781,7 +808,7 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_a)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -837,22 +864,26 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_a)
 	CREATE_BOB_CHANNEL(chan_bob, &caller_bob, &bob_expected);
 	ast_copy_string(bob_expected.linkedid, ast_channel_linkedid(chan_alice), sizeof(bob_expected.linkedid));
 
+	ast_channel_lock(chan_alice);
 	EMULATE_APP_DATA(chan_alice, 1, "Answer", "");
 	ast_setstate(chan_alice, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_alice, 2, "Bridge", "");
+	ast_channel_unlock(chan_alice);
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
+	ast_channel_lock(chan_bob);
 	EMULATE_APP_DATA(chan_bob, 1, "Answer", "");
 	ast_setstate(chan_bob, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_bob, 2, "Bridge", "");
+	ast_channel_unlock(chan_bob);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
@@ -869,7 +900,7 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_b)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -925,23 +956,27 @@ AST_TEST_DEFINE(test_cdr_single_twoparty_bridge_b)
 	CREATE_BOB_CHANNEL(chan_bob, &caller_bob, &bob_expected);
 	ast_copy_string(bob_expected.linkedid, ast_channel_linkedid(chan_alice), sizeof(bob_expected.linkedid));
 
+	ast_channel_unlock(chan_alice);
 	EMULATE_APP_DATA(chan_alice, 1, "Answer", "");
 	ast_setstate(chan_alice, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_alice, 2, "Bridge", "");
+	ast_channel_unlock(chan_alice);
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
+	ast_channel_lock(chan_bob);
 	EMULATE_APP_DATA(chan_bob, 1, "Answer", "");
 	ast_setstate(chan_bob, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_bob, 2, "Bridge", "");
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_channel_unlock(chan_bob);
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
@@ -959,7 +994,7 @@ AST_TEST_DEFINE(test_cdr_single_multiparty_bridge)
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_charlie, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1048,31 +1083,37 @@ AST_TEST_DEFINE(test_cdr_single_multiparty_bridge)
 	CREATE_CHARLIE_CHANNEL(chan_charlie, &caller_charlie, &charlie_expected);
 	ast_copy_string(charlie_expected.linkedid, ast_channel_linkedid(chan_alice), sizeof(charlie_expected.linkedid));
 
+	ast_channel_lock(chan_alice);
 	EMULATE_APP_DATA(chan_alice, 1, "Answer", "");
 	ast_setstate(chan_alice, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_alice, 2, "Bridge", "");
+	ast_channel_unlock(chan_alice);
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, 0);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
+	ast_channel_lock(chan_bob);
 	EMULATE_APP_DATA(chan_bob, 1, "Answer", "");
 	ast_setstate(chan_bob, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_bob, 2, "Bridge", "");
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_channel_unlock(chan_bob);
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, 0);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
+	ast_channel_lock(chan_charlie);
 	EMULATE_APP_DATA(chan_charlie, 1, "Answer", "");
 	ast_setstate(chan_charlie, AST_STATE_UP);
 	EMULATE_APP_DATA(chan_charlie, 2, "Bridge", "");
-	ast_bridge_impart(bridge, chan_charlie, NULL, NULL, 0);
+	ast_channel_unlock(chan_charlie);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_charlie, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
@@ -1132,6 +1173,7 @@ AST_TEST_DEFINE(test_cdr_dial_unanswered)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", "CDRTestChannel/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1193,6 +1235,7 @@ AST_TEST_DEFINE(test_cdr_dial_busy)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1253,6 +1296,7 @@ AST_TEST_DEFINE(test_cdr_dial_congestion)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1313,6 +1357,7 @@ AST_TEST_DEFINE(test_cdr_dial_unavailable)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1374,6 +1419,7 @@ AST_TEST_DEFINE(test_cdr_dial_caller_cancel)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1475,14 +1521,17 @@ AST_TEST_DEFINE(test_cdr_dial_parallel_failed)
 
 	/* Outbound channels are created */
 	chan_bob = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_bob);
 	ast_set_flag(ast_channel_flags(chan_bob), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_bob, 0, "AppDial", "(Outgoing Line)");
 
 	chan_charlie = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "300", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Charlie");
+	ast_channel_unlock(chan_charlie);
 	ast_set_flag(ast_channel_flags(chan_charlie), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_charlie, 0, "AppDial", "(Outgoing Line)");
 
 	chan_david = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "400", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/David");
+	ast_channel_unlock(chan_david);
 	ast_set_flag(ast_channel_flags(chan_david), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_david, 0, "AppDial", "(Outgoing Line)");
 
@@ -1588,6 +1637,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_no_bridge)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	COPY_IDS(chan_callee, &bob_expected_one);
 
@@ -1613,7 +1663,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_a)
 {
 	RAII_VAR(struct ast_channel *, chan_caller, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_callee, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1655,6 +1705,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_a)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1667,12 +1718,12 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_a)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
-	ast_bridge_impart(bridge, chan_caller, NULL, NULL, 0);
-	ast_bridge_impart(bridge, chan_callee, NULL, NULL, 0);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_caller, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_callee, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	ast_bridge_depart(chan_caller);
 	ast_bridge_depart(chan_callee);
@@ -1688,7 +1739,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_b)
 {
 	RAII_VAR(struct ast_channel *, chan_caller, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_callee, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1730,6 +1781,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_b)
 	EMULATE_APP_DATA(chan_caller, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_callee = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, "200", NULL, NULL, ast_channel_linkedid(chan_caller), 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_callee);
 	ast_set_flag(ast_channel_flags(chan_callee), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_callee, 0, "AppDial", "(Outgoing Line)");
 
@@ -1742,11 +1794,11 @@ AST_TEST_DEFINE(test_cdr_dial_answer_twoparty_bridge_b)
 
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_bridge_impart(bridge, chan_callee, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_bridge_impart(bridge, chan_caller, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_callee, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_caller, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 	ast_bridge_depart(chan_caller);
 	ast_bridge_depart(chan_callee);
 
@@ -1763,7 +1815,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_charlie, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_david, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1802,6 +1854,22 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 		.peeraccount = "400",
 		.next = &charlie_expected_two,
 	};
+	struct ast_cdr bob_expected_one = {
+		.clid = "\"Bob\" <200>",
+		.src = "200",
+		.dst = "200",
+		.dcontext = "default",
+		.channel = CHANNEL_TECH_NAME "/Bob",
+		.dstchannel = CHANNEL_TECH_NAME "/David",
+		.lastapp = "AppDial",
+		.lastdata = "(Outgoing Line)",
+		.amaflags = AST_AMA_DOCUMENTATION,
+		.billsec = 1,
+		.disposition = AST_CDR_ANSWERED,
+		.accountcode = "200",
+		.peeraccount = "400",
+		.next = &charlie_expected_one,
+	};
 	struct ast_cdr alice_expected_three = {
 		.clid = "\"Alice\" <100>",
 		.src = "100",
@@ -1816,7 +1884,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 		.disposition = AST_CDR_ANSWERED,
 		.accountcode = "100",
 		.peeraccount = "400",
-		.next = &charlie_expected_one,
+		.next = &bob_expected_one,
 	};
 	struct ast_cdr alice_expected_two = {
 		.clid = "\"Alice\" <100>",
@@ -1872,8 +1940,11 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 	EMULATE_APP_DATA(chan_alice, 1, "Dial", CHANNEL_TECH_NAME "/Bob");
 
 	chan_bob = ast_channel_alloc(0, AST_STATE_DOWN, "200", "Bob", "200", "200", "default", NULL, 0, CHANNEL_TECH_NAME "/Bob");
+	ast_channel_unlock(chan_bob);
 	ast_set_flag(ast_channel_flags(chan_bob), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_bob, 0, "AppDial", "(Outgoing Line)");
+	ast_copy_string(bob_expected_one.uniqueid, ast_channel_uniqueid(chan_bob), sizeof(bob_expected_one.uniqueid));
+	ast_copy_string(bob_expected_one.linkedid, ast_channel_linkedid(chan_alice), sizeof(bob_expected_one.linkedid));
 
 	CREATE_CHARLIE_CHANNEL(chan_charlie, &charlie_caller, &charlie_expected_one);
 	EMULATE_APP_DATA(chan_charlie, 1, "Dial", CHANNEL_TECH_NAME "/David");
@@ -1883,6 +1954,7 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 	ast_copy_string(charlie_expected_two.linkedid, ast_channel_linkedid(chan_alice), sizeof(charlie_expected_two.linkedid));
 
 	chan_david = ast_channel_alloc(0, AST_STATE_DOWN, "400", "David", "400", "400", "default", NULL, 0, CHANNEL_TECH_NAME "/David");
+	ast_channel_unlock(chan_david);
 	ast_set_flag(ast_channel_flags(chan_david), AST_FLAG_OUTGOING);
 	EMULATE_APP_DATA(chan_david, 0, "AppDial", "(Outgoing Line)");
 
@@ -1901,26 +1973,26 @@ AST_TEST_DEFINE(test_cdr_dial_answer_multiparty)
 	bridge = ast_bridge_basic_new();
 	ast_test_validate(test, bridge != NULL);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_charlie, NULL, NULL, 0));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_david, NULL, NULL, 0));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_bob, NULL, NULL, 0));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_test_validate(test, 0 == ast_bridge_impart(bridge, chan_alice, NULL, NULL, 0));
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_alice));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_bob));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_charlie));
-	ast_test_validate(test, 0 == ast_bridge_depart(chan_david));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_charlie, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_david, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_depart(chan_alice));
+	ast_test_validate(test, !ast_bridge_depart(chan_bob));
+	ast_test_validate(test, !ast_bridge_depart(chan_charlie));
+	ast_test_validate(test, !ast_bridge_depart(chan_david));
 
 	HANGUP_CHANNEL(chan_alice, AST_CAUSE_NORMAL);
 	HANGUP_CHANNEL(chan_bob, AST_CAUSE_NORMAL);
 	HANGUP_CHANNEL(chan_charlie, AST_CAUSE_NORMAL);
 	HANGUP_CHANNEL(chan_david, AST_CAUSE_NORMAL);
 
-	result = verify_mock_cdr_record(test, &alice_expected_one, 5);
+	result = verify_mock_cdr_record(test, &alice_expected_one, 6);
 
 	return result;
 }
@@ -1929,7 +2001,7 @@ AST_TEST_DEFINE(test_cdr_park)
 {
 	RAII_VAR(struct ast_channel *, chan_alice, NULL, safe_channel_release);
 	RAII_VAR(struct ast_channel *, chan_bob, NULL, safe_channel_release);
-	RAII_VAR(struct ast_bridge *, bridge, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, NULL, safe_bridge_destroy);
 	RAII_VAR(struct ast_cdr_config *, config, ao2_alloc(sizeof(*config), NULL),
 			ao2_cleanup);
 	struct timespec to_sleep = {1, 0};
@@ -1981,21 +2053,27 @@ AST_TEST_DEFINE(test_cdr_park)
 	CREATE_ALICE_CHANNEL(chan_alice, &alice_caller, &alice_expected);
 	CREATE_BOB_CHANNEL(chan_bob, &bob_caller, &bob_expected);
 
+	ast_channel_lock(chan_alice);
 	EMULATE_APP_DATA(chan_alice, 1, "Park", "700");
 	ast_setstate(chan_alice, AST_STATE_UP);
+	ast_channel_unlock(chan_alice);
+
+	ast_channel_lock(chan_bob);
 	EMULATE_APP_DATA(chan_bob, 1, "Park", "701");
 	ast_setstate(chan_bob, AST_STATE_UP);
+	ast_channel_unlock(chan_bob);
 
 	bridge = ast_bridge_base_new(AST_BRIDGE_CAPABILITY_HOLDING,
 		AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM
-			| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED);
+			| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED,
+		"test_cdr", "test_cdr_park");
 	ast_test_validate(test, bridge != NULL);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_bridge_impart(bridge, chan_alice, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
-	ast_bridge_impart(bridge, chan_bob, NULL, NULL, 0);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_alice, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
+	ast_test_validate(test, !ast_bridge_impart(bridge, chan_bob, NULL, NULL, AST_BRIDGE_IMPART_CHAN_DEPARTABLE));
+	do_sleep(&to_sleep);
 	ast_bridge_depart(chan_alice);
 	ast_bridge_depart(chan_bob);
 
@@ -2089,6 +2167,7 @@ AST_TEST_DEFINE(test_cdr_fields)
 	ast_copy_string(fork_expected_two.linkedid, ast_channel_linkedid(chan), sizeof(fork_expected_two.linkedid));
 
 	/* Channel enters Wait app */
+	ast_channel_lock(chan);
 	ast_channel_appl_set(chan, "Wait");
 	ast_channel_data_set(chan, "10");
 	ast_channel_priority_set(chan, 1);
@@ -2097,9 +2176,10 @@ AST_TEST_DEFINE(test_cdr_fields)
 	/* Set properties on the channel that propagate to the CDR */
 	ast_channel_amaflags_set(chan, AST_AMA_OMIT);
 	ast_channel_accountcode_set(chan, "XXX");
+	ast_channel_unlock(chan);
 
 	/* Wait one second so we get a duration. */
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	ast_cdr_setuserfield(ast_channel_name(chan), "foobar");
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_1") == 0);
@@ -2189,6 +2269,7 @@ AST_TEST_DEFINE(test_cdr_fields)
 	ast_test_validate(test, ast_cdr_fork(ast_channel_name(chan), &fork_options) == 0);
 
 	/* Channel enters Answer app */
+	ast_channel_lock(chan);
 	ast_channel_appl_set(chan, "Answer");
 	ast_channel_data_set(chan, "");
 	ast_channel_priority_set(chan, 1);
@@ -2197,6 +2278,7 @@ AST_TEST_DEFINE(test_cdr_fields)
 
 	/* Set properties on the last record */
 	ast_channel_accountcode_set(chan, "ZZZ");
+	ast_channel_unlock(chan);
 	ast_cdr_setuserfield(ast_channel_name(chan), "schmackity");
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_2") == 0);
 
@@ -2247,7 +2329,7 @@ AST_TEST_DEFINE(test_cdr_no_reset_cdr)
 
 	CREATE_ALICE_CHANNEL(chan, &caller, &expected);
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	/* Disable the CDR */
 	ast_test_validate(test, ast_cdr_set_property(ast_channel_name(chan), AST_CDR_FLAG_DISABLE) == 0);
@@ -2349,7 +2431,7 @@ AST_TEST_DEFINE(test_cdr_fork_cdr)
 	ast_copy_string(fork_expected_two.uniqueid, ast_channel_uniqueid(chan), sizeof(fork_expected_two.uniqueid));
 	ast_copy_string(fork_expected_two.linkedid, ast_channel_linkedid(chan), sizeof(fork_expected_two.linkedid));
 
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	do_sleep(&to_sleep);
 
 	/* Test blowing away variables */
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_1") == 0);
@@ -2366,8 +2448,10 @@ AST_TEST_DEFINE(test_cdr_fork_cdr)
 	ast_test_validate(test, ast_cdr_fork(ast_channel_name(chan), &fork_options) == 0);
 
 	/* Test keep variables; setting a new answer time */
+	ast_channel_lock(chan);
 	ast_setstate(chan, AST_STATE_UP);
-	while ((nanosleep(&to_sleep, &to_sleep) == -1) && (errno == EINTR));
+	ast_channel_unlock(chan);
+	do_sleep(&to_sleep);
 	ast_test_validate(test, ast_cdr_setvar(ast_channel_name(chan), "test_variable", "record_2") == 0);
 	ast_test_validate(test, ast_cdr_getvar(ast_channel_name(chan), "test_variable", varbuffer, sizeof(varbuffer)) == 0);
 	ast_test_validate(test, strcmp(varbuffer, "record_2") == 0);

@@ -463,7 +463,7 @@ int ast_devstate_changed_literal(enum ast_device_state state, enum ast_devstate_
 		AST_LIST_UNLOCK(&state_changes);
 	}
 
-	return 1;
+	return 0;
 }
 
 int ast_device_state_changed_literal(const char *dev)
@@ -610,7 +610,7 @@ static int aggregate_state_changed(char *device, enum ast_device_state new_aggre
 	return 1;
 }
 
-static void devstate_change_collector_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void devstate_change_collector_cb(void *data, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	enum ast_device_state aggregate_state;
 	char *device;
@@ -732,6 +732,22 @@ struct stasis_topic *ast_device_state_topic_cached(void)
 struct stasis_topic *ast_device_state_topic(const char *device)
 {
 	return stasis_topic_pool_get_topic(device_state_topic_pool, device);
+}
+
+int ast_device_state_clear_cache(const char *device)
+{
+	RAII_VAR(struct stasis_message *, cached_msg, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+
+	if (!(cached_msg = stasis_cache_get(ast_device_state_cache(),
+					    ast_device_state_message_type(), device))) {
+		/* nothing to clear */
+		return -1;
+	}
+
+	msg = stasis_cache_clear_create(cached_msg);
+	stasis_publish(ast_device_state_topic(device), msg);
+	return 0;
 }
 
 int ast_publish_device_state_full(

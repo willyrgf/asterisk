@@ -27,19 +27,29 @@
 #include <pjsip.h>
 
 #include "asterisk/res_pjsip.h"
+#include "asterisk/res_pjsip_cli.h"
 #include "asterisk/module.h"
 #include "asterisk/acl.h"
+#include "asterisk/manager.h"
+#include "res_pjsip/include/res_pjsip_private.h"
 
 /*** DOCUMENTATION
 	<configInfo name="res_pjsip_endpoint_identifier_ip" language="en_US">
 		<synopsis>Module that identifies endpoints via source IP address</synopsis>
 		<configFile name="pjsip.conf">
 			<configObject name="identify">
+				<synopsis>Identifies endpoints via source IP address</synopsis>
 				<configOption name="endpoint">
 					<synopsis>Name of Endpoint</synopsis>
 				</configOption>
 				<configOption name="match">
 					<synopsis>IP addresses or networks to match against</synopsis>
+					<description><para>
+						The value is a comma-delimited list of IP addresses. IP addresses may
+						have a subnet mask appended. The subnet mask may be written in either
+						CIDR or dot-decimal notation. Separate the IP address and subnet
+						mask with a slash ('/')
+					</para></description>
 				</configOption>
 				<configOption name="type">
 					<synopsis>Must be of type 'identify'.</synopsis>
@@ -89,8 +99,20 @@ static int ip_identify_match_check(void *obj, void *arg, int flags)
 {
 	struct ip_identify_match *identify = obj;
 	struct ast_sockaddr *addr = arg;
+	int sense;
 
-	return (ast_apply_ha(identify->matches, addr) != AST_SENSE_ALLOW) ? CMP_MATCH | CMP_STOP : 0;
+	sense = ast_apply_ha(identify->matches, addr);
+	if (sense != AST_SENSE_ALLOW) {
+		ast_debug(3, "Source address %s matches identify '%s'\n",
+				ast_sockaddr_stringify(addr),
+				ast_sorcery_object_get_id(identify));
+		return CMP_MATCH | CMP_STOP;
+	} else {
+		ast_debug(3, "Source address %s does not match identify '%s'\n",
+				ast_sockaddr_stringify(addr),
+				ast_sorcery_object_get_id(identify));
+		return 0;
+	}
 }
 
 static struct ast_sip_endpoint *ip_identify(pjsip_rx_data *rdata)
@@ -103,6 +125,7 @@ static struct ast_sip_endpoint *ip_identify(pjsip_rx_data *rdata)
 	/* If no possibilities exist return early to save some time */
 	if (!(candidates = ast_sorcery_retrieve_by_fields(ast_sip_get_sorcery(), "identify", AST_RETRIEVE_FLAG_MULTIPLE | AST_RETRIEVE_FLAG_ALL, NULL)) ||
 		!ao2_container_count(candidates)) {
+		ast_debug(3, "No identify sections to match against\n");
 		return NULL;
 	}
 
@@ -110,12 +133,17 @@ static struct ast_sip_endpoint *ip_identify(pjsip_rx_data *rdata)
 	ast_sockaddr_set_port(&addr, rdata->pkt_info.src_port);
 
 	if (!(match = ao2_callback(candidates, 0, ip_identify_match_check, &addr))) {
+		ast_debug(3, "'%s' did not match any identify section rules\n",
+				ast_sockaddr_stringify(&addr));
 		return NULL;
 	}
 
 	endpoint = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(), "endpoint", match->endpoint_name);
 	if (endpoint) {
 		ast_debug(3, "Retrieved endpoint %s\n", ast_sorcery_object_get_id(endpoint));
+	} else {
+		ast_log(LOG_WARNING, "Identify section '%s' points to endpoint '%s' but endpoint could not be looked up\n",
+				ast_sorcery_object_get_id(match), match->endpoint_name);
 	}
 
 	return endpoint;
@@ -129,15 +157,212 @@ static struct ast_sip_endpoint_identifier ip_identifier = {
 static int ip_identify_match_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
 	struct ip_identify_match *identify = obj;
-	int error = 0;
+	int num_addrs = 0, error = 0, i;
+	struct ast_sockaddr *addrs;
 
-	/* We deny what we actually want to match because there is an implicit permit all rule for ACLs */
-	if (!(identify->matches = ast_append_ha("d", var->value, identify->matches, &error))) {
+	num_addrs = ast_sockaddr_resolve(&addrs, var->value, PARSE_PORT_FORBID, AST_AF_UNSPEC);
+	if (!num_addrs) {
+		ast_log(LOG_ERROR, "Address '%s' provided on ip endpoint identifier '%s' did not resolve to any address\n",
+			var->value, ast_sorcery_object_get_id(obj));
 		return -1;
 	}
 
+	for (i = 0; i < num_addrs; ++i) {
+		/* We deny what we actually want to match because there is an implicit permit all rule for ACLs */
+		identify->matches = ast_append_ha("d", ast_sockaddr_stringify_addr(&addrs[i]), identify->matches, &error);
+
+		if (!identify->matches || error) {
+			ast_log(LOG_ERROR, "Failed to add address '%s' to ip endpoint identifier '%s'\n",
+				ast_sockaddr_stringify_addr(&addrs[i]), ast_sorcery_object_get_id(obj));
+			error = -1;
+			break;
+		}
+	}
+
+	ast_free(addrs);
+
 	return error;
 }
+
+static int ip_identify_match_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	RAII_VAR(struct ast_str *, str, ast_str_create(MAX_OBJECT_FIELD), ast_free);
+	const struct ip_identify_match *identify = obj;
+
+	ast_ha_join(identify->matches, &str);
+	*buf = ast_strdup(ast_str_buffer(str));
+	return 0;
+}
+
+static int sip_identify_to_ami(const struct ip_identify_match *identify,
+			       struct ast_str **buf)
+{
+	return ast_sip_sorcery_object_to_ami(identify, buf);
+}
+
+static int find_identify_by_endpoint(void *obj, void *arg, int flags)
+{
+	struct ip_identify_match *identify = obj;
+	const char *endpoint_name = arg;
+
+	return strcmp(identify->endpoint_name, endpoint_name) ? 0 : CMP_MATCH;
+}
+
+static int format_ami_endpoint_identify(const struct ast_sip_endpoint *endpoint,
+					struct ast_sip_ami *ami)
+{
+	RAII_VAR(struct ao2_container *, identifies, NULL, ao2_cleanup);
+	RAII_VAR(struct ip_identify_match *, identify, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_str *, buf, NULL, ast_free);
+
+	identifies = ast_sorcery_retrieve_by_fields(ast_sip_get_sorcery(), "identify",
+		AST_RETRIEVE_FLAG_MULTIPLE | AST_RETRIEVE_FLAG_ALL, NULL);
+	if (!identifies) {
+		return -1;
+	}
+
+	identify = ao2_callback(identifies, 0, find_identify_by_endpoint,
+		(void *) ast_sorcery_object_get_id(endpoint));
+	if (!identify) {
+		return 1;
+	}
+
+	if (!(buf = ast_sip_create_ami_event("IdentifyDetail", ami))) {
+		return -1;
+	}
+
+	if (sip_identify_to_ami(identify, &buf)) {
+		return -1;
+	}
+
+	ast_str_append(&buf, 0, "EndpointName: %s\r\n",
+		ast_sorcery_object_get_id(endpoint));
+
+	astman_append(ami->s, "%s\r\n", ast_str_buffer(buf));
+	return 0;
+}
+
+struct ast_sip_endpoint_formatter endpoint_identify_formatter = {
+	.format_ami = format_ami_endpoint_identify
+};
+
+static int populate_identify_container(void *obj, void *arg, int flags)
+{
+	struct ast_sip_ip_identify_match *ident = obj;
+	struct ao2_container *container = arg;
+
+	ao2_link(container, ident);
+	return 0;
+}
+
+static int cli_iterator(const void *container, ao2_callback_fn callback, void *args)
+{
+	const struct ast_sip_endpoint *endpoint = container;
+	struct ao2_container *identifies;
+
+	struct ast_variable fields = {
+		.name = "endpoint",
+		.value = ast_sorcery_object_get_id(endpoint),
+		.next = NULL,
+	};
+
+	identifies = ast_sorcery_retrieve_by_fields(ast_sip_get_sorcery(), "identify",
+		AST_RETRIEVE_FLAG_MULTIPLE, &fields);
+	if (!identifies) {
+		return -1;
+	}
+
+	ao2_callback(identifies, OBJ_NODATA, callback, args);
+
+	return 0;
+}
+
+static int gather_endpoint_identifies(void *obj, void *arg, int flags)
+{
+	struct ast_sip_endpoint *endpoint = obj;
+	struct ao2_container *container = arg;
+
+	cli_iterator(endpoint, populate_identify_container, container);
+	return 0;
+}
+
+static struct ao2_container *cli_get_identify_container(void)
+{
+	RAII_VAR(struct ao2_container *, parent_container, NULL, ao2_cleanup);
+	RAII_VAR(struct ao2_container *, s_parent_container, NULL, ao2_cleanup);
+	struct ao2_container *child_container;
+
+	parent_container =  ast_sorcery_retrieve_by_fields(ast_sip_get_sorcery(), "endpoint",
+		AST_RETRIEVE_FLAG_MULTIPLE | AST_RETRIEVE_FLAG_ALL, NULL);
+	if (!parent_container) {
+		return NULL;
+	}
+
+	s_parent_container = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK, 0,
+		ast_sorcery_object_id_compare, NULL);
+	if (!s_parent_container) {
+		return NULL;
+	}
+
+	if (ao2_container_dup(s_parent_container, parent_container, 0)) {
+		return NULL;
+	}
+
+	child_container = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK, 0,
+		ast_sorcery_object_id_compare, NULL);
+	if (!child_container) {
+		return NULL;
+	}
+
+	ao2_callback(s_parent_container, OBJ_NODATA, gather_endpoint_identifies, child_container);
+	ao2_ref(child_container, +1);
+	return child_container;
+}
+
+
+static int cli_print_identify_header(void *obj, void *arg, int flags)
+{
+	struct ast_sip_cli_context *context = arg;
+	int indent = CLI_INDENT_TO_SPACES(context->indent_level);
+	int filler = CLI_MAX_WIDTH - indent - 14;
+
+	if (!context->output_buffer) {
+		return -1;
+	}
+
+	ast_str_append(&context->output_buffer, 0,
+		"%*s:  <MatchList%*.*s>\n",
+		indent, "Identify", filler, filler, CLI_HEADER_FILLER);
+
+	return 0;
+}
+
+static int cli_print_identify_body(void *obj, void *arg, int flags)
+{
+	RAII_VAR(struct ast_str *, str, ast_str_create(MAX_OBJECT_FIELD), ast_free);
+	struct ip_identify_match *ident = obj;
+	struct ast_sip_cli_context *context = arg;
+
+	if (!context->output_buffer || !str) {
+		return -1;
+	}
+
+	ast_str_append(&context->output_buffer, 0, "%*s:  ",
+		CLI_INDENT_TO_SPACES(context->indent_level), "Identify");
+	ast_ha_join(ident->matches, &str);
+	ast_str_append(&context->output_buffer, 0, "%s\n", ast_str_buffer(str));
+
+	return 0;
+}
+
+static struct ast_sip_cli_formatter_entry  cli_identify_formatter = {
+	.name = "identify",
+	.print_header = cli_print_identify_header,
+	.print_body = cli_print_identify_body,
+	.get_container = cli_get_identify_container,
+	.comparator = ast_sorcery_object_id_compare,
+	.iterator = cli_iterator,
+};
 
 static int load_module(void)
 {
@@ -149,10 +374,12 @@ static int load_module(void)
 
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "identify", "type", "", OPT_NOOP_T, 0, 0);
 	ast_sorcery_object_field_register(ast_sip_get_sorcery(), "identify", "endpoint", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ip_identify_match, endpoint_name));
-	ast_sorcery_object_field_register_custom(ast_sip_get_sorcery(), "identify", "match", "", ip_identify_match_handler, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(ast_sip_get_sorcery(), "identify", "match", "", ip_identify_match_handler, ip_identify_match_to_str, 0, 0);
 	ast_sorcery_reload_object(ast_sip_get_sorcery(), "identify");
 
 	ast_sip_register_endpoint_identifier(&ip_identifier);
+	ast_sip_register_endpoint_formatter(&endpoint_identify_formatter);
+	ast_sip_register_cli_formatter(&cli_identify_formatter);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
@@ -165,6 +392,8 @@ static int reload_module(void)
 
 static int unload_module(void)
 {
+	ast_sip_unregister_cli_formatter(&cli_identify_formatter);
+	ast_sip_unregister_endpoint_formatter(&endpoint_identify_formatter);
 	ast_sip_unregister_endpoint_identifier(&ip_identifier);
 	return 0;
 }

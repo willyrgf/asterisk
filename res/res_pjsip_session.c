@@ -42,8 +42,15 @@
 #include "asterisk/causes.h"
 #include "asterisk/sdp_srtp.h"
 #include "asterisk/dsp.h"
+#include "asterisk/acl.h"
 
 #define SDP_HANDLER_BUCKETS 11
+
+#define MOD_DATA_ON_RESPONSE "on_response"
+#define MOD_DATA_NAT_HOOK "nat_hook"
+
+/* Hostname used for origin line within SDP */
+static const pj_str_t *hostname;
 
 /* Some forward declarations */
 static void handle_incoming_request(struct ast_sip_session *session, pjsip_rx_data *rdata);
@@ -127,7 +134,7 @@ int ast_sip_session_register_sdp_handler(struct ast_sip_session_sdp_handler *han
 			}
 		}
 		AST_LIST_INSERT_TAIL(&handler_list->list, handler, next);
-		ast_debug(1, "Registered SDP stream handler '%s' for stream type '%s'\n", handler->id, stream_type); 
+		ast_debug(1, "Registered SDP stream handler '%s' for stream type '%s'\n", handler->id, stream_type);
 		ast_module_ref(ast_module_info->self);
 		return 0;
 	}
@@ -144,7 +151,7 @@ int ast_sip_session_register_sdp_handler(struct ast_sip_session_sdp_handler *han
 	if (!ao2_link(sdp_handlers, handler_list)) {
 		return -1;
 	}
-	ast_debug(1, "Registered SDP stream handler '%s' for stream type '%s'\n", handler->id, stream_type); 
+	ast_debug(1, "Registered SDP stream handler '%s' for stream type '%s'\n", handler->id, stream_type);
 	ast_module_ref(ast_module_info->self);
 	return 0;
 }
@@ -464,8 +471,9 @@ static int handle_negotiated_sdp(struct ast_sip_session *session, const pjmedia_
 	};
 
 	successful = ao2_callback(session->media, OBJ_MULTIPLE, handle_negotiated_sdp_session_media, &callback_data);
-	if (successful && ao2_container_count(successful->c) == ao2_container_count(session->media)) {
+	if (successful && ao2_iterator_count(successful) == ao2_container_count(session->media)) {
 		/* Nothing experienced a catastrophic failure */
+		ast_queue_frame(session->channel, &ast_null_frame);
 		return 0;
 	}
 	return -1;
@@ -887,9 +895,16 @@ static pj_bool_t session_reinvite_on_rx_request(pjsip_rx_data *rdata)
 	}
 
 	if (!(sdp_info = pjsip_rdata_get_sdp_info(rdata)) ||
-		(sdp_info->sdp_err != PJ_SUCCESS) ||
-		!sdp_info->sdp ||
-		!sdp_requires_deferral(session, sdp_info->sdp)) {
+		(sdp_info->sdp_err != PJ_SUCCESS)) {
+		return PJ_FALSE;
+	}
+
+	if (!sdp_info->sdp) {
+		ast_queue_unhold(session->channel);
+		return PJ_FALSE;
+	}
+
+	if (!sdp_requires_deferral(session, sdp_info->sdp)) {
 		return PJ_FALSE;
 	}
 
@@ -925,7 +940,22 @@ void ast_sip_session_send_request_with_cb(struct ast_sip_session *session, pjsip
 		return;
 	}
 
-	tdata->mod_data[session_module.id] = on_response;
+	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, session_module.id,
+			     MOD_DATA_ON_RESPONSE, on_response);
+
+	if (!ast_strlen_zero(session->endpoint->fromuser) ||
+		!ast_strlen_zero(session->endpoint->fromdomain)) {
+		pjsip_fromto_hdr *from = pjsip_msg_find_hdr(tdata->msg, PJSIP_H_FROM, tdata->msg->hdr.next);
+		pjsip_sip_uri *uri = pjsip_uri_get_uri(from->uri);
+
+		if (!ast_strlen_zero(session->endpoint->fromuser)) {
+			pj_strdup2(tdata->pool, &uri->user, session->endpoint->fromuser);
+		}
+		if (!ast_strlen_zero(session->endpoint->fromdomain)) {
+			pj_strdup2(tdata->pool, &uri->host, session->endpoint->fromdomain);
+		}
+	}
+
 	handle_outgoing_request(session, tdata);
 	pjsip_inv_send_msg(session->inv_session, tdata);
 	return;
@@ -1015,7 +1045,9 @@ static void session_destructor(void *obj)
 	}
 	ast_party_id_free(&session->id);
 	ao2_cleanup(session->endpoint);
+	ao2_cleanup(session->contact);
 	ast_format_cap_destroy(session->req_caps);
+	ast_format_cap_destroy(session->direct_media_cap);
 
 	if (session->dsp) {
 		ast_dsp_free(session->dsp);
@@ -1081,7 +1113,8 @@ struct ast_sip_channel_pvt *ast_sip_channel_pvt_alloc(void *pvt, struct ast_sip_
 	return channel;
 }
 
-struct ast_sip_session *ast_sip_session_alloc(struct ast_sip_endpoint *endpoint, pjsip_inv_session *inv_session)
+struct ast_sip_session *ast_sip_session_alloc(struct ast_sip_endpoint *endpoint,
+	struct ast_sip_contact *contact, pjsip_inv_session *inv_session)
 {
 	RAII_VAR(struct ast_sip_session *, session, ao2_alloc(sizeof(*session), session_destructor), ao2_cleanup);
 	struct ast_sip_session_supplement *iter;
@@ -1109,12 +1142,11 @@ struct ast_sip_session *ast_sip_session_alloc(struct ast_sip_endpoint *endpoint,
 	ast_sip_dialog_set_serializer(inv_session->dlg, session->serializer);
 	ast_sip_dialog_set_endpoint(inv_session->dlg, endpoint);
 	pjsip_dlg_inc_session(inv_session->dlg, &session_module);
-	ao2_ref(session, +1);
-	inv_session->mod_data[session_module.id] = session;
-	ao2_ref(endpoint, +1);
-	session->endpoint = endpoint;
+	inv_session->mod_data[session_module.id] = ao2_bump(session);
+	session->endpoint = ao2_bump(endpoint);
+	session->contact = ao2_bump(contact);
 	session->inv_session = inv_session;
-	session->req_caps = ast_format_cap_alloc_nolock();
+	session->req_caps = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 
 	if (endpoint->dtmf == AST_SIP_DTMF_INBAND) {
 		dsp_features |= DSP_FEATURE_DIGIT_DETECT;
@@ -1142,7 +1174,7 @@ struct ast_sip_session *ast_sip_session_alloc(struct ast_sip_endpoint *endpoint,
 			iter->session_begin(session);
 		}
 	}
-	session->direct_media_cap = ast_format_cap_alloc_nolock();
+	session->direct_media_cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	AST_LIST_HEAD_INIT_NOLOCK(&session->delayed_requests);
 	ast_party_id_init(&session->id);
 	ao2_ref(session, +1);
@@ -1155,27 +1187,33 @@ static int session_outbound_auth(pjsip_dialog *dlg, pjsip_tx_data *tdata, void *
 	struct ast_sip_session *session = inv->mod_data[session_module.id];
 
 	if (inv->state < PJSIP_INV_STATE_CONFIRMED && tdata->msg->line.req.method.id == PJSIP_INVITE_METHOD) {
-		pjsip_inv_uac_restart(inv, PJ_TRUE);
+		pjsip_inv_uac_restart(inv, PJ_FALSE);
 	}
 	ast_sip_session_send_request(session, tdata);
 	return 0;
 }
 
-struct ast_sip_session *ast_sip_session_create_outgoing(struct ast_sip_endpoint *endpoint, const char *location, const char *request_user, struct ast_format_cap *req_caps)
+struct ast_sip_session *ast_sip_session_create_outgoing(struct ast_sip_endpoint *endpoint,
+	struct ast_sip_contact *contact, const char *location, const char *request_user,
+	struct ast_format_cap *req_caps)
 {
 	const char *uri = NULL;
-	RAII_VAR(struct ast_sip_contact *, contact, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_sip_contact *, found_contact, NULL, ao2_cleanup);
 	pjsip_timer_setting timer;
 	pjsip_dialog *dlg;
 	struct pjsip_inv_session *inv_session;
 	RAII_VAR(struct ast_sip_session *, session, NULL, ao2_cleanup);
 
 	/* If no location has been provided use the AOR list from the endpoint itself */
-	location = S_OR(location, endpoint->aors);
+	if (location || !contact) {
+		location = S_OR(location, endpoint->aors);
 
-	contact = ast_sip_location_retrieve_contact_from_aor_list(location);
-	if (!contact || ast_strlen_zero(contact->uri)) {
-		uri = location;
+		found_contact = ast_sip_location_retrieve_contact_from_aor_list(location);
+		if (!found_contact || ast_strlen_zero(found_contact->uri)) {
+			uri = location;
+		} else {
+			uri = found_contact->uri;
+		}
 	} else {
 		uri = contact->uri;
 	}
@@ -1185,7 +1223,7 @@ struct ast_sip_session *ast_sip_session_create_outgoing(struct ast_sip_endpoint 
 		return NULL;
 	}
 
-	if (!(dlg = ast_sip_create_dialog(endpoint, uri, request_user))) {
+	if (!(dlg = ast_sip_create_dialog_uac(endpoint, uri, request_user))) {
 		return NULL;
 	}
 
@@ -1198,7 +1236,7 @@ struct ast_sip_session *ast_sip_session_create_outgoing(struct ast_sip_endpoint 
 		pjsip_dlg_terminate(dlg);
 		return NULL;
 	}
-#ifdef PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE
+#if defined(HAVE_PJSIP_REPLACE_MEDIA_STREAM) || defined(PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE)
 	inv_session->sdp_neg_flags = PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE;
 #endif
 
@@ -1207,12 +1245,16 @@ struct ast_sip_session *ast_sip_session_create_outgoing(struct ast_sip_endpoint 
 	timer.sess_expires = endpoint->extensions.timer.sess_expires;
 	pjsip_timer_init_session(inv_session, &timer);
 
-	if (!(session = ast_sip_session_alloc(endpoint, inv_session))) {
+	if (!(session = ast_sip_session_alloc(endpoint, found_contact ? found_contact : contact, inv_session))) {
 		pjsip_inv_terminate(inv_session, 500, PJ_FALSE);
 		return NULL;
 	}
 
-	ast_format_cap_copy(session->req_caps, req_caps);
+	if (!ast_format_cap_is_empty(req_caps)) {
+		ast_format_cap_copy(session->req_caps, session->endpoint->media.codecs);
+		ast_format_cap_append(session->req_caps, req_caps);
+	}
+
 	if ((pjsip_dlg_add_usage(dlg, &session_module, NULL) != PJ_SUCCESS)) {
 		pjsip_inv_terminate(inv_session, 500, PJ_FALSE);
 		/* Since we are not notifying ourselves that the INVITE session is being terminated
@@ -1337,7 +1379,8 @@ static pjsip_inv_session *pre_session_setup(pjsip_rx_data *rdata, const struct a
 		}
 		return NULL;
 	}
-	if (pjsip_dlg_create_uas(pjsip_ua_instance(), rdata, NULL, &dlg) != PJ_SUCCESS) {
+	dlg = ast_sip_create_dialog_uas(endpoint, rdata);
+	if (!dlg) {
 		pjsip_endpt_respond_stateless(ast_sip_get_pjsip_endpoint(), rdata, 500, NULL, NULL, NULL);
 		return NULL;
 	}
@@ -1346,7 +1389,8 @@ static pjsip_inv_session *pre_session_setup(pjsip_rx_data *rdata, const struct a
 		pjsip_dlg_terminate(dlg);
 		return NULL;
 	}
-#ifdef PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE
+
+#if defined(HAVE_PJSIP_REPLACE_MEDIA_STREAM) || defined(PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE)
 	inv_session->sdp_neg_flags = PJMEDIA_SDP_NEG_ALLOW_MEDIA_CHANGE;
 #endif
 	if (pjsip_dlg_add_usage(dlg, &session_module, NULL) != PJ_SUCCESS) {
@@ -1501,7 +1545,7 @@ static void handle_new_invite_request(pjsip_rx_data *rdata)
 		return;
 	}
 
-	session = ast_sip_session_alloc(endpoint, inv_session);
+	session = ast_sip_session_alloc(endpoint, NULL, inv_session);
 	if (!session) {
 		if (pjsip_inv_initial_answer(inv_session, rdata, 500, NULL, NULL, &tdata) == PJ_SUCCESS) {
 			pjsip_inv_terminate(inv_session, 500, PJ_FALSE);
@@ -1640,7 +1684,7 @@ static void reschedule_reinvite(struct ast_sip_session *session, ast_sip_session
 	pjsip_inv_session *inv = session->inv_session;
 	struct reschedule_reinvite_data *rrd = reschedule_reinvite_data_alloc(session, delay);
 	pj_time_val tv;
-	
+
 	if (!rrd || !delay) {
 		return;
 	}
@@ -1800,10 +1844,20 @@ static int session_end(struct ast_sip_session *session)
 static void session_inv_on_state_changed(pjsip_inv_session *inv, pjsip_event *e)
 {
 	struct ast_sip_session *session = inv->mod_data[session_module.id];
+	pjsip_event_id_e type;
 
-	print_debug_details(inv, NULL, e);
+	if (e) {
+		print_debug_details(inv, NULL, e);
+		type = e->type;
+	} else {
+		type = PJSIP_EVENT_UNKNOWN;
+	}
 
-	switch(e->type) {
+	if (!session) {
+		return;
+	}
+
+	switch(type) {
 	case PJSIP_EVENT_TX_MSG:
 		handle_outgoing(session, e->body.tx_msg.tdata);
 		break;
@@ -1849,6 +1903,7 @@ static void session_inv_on_new_session(pjsip_inv_session *inv, pjsip_event *e)
 
 static void session_inv_on_tsx_state_changed(pjsip_inv_session *inv, pjsip_transaction *tsx, pjsip_event *e)
 {
+	ast_sip_session_response_cb cb;
 	struct ast_sip_session *session = inv->mod_data[session_module.id];
 	print_debug_details(inv, tsx, e);
 	if (!session) {
@@ -1903,8 +1958,8 @@ static void session_inv_on_tsx_state_changed(pjsip_inv_session *inv, pjsip_trans
 				handle_incoming_request(session, e->body.tsx_state.src.rdata);
 			}
 		}
-		if (tsx->mod_data[session_module.id]) {
-			ast_sip_session_response_cb cb = tsx->mod_data[session_module.id];
+		if ((cb = ast_sip_mod_data_get(tsx->mod_data, session_module.id,
+					       MOD_DATA_ON_RESPONSE))) {
 			cb(session, e->body.tsx_state.src.rdata);
 		}
 	case PJSIP_EVENT_TRANSPORT_ERROR:
@@ -1984,12 +2039,12 @@ static struct pjmedia_sdp_session *create_local_sdp(pjsip_inv_session *inv, stru
 	pj_strdup2(inv->pool, &local->origin.user, session->endpoint->media.sdpowner);
 	local->origin.net_type = STR_IN;
 	local->origin.addr_type = session->endpoint->media.rtp.ipv6 ? STR_IP6 : STR_IP4;
-	local->origin.addr = *pj_gethostname();
+	local->origin.addr = *hostname;
 	pj_strdup2(inv->pool, &local->name, session->endpoint->media.sdpsession);
 
 	/* Now let the handlers add streams of various types, pjmedia will automatically reorder the media streams for us */
 	successful = ao2_callback_data(session->media, OBJ_MULTIPLE, add_sdp_streams, local, session);
-	if (!successful || ao2_container_count(successful->c) != ao2_container_count(session->media)) {
+	if (!successful || ao2_iterator_count(successful) != ao2_container_count(session->media)) {
 		/* Something experienced a catastrophic failure */
 		return NULL;
 	}
@@ -2048,13 +2103,31 @@ static void session_inv_on_media_update(pjsip_inv_session *inv, pj_status_t stat
 static pjsip_redirect_op session_inv_on_redirected(pjsip_inv_session *inv, const pjsip_uri *target, const pjsip_event *e)
 {
 	struct ast_sip_session *session = inv->mod_data[session_module.id];
+	const pjsip_sip_uri *uri;
 
-	if (PJSIP_URI_SCHEME_IS_SIP(target) || PJSIP_URI_SCHEME_IS_SIPS(target)) {
-		const pjsip_sip_uri *uri = pjsip_uri_get_uri(target);
+	if (session->endpoint->redirect_method == AST_SIP_REDIRECT_URI_PJSIP) {
+		return PJSIP_REDIRECT_ACCEPT;
+	}
+
+	if (!PJSIP_URI_SCHEME_IS_SIP(target) && !PJSIP_URI_SCHEME_IS_SIPS(target)) {
+		return PJSIP_REDIRECT_STOP;
+	}
+
+	uri = pjsip_uri_get_uri(target);
+
+	if (session->endpoint->redirect_method == AST_SIP_REDIRECT_USER) {
 		char exten[AST_MAX_EXTENSION];
 
 		ast_copy_pj_str(exten, &uri->user, sizeof(exten));
 		ast_channel_call_forward_set(session->channel, exten);
+	} else if (session->endpoint->redirect_method == AST_SIP_REDIRECT_URI_CORE) {
+		char target_uri[PJSIP_MAX_URL_SIZE];
+		/* PJSIP/ + endpoint length + / + max URL size */
+		char forward[8 + strlen(ast_sorcery_object_get_id(session->endpoint)) + PJSIP_MAX_URL_SIZE];
+
+		pjsip_uri_print(PJSIP_URI_IN_REQ_URI, uri, target_uri, sizeof(target_uri));
+		sprintf(forward, "PJSIP/%s/%s", ast_sorcery_object_get_id(session->endpoint), target_uri);
+		ast_channel_call_forward_set(session->channel, forward);
 	}
 
 	return PJSIP_REDIRECT_STOP;
@@ -2072,7 +2145,8 @@ static pjsip_inv_callback inv_callback = {
 /*! \brief Hook for modifying outgoing messages with SDP to contain the proper address information */
 static void session_outgoing_nat_hook(pjsip_tx_data *tdata, struct ast_sip_transport *transport)
 {
-	struct ast_sip_nat_hook *hook = tdata->mod_data[session_module.id];
+	struct ast_sip_nat_hook *hook = ast_sip_mod_data_get(
+		tdata->mod_data, session_module.id, MOD_DATA_NAT_HOOK);
 	struct pjmedia_sdp_session *sdp;
 	int stream;
 
@@ -2083,6 +2157,18 @@ static void session_outgoing_nat_hook(pjsip_tx_data *tdata, struct ast_sip_trans
 	}
 
 	sdp = tdata->msg->body->data;
+
+	if (sdp->conn) {
+		char host[NI_MAXHOST];
+		struct ast_sockaddr addr = { { 0, } };
+
+		ast_copy_pj_str(host, &sdp->conn->addr, sizeof(host));
+		ast_sockaddr_parse(&addr, host, PARSE_PORT_FORBID);
+
+		if (ast_apply_ha(transport->localnet, &addr) != AST_SENSE_ALLOW) {
+			pj_strdup2(tdata->pool, &sdp->conn->addr, transport->external_media_address);
+		}
+	}
 
 	for (stream = 0; stream < sdp->media_count; ++stream) {
 		/* See if there are registered handlers for this media stream type */
@@ -2106,7 +2192,7 @@ static void session_outgoing_nat_hook(pjsip_tx_data *tdata, struct ast_sip_trans
 	}
 
 	/* We purposely do this so that the hook will not be invoked multiple times, ie: if a retransmit occurs */
-	tdata->mod_data[session_module.id] = nat_hook;
+	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, session_module.id, MOD_DATA_NAT_HOOK, nat_hook);
 }
 
 static int load_module(void)
@@ -2129,21 +2215,20 @@ static int load_module(void)
 	pjsip_inv_usage_init(endpt, &inv_callback);
 	pjsip_100rel_init_module(endpt);
 	pjsip_timer_init_module(endpt);
+	hostname = pj_gethostname();
 	if (ast_sip_register_service(&session_module)) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_sip_register_service(&session_reinvite_module);
+
+	ast_module_ref(ast_module_info->self);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int unload_module(void)
 {
-	ast_sip_unregister_service(&session_module);
-	ast_sip_unregister_service(&session_reinvite_module);
-	if (nat_hook) {
-		ast_sorcery_delete(ast_sip_get_sorcery(), nat_hook);
-		nat_hook = NULL;
-	}
+	/* This will never get called as this module can't be unloaded */
 	return 0;
 }
 

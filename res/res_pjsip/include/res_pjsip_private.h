@@ -8,12 +8,16 @@
 #ifndef RES_PJSIP_PRIVATE_H_
 #define RES_PJSIP_PRIVATE_H_
 
+#include "asterisk/module.h"
+#include "asterisk/compat.h"
+
 struct ao2_container;
+struct ast_threadpool_options;
 
 /*!
  * \brief Initialize the configuration for res_pjsip
  */
-int ast_res_pjsip_initialize_configuration(void);
+int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_module_info);
 
 /*!
  * \brief Annihilate the configuration objects
@@ -80,5 +84,22 @@ void ast_res_pjsip_cleanup_options_handling(void);
  * \brief Get threadpool options
  */
 void sip_get_threadpool_options(struct ast_threadpool_options *threadpool_options);
+
+/*!
+ * \brief Retrieve the name of the default outbound endpoint.
+ *
+ * \note This returns a memory allocated copy of the name that
+ *       needs to be freed by the caller.
+ *
+ * \retval The name of the default outbound endpoint.
+ * \retval NULL if configuration not found.
+ */
+char *ast_sip_global_default_outbound_endpoint(void);
+
+/*!
+ * \brief Functions for initializing and destroying the CLI.
+ */
+int ast_sip_initialize_cli(void);
+void ast_sip_destroy_cli(void);
 
 #endif /* RES_PJSIP_PRIVATE_H_ */

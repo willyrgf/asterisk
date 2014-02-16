@@ -161,6 +161,7 @@ enum conf_sounds {
 	CONF_SOUND_LEAVE,
 	CONF_SOUND_PARTICIPANTS_MUTED,
 	CONF_SOUND_PARTICIPANTS_UNMUTED,
+	CONF_SOUND_BEGIN,
 };
 
 struct bridge_profile_sounds {
@@ -187,11 +188,13 @@ struct bridge_profile_sounds {
 		AST_STRING_FIELD(join);
 		AST_STRING_FIELD(participantsmuted);
 		AST_STRING_FIELD(participantsunmuted);
+		AST_STRING_FIELD(begin);
 	);
 };
 
 struct bridge_profile {
 	char name[64];
+	char language[MAX_LANGUAGE];		  /*!< Language used for playback_chan */
 	char rec_file[PATH_MAX];
 	unsigned int flags;
 	unsigned int max_members;          /*!< The maximum number of participants allowed in the conference */
@@ -240,6 +243,7 @@ struct confbridge_user {
 	struct ast_bridge_features features;         /*!< Bridge features structure */
 	struct ast_bridge_tech_optimizations tech_args; /*!< Bridge technology optimizations for talk detection */
 	unsigned int suspended_moh;                  /*!< Count of active suspended MOH actions. */
+	unsigned int muted:1;                        /*!< Has the user requested to be muted? */
 	unsigned int kicked:1;                       /*!< User has been kicked from the conference */
 	unsigned int playing_moh:1;                  /*!< MOH is currently being played to the user */
 	AST_LIST_HEAD_NOLOCK(, post_join_action) post_join_list; /*!< List of sounds to play after joining */;
@@ -366,6 +370,15 @@ int play_sound_file(struct confbridge_conference *conference, const char *filena
 void conf_ended(struct confbridge_conference *conference);
 
 /*!
+ * \brief Update the actual mute status of the user and set it on the bridge.
+ *
+ * \param user User to update the mute status.
+ *
+ * \return Nothing
+ */
+void conf_update_user_mute(struct confbridge_user *user);
+
+/*!
  * \brief Stop MOH for the conference user.
  *
  * \param user Conference user to stop MOH on.
@@ -387,13 +400,6 @@ void conf_moh_start(struct confbridge_user *user);
  * \param conference A conference bridge containing a single user
  */
 void conf_mute_only_active(struct confbridge_conference *conference);
-
-/*! \brief Callback to execute any time we transition from zero to one marked users
- * \param user The first marked user joining the conference
- * \retval 0 success
- * \retval -1 failure
- */
-int conf_handle_first_marked_common(struct confbridge_user *user);
 
 /*! \brief Callback to execute any time we transition from zero to one active users
  * \param conference The conference bridge with a single active user joined

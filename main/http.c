@@ -65,6 +65,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/_private.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/netsock2.h"
+#include "asterisk/json.h"
 
 #define MAX_PREFIX 80
 #define DEFAULT_PORT 8088
@@ -607,6 +608,296 @@ void ast_http_uri_unlink_all_with_key(const char *key)
 
 #define MAX_POST_CONTENT 1025
 
+/*!
+ * \brief Retrieves the header with the given field name.
+ *
+ * \param headers Headers to search.
+ * \param field_name Name of the header to find.
+ * \return Associated header value.
+ * \return \c NULL if header is not present.
+ */
+static const char *get_header(struct ast_variable *headers,
+	const char *field_name)
+{
+	struct ast_variable *v;
+
+	for (v = headers; v; v = v->next) {
+		if (!strcasecmp(v->name, field_name)) {
+			return v->value;
+		}
+	}
+	return NULL;
+}
+
+/*!
+ * \brief Retrieves the content type specified in the "Content-Type" header.
+ *
+ * This function only returns the "type/subtype" and any trailing parameter is
+ * not included.
+ *
+ * \note the return value is an allocated string that needs to be freed.
+ *
+ * \retval the content type/subtype or NULL if the header is not found.
+ */
+static char *get_content_type(struct ast_variable *headers)
+{
+	const char *content_type = get_header(headers, "Content-Type");
+	const char *param;
+	size_t size;
+
+	if (!content_type) {
+		return NULL;
+	}
+
+	param = strchr(content_type, ';');
+	size = param ? param - content_type : strlen(content_type);
+
+	return ast_strndup(content_type, size);
+}
+
+/*!
+ * \brief Returns the value of the Content-Length header.
+ *
+ * \param headers HTTP headers.
+ * \return Value of the Content-Length header.
+ * \return 0 if header is not present, or is invalid.
+ */
+static int get_content_length(struct ast_variable *headers)
+{
+	const char *content_length = get_header(headers, "Content-Length");
+
+	if (!content_length) {
+		/* Missing content length; assume zero */
+		return 0;
+	}
+
+	/* atoi() will return 0 for invalid inputs, which is good enough for
+	 * the HTTP parsing. */
+	return atoi(content_length);
+}
+
+/*!
+ * \brief Returns the value of the Transfer-Encoding header.
+ *
+ * \param headers HTTP headers.
+ * \return Value of the Transfer-Encoding header.
+ * \return 0 if header is not present, or is invalid.
+ */
+static const char *get_transfer_encoding(struct ast_variable *headers)
+{
+	return get_header(headers, "Transfer-Encoding");
+}
+
+/*!
+ * \brief decode chunked mode hexadecimal value
+ *
+ * \param s string to decode
+ * \param len length of string
+ * \return integer value or -1 for decode error
+ */
+static int chunked_atoh(const char *s, int len)
+{
+	int value = 0;
+	char c;
+
+	if (*s < '0') {
+		/* zero value must be 0\n not just \n */
+		return -1;
+	}
+
+	while (len--)
+	{
+		if (*s == '\x0D') {
+			return value;
+		}
+		value <<= 4;
+		c = *s++;
+		if (c >= '0' && c <= '9') {
+			value += c - '0';
+			continue;
+		}
+		if (c >= 'a' && c <= 'f') {
+			value += 10 + c - 'a';
+			continue;
+		}
+		if (c >= 'A' && c <= 'F') {
+			value += 10 + c - 'A';
+			continue;
+		}
+		/* invalid character */
+		return -1;
+	}
+	/* end of string */
+	return -1;
+}
+
+/*!
+ * \brief Returns the contents (body) of the HTTP request
+ *
+ * \param return_length ptr to int that returns content length
+ * \param aser HTTP TCP/TLS session object
+ * \param headers List of HTTP headers
+ * \return ptr to content (zero terminated) or NULL on failure
+ * \note Since returned ptr is malloc'd, it should be free'd by caller
+ */
+static char *ast_http_get_contents(int *return_length,
+	struct ast_tcptls_session_instance *ser, struct ast_variable *headers)
+{
+	const char *transfer_encoding;
+	int res;
+	int content_length = 0;
+	int chunk_length;
+	char chunk_header[8];
+	int bufsize = 250;
+	char *buf;
+
+	transfer_encoding = get_transfer_encoding(headers);
+
+	if (ast_strlen_zero(transfer_encoding) ||
+		strcasecmp(transfer_encoding, "chunked") != 0) {
+		/* handle regular non-chunked content */
+		content_length = get_content_length(headers);
+		if (content_length <= 0) {
+			/* no content - not an error */
+			return NULL;
+		}
+		if (content_length > MAX_POST_CONTENT - 1) {
+			ast_log(LOG_WARNING,
+				"Excessively long HTTP content. (%d > %d)\n",
+				content_length, MAX_POST_CONTENT);
+			errno = EFBIG;
+			return NULL;
+		}
+		buf = ast_malloc(content_length + 1);
+		if (!buf) {
+			/* Malloc sets ENOMEM */
+			return NULL;
+		}
+		res = fread(buf, 1, content_length, ser->f);
+		if (res < content_length) {
+			/* Error, distinguishable by ferror() or feof(), but neither
+			 * is good. Treat either one as I/O error */
+			ast_log(LOG_WARNING, "Short HTTP request body (%d < %d)\n",
+				res, content_length);
+			errno = EIO;
+			ast_free(buf);
+			return NULL;
+		}
+		buf[content_length] = 0;
+		*return_length = content_length;
+		return buf;
+	}
+
+	/* pre-allocate buffer */
+	buf = ast_malloc(bufsize);
+	if (!buf) {
+		return NULL;
+	}
+
+	/* handled chunked content */
+	do {
+		/* get the line of hexadecimal giving chunk size */
+		if (!fgets(chunk_header, sizeof(chunk_header), ser->f)) {
+			ast_log(LOG_WARNING,
+				"Short HTTP read of chunked header\n");
+			errno = EIO;
+			ast_free(buf);
+			return NULL;
+		}
+		chunk_length = chunked_atoh(chunk_header, sizeof(chunk_header));
+		if (chunk_length < 0) {
+			ast_log(LOG_WARNING, "Invalid HTTP chunk size\n");
+			errno = EIO;
+			ast_free(buf);
+			return NULL;
+		}
+		if (content_length + chunk_length > MAX_POST_CONTENT - 1) {
+			ast_log(LOG_WARNING,
+				"Excessively long HTTP chunk. (%d + %d > %d)\n",
+				content_length, chunk_length, MAX_POST_CONTENT);
+			errno = EFBIG;
+			ast_free(buf);
+			return NULL;
+		}
+
+		/* insure buffer is large enough +1 */
+		if (content_length + chunk_length >= bufsize)
+		{
+			bufsize *= 2;
+			buf = ast_realloc(buf, bufsize);
+			if (!buf) {
+				return NULL;
+			}
+		}
+
+		/* read the chunk */
+		res = fread(buf + content_length, 1, chunk_length, ser->f);
+		if (res < chunk_length) {
+			ast_log(LOG_WARNING, "Short HTTP chunk read (%d < %d)\n",
+				res, chunk_length);
+			errno = EIO;
+			ast_free(buf);
+			return NULL;
+		}
+		content_length += chunk_length;
+
+		/* insure the next 2 bytes are CRLF */
+		res = fread(chunk_header, 1, 2, ser->f);
+		if (res < 2) {
+			ast_log(LOG_WARNING,
+				"Short HTTP chunk sync read (%d < 2)\n", res);
+			errno = EIO;
+			ast_free(buf);
+			return NULL;
+		}
+		if (chunk_header[0] != 0x0D || chunk_header[1] != 0x0A) {
+			ast_log(LOG_WARNING,
+				"Post HTTP chunk sync bytes wrong (%d, %d)\n",
+				chunk_header[0], chunk_header[1]);
+			errno = EIO;
+			ast_free(buf);
+			return NULL;
+		}
+	} while (chunk_length);
+
+	buf[content_length] = 0;
+	*return_length = content_length;
+	return buf;
+}
+
+struct ast_json *ast_http_get_json(
+	struct ast_tcptls_session_instance *ser, struct ast_variable *headers)
+{
+	int content_length = 0;
+	struct ast_json *body;
+	RAII_VAR(char *, buf, NULL, ast_free);
+	RAII_VAR(char *, type, get_content_type(headers), ast_free);
+
+	/* Use errno to distinguish errors from no body */
+	errno = 0;
+
+	if (ast_strlen_zero(type) || strcasecmp(type, "application/json")) {
+		/* Content type is not JSON */
+		return NULL;
+	}
+
+	buf = ast_http_get_contents(&content_length, ser, headers);
+	if (buf == NULL)
+	{
+		/* errno already set */
+		return NULL;
+	}
+
+	body = ast_json_load_buf(buf, content_length, NULL);
+	if (body == NULL) {
+		/* Failed to parse JSON; treat as an I/O error */
+		errno = EIO;
+		return NULL;
+	}
+
+	return body;
+}
+
 /*
  * get post variables from client Request Entity-Body, if content type is
  * application/x-www-form-urlencoded
@@ -616,48 +907,23 @@ struct ast_variable *ast_http_get_post_vars(
 {
 	int content_length = 0;
 	struct ast_variable *v, *post_vars=NULL, *prev = NULL;
-	char *buf, *var, *val;
-	int res;
+	char *var, *val;
+	RAII_VAR(char *, buf, NULL, ast_free_ptr);
+	RAII_VAR(char *, type, get_content_type(headers), ast_free);
 
-	for (v = headers; v; v = v->next) {
-		if (!strcasecmp(v->name, "Content-Type")) {
-			if (strcasecmp(v->value, "application/x-www-form-urlencoded")) {
-				return NULL;
-			}
-			break;
-		}
-	}
+	/* Use errno to distinguish errors from no params */
+	errno = 0;
 
-	for (v = headers; v; v = v->next) {
-		if (!strcasecmp(v->name, "Content-Length")) {
-			content_length = atoi(v->value);
-			break;
-		}
-	}
-
-	if (content_length <= 0) {
+	if (ast_strlen_zero(type) ||
+	    strcasecmp(type, "application/x-www-form-urlencoded")) {
+		/* Content type is not form data */
 		return NULL;
 	}
 
-	if (content_length > MAX_POST_CONTENT - 1) {
-		ast_log(LOG_WARNING, "Excessively long HTTP content. %d is greater than our max of %d\n",
-				content_length, MAX_POST_CONTENT);
-		ast_http_send(ser, AST_HTTP_POST, 413, "Request Entity Too Large", NULL, NULL, 0, 0);
+	buf = ast_http_get_contents(&content_length, ser, headers);
+	if (buf == NULL) {
 		return NULL;
 	}
-
-	buf = ast_malloc(content_length + 1);
-	if (!buf) {
-		return NULL;
-	}
-
-	res = fread(buf, 1, content_length, ser->f);
-	if (res < content_length) {
-		/* Error, distinguishable by ferror() or feof(), but neither
-		 * is good. */
-		goto done;
-	}
-	buf[content_length] = '\0';
 
 	while ((val = strsep(&buf, "&"))) {
 		var = strsep(&val, "=");
@@ -677,8 +943,6 @@ struct ast_variable *ast_http_get_post_vars(
 		}
 	}
 
-done:
-	ast_free(buf);
 	return post_vars;
 }
 
@@ -914,7 +1178,9 @@ struct ast_http_auth *ast_http_get_auth(struct ast_variable *headers)
 		char decoded[256] = {};
 		char *username;
 		char *password;
+#ifdef AST_DEVMODE
 		int cnt;
+#endif /* AST_DEVMODE */
 
 		if (strcasecmp("Authorization", v->name) != 0) {
 			continue;
@@ -939,7 +1205,10 @@ struct ast_http_auth *ast_http_get_auth(struct ast_variable *headers)
 		/* This will truncate "userid:password" lines to
 		 * sizeof(decoded). The array is long enough that this shouldn't
 		 * be a problem */
-		cnt = ast_base64decode((unsigned char*)decoded, base64,
+#ifdef AST_DEVMODE
+		cnt =
+#endif /* AST_DEVMODE */
+		ast_base64decode((unsigned char*)decoded, base64,
 			sizeof(decoded) - 1);
 		ast_assert(cnt < sizeof(decoded));
 
@@ -966,6 +1235,7 @@ static void *httpd_helper_thread(void *data)
 	struct ast_variable *tail = headers;
 	char *uri, *method;
 	enum ast_http_method http_method = AST_HTTP_UNKNOWN;
+	const char *transfer_encoding;
 
 	if (ast_atomic_fetchadd_int(&session_count, +1) >= session_limit) {
 		goto done;
@@ -1036,6 +1306,23 @@ static void *httpd_helper_thread(void *data)
 			tail->next = ast_variable_new(name, value, __FILE__);
 			tail = tail->next;
 		}
+	}
+
+	transfer_encoding = get_transfer_encoding(headers);
+	/* Transfer encoding defaults to identity */
+	if (!transfer_encoding) {
+		transfer_encoding = "identity";
+	}
+
+	/*
+	 * RFC 2616, section 3.6, we should respond with a 501 for any transfer-
+	 * codings we don't understand.
+	 */
+	if (strcasecmp(transfer_encoding, "identity") != 0 &&
+		strcasecmp(transfer_encoding, "chunked") != 0) {
+		/* Transfer encodings not supported */
+		ast_http_error(ser, 501, "Unimplemented", "Unsupported Transfer-Encoding.");
+		goto done;
 	}
 
 	if (!*uri) {

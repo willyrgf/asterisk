@@ -1397,7 +1397,7 @@ static void generic_monitor_instance_list_destructor(void *obj)
 	ast_free((char *)generic_list->device_name);
 }
 
-static void generic_monitor_devstate_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg);
+static void generic_monitor_devstate_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg);
 static struct generic_monitor_instance_list *create_new_generic_list(struct ast_cc_monitor *monitor)
 {
 	struct generic_monitor_instance_list *generic_list = ao2_t_alloc(sizeof(*generic_list),
@@ -1471,7 +1471,7 @@ static int generic_monitor_devstate_tp_cb(void *data)
 	return 0;
 }
 
-static void generic_monitor_devstate_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void generic_monitor_devstate_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	/* Wow, it's cool that we've picked up on a state change, but we really want
 	 * the actual work to be done in the core's taskprocessor execution thread
@@ -2750,7 +2750,7 @@ static int cc_generic_agent_stop_ringing(struct ast_cc_agent *agent)
 	return 0;
 }
 
-static void generic_agent_devstate_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void generic_agent_devstate_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	struct ast_cc_agent *agent = userdata;
 	enum ast_device_state new_state;
@@ -2815,7 +2815,7 @@ static void *generic_recall(void *data)
 	const char *callback_sub = ast_get_cc_callback_sub(agent->cc_params);
 	unsigned int recall_timer = ast_get_cc_recall_timer(agent->cc_params) * 1000;
 	struct ast_format tmp_fmt;
-	struct ast_format_cap *tmp_cap = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *tmp_cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 
 	if (!tmp_cap) {
 		return NULL;

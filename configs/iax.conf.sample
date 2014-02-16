@@ -22,11 +22,13 @@
 ;bindport=4569           ; The default port to listen on
                          ; NOTE: bindport must be specified BEFORE bindaddr or
                          ; may be specified on a specific bindaddr if followed by
-                         ; colon and port (e.g. bindaddr=192.168.0.1:4569)
+                         ; colon and port (e.g. bindaddr=192.168.0.1:4569) or for
+                         ; IPv6 the address needs to be in brackets then colon
+                         ; and port (e.g. bindaddr=[2001:db8::1]:4569).
 
 ;bindaddr=192.168.0.1    ; You can specify 'bindaddr' more than once to bind to
                          ; multiple addresses, but the first will be the
-                         ; default.
+                         ; default. IPv6 addresses are accepted.
 
 ;
 ; Set 'iaxcompat' to yes if you plan to use layered switches or some other
@@ -608,19 +610,24 @@ description=Demo System At Digium    ; Description of this peer, as listed by
 ; IPs can also optionally be given but are not required.  Caller*ID can be
 ; suggested to the other side as well if it is for example a phone instead of
 ; another PBX.
-;connectedline=yes ; Set how connected line information is handled for this
-;                  ; peer. If set to "yes", both sending and receiving
-;                  ; connected line information will be enabled. If set to
-;                  ; "send", this peer will send connected line information
-;                  ; but will not process connected line updates. If set to
-;                  ; "receive", connected line updates will be processed
-;                  ; but not sent. If set to "no", connected line updates
-;                  ; will be disabled. Default is "no".
+;connectedline=yes ; Set if connected line and redirecting information updates
+;                  ; are passed between Asterisk servers for this peer.
+;                  ; yes - Sending and receiving updates are enabled.
+;                  ; send - Only send updates.
+;                  ; receive - Only process received updates.
+;                  ; no - Sending and receiving updates are disabled.
+;                  ; Default is "no".
+;                  ;
+;                  ; Note: Because of an incompatibility between Asterisk v1.4
+;                  ; and Asterisk v1.8 or later, this option must be set
+;                  ; to "no" toward the Asterisk v1.4 peer.  A symptom of the
+;                  ; incompatibility is the call gets disconnected unexpectedly.
 
 
 ;[dynamichost]
 ;host=dynamic
 ;secret=mysecret
+; Note: app_voicemail mailboxes must be in the form of mailbox@context.
 ;mailbox=1234		; Notify about mailbox 1234
 ;inkeys=key1:key2
 ;peercontext=local	; Default context to request for calls to peer

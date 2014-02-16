@@ -49,8 +49,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*! Recording check is unimplemented. le sigh */
 #define RECORDING_CHECK 0
 
-STASIS_MESSAGE_TYPE_DEFN(stasis_app_recording_snapshot_type);
-
 /*! Container of all current recordings */
 static struct ao2_container *recordings;
 
@@ -61,12 +59,39 @@ struct stasis_app_recording {
 	char *absolute_name;
 	/*! Control object for the channel we're recording */
 	struct stasis_app_control *control;
-
 	/*! Current state of the recording. */
 	enum stasis_app_recording_state state;
 	/*! Indicates whether the recording is currently muted */
 	int muted:1;
 };
+
+static struct ast_json *recording_to_json(struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
+{
+	struct ast_channel_blob *channel_blob = stasis_message_data(message);
+	struct ast_json *blob = channel_blob->blob;
+	const char *state =
+		ast_json_string_get(ast_json_object_get(blob, "state"));
+	const char *type;
+
+	if (!strcmp(state, "recording")) {
+		type = "RecordingStarted";
+	} else if (!strcmp(state, "done") || !strcasecmp(state, "canceled")) {
+		type = "RecordingFinished";
+	} else if (!strcmp(state, "failed")) {
+		type = "RecordingFailed";
+	} else {
+		return NULL;
+	}
+
+	return ast_json_pack("{s: s, s: O}",
+		"type", type,
+		"recording", blob);
+}
+
+STASIS_MESSAGE_TYPE_DEFN(stasis_app_recording_snapshot_type,
+	.to_json = recording_to_json,
+);
 
 static int recording_hash(const void *obj, int flags)
 {
@@ -183,7 +208,7 @@ enum ast_record_if_exists stasis_app_recording_if_exists_parse(
 	return -1;
 }
 
-static void recording_publish(struct stasis_app_recording *recording)
+static void recording_publish(struct stasis_app_recording *recording, const char *cause)
 {
 	RAII_VAR(struct ast_json *, json, NULL, ast_json_unref);
 	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
@@ -196,6 +221,19 @@ static void recording_publish(struct stasis_app_recording *recording)
 		return;
 	}
 
+	if (!ast_strlen_zero(cause)) {
+		struct ast_json *failure_cause = ast_json_string_create(cause);
+
+		if (!failure_cause) {
+			return;
+		}
+
+		if (ast_json_object_set(json, "cause", failure_cause)) {
+			ast_json_unref(failure_cause);
+			return;
+		}
+	}
+
 	message = ast_channel_blob_create_from_cache(
 		stasis_app_control_get_channel_id(recording->control),
 		stasis_app_recording_snapshot_type(), json);
@@ -206,11 +244,34 @@ static void recording_publish(struct stasis_app_recording *recording)
 	stasis_app_control_publish(recording->control, message);
 }
 
-static void recording_fail(struct stasis_app_recording *recording)
+
+static void recording_set_state(struct stasis_app_recording *recording,
+				enum stasis_app_recording_state state,
+				const char *cause)
 {
 	SCOPED_AO2LOCK(lock, recording);
-	recording->state = STASIS_APP_RECORDING_STATE_FAILED;
-	recording_publish(recording);
+	recording->state = state;
+	recording_publish(recording, cause);
+}
+
+static enum stasis_app_control_channel_result check_rule_recording(
+	const struct stasis_app_control *control)
+{
+	return STASIS_APP_CHANNEL_RECORDING;
+}
+
+struct stasis_app_control_rule rule_recording = {
+	.check_rule = check_rule_recording
+};
+
+static void recording_fail(struct stasis_app_control *control,
+			   struct stasis_app_recording *recording,
+			   const char *cause)
+{
+	stasis_app_control_unregister_add_rule(control, &rule_recording);
+
+	recording_set_state(
+		recording, STASIS_APP_RECORDING_STATE_FAILED, cause);
 }
 
 static void recording_cleanup(struct stasis_app_recording *recording)
@@ -219,7 +280,7 @@ static void recording_cleanup(struct stasis_app_recording *recording)
 		OBJ_POINTER | OBJ_UNLINK | OBJ_NODATA);
 }
 
-static void *record_file(struct stasis_app_control *control,
+static int record_file(struct stasis_app_control *control,
 	struct ast_channel *chan, void *data)
 {
 	RAII_VAR(struct stasis_app_recording *, recording,
@@ -233,8 +294,8 @@ static void *record_file(struct stasis_app_control *control,
 
 	if (stasis_app_get_bridge(control)) {
 		ast_log(LOG_ERROR, "Cannot record channel while in bridge\n");
-		recording_fail(recording);
-		return NULL;
+		recording_fail(control, recording, "Cannot record channel while in bridge");
+		return -1;
 	}
 
 	switch (recording->options->terminate_on) {
@@ -255,15 +316,12 @@ static void *record_file(struct stasis_app_control *control,
 	if (res != 0) {
 		ast_debug(3, "%s: Failed to answer\n",
 			ast_channel_uniqueid(chan));
-		recording_fail(recording);
-		return NULL;
+		recording_fail(control, recording, "Failed to answer channel");
+		return -1;
 	}
 
-	ao2_lock(recording);
-	recording->state = STASIS_APP_RECORDING_STATE_RECORDING;
-	recording_publish(recording);
-	ao2_unlock(recording);
-
+	recording_set_state(
+		recording, STASIS_APP_RECORDING_STATE_RECORDING, NULL);
 	ast_play_and_record_full(chan,
 		NULL, /* playfile */
 		recording->absolute_name,
@@ -282,12 +340,12 @@ static void *record_file(struct stasis_app_control *control,
 
 	ast_debug(3, "%s: Recording complete\n", ast_channel_uniqueid(chan));
 
-	ao2_lock(recording);
-	recording->state = STASIS_APP_RECORDING_STATE_COMPLETE;
-	recording_publish(recording);
-	ao2_unlock(recording);
+	recording_set_state(
+		recording, STASIS_APP_RECORDING_STATE_COMPLETE, NULL);
 
-	return NULL;
+	stasis_app_control_unregister_add_rule(control, &rule_recording);
+
+	return 0;
 }
 
 static void recording_dtor(void *obj)
@@ -348,6 +406,14 @@ struct stasis_app_recording *stasis_app_control_record(
 	recording->control = control;
 	recording->state = STASIS_APP_RECORDING_STATE_QUEUED;
 
+	if ((recording->options->if_exists == AST_RECORD_IF_EXISTS_FAIL) &&
+			(ast_fileexists(recording->absolute_name, NULL, NULL))) {
+		ast_log(LOG_WARNING, "Recording file '%s' already exists and ifExists option is failure.\n",
+			recording->absolute_name);
+		errno = EEXIST;
+		return NULL;
+	}
+
 	{
 		RAII_VAR(struct stasis_app_recording *, old_recording, NULL,
 			ao2_cleanup);
@@ -365,6 +431,8 @@ struct stasis_app_recording *stasis_app_control_record(
 		}
 		ao2_link(recordings, recording);
 	}
+
+	stasis_app_control_register_add_rule(control, &rule_recording);
 
 	/* A ref is kept in the recordings container; no need to bump */
 	stasis_app_send_command_async(control, record_file, recording);

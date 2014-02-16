@@ -862,6 +862,7 @@ static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *cntx,
 	struct ast_format tmpfmt;
 	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, "", i->ext, i->context, linkedid, 0, "Phone/%s", i->dev + 5);
 	if (tmp) {
+		ast_channel_lock(tmp);
 		ast_channel_tech_set(tmp, cur_tech);
 		ast_channel_set_fd(tmp, 0, i->fd);
 		/* XXX Switching formats silently causes kernel panics XXX */
@@ -901,6 +902,7 @@ static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *cntx,
 
 		i->owner = tmp;
 		ast_module_ref(ast_module_info->self);
+		ast_channel_unlock(tmp);
 		if (state != AST_STATE_DOWN) {
 			if (state == AST_STATE_RING) {
 				ioctl(ast_channel_fd(tmp, 0), PHONE_RINGBACK);
@@ -1376,7 +1378,7 @@ static int load_module(void)
 	struct ast_flags config_flags = { 0 };
 	struct ast_format tmpfmt;
 
-	if (!(phone_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(phone_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(phone_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_G723_1, 0));
@@ -1384,11 +1386,11 @@ static int load_module(void)
 	ast_format_cap_add(phone_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_ULAW, 0));
 	ast_format_cap_add(phone_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_G729A, 0));
 
-	if (!(prefcap = ast_format_cap_alloc())) {
+	if (!(prefcap = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_copy(prefcap, phone_tech.capabilities);
-	if (!(phone_tech_fxs.capabilities = ast_format_cap_alloc())) {
+	if (!(phone_tech_fxs.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 

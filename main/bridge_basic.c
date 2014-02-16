@@ -2218,7 +2218,7 @@ static void recall_callback(struct ast_dial *dial)
 
 static int recalling_enter(struct attended_transfer_properties *props)
 {
-	RAII_VAR(struct ast_format_cap *, cap, ast_format_cap_alloc_nolock(), ast_format_cap_destroy);
+	RAII_VAR(struct ast_format_cap *, cap, ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK), ast_format_cap_destroy);
 	struct ast_format fmt;
 
 	if (!cap) {
@@ -2289,7 +2289,8 @@ static enum attended_transfer_state recalling_exit(struct attended_transfer_prop
 		 */
 		ast_bridge_features_ds_set(props->recall_target, &props->transferer_features);
 		ast_channel_ref(props->recall_target);
-		if (ast_bridge_impart(props->transferee_bridge, props->recall_target, NULL, NULL, 1)) {
+		if (ast_bridge_impart(props->transferee_bridge, props->recall_target, NULL, NULL,
+			AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 			ast_hangup(props->recall_target);
 			return TRANSFER_FAIL;
 		}
@@ -2345,7 +2346,7 @@ static int attach_framehook(struct attended_transfer_properties *props, struct a
 
 static int retransfer_enter(struct attended_transfer_properties *props)
 {
-	RAII_VAR(struct ast_format_cap *, cap, ast_format_cap_alloc_nolock(), ast_format_cap_destroy);
+	RAII_VAR(struct ast_format_cap *, cap, ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK), ast_format_cap_destroy);
 	struct ast_format fmt;
 	char destination[AST_MAX_EXTENSION + AST_MAX_CONTEXT + 2];
 	int cause;
@@ -2380,7 +2381,8 @@ static int retransfer_enter(struct attended_transfer_properties *props)
 	}
 
 	ast_channel_ref(props->recall_target);
-	if (ast_bridge_impart(props->transferee_bridge, props->recall_target, NULL, NULL, 1)) {
+	if (ast_bridge_impart(props->transferee_bridge, props->recall_target, NULL, NULL,
+		AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 		ast_log(LOG_ERROR, "Unable to place recall target into bridge\n");
 		ast_hangup(props->recall_target);
 		return -1;
@@ -2719,7 +2721,7 @@ static enum attended_transfer_stimulus wait_for_stimulus(struct attended_transfe
 		if (!(state_properties[props->state].flags & TRANSFER_STATE_FLAG_TIMED)) {
 			ast_cond_wait(&props->cond, lock);
 		} else {
-			struct timeval relative_timeout;
+			struct timeval relative_timeout = { 0, };
 			struct timeval absolute_timeout;
 			struct timespec timeout_arg;
 
@@ -2728,10 +2730,10 @@ static enum attended_transfer_stimulus wait_for_stimulus(struct attended_transfe
 			}
 
 			if (state_properties[props->state].flags & TRANSFER_STATE_FLAG_TIMER_LOOP_DELAY) {
-				relative_timeout = ast_samp2tv(props->atxferloopdelay, 1000);
+				relative_timeout.tv_sec = props->atxferloopdelay;
 			} else {
 				/* Implied TRANSFER_STATE_FLAG_TIMER_ATXFER_NO_ANSWER */
-				relative_timeout = ast_samp2tv(props->atxfernoanswertimeout, 1000);
+				relative_timeout.tv_sec = props->atxfernoanswertimeout;
 			}
 
 			absolute_timeout = ast_tvadd(props->start, relative_timeout);
@@ -2864,7 +2866,7 @@ static int grab_transfer(struct ast_channel *chan, char *exten, size_t exten_len
 		ast_channel_unlock(chan);
 		return -1;
 	}
-	digit_timeout = xfer_cfg->transferdigittimeout;
+	digit_timeout = xfer_cfg->transferdigittimeout * 1000;
 	ast_channel_unlock(chan);
 
 	/* Play the simple "transfer" prompt out and wait */
@@ -2927,8 +2929,7 @@ static struct ast_channel *dial_transfer(struct ast_channel *caller, const char 
 	/* Who is transferring the call. */
 	pbx_builtin_setvar_helper(chan, "TRANSFERERNAME", ast_channel_name(caller));
 
-	/* To work as an analog to BLINDTRANSFER */
-	pbx_builtin_setvar_helper(chan, "ATTENDEDTRANSFER", ast_channel_name(caller));
+	ast_bridge_set_transfer_variables(chan, ast_channel_name(caller), 1);
 
 	/* Before we actually dial out let's inherit appropriate information. */
 	copy_caller_data(chan, caller);
@@ -3067,7 +3068,8 @@ static int feature_attended_transfer(struct ast_bridge_channel *bridge_channel, 
 	 * choice is to give it a bump
 	 */
 	ast_channel_ref(props->transfer_target);
-	if (ast_bridge_impart(props->target_bridge, props->transfer_target, NULL, NULL, 1)) {
+	if (ast_bridge_impart(props->target_bridge, props->transfer_target, NULL, NULL,
+		AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 		ast_log(LOG_ERROR, "Unable to place transfer target into bridge.\n");
 		ast_stream_and_wait(bridge_channel->chan, props->failsound, AST_DIGIT_NONE);
 		ast_bridge_channel_write_unhold(bridge_channel);
@@ -3237,7 +3239,7 @@ struct ast_bridge *ast_bridge_basic_new(void)
 	bridge = bridge_alloc(sizeof(struct ast_bridge), &ast_bridge_basic_v_table);
 	bridge = bridge_base_init(bridge,
 		AST_BRIDGE_CAPABILITY_NATIVE | AST_BRIDGE_CAPABILITY_1TO1MIX
-			| AST_BRIDGE_CAPABILITY_MULTIMIX, NORMAL_FLAGS);
+			| AST_BRIDGE_CAPABILITY_MULTIMIX, NORMAL_FLAGS, NULL, NULL);
 	bridge = bridge_basic_personality_alloc(bridge);
 	bridge = bridge_register(bridge);
 	return bridge;

@@ -98,14 +98,20 @@
 						<note><para>When parking times out and the channel returns to the dial plan, the following variables are set:
 						</para></note>
 						<variablelist>
-							<variable name="PARKINGSLOT">
+							<variable name="PARKING_SPACE">
 								<para>extension that the call was parked in prior to timing out.</para>
+							</variable>
+							<variable name="PARKINGSLOT">
+								<para>Deprecated.  Use <variable>PARKING_SPACE</variable> instead.</para>
 							</variable>
 							<variable name="PARKEDLOT">
 								<para>name of the lot that the call was parked in prior to timing out.</para>
 							</variable>
 							<variable name="PARKER">
 								<para>The device that parked the call</para>
+							</variable>
+							<variable name="PARKER_FLAT">
+								<para>The flat version of <variable>PARKER</variable></para>
 							</variable>
 						</variablelist>
 					</description>
@@ -131,33 +137,33 @@
 					<description>
 						<enumlist>
 							<enum name="no"><para>Apply to neither side.</para></enum>
-							<enum name="caller"><para>Apply to only to the caller picking up the parked call.</para></enum>
-							<enum name="callee"><para>Apply to only to the parked call being picked up.</para></enum>
-							<enum name="both"><para>Apply to both the caller and the callee.</para></enum>
+							<enum name="caller"><para>Apply only to the call connecting with the call coming out of the parking lot.</para></enum>
+							<enum name="callee"><para>Apply only to the call coming out of the parking lot.</para></enum>
+							<enum name="both"><para>Apply to both sides.</para></enum>
 						</enumlist>
 						<note><para>If courtesy tone is not specified then this option will be ignored.</para></note>
 					</description>
 				</configOption>
 				<configOption name="parkedcalltransfers" default="no">
-					<synopsis>Apply the DTMF transfer features to the caller and/or callee when parked calls are picked up.</synopsis>
+					<synopsis>Who to apply the DTMF transfer features to when parked calls are picked up or timeout.</synopsis>
 					<description>
 						<xi:include xpointer="xpointer(/docs/configInfo[@name='res_parking']/configFile[@name='res_parking.conf']/configObject[@name='parking_lot']/configOption[@name='parkedplay']/description/enumlist)" />
 					</description>
 				</configOption>
 				<configOption name="parkedcallreparking" default="no">
-					<synopsis>Apply the DTMF parking feature to the caller and/or callee when parked calls are picked up.</synopsis>
+					<synopsis>Who to apply the DTMF parking feature to when parked calls are picked up or timeout.</synopsis>
 					<description>
 						<xi:include xpointer="xpointer(/docs/configInfo[@name='res_parking']/configFile[@name='res_parking.conf']/configObject[@name='parking_lot']/configOption[@name='parkedplay']/description/enumlist)" />
 					</description>
 				</configOption>
 				<configOption name="parkedcallhangup" default="no">
-					<synopsis>Apply the DTMF Hangup feature to the caller and/or callee when parked calls are picked up.</synopsis>
+					<synopsis>Who to apply the DTMF hangup feature to when parked calls are picked up or timeout.</synopsis>
 					<description>
 						<xi:include xpointer="xpointer(/docs/configInfo[@name='res_parking']/configFile[@name='res_parking.conf']/configObject[@name='parking_lot']/configOption[@name='parkedplay']/description/enumlist)" />
 					</description>
 				</configOption>
 				<configOption name="parkedcallrecording" default="no">
-					<synopsis>Apply the DTMF recording features to the caller and/or callee when parked calls are picked up</synopsis>
+					<synopsis>Who to apply the DTMF MixMonitor recording feature to when parked calls are picked up or timeout.</synopsis>
 					<description>
 						<xi:include xpointer="xpointer(/docs/configInfo[@name='res_parking']/configFile[@name='res_parking.conf']/configObject[@name='parking_lot']/configOption[@name='parkedplay']/description/enumlist)" />
 					</description>
@@ -623,6 +629,9 @@ void parking_lot_cfg_remove_extensions(struct parking_lot_cfg *lot_cfg)
 		 */
 		ast_context_destroy(NULL, lot_cfg->registrar);
 	}
+
+	/* If we come back for a second pass, someone else has this registrar now. */
+	ast_string_field_set(lot_cfg, registrar, "");
 }
 
 static void remove_all_configured_parking_lot_extensions(void)
@@ -1169,6 +1178,7 @@ static int unload_module(void)
 	ao2_cleanup(parking_lot_container);
 	parking_lot_container = NULL;
 	aco_info_destroy(&cfg_info);
+	ao2_global_obj_release(globals);
 
 	return 0;
 }

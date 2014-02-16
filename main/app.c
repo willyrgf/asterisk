@@ -426,126 +426,72 @@ int ast_app_run_sub(struct ast_channel *autoservice_chan, struct ast_channel *su
 	return res;
 }
 
-static int (*ast_has_voicemail_func)(const char *mailbox, const char *folder) = NULL;
-static int (*ast_inboxcount_func)(const char *mailbox, int *newmsgs, int *oldmsgs) = NULL;
-static int (*ast_inboxcount2_func)(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs) = NULL;
-static int (*ast_sayname_func)(struct ast_channel *chan, const char *mailbox, const char *context) = NULL;
-static int (*ast_messagecount_func)(const char *context, const char *mailbox, const char *folder) = NULL;
-static int (*ast_copy_recording_to_vm_func)(struct ast_vm_recording_data *vm_rec_data) = NULL;
-static const char *(*ast_vm_index_to_foldername_func)(int id) = NULL;
-static struct ast_vm_mailbox_snapshot *(*ast_vm_mailbox_snapshot_create_func)(const char *mailbox,
-	const char *context,
-	const char *folder,
-	int descending,
-	enum ast_vm_snapshot_sort_val sort_val,
-	int combine_INBOX_and_OLD) = NULL;
-static struct ast_vm_mailbox_snapshot *(*ast_vm_mailbox_snapshot_destroy_func)(struct ast_vm_mailbox_snapshot *mailbox_snapshot) = NULL;
-static int (*ast_vm_msg_move_func)(const char *mailbox,
-	const char *context,
-	size_t num_msgs,
-	const char *oldfolder,
-	const char *old_msg_ids[],
-	const char *newfolder) = NULL;
-static int (*ast_vm_msg_remove_func)(const char *mailbox,
-	const char *context,
-	size_t num_msgs,
-	const char *folder,
-	const char *msgs[]) = NULL;
-static int (*ast_vm_msg_forward_func)(const char *from_mailbox,
-	const char *from_context,
-	const char *from_folder,
-	const char *to_mailbox,
-	const char *to_context,
-	const char *to_folder,
-	size_t num_msgs,
-	const char *msg_ids[],
-	int delete_old) = NULL;
-static int (*ast_vm_msg_play_func)(struct ast_channel *chan,
-	const char *mailbox,
-	const char *context,
-	const char *folder,
-	const char *msg_num,
-	ast_vm_msg_play_cb cb) = NULL;
+/*! \brief The container for the voicemail provider */
+static AO2_GLOBAL_OBJ_STATIC(vm_provider);
 
-void ast_install_vm_functions(int (*has_voicemail_func)(const char *mailbox, const char *folder),
-			      int (*inboxcount_func)(const char *mailbox, int *newmsgs, int *oldmsgs),
-			      int (*inboxcount2_func)(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs),
-			      int (*messagecount_func)(const char *context, const char *mailbox, const char *folder),
-			      int (*sayname_func)(struct ast_channel *chan, const char *mailbox, const char *context),
-			      int (*copy_recording_to_vm_func)(struct ast_vm_recording_data *vm_rec_data),
-			      const char *vm_index_to_foldername_func(int id),
-			      struct ast_vm_mailbox_snapshot *(*vm_mailbox_snapshot_create_func)(const char *mailbox,
-				const char *context,
-				const char *folder,
-				int descending,
-				enum ast_vm_snapshot_sort_val sort_val,
-				int combine_INBOX_and_OLD),
-			      struct ast_vm_mailbox_snapshot *(*vm_mailbox_snapshot_destroy_func)(struct ast_vm_mailbox_snapshot *mailbox_snapshot),
-			      int (*vm_msg_move_func)(const char *mailbox,
-				const char *context,
-				size_t num_msgs,
-				const char *oldfolder,
-				const char *old_msg_ids[],
-				const char *newfolder),
-			      int (*vm_msg_remove_func)(const char *mailbox,
-				const char *context,
-				size_t num_msgs,
-				const char *folder,
-				const char *msgs[]),
-			      int (*vm_msg_forward_func)(const char *from_mailbox,
-				const char *from_context,
-				const char *from_folder,
-				const char *to_mailbox,
-				const char *to_context,
-				const char *to_folder,
-				size_t num_msgs,
-				const char *msg_ids[],
-				int delete_old),
-			      int (*vm_msg_play_func)(struct ast_channel *chan,
-				const char *mailbox,
-				const char *context,
-				const char *folder,
-				const char *msg_num,
-				ast_vm_msg_play_cb cb))
+/*! Voicemail not registered warning */
+static int vm_warnings;
+
+int ast_vm_is_registered(void)
 {
-	ast_has_voicemail_func = has_voicemail_func;
-	ast_inboxcount_func = inboxcount_func;
-	ast_inboxcount2_func = inboxcount2_func;
-	ast_messagecount_func = messagecount_func;
-	ast_sayname_func = sayname_func;
-	ast_copy_recording_to_vm_func = copy_recording_to_vm_func;
-	ast_vm_index_to_foldername_func = vm_index_to_foldername_func;
-	ast_vm_mailbox_snapshot_create_func = vm_mailbox_snapshot_create_func;
-	ast_vm_mailbox_snapshot_destroy_func = vm_mailbox_snapshot_destroy_func;
-	ast_vm_msg_move_func = vm_msg_move_func;
-	ast_vm_msg_remove_func = vm_msg_remove_func;
-	ast_vm_msg_forward_func = vm_msg_forward_func;
-	ast_vm_msg_play_func = vm_msg_play_func;
+	struct ast_vm_functions *table;
+	int is_registered;
+
+	table = ao2_global_obj_ref(vm_provider);
+	is_registered = table ? 1 : 0;
+	ao2_cleanup(table);
+	return is_registered;
 }
 
-void ast_uninstall_vm_functions(void)
+int __ast_vm_register(const struct ast_vm_functions *vm_table, struct ast_module *module)
 {
-	ast_has_voicemail_func = NULL;
-	ast_inboxcount_func = NULL;
-	ast_inboxcount2_func = NULL;
-	ast_messagecount_func = NULL;
-	ast_sayname_func = NULL;
-	ast_copy_recording_to_vm_func = NULL;
-	ast_vm_index_to_foldername_func = NULL;
-	ast_vm_mailbox_snapshot_create_func = NULL;
-	ast_vm_mailbox_snapshot_destroy_func = NULL;
-	ast_vm_msg_move_func = NULL;
-	ast_vm_msg_remove_func = NULL;
-	ast_vm_msg_forward_func = NULL;
-	ast_vm_msg_play_func = NULL;
+	RAII_VAR(struct ast_vm_functions *, table, NULL, ao2_cleanup);
+
+	if (!vm_table->module_name) {
+		ast_log(LOG_ERROR, "Voicemail provider missing required information.\n");
+		return -1;
+	}
+	if (vm_table->module_version != VM_MODULE_VERSION) {
+		ast_log(LOG_ERROR, "Voicemail provider '%s' has incorrect version\n",
+			vm_table->module_name);
+		return -1;
+	}
+
+	table = ao2_global_obj_ref(vm_provider);
+	if (table) {
+		ast_log(LOG_WARNING, "Voicemail provider already registered by %s.\n",
+			table->module_name);
+		return -1;
+	}
+
+	table = ao2_alloc_options(sizeof(*table), NULL, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!table) {
+		return -1;
+	}
+	*table = *vm_table;
+	table->module = module;
+
+	ao2_global_obj_replace_unref(vm_provider, table);
+	return 0;
+}
+
+void ast_vm_unregister(const char *module_name)
+{
+	struct ast_vm_functions *table;
+
+	table = ao2_global_obj_ref(vm_provider);
+	if (table && !strcmp(table->module_name, module_name)) {
+		ao2_global_obj_release(vm_provider);
+	}
+	ao2_cleanup(table);
 }
 
 #ifdef TEST_FRAMEWORK
-int (*ast_vm_test_create_user_func)(const char *context, const char *mailbox) = NULL;
-int (*ast_vm_test_destroy_user_func)(const char *context, const char *mailbox) = NULL;
+static ast_vm_test_create_user_fn *ast_vm_test_create_user_func = NULL;
+static ast_vm_test_destroy_user_fn *ast_vm_test_destroy_user_func = NULL;
 
-void ast_install_vm_test_functions(int (*vm_test_create_user_func)(const char *context, const char *mailbox),
-				   int (*vm_test_destroy_user_func)(const char *context, const char *mailbox))
+void ast_install_vm_test_functions(ast_vm_test_create_user_fn *vm_test_create_user_func,
+	ast_vm_test_destroy_user_fn *vm_test_destroy_user_func)
 {
 	ast_vm_test_create_user_func = vm_test_create_user_func;
 	ast_vm_test_destroy_user_func = vm_test_destroy_user_func;
@@ -558,17 +504,32 @@ void ast_uninstall_vm_test_functions(void)
 }
 #endif
 
-int ast_app_has_voicemail(const char *mailbox, const char *folder)
+static void vm_warn_no_provider(void)
 {
-	static int warned = 0;
-	if (ast_has_voicemail_func) {
-		return ast_has_voicemail_func(mailbox, folder);
+	if (vm_warnings++ % 10 == 0) {
+		ast_verb(3, "No voicemail provider registered.\n");
 	}
+}
 
-	if (warned++ % 10 == 0) {
-		ast_verb(3, "Message check requested for mailbox %s/folder %s but voicemail not loaded.\n", mailbox, folder ? folder : "INBOX");
-	}
-	return 0;
+#define VM_API_CALL(res, api_call, api_parms)								\
+	do {																	\
+		struct ast_vm_functions *table = ao2_global_obj_ref(vm_provider);	\
+		if (!table) {														\
+			vm_warn_no_provider();											\
+		} else if (table->api_call) {										\
+			ast_module_ref(table->module);									\
+			(res) = table->api_call api_parms;								\
+			ast_module_unref(table->module);								\
+		}																	\
+		ao2_cleanup(table);													\
+	} while (0)
+
+int ast_app_has_voicemail(const char *mailboxes, const char *folder)
+{
+	int res = 0;
+
+	VM_API_CALL(res, has_voicemail, (mailboxes, folder));
+	return res;
 }
 
 /*!
@@ -579,44 +540,31 @@ int ast_app_has_voicemail(const char *mailbox, const char *folder)
  */
 int ast_app_copy_recording_to_vm(struct ast_vm_recording_data *vm_rec_data)
 {
-	static int warned = 0;
+	int res = -1;
 
-	if (ast_copy_recording_to_vm_func) {
-		return ast_copy_recording_to_vm_func(vm_rec_data);
-	}
-
-	if (warned++ % 10 == 0) {
-		ast_verb(3, "copy recording to voicemail called to copy %s.%s to %s@%s, but voicemail not loaded.\n",
-			vm_rec_data->recording_file, vm_rec_data->recording_ext,
-			vm_rec_data->mailbox, vm_rec_data->context);
-	}
-
-	return -1;
+	VM_API_CALL(res, copy_recording_to_vm, (vm_rec_data));
+	return res;
 }
 
-int ast_app_inboxcount(const char *mailbox, int *newmsgs, int *oldmsgs)
+int ast_app_inboxcount(const char *mailboxes, int *newmsgs, int *oldmsgs)
 {
-	static int warned = 0;
+	int res = 0;
+
 	if (newmsgs) {
 		*newmsgs = 0;
 	}
 	if (oldmsgs) {
 		*oldmsgs = 0;
 	}
-	if (ast_inboxcount_func) {
-		return ast_inboxcount_func(mailbox, newmsgs, oldmsgs);
-	}
 
-	if (warned++ % 10 == 0) {
-		ast_verb(3, "Message count requested for mailbox %s but voicemail not loaded.\n", mailbox);
-	}
-
-	return 0;
+	VM_API_CALL(res, inboxcount, (mailboxes, newmsgs, oldmsgs));
+	return res;
 }
 
-int ast_app_inboxcount2(const char *mailbox, int *urgentmsgs, int *newmsgs, int *oldmsgs)
+int ast_app_inboxcount2(const char *mailboxes, int *urgentmsgs, int *newmsgs, int *oldmsgs)
 {
-	static int warned = 0;
+	int res = 0;
+
 	if (newmsgs) {
 		*newmsgs = 0;
 	}
@@ -626,46 +574,33 @@ int ast_app_inboxcount2(const char *mailbox, int *urgentmsgs, int *newmsgs, int 
 	if (urgentmsgs) {
 		*urgentmsgs = 0;
 	}
-	if (ast_inboxcount2_func) {
-		return ast_inboxcount2_func(mailbox, urgentmsgs, newmsgs, oldmsgs);
-	}
 
-	if (warned++ % 10 == 0) {
-		ast_verb(3, "Message count requested for mailbox %s but voicemail not loaded.\n", mailbox);
-	}
-
-	return 0;
+	VM_API_CALL(res, inboxcount2, (mailboxes, urgentmsgs, newmsgs, oldmsgs));
+	return res;
 }
 
 int ast_app_sayname(struct ast_channel *chan, const char *mailbox, const char *context)
 {
-	if (ast_sayname_func) {
-		return ast_sayname_func(chan, mailbox, context);
-	}
-	return -1;
+	int res = -1;
+
+	VM_API_CALL(res, sayname, (chan, mailbox, context));
+	return res;
 }
 
-int ast_app_messagecount(const char *context, const char *mailbox, const char *folder)
+int ast_app_messagecount(const char *mailbox_id, const char *folder)
 {
-	static int warned = 0;
-	if (ast_messagecount_func) {
-		return ast_messagecount_func(context, mailbox, folder);
-	}
+	int res = 0;
 
-	if (!warned) {
-		warned++;
-		ast_verb(3, "Message count requested for mailbox %s@%s/%s but voicemail not loaded.\n", mailbox, context, folder);
-	}
-
-	return 0;
+	VM_API_CALL(res, messagecount, (mailbox_id, folder));
+	return res;
 }
 
 const char *ast_vm_index_to_foldername(int id)
 {
-	if (ast_vm_index_to_foldername_func) {
-		return ast_vm_index_to_foldername_func(id);
-	}
-	return NULL;
+	const char *res = NULL;
+
+	VM_API_CALL(res, index_to_foldername, (id));
+	return res;
 }
 
 struct ast_vm_mailbox_snapshot *ast_vm_mailbox_snapshot_create(const char *mailbox,
@@ -675,18 +610,19 @@ struct ast_vm_mailbox_snapshot *ast_vm_mailbox_snapshot_create(const char *mailb
 	enum ast_vm_snapshot_sort_val sort_val,
 	int combine_INBOX_and_OLD)
 {
-	if (ast_vm_mailbox_snapshot_create_func) {
-		return ast_vm_mailbox_snapshot_create_func(mailbox, context, folder, descending, sort_val, combine_INBOX_and_OLD);
-	}
-	return NULL;
+	struct ast_vm_mailbox_snapshot *res = NULL;
+
+	VM_API_CALL(res, mailbox_snapshot_create, (mailbox, context, folder, descending,
+		sort_val, combine_INBOX_and_OLD));
+	return res;
 }
 
 struct ast_vm_mailbox_snapshot *ast_vm_mailbox_snapshot_destroy(struct ast_vm_mailbox_snapshot *mailbox_snapshot)
 {
-	if (ast_vm_mailbox_snapshot_destroy_func) {
-		return ast_vm_mailbox_snapshot_destroy_func(mailbox_snapshot);
-	}
-	return NULL;
+	struct ast_vm_mailbox_snapshot *res = NULL;
+
+	VM_API_CALL(res, mailbox_snapshot_destroy, (mailbox_snapshot));
+	return res;
 }
 
 int ast_vm_msg_move(const char *mailbox,
@@ -696,10 +632,11 @@ int ast_vm_msg_move(const char *mailbox,
 	const char *old_msg_ids[],
 	const char *newfolder)
 {
-	if (ast_vm_msg_move_func) {
-		return ast_vm_msg_move_func(mailbox, context, num_msgs, oldfolder, old_msg_ids, newfolder);
-	}
-	return 0;
+	int res = 0;
+
+	VM_API_CALL(res, msg_move, (mailbox, context, num_msgs, oldfolder, old_msg_ids,
+		newfolder));
+	return res;
 }
 
 int ast_vm_msg_remove(const char *mailbox,
@@ -708,10 +645,10 @@ int ast_vm_msg_remove(const char *mailbox,
 	const char *folder,
 	const char *msgs[])
 {
-	if (ast_vm_msg_remove_func) {
-		return ast_vm_msg_remove_func(mailbox, context, num_msgs, folder, msgs);
-	}
-	return 0;
+	int res = 0;
+
+	VM_API_CALL(res, msg_remove, (mailbox, context, num_msgs, folder, msgs));
+	return res;
 }
 
 int ast_vm_msg_forward(const char *from_mailbox,
@@ -724,10 +661,11 @@ int ast_vm_msg_forward(const char *from_mailbox,
 	const char *msg_ids[],
 	int delete_old)
 {
-	if (ast_vm_msg_forward_func) {
-		return ast_vm_msg_forward_func(from_mailbox, from_context, from_folder, to_mailbox, to_context, to_folder, num_msgs, msg_ids, delete_old);
-	}
-	return 0;
+	int res = 0;
+
+	VM_API_CALL(res, msg_forward, (from_mailbox, from_context, from_folder, to_mailbox,
+		to_context, to_folder, num_msgs, msg_ids, delete_old));
+	return res;
 }
 
 int ast_vm_msg_play(struct ast_channel *chan,
@@ -735,12 +673,12 @@ int ast_vm_msg_play(struct ast_channel *chan,
 	const char *context,
 	const char *folder,
 	const char *msg_num,
-	ast_vm_msg_play_cb cb)
+	ast_vm_msg_play_cb *cb)
 {
-	if (ast_vm_msg_play_func) {
-		return ast_vm_msg_play_func(chan, mailbox, context, folder, msg_num, cb);
-	}
-	return 0;
+	int res = 0;
+
+	VM_API_CALL(res, msg_play, (chan, mailbox, context, folder, msg_num, cb));
+	return res;
 }
 
 #ifdef TEST_FRAMEWORK
@@ -2786,7 +2724,9 @@ int ast_app_parse_timelen(const char *timestr, int *result, enum ast_timelen uni
 		return -1;
 	}
 
-	if ((res = sscanf(timestr, FMT, &amount, u)) == 0) {
+	res = sscanf(timestr, FMT, &amount, u);
+
+	if (res == 0 || res == EOF) {
 #undef FMT
 		return -1;
 	} else if (res == 2) {
@@ -2860,10 +2800,8 @@ struct stasis_topic *ast_mwi_topic(const char *uniqueid)
 struct ast_mwi_state *ast_mwi_create(const char *mailbox, const char *context)
 {
 	RAII_VAR(struct ast_mwi_state *, mwi_state, NULL, ao2_cleanup);
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 
 	ast_assert(!ast_strlen_zero(mailbox));
-	ast_assert(!ast_strlen_zero(context));
 
 	mwi_state = ao2_alloc(sizeof(*mwi_state), mwi_state_dtor);
 	if (!mwi_state) {
@@ -2873,10 +2811,11 @@ struct ast_mwi_state *ast_mwi_create(const char *mailbox, const char *context)
 	if (ast_string_field_init(mwi_state, 256)) {
 		return NULL;
 	}
-	ast_str_set(&uniqueid, 0, "%s@%s", mailbox, context);
-	ast_string_field_set(mwi_state, uniqueid, ast_str_buffer(uniqueid));
-	ast_string_field_set(mwi_state, mailbox, mailbox);
-	ast_string_field_set(mwi_state, context, context);
+	if (!ast_strlen_zero(context)) {
+		ast_string_field_build(mwi_state, uniqueid, "%s@%s", mailbox, context);
+	} else {
+		ast_string_field_set(mwi_state, uniqueid, mailbox);
+	}
 
 	ao2_ref(mwi_state, +1);
 	return mwi_state;

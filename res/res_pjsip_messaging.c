@@ -23,6 +23,16 @@
 	<support_level>core</support_level>
  ***/
 
+/*** DOCUMENTATION
+	<info name="PJSIPMessageFromInfo" language="en_US" tech="PJSIP">
+		<para>The <literal>from</literal> parameter can be a configured endpoint
+		or in the form of "display-name" &lt;URI&gt;.</para>
+	</info>
+	<info name="PJSIPMessageToInfo" language="en_US" tech="PJSIP">
+		<para>Specifying a prefix of <literal>pjsip:</literal> will send the
+		message as a SIP MESSAGE request.</para>
+	</info>
+ ***/
 #include "asterisk.h"
 
 #include "pjsua-lib/pjsua.h"
@@ -80,13 +90,17 @@ static enum pjsip_status_code get_destination(const pjsip_rx_data *rdata, const 
  */
 static enum pjsip_status_code check_content_type(const pjsip_rx_data *rdata)
 {
-	if (ast_sip_is_content_type(&rdata->msg_info.msg->body->content_type,
-				    "text",
-				    "plain")) {
-		return PJSIP_SC_OK;
+	int res;
+	if (rdata->msg_info.msg->body && rdata->msg_info.msg->body->len) {
+		res = ast_sip_is_content_type(
+			&rdata->msg_info.msg->body->content_type, "text", "plain");
 	} else {
-		return PJSIP_SC_UNSUPPORTED_MEDIA_TYPE;
+		res = rdata->msg_info.ctype &&
+			!pj_strcmp2(&rdata->msg_info.ctype->media.type, "text") &&
+			!pj_strcmp2(&rdata->msg_info.ctype->media.subtype, "plain");
 	}
+
+	return res ? PJSIP_SC_OK : PJSIP_SC_UNSUPPORTED_MEDIA_TYPE;
 }
 
 /*!
@@ -96,7 +110,7 @@ static enum pjsip_status_code check_content_type(const pjsip_rx_data *rdata)
  *
  * \param fromto 'From' or 'To' field containing 'sip:'
  */
-static const char* skip_sip(const char *fromto)
+static const char *skip_sip(const char *fromto)
 {
 	const char *p;
 
@@ -109,46 +123,70 @@ static const char* skip_sip(const char *fromto)
 	if (*p == 's') {
 		++p;
 	}
+
 	return ++p;
 }
 
 /*!
  * \internal
- * \brief Retrieves an endpoint if specified in the given 'fromto'
+ * \brief Retrieves an endpoint if specified in the given 'to'
  *
- * Expects the given 'fromto' to be in one of the following formats:
+ * Expects the given 'to' to be in one of the following formats:
  *      sip[s]:endpoint[/aor]
  *      sip[s]:endpoint[/uri]
+ *      sip[s]:uri <-- will use default outbound endpoint
  *
  * If an optional aor is given it will try to find an associated uri
  * to return.  If an optional uri is given then that will be returned,
  * otherwise uri will be NULL.
  *
- * \param fromto 'From' or 'To' field with possible endpoint
+ * \param to 'From' or 'To' field with possible endpoint
  * \param uri Optional uri to return
  */
-static struct ast_sip_endpoint* get_endpoint(const char *fromto, char **uri)
+static struct ast_sip_endpoint* get_outbound_endpoint(
+	const char *to, char **uri)
 {
-	const char *name = skip_sip(fromto);
+	char *name, *aor_uri;
 	struct ast_sip_endpoint* endpoint;
-	struct ast_sip_aor *aor;
+	RAII_VAR(struct ast_sip_aor *, aor, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_sip_contact *, contact, NULL, ao2_cleanup);
 
-	if ((*uri = strchr(name, '/'))) {
-		*(*uri)++ = '\0';
+	name = ast_strdupa(skip_sip(to));
+
+	/* attempt to extract the endpoint name */
+	if ((aor_uri = strchr(name, '/'))) {
+		/* format was 'endpoint/' */
+		*aor_uri++ = '\0';
+	} else if ((aor_uri = strchr(name, '@'))) {
+		/* format was 'endpoint@' - don't use the rest */
+		*aor_uri = '\0';
 	}
 
-	/* endpoint is required */
-	if (ast_strlen_zero(name)) {
-		return NULL;
-	}
-
-	if (!(endpoint = ast_sorcery_retrieve_by_id(
+	/* at this point, if name is not empty then it
+	   might be an endpoint, so try to retrieve it */
+	if (ast_strlen_zero(name) || !(endpoint = ast_sorcery_retrieve_by_id(
 		      ast_sip_get_sorcery(), "endpoint", name))) {
-		return NULL;
+		/* an endpoint was not found, so assume sending directly
+		   to a uri and use the default outbound endpoint */
+		*uri = ast_strdup(to);
+		return ast_sip_default_outbound_endpoint();
 	}
 
-	if (*uri && (aor = ast_sip_location_retrieve_aor(*uri))) {
-		*uri = (char*)ast_sip_location_retrieve_first_aor_contact(aor)->uri;
+	*uri = aor_uri;
+	if (*uri) {
+		char *end = strchr(*uri, '>');
+		if (end) {
+			*end++ = '\0';
+		}
+
+		/* if what's in 'uri' is a retrievable aor use the uri on it
+		   instead, otherwise assume what's there is already a uri*/
+		if ((aor = ast_sip_location_retrieve_aor(*uri)) &&
+			(contact = ast_sip_location_retrieve_first_aor_contact(aor))) {
+			*uri = (char*)contact->uri;
+		}
+		/* need to copy because underlying uri goes away */
+		*uri = ast_strdup(*uri);
 	}
 
 	return endpoint;
@@ -156,55 +194,73 @@ static struct ast_sip_endpoint* get_endpoint(const char *fromto, char **uri)
 
 /*!
  * \internal
- * \brief Updates fields in an outgoing 'From' header.
+ * \brief Overwrite fields in the outbound 'To' header
  *
- * \param tdata The outgoing message data structure
- * \param from Info to potentially copy into the 'From' header
+ * Updates display name in an outgoing To header.
+ *
+ * \param tdata the outbound message data structure
+ * \param to info to copy into the header
  */
-static void update_from(pjsip_tx_data *tdata, const char *from)
+static void update_to(pjsip_tx_data *tdata, char *to)
 {
-	/* static const pj_str_t hname = { "From", 4 }; */
-	pjsip_name_addr *from_name_addr;
-	pjsip_sip_uri *from_uri;
+	pjsip_name_addr *name_addr = (pjsip_name_addr *)
+		PJSIP_MSG_TO_HDR(tdata->msg)->uri;
 	pjsip_uri *parsed;
-	char *uri;
 
-	RAII_VAR(struct ast_sip_endpoint *, endpoint, NULL, ao2_cleanup);
+	if ((parsed = pjsip_parse_uri(tdata->pool, to, strlen(to),
+				      PJSIP_PARSE_URI_AS_NAMEADDR))) {
+		pjsip_name_addr *parsed_name_addr = (pjsip_name_addr *)parsed;
+		if (pj_strlen(&parsed_name_addr->display)) {
+			pj_strdup(tdata->pool, &name_addr->display,
+				  &parsed_name_addr->display);
+		}
+	}
+}
+
+/*!
+ * \internal
+ * \brief Overwrite fields in the outbound 'From' header
+ *
+ * The outbound 'From' header is created/added in ast_sip_create_request with
+ * default data.  If available that data may be info specified in the 'from_user'
+ * and 'from_domain' options found on the endpoint.  That information will be
+ * overwritten with data in the given 'from' parameter.
+ *
+ * \param tdata the outbound message data structure
+ * \param from info to copy into the header
+ */
+static void update_from(pjsip_tx_data *tdata, char *from)
+{
+	pjsip_name_addr *name_addr = (pjsip_name_addr *)
+		PJSIP_MSG_FROM_HDR(tdata->msg)->uri;
+	pjsip_sip_uri *uri = pjsip_uri_get_uri(name_addr);
+	pjsip_uri *parsed;
 
 	if (ast_strlen_zero(from)) {
 		return;
 	}
 
-	if (!(endpoint = get_endpoint(from, &uri))) {
-		return;
-	}
+	if ((parsed = pjsip_parse_uri(tdata->pool, from, strlen(from),
+				      PJSIP_PARSE_URI_AS_NAMEADDR))) {
+		pjsip_name_addr *parsed_name_addr = (pjsip_name_addr *)parsed;
+		pjsip_sip_uri *parsed_uri = pjsip_uri_get_uri(parsed_name_addr->uri);
 
-	if (ast_strlen_zero(uri)) {
-		/* if no aor/uri was specified get one from the endpoint */
-		uri = (char*)ast_sip_location_retrieve_contact_from_aor_list(endpoint->aors)->uri;
-	}
+		if (pj_strlen(&parsed_name_addr->display)) {
+			pj_strdup(tdata->pool, &name_addr->display,
+				  &parsed_name_addr->display);
+		}
 
-	/* get current 'from' hdr & uri - going to overwrite some fields */
-	from_name_addr = (pjsip_name_addr *)PJSIP_MSG_FROM_HDR(tdata->msg)->uri;
-	from_uri = pjsip_uri_get_uri(from_name_addr);
-
-	/* check to see if uri is in 'name <sip:user@domain>' format */
-	if ((parsed = pjsip_parse_uri(tdata->pool, uri, strlen(uri), PJSIP_PARSE_URI_AS_NAMEADDR))) {
-		pjsip_name_addr *name_addr = (pjsip_name_addr *)parsed;
-		pjsip_sip_uri *sip_uri = pjsip_uri_get_uri(name_addr->uri);
-
-		pj_strdup(tdata->pool, &from_name_addr->display, &name_addr->display);
-		pj_strdup(tdata->pool, &from_uri->user, &sip_uri->user);
-		pj_strdup(tdata->pool, &from_uri->host, &sip_uri->host);
-		from_uri->port = sip_uri->port;
+		pj_strdup(tdata->pool, &uri->user, &parsed_uri->user);
+		pj_strdup(tdata->pool, &uri->host, &parsed_uri->host);
+		uri->port = parsed_uri->port;
 	} else {
 		/* assume it is 'user[@domain]' format */
-		char *domain = strchr(uri, '@');
+		char *domain = strchr(from, '@');
 		if (domain) {
 			*domain++ = '\0';
-			pj_strdup2(tdata->pool, &from_uri->host, domain);
+			pj_strdup2(tdata->pool, &uri->host, domain);
 		}
-		pj_strdup2(tdata->pool, &from_uri->user, uri);
+		pj_strdup2(tdata->pool, &uri->user, from);
 	}
 }
 
@@ -273,8 +329,7 @@ static enum pjsip_status_code vars_to_headers(const struct ast_msg *msg, pjsip_t
 			}
 			sprintf((char*)value, "%d", max_forwards);
 			ast_sip_add_header(tdata, name, value);
-		}
-		else if (!is_msg_var_blocked(name)) {
+		} else if (!is_msg_var_blocked(name)) {
 			ast_sip_add_header(tdata, name, value);
 		}
 		ast_msg_var_unref_current(i);
@@ -283,7 +338,7 @@ static enum pjsip_status_code vars_to_headers(const struct ast_msg *msg, pjsip_t
 }
 
 /*!
- * \internal  
+ * \internal
  * \brief Copies any other request header data over to ast_msg structure.
  *
  * \param rdata The SIP request
@@ -292,6 +347,7 @@ static enum pjsip_status_code vars_to_headers(const struct ast_msg *msg, pjsip_t
 static int headers_to_vars(const pjsip_rx_data *rdata, struct ast_msg *msg)
 {
 	char *c;
+	char name[MAX_HDR_SIZE];
 	char buf[MAX_HDR_SIZE];
 	int res = 0;
 	pjsip_hdr *h = rdata->msg_info.msg->hdr.next;
@@ -301,10 +357,11 @@ static int headers_to_vars(const pjsip_rx_data *rdata, struct ast_msg *msg)
 		if ((res = pjsip_hdr_print_on(h, buf, sizeof(buf)-1)) > 0) {
 			buf[res] = '\0';
 			if ((c = strchr(buf, ':'))) {
-				ast_copy_string(buf, ast_skip_blanks(c + 1), sizeof(buf)-(c-buf));
+				ast_copy_string(buf, ast_skip_blanks(c + 1), sizeof(buf));
 			}
 
-			if ((res = ast_msg_set_var(msg, pj_strbuf(&h->name), buf)) != 0) {
+			ast_copy_pj_str(name, &h->name, sizeof(name));
+			if ((res = ast_msg_set_var(msg, name, buf)) != 0) {
 				break;
 			}
 		}
@@ -326,10 +383,14 @@ static int headers_to_vars(const pjsip_rx_data *rdata, struct ast_msg *msg)
  */
 static int print_body(pjsip_rx_data *rdata, char *buf, int len)
 {
-	int res = rdata->msg_info.msg->body->print_body(
-		rdata->msg_info.msg->body, buf, len);
+	int res;
 
-	if (res < 0) {
+	if (!rdata->msg_info.msg->body || !rdata->msg_info.msg->body->len) {
+		return 0;
+	}
+
+	if ((res = rdata->msg_info.msg->body->print_body(
+		     rdata->msg_info.msg->body, buf, len)) < 0) {
 		return res;
 	}
 
@@ -337,6 +398,46 @@ static int print_body(pjsip_rx_data *rdata, char *buf, int len)
 	while (res > 0 && ((buf[--res] == '\r') || (buf[res] == '\n')));
 
 	buf[++res] = '\0';
+
+	return res;
+}
+
+/*!
+ * \internal
+ * \brief Converts a 'sip:' uri to a 'pjsip:' so it can be found by
+ * the message tech.
+ *
+ * \param buf uri to insert 'pjsip' into
+ * \param size length of the uri in buf
+ * \param capacity total size of buf
+ */
+static char *sip_to_pjsip(char *buf, int size, int capacity)
+{
+	int count;
+	const char *scheme;
+	char *res = buf;
+
+	/* remove any wrapping brackets */
+	if (*buf == '<') {
+		++buf;
+		--size;
+	}
+
+	scheme = strncmp(buf, "sip", 3) ? "pjsip:" : "pj";
+	count = strlen(scheme);
+	if (count + size >= capacity) {
+		ast_log(LOG_WARNING, "Unable to handle MESSAGE- incoming uri "
+			"too large for given buffer\n");
+		return NULL;
+	}
+
+	memmove(res + count, buf, size);
+	memcpy(res, scheme, count);
+
+	buf += size - 1;
+	if (*buf == '>') {
+		*buf = '\0';
+	}
 
 	return res;
 }
@@ -376,7 +477,8 @@ static enum pjsip_status_code rx_data_to_ast_msg(pjsip_rx_data *rdata, struct as
 	name_addr = (pjsip_name_addr *)rdata->msg_info.to->uri;
 	if ((size = pjsip_uri_print(PJSIP_URI_IN_FROMTO_HDR, name_addr, buf, sizeof(buf)-1)) > 0) {
 		buf[size] = '\0';
-		CHECK_RES(ast_msg_set_to(msg, "%s", buf));
+		/* prepend the tech */
+		CHECK_RES(ast_msg_set_to(msg, "%s", sip_to_pjsip(buf, ++size, sizeof(buf)-1)));
 	}
 
 	/* from header */
@@ -386,15 +488,9 @@ static enum pjsip_status_code rx_data_to_ast_msg(pjsip_rx_data *rdata, struct as
 		CHECK_RES(ast_msg_set_from(msg, "%s", buf));
 	}
 
-	/* contact header */
-	if ((size = pjsip_hdr_print_on(pjsip_msg_find_hdr(rdata->msg_info.msg, PJSIP_H_CONTACT, NULL), buf, sizeof(buf)-1)) > 0) {
-		buf[size] = '\0';
-		CHECK_RES(ast_msg_set_var(msg, "SIP_FULLCONTACT", buf));
-	}
-
 	/* receive address */
 	field = pj_sockaddr_print(&rdata->pkt_info.src_addr, buf, sizeof(buf)-1, 1);
-	CHECK_RES(ast_msg_set_var(msg, "SIP_RECVADDR", field));
+	CHECK_RES(ast_msg_set_var(msg, "PJSIP_RECVADDR", field));
 
 	/* body */
 	if (print_body(rdata, buf, sizeof(buf) - 1) > 0) {
@@ -403,7 +499,7 @@ static enum pjsip_status_code rx_data_to_ast_msg(pjsip_rx_data *rdata, struct as
 
 	/* endpoint name */
 	if (endpt->id.self.name.valid) {
-		CHECK_RES(ast_msg_set_var(msg, "SIP_PEERNAME", endpt->id.self.name.str));
+		CHECK_RES(ast_msg_set_var(msg, "PJSIP_PEERNAME", endpt->id.self.name.str));
 	}
 
 	CHECK_RES(headers_to_vars(rdata, msg));
@@ -439,7 +535,17 @@ static struct msg_data* msg_data_create(const struct ast_msg *msg, const char *t
 	/* typecast to suppress const warning */
 	mdata->msg = ast_msg_ref((struct ast_msg*)msg);
 
-	mdata->to = ast_strdup(to);
+	/* starts with 'pjsip:' the 'pj' needs to be removed and maybe even
+	   the entire string. */
+	if (!(to = strchr(to, ':'))) {
+		ao2_ref(mdata, -1);
+		return NULL;
+	}
+
+	/* if there is another sip in the uri then we are good,
+	   otherwise it needs a sip: in front */
+	mdata->to = to == skip_sip(to) ? ast_strdup(to - 3) :
+		ast_strdup(++to);
 	mdata->from = ast_strdup(from);
 
 	/* sometimes from can still contain the tag at this point, so remove it */
@@ -461,30 +567,34 @@ static int msg_send(void *data)
 	};
 
 	pjsip_tx_data *tdata;
-	char *uri;
-
-	RAII_VAR(struct ast_sip_endpoint *, endpoint, get_endpoint(
+	RAII_VAR(char *, uri, NULL, ast_free);
+	RAII_VAR(struct ast_sip_endpoint *, endpoint, get_outbound_endpoint(
 			 mdata->to, &uri), ao2_cleanup);
+
 	if (!endpoint) {
-		ast_log(LOG_ERROR, "SIP MESSAGE - Endpoint not found in %s\n", mdata->to);
+		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not find endpoint and "
+			"no default outbound endpoint configured\n");
 		return -1;
 	}
 
-	if (ast_sip_create_request("MESSAGE", NULL, endpoint, uri, &tdata)) {
-		ast_log(LOG_ERROR, "SIP MESSAGE - Could not create request\n");
+	if (ast_sip_create_request("MESSAGE", NULL, endpoint, uri, NULL, &tdata)) {
+		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not create request\n");
 		return -1;
 	}
+
+	update_to(tdata, mdata->to);
+	update_from(tdata, mdata->from);
 
 	if (ast_sip_add_body(tdata, &body)) {
 		pjsip_tx_data_dec_ref(tdata);
-		ast_log(LOG_ERROR, "SIP MESSAGE - Could not add body to request\n");
+		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not add body to request\n");
 		return -1;
 	}
 
-	update_from(tdata, mdata->from);
 	vars_to_headers(mdata->msg, tdata);
-	if (ast_sip_send_request(tdata, NULL, endpoint)) {
-		ast_log(LOG_ERROR, "SIP MESSAGE - Could not send request\n");
+
+	if (ast_sip_send_request(tdata, NULL, endpoint, NULL, NULL)) {
+		ast_log(LOG_ERROR, "PJSIP MESSAGE - Could not send request\n");
 		return -1;
 	}
 
@@ -509,7 +619,7 @@ static int sip_msg_send(const struct ast_msg *msg, const char *to, const char *f
 }
 
 static const struct ast_msg_tech msg_tech = {
-	.name = "sip",
+	.name = "pjsip",
 	.msg_send = sip_msg_send,
 };
 
@@ -520,9 +630,7 @@ static pj_status_t send_response(pjsip_rx_data *rdata, enum pjsip_status_code co
 	pj_status_t status;
 	pjsip_response_addr res_addr;
 
-	pjsip_endpoint *endpt = ast_sip_get_pjsip_endpoint();
-
-	status = pjsip_endpt_create_response(endpt, rdata, code, NULL, &tdata);
+	status = ast_sip_create_response(rdata, code, NULL, &tdata);
 	if (status != PJ_SUCCESS) {
 		ast_log(LOG_ERROR, "Unable to create response (%d)\n", status);
 		return status;
@@ -537,7 +645,7 @@ static pj_status_t send_response(pjsip_rx_data *rdata, enum pjsip_status_code co
 			ast_log(LOG_ERROR, "Unable to get response address (%d)\n", status);
 			return status;
 		}
-		status = pjsip_endpt_send_response(endpt, &res_addr, tdata, NULL, NULL);
+		status = ast_sip_send_response(&res_addr, tdata, ast_pjsip_rdata_get_endpoint(rdata));
 	}
 
 	if (status != PJ_SUCCESS) {
@@ -596,6 +704,8 @@ static int incoming_in_dialog_request(struct ast_sip_session *session, struct pj
 		/* invalid body size */
 		return 0;
 	}
+
+	ast_debug(3, "Received in dialog SIP message\n");
 
 	memset(&f, 0, sizeof(f));
 	f.frametype = AST_FRAME_TEXT;

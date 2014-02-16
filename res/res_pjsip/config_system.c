@@ -121,17 +121,18 @@ int ast_sip_initialize_system(void)
 	ast_sorcery_apply_default(system_sorcery, "system", "config", "pjsip.conf,criteria=type=system");
 
 	if (ast_sorcery_object_register(system_sorcery, "system", system_alloc, NULL, system_apply)) {
+		ast_log(LOG_ERROR, "Failed to register with sorcery (is res_sorcery_config loaded?)\n");
 		ast_sorcery_unref(system_sorcery);
 		system_sorcery = NULL;
 		return -1;
 	}
 
 	ast_sorcery_object_field_register(system_sorcery, "system", "type", "", OPT_NOOP_T, 0, 0);
-	ast_sorcery_object_field_register(system_sorcery, "system", "timert1", __stringify(DEFAULT_TIMER_T1),
+	ast_sorcery_object_field_register(system_sorcery, "system", "timer_t1", __stringify(DEFAULT_TIMER_T1),
 			OPT_UINT_T, 0, FLDSET(struct system_config, timert1));
-	ast_sorcery_object_field_register(system_sorcery, "system", "timerb", __stringify(DEFAULT_TIMER_B),
+	ast_sorcery_object_field_register(system_sorcery, "system", "timer_b", __stringify(DEFAULT_TIMER_B),
 			OPT_UINT_T, 0, FLDSET(struct system_config, timerb));
-	ast_sorcery_object_field_register(system_sorcery, "system", "compactheaders", "no",
+	ast_sorcery_object_field_register(system_sorcery, "system", "compact_headers", "no",
 			OPT_BOOL_T, 1, FLDSET(struct system_config, compactheaders));
 	ast_sorcery_object_field_register(system_sorcery, "system", "threadpool_initial_size", "0",
 			OPT_UINT_T, 0, FLDSET(struct system_config, threadpool.initial_size));

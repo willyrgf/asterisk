@@ -69,6 +69,14 @@ typedef void (*stasis_app_cb)(void *data, const char *app_name,
 	struct ast_json *message);
 
 /*!
+ * \brief Gets the names of all registered Stasis applications.
+ *
+ * \return \c ast_str_container of container names.
+ * \return \c NULL on error.
+ */
+struct ao2_container *stasis_app_get_all(void);
+
+/*!
  * \brief Register a new Stasis application.
  *
  * If an application is already registered with the given name, the old
@@ -77,6 +85,7 @@ typedef void (*stasis_app_cb)(void *data, const char *app_name,
  * \param app_name Name of this application.
  * \param handler Callback for application messages.
  * \param data Data blob to pass to the callback. Must be AO2 managed.
+ *
  * \return 0 for success
  * \return -1 for error.
  */
@@ -96,10 +105,170 @@ void stasis_app_unregister(const char *app_name);
  *
  * \param app_name Name of the application to invoke.
  * \param message Message to send (borrowed reference)
+ *
  * \return 0 for success.
  * \return -1 for error.
  */
 int stasis_app_send(const char *app_name, struct ast_json *message);
+
+/*! \brief Forward declare app */
+struct stasis_app;
+
+/*!
+ * \brief Retrieve an application's name
+ *
+ * \param app An application
+ *
+ * \return The name of the application.
+ */
+const char *stasis_app_name(const struct stasis_app *app);
+
+/*!
+ * \brief Return the JSON representation of a Stasis application.
+ *
+ * \param app_name Name of the application.
+ *
+ * \return JSON representation of app with given name.
+ * \return \c NULL on error.
+ */
+struct ast_json *stasis_app_to_json(const char *app_name);
+
+/*!
+ * \brief Event source information and callbacks.
+ */
+struct stasis_app_event_source {
+	/*! \brief The scheme to match against on [un]subscribes */
+	const char *scheme;
+
+	/*!
+	 * \brief Find an event source data object by the given id/name.
+	 *
+	 * \param app Application
+	 * \param id A unique identifier to search on
+	 *
+	 * \return The data object associated with the id/name.
+	 */
+	void *(*find)(const struct stasis_app *app, const char *id);
+
+	/*!
+	 * \brief Subscribe an application to an event source.
+	 *
+	 * \param app Application
+	 * \param obj an event source data object
+	 *
+	 * \return 0 on success, failure code otherwise
+	 */
+	int (*subscribe)(struct stasis_app *app, void *obj);
+
+	/*!
+	 * \brief Cancel the subscription an app has to an event source.
+	 *
+	 * \param app Application
+	 * \param id a previously subscribed object id
+	 *
+	 * \return 0 on success, failure code otherwise
+	 */
+	int (*unsubscribe)(struct stasis_app *app, const char *id);
+
+	/*!
+	 * \brief Find an event source by the given id/name.
+	 *
+	 * \param app Application
+	 * \param id A unique identifier to check
+	 *
+	 * \return true if id is subscribed, false otherwise.
+	 */
+	int (*is_subscribed)(struct stasis_app *app, const char *id);
+
+	/*!
+	 * \brief Convert event source data to json
+	 *
+	 * \param app Application
+	 * \param id json object to fill
+	 */
+	void (*to_json)(const struct stasis_app *app, struct ast_json *json);
+
+	/*! Next item in the list */
+	AST_LIST_ENTRY(stasis_app_event_source) next;
+};
+
+/*!
+ * \brief Register an application event source.
+ *
+ * \param obj the event source to register
+ */
+void stasis_app_register_event_source(struct stasis_app_event_source *obj);
+
+/*!
+ * \brief Register core event sources.
+ */
+void stasis_app_register_event_sources(void);
+
+/*!
+ * \brief Checks to see if the given object is a core event source
+ *
+ * \note core event sources are currently only endpoint, bridge, and channel.
+ *
+ * \param obj event source object to check
+ *
+ * \return non-zero if core event source, otherwise 0 (false)
+
+ */
+int stasis_app_is_core_event_source(struct stasis_app_event_source *obj);
+
+/*!
+ * \brief Unregister an application event source.
+ *
+ * \param obj the event source to unregister
+ */
+void stasis_app_unregister_event_source(struct stasis_app_event_source *obj);
+
+/*!
+ * \brief Unregister core event sources.
+ */
+void stasis_app_unregister_event_sources(void);
+
+
+/*! \brief Return code for stasis_app_[un]subscribe */
+enum stasis_app_subscribe_res {
+	STASIS_ASR_OK,
+	STASIS_ASR_APP_NOT_FOUND,
+	STASIS_ASR_EVENT_SOURCE_NOT_FOUND,
+	STASIS_ASR_EVENT_SOURCE_BAD_SCHEME,
+	STASIS_ASR_INTERNAL_ERROR,
+};
+
+/*!
+ * \brief Subscribes an application to a list of event sources.
+ *
+ * \param app_name Name of the application to subscribe.
+ * \param event_source_uris URIs for the event sources to subscribe to.
+ * \param event_sources_count Array size of event_source_uris.
+ * \param json Optional output pointer for JSON representation of the app
+ *             after adding the subscription.
+ *
+ * \return \ref stasis_app_subscribe_res return code.
+ *
+ * \note Do not hold any channel locks if subscribing to a channel.
+ */
+enum stasis_app_subscribe_res stasis_app_subscribe(const char *app_name,
+	const char **event_source_uris, int event_sources_count,
+	struct ast_json **json);
+
+/*!
+ * \brief Unsubscribes an application from a list of event sources.
+ *
+ * \param app_name Name of the application to subscribe.
+ * \param event_source_uris URIs for the event sources to subscribe to.
+ * \param event_sources_count Array size of event_source_uris.
+ * \param json Optional output pointer for JSON representation of the app
+ *             after adding the subscription.
+ *
+ * \return \ref stasis_app_subscribe_res return code.
+ */
+enum stasis_app_subscribe_res stasis_app_unsubscribe(const char *app_name,
+	const char **event_source_uris, int event_sources_count,
+	struct ast_json **json);
 
 /*! @} */
 
@@ -108,9 +277,64 @@ int stasis_app_send(const char *app_name, struct ast_json *message);
 /*! \brief Handler for controlling a channel that's in a Stasis application */
 struct stasis_app_control;
 
+/*! \brief Rule to check to see if an operation is allowed */
+struct stasis_app_control_rule {
+	/*!
+	 * \brief Checks to see if an operation is allowed on the control
+	 *
+	 * \param control Control object to check
+	 * \return 0 on success, otherwise a failure code
+	 */
+	enum stasis_app_control_channel_result (*check_rule)(
+		const struct stasis_app_control *control);
+	/*! Next item in the list */
+	AST_LIST_ENTRY(stasis_app_control_rule) next;
+};
+
+/*!
+ * \brief Registers an add channel to bridge rule.
+ *
+ * \param control Control object
+ * \param rule The rule to register
+ */
+void stasis_app_control_register_add_rule(
+	struct stasis_app_control *control,
+	struct stasis_app_control_rule *rule);
+
+/*!
+ * \brief UnRegister an add channel to bridge rule.
+ *
+ * \param control Control object
+ * \param rule The rule to unregister
+ */
+void stasis_app_control_unregister_add_rule(
+	struct stasis_app_control *control,
+	struct stasis_app_control_rule *rule);
+
+/*!
+ * \brief Registers a remove channel from bridge rule.
+ *
+ * \param control Control object
+ * \param rule The rule to register
+ */
+void stasis_app_control_register_remove_rule(
+	struct stasis_app_control *control,
+	struct stasis_app_control_rule *rule);
+
+/*!
+ * \brief Unregisters a remove channel from bridge rule.
+ *
+ * \param control Control object
+ * \param rule The rule to unregister
+ */
+void stasis_app_control_unregister_remove_rule(
+	struct stasis_app_control *control,
+	struct stasis_app_control_rule *rule);
+
 /*!
  * \brief Returns the handler for the given channel.
  * \param chan Channel to handle.
+ *
  * \return NULL channel not in Stasis application.
  * \return Pointer to \c res_stasis handler.
  */
@@ -120,6 +344,7 @@ struct stasis_app_control *stasis_app_control_find_by_channel(
 /*!
  * \brief Returns the handler for the channel with the given id.
  * \param channel_id Uniqueid of the channel.
+ *
  * \return NULL channel not in Stasis application, or channel does not exist.
  * \return Pointer to \c res_stasis handler.
  */
@@ -153,6 +378,7 @@ void stasis_app_control_execute_until_exhausted(
  * \brief Returns the uniqueid of the channel associated with this control
  *
  * \param control Control object.
+ *
  * \return Uniqueid of the associate channel.
  * \return \c NULL if \a control is \c NULL.
  */
@@ -166,12 +392,15 @@ const char *stasis_app_control_get_channel_id(
  *
  * \param control Control for \c res_stasis
  * \param endpoint The endpoint to dial.
+ * \param exten Extension to dial if no endpoint specified.
+ * \param context Context to use with extension.
  * \param timeout The amount of time to wait for answer, before giving up.
  *
  * \return 0 for success
  * \return -1 for error.
  */
-int stasis_app_control_dial(struct stasis_app_control *control, const char *endpoint, int timeout);
+int stasis_app_control_dial(struct stasis_app_control *control, const char *endpoint, const char *exten,
+                            const char *context, int timeout);
 
 /*!
  * \brief Apply a bridge role to a channel controlled by a stasis app control
@@ -205,6 +434,41 @@ void stasis_app_control_clear_roles(struct stasis_app_control *control);
  * \return -1 for error.
  */
 int stasis_app_control_continue(struct stasis_app_control *control, const char *context, const char *extension, int priority);
+
+/*!
+ * \brief Indicate ringing to the channel associated with this control.
+ *
+ * \param control Control for \c res_stasis.
+ *
+ * \return 0 for success.
+ * \return -1 for error.
+ */
+int stasis_app_control_ring(struct stasis_app_control *control);
+
+/*!
+ * \brief Stop locally generated ringing on the channel associated with this control.
+ *
+ * \param control Control for \c res_stasis.
+ *
+ * \return 0 for success.
+ * \return -1 for error.
+ */
+int stasis_app_control_ring_stop(struct stasis_app_control *control);
+
+/*!
+ * \brief Send DTMF to the channel associated with this control.
+ *
+ * \param control Control for \c res_stasis.
+ * \param dtmf DTMF string.
+ * \param before Amount of time to wait before sending DTMF digits.
+ * \param between Amount of time between each DTMF digit.
+ * \param duration Amount of time each DTMF digit lasts for.
+ * \param after Amount of time to wait after sending DTMF digits.
+ *
+ * \return 0 for success.
+ * \return -1 for error.
+ */
+int stasis_app_control_dtmf(struct stasis_app_control *control, const char *dtmf, int before, int between, unsigned int duration, int after);
 
 /*!
  * \brief Mute the channel associated with this control.
@@ -242,6 +506,7 @@ int stasis_app_control_answer(struct stasis_app_control *control);
  * \brief Get the value of a variable on the channel associated with this control.
  * \param control Control for \c res_stasis.
  * \param variable The name of the variable.
+ *
  * \return The value of the variable.  The returned variable must be freed.
  */
 char *stasis_app_control_get_channel_var(struct stasis_app_control *control, const char *variable);
@@ -283,11 +548,24 @@ void stasis_app_control_moh_start(struct stasis_app_control *control, const char
 void stasis_app_control_moh_stop(struct stasis_app_control *control);
 
 /*!
+ * \brief Start playing silence to a channel.
+ * \param control Control for \c res_stasis.
+ */
+void stasis_app_control_silence_start(struct stasis_app_control *control);
+
+/*!
+ * \brief Stop playing silence to a channel.
+ * \param control Control for \c res_stasis.
+ */
+void stasis_app_control_silence_stop(struct stasis_app_control *control);
+
+/*!
  * \brief Returns the most recent snapshot for the associated channel.
  *
  * The returned pointer is AO2 managed, so ao2_cleanup() when you're done.
  *
  * \param control Control for \c res_stasis.
+ *
  * \return Most recent snapshot. ao2_cleanup() when done.
  * \return \c NULL if channel isn't in cache.
  */
@@ -319,15 +597,17 @@ int stasis_app_control_queue_control(struct stasis_app_control *control,
  * \brief Create a bridge of the specified type.
  *
  * \param type The type of bridge to be created
+ * \param name Optional name to give to the bridge
  *
  * \return New bridge.
  * \return \c NULL on error.
  */
-struct ast_bridge *stasis_app_bridge_create(const char *type);
+struct ast_bridge *stasis_app_bridge_create(const char *type, const char *name);
 
 /*!
  * \brief Returns the bridge with the given id.
  * \param bridge_id Uniqueid of the bridge.
+ *
  * \return NULL bridge not created by a Stasis application, or bridge does not exist.
  * \return Pointer to bridge.
  */
@@ -357,10 +637,21 @@ int stasis_app_bridge_moh_stop(
 	struct ast_bridge *bridge);
 
 /*!
+ * \brief Result codes used when adding/removing channels to/from bridges.
+ */
+enum stasis_app_control_channel_result {
+	/*! The channel is okay to be added/removed */
+	STASIS_APP_CHANNEL_OKAY = 0,
+	/*! The channel is currently recording */
+	STASIS_APP_CHANNEL_RECORDING
+};
+
+/*!
  * \brief Add a channel to the bridge.
  *
  * \param control Control whose channel should be added to the bridge
  * \param bridge Pointer to the bridge
+ *
  * \return non-zero on failure
  * \return zero on success
  */
@@ -372,6 +663,7 @@ int stasis_app_control_add_channel_to_bridge(
  *
  * \param control Control whose channel should be removed from the bridge
  * \param bridge Pointer to the bridge
+ *
  * \return non-zero on failure
  * \return zero on success
  */
@@ -383,6 +675,7 @@ int stasis_app_control_remove_channel_from_bridge(
  * \brief Gets the bridge currently associated with a control object.
  *
  * \param control Control object for the channel to query.
+ *
  * \return Associated \ref ast_bridge.
  * \return \c NULL if not associated with a bridge.
  */
@@ -411,6 +704,13 @@ void stasis_app_ref(void);
  * This ensures graceful shutdown happens in the proper order.
  */
 void stasis_app_unref(void);
+
+/*!
+ * \brief Get the Stasis message sanitizer for app_stasis applications
+ *
+ * \retval The stasis message sanitizer
+ */
+struct stasis_message_sanitizer *stasis_app_get_sanitizer(void);
 
 /*! @} */
 

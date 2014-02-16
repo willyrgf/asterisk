@@ -55,6 +55,15 @@
 int ast_ari_validate_void(struct ast_json *json);
 
 /*!
+ * \brief Validator for native Swagger object.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_object(struct ast_json *json);
+
+/*!
  * \brief Validator for native Swagger byte.
  *
  * \param json JSON object to validate.
@@ -472,6 +481,42 @@ int ast_ari_validate_playback(struct ast_json *json);
 ari_validator ast_ari_validate_playback_fn(void);
 
 /*!
+ * \brief Validator for DeviceState.
+ *
+ * Represents the state of a device.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_device_state(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_device_state().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_device_state_fn(void);
+
+/*!
+ * \brief Validator for Mailbox.
+ *
+ * Represents the state of a mailbox.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_mailbox(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_mailbox().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_mailbox_fn(void);
+
+/*!
  * \brief Validator for ApplicationReplaced.
  *
  * Notification that another WebSocket has taken over for an application.
@@ -490,6 +535,42 @@ int ast_ari_validate_application_replaced(struct ast_json *json);
  * See \ref ast_ari_model_validators.h for more details.
  */
 ari_validator ast_ari_validate_application_replaced_fn(void);
+
+/*!
+ * \brief Validator for BridgeAttendedTransfer.
+ *
+ * Notification that an attended transfer has occurred.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_bridge_attended_transfer(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_bridge_attended_transfer().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_bridge_attended_transfer_fn(void);
+
+/*!
+ * \brief Validator for BridgeBlindTransfer.
+ *
+ * Notification that a blind transfer has occurred.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_bridge_blind_transfer(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_bridge_blind_transfer().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_bridge_blind_transfer_fn(void);
 
 /*!
  * \brief Validator for BridgeCreated.
@@ -746,6 +827,60 @@ int ast_ari_validate_channel_varset(struct ast_json *json);
 ari_validator ast_ari_validate_channel_varset_fn(void);
 
 /*!
+ * \brief Validator for DeviceStateChanged.
+ *
+ * Notification that a device state has changed.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_device_state_changed(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_device_state_changed().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_device_state_changed_fn(void);
+
+/*!
+ * \brief Validator for Dial.
+ *
+ * Dialing state has changed.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_dial(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_dial().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_dial_fn(void);
+
+/*!
+ * \brief Validator for EndpointStateChange.
+ *
+ * Endpoint state changed.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_endpoint_state_change(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_endpoint_state_change().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_endpoint_state_change_fn(void);
+
+/*!
  * \brief Validator for Event.
  *
  * Base type for asynchronous events from Asterisk.
@@ -836,9 +971,63 @@ int ast_ari_validate_playback_started(struct ast_json *json);
 ari_validator ast_ari_validate_playback_started_fn(void);
 
 /*!
+ * \brief Validator for RecordingFailed.
+ *
+ * Event showing failure of a recording operation.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_recording_failed(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_recording_failed().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_recording_failed_fn(void);
+
+/*!
+ * \brief Validator for RecordingFinished.
+ *
+ * Event showing the completion of a recording operation.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_recording_finished(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_recording_finished().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_recording_finished_fn(void);
+
+/*!
+ * \brief Validator for RecordingStarted.
+ *
+ * Event showing the start of a recording operation.
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_recording_started(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_recording_started().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_recording_started_fn(void);
+
+/*!
  * \brief Validator for StasisEnd.
  *
- * Notification that a channel has left a Stasis appliction.
+ * Notification that a channel has left a Stasis application.
  *
  * \param json JSON object to validate.
  * \returns True (non-zero) if valid.
@@ -856,7 +1045,7 @@ ari_validator ast_ari_validate_stasis_end_fn(void);
 /*!
  * \brief Validator for StasisStart.
  *
- * Notification that a channel has entered a Stasis appliction.
+ * Notification that a channel has entered a Stasis application.
  *
  * \param json JSON object to validate.
  * \returns True (non-zero) if valid.
@@ -870,6 +1059,24 @@ int ast_ari_validate_stasis_start(struct ast_json *json);
  * See \ref ast_ari_model_validators.h for more details.
  */
 ari_validator ast_ari_validate_stasis_start_fn(void);
+
+/*!
+ * \brief Validator for Application.
+ *
+ * Details of a Stasis application
+ *
+ * \param json JSON object to validate.
+ * \returns True (non-zero) if valid.
+ * \returns False (zero) if invalid.
+ */
+int ast_ari_validate_application(struct ast_json *json);
+
+/*!
+ * \brief Function pointer to ast_ari_validate_application().
+ *
+ * See \ref ast_ari_model_validators.h for more details.
+ */
+ari_validator ast_ari_validate_application_fn(void);
 
 /*
  * JSON models
@@ -930,9 +1137,12 @@ ari_validator ast_ari_validate_stasis_start_fn(void);
  * - bridge_class: string (required)
  * - bridge_type: string (required)
  * - channels: List[string] (required)
+ * - creator: string (required)
  * - id: string (required)
+ * - name: string (required)
  * - technology: string (required)
  * LiveRecording
+ * - cause: string
  * - format: string (required)
  * - name: string (required)
  * - state: string (required)
@@ -952,10 +1162,44 @@ ari_validator ast_ari_validate_stasis_start_fn(void);
  * - media_uri: string (required)
  * - state: string (required)
  * - target_uri: string (required)
+ * DeviceState
+ * - name: string (required)
+ * - state: string (required)
+ * Mailbox
+ * - name: string (required)
+ * - new_messages: int (required)
+ * - old_messages: int (required)
  * ApplicationReplaced
  * - type: string (required)
  * - application: string (required)
  * - timestamp: Date
+ * BridgeAttendedTransfer
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - destination_application: string
+ * - destination_bridge: string
+ * - destination_link_first_leg: Channel
+ * - destination_link_second_leg: Channel
+ * - destination_threeway_bridge: Bridge
+ * - destination_threeway_channel: Channel
+ * - destination_type: string (required)
+ * - is_external: boolean (required)
+ * - result: string (required)
+ * - transferer_first_leg: Channel (required)
+ * - transferer_first_leg_bridge: Bridge
+ * - transferer_second_leg: Channel (required)
+ * - transferer_second_leg_bridge: Bridge
+ * BridgeBlindTransfer
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - bridge: Bridge
+ * - channel: Channel (required)
+ * - context: string (required)
+ * - exten: string (required)
+ * - is_external: boolean (required)
+ * - result: string (required)
  * BridgeCreated
  * - type: string (required)
  * - application: string (required)
@@ -1035,6 +1279,7 @@ ari_validator ast_ari_validate_stasis_start_fn(void);
  * - timestamp: Date
  * - channel: Channel (required)
  * - eventname: string (required)
+ * - userevent: object (required)
  * ChannelVarset
  * - type: string (required)
  * - application: string (required)
@@ -1042,6 +1287,26 @@ ari_validator ast_ari_validate_stasis_start_fn(void);
  * - channel: Channel
  * - value: string (required)
  * - variable: string (required)
+ * DeviceStateChanged
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - device_state: DeviceState (required)
+ * Dial
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - caller: Channel
+ * - dialstatus: string (required)
+ * - dialstring: string
+ * - forward: string
+ * - forwarded: Channel
+ * - peer: Channel (required)
+ * EndpointStateChange
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - endpoint: Endpoint (required)
  * Event
  * - type: string (required)
  * - application: string (required)
@@ -1061,6 +1326,21 @@ ari_validator ast_ari_validate_stasis_start_fn(void);
  * - application: string (required)
  * - timestamp: Date
  * - playback: Playback (required)
+ * RecordingFailed
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - recording: LiveRecording (required)
+ * RecordingFinished
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - recording: LiveRecording (required)
+ * RecordingStarted
+ * - type: string (required)
+ * - application: string (required)
+ * - timestamp: Date
+ * - recording: LiveRecording (required)
  * StasisEnd
  * - type: string (required)
  * - application: string (required)
@@ -1072,6 +1352,12 @@ ari_validator ast_ari_validate_stasis_start_fn(void);
  * - timestamp: Date
  * - args: List[string] (required)
  * - channel: Channel (required)
+ * Application
+ * - bridge_ids: List[string] (required)
+ * - channel_ids: List[string] (required)
+ * - device_names: List[string] (required)
+ * - endpoint_ids: List[string] (required)
+ * - name: string (required)
  */
 
 #endif /* _ASTERISK_ARI_MODEL_H */

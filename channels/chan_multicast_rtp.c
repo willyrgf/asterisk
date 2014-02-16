@@ -166,6 +166,8 @@ static struct ast_channel *multicast_rtp_request(const char *type, struct ast_fo
 
 	ast_channel_tech_pvt_set(chan, instance);
 
+	ast_channel_unlock(chan);
+
 	return chan;
 
 failure:
@@ -176,7 +178,7 @@ failure:
 /*! \brief Function called when our module is loaded */
 static int load_module(void)
 {
-	if (!(multicast_rtp_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(multicast_rtp_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add_all(multicast_rtp_tech.capabilities);

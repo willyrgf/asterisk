@@ -312,8 +312,15 @@ struct ast_bridge {
 	unsigned int dissolved:1;
 	/*! TRUE if the bridge construction was completed. */
 	unsigned int construction_completed:1;
-	/*! Immutable bridge UUID. */
-	char uniqueid[AST_UUID_STR_LEN];
+
+	AST_DECLARE_STRING_FIELDS(
+		/*! Immutable name of the creator for the bridge */
+		AST_STRING_FIELD(creator);
+		/*! Immutable name given to the bridge by its creator */
+		AST_STRING_FIELD(name);
+		/*! Immutable bridge UUID. */
+		AST_STRING_FIELD(uniqueid);
+	);
 };
 
 /*! \brief Bridge base class virtual method table. */
@@ -324,6 +331,8 @@ extern struct ast_bridge_methods ast_bridge_base_v_table;
  *
  * \param capabilities The capabilities that we require to be used on the bridge
  * \param flags Flags that will alter the behavior of the bridge
+ * \param creator Entity that created the bridge (optional)
+ * \param name Name given to the bridge by its creator (optional, requires named creator)
  *
  * \retval a pointer to a new bridge on success
  * \retval NULL on failure
@@ -338,7 +347,7 @@ extern struct ast_bridge_methods ast_bridge_base_v_table;
  * This creates a no frills two party bridge that will be
  * destroyed once one of the channels hangs up.
  */
-struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, unsigned int flags);
+struct ast_bridge *ast_bridge_base_new(uint32_t capabilities, unsigned int flags, const char *creator, const char *name);
 
 /*!
  * \brief Try locking the bridge.
@@ -409,6 +418,12 @@ static inline void _ast_bridge_unlock(struct ast_bridge *bridge, const char *fil
  * \endcode
  *
  * This destroys a bridge that was previously created.
+ *
+ * \note
+ * While this function will kick all channels out of the bridge, channels that
+ * were added to the bridge using ast_bridge_impart() with the flag
+ * AST_BRIDGE_IMPART_CHAN_DEPARTABLE set must have ast_bridge_depart() called
+ * on them.
  */
 int ast_bridge_destroy(struct ast_bridge *bridge, int cause);
 
@@ -422,6 +437,13 @@ int ast_bridge_destroy(struct ast_bridge *bridge, int cause);
  */
 void ast_bridge_notify_masquerade(struct ast_channel *chan);
 
+enum ast_bridge_join_flags {
+	/*! The bridge reference is being passed by the caller. */
+	AST_BRIDGE_JOIN_PASS_REFERENCE = (1 << 0),
+	/*! The initial bridge join does not cause a COLP exchange. */
+	AST_BRIDGE_JOIN_INHIBIT_JOIN_COLP = (1 << 1),
+};
+
 /*!
  * \brief Join (blocking) a channel to a bridge
  *
@@ -430,7 +452,7 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan);
  * \param swap Channel to swap out if swapping
  * \param features Bridge features structure
  * \param tech_args Optional Bridging tech optimization parameters for this channel.
- * \param pass_reference TRUE if the bridge reference is being passed by the caller.
+ * \param flags defined by enum ast_bridge_join_flags.
  *
  * \note Absolutely _NO_ locks should be held before calling
  * this function since it blocks.
@@ -441,7 +463,7 @@ void ast_bridge_notify_masquerade(struct ast_channel *chan);
  * Example usage:
  *
  * \code
- * ast_bridge_join(bridge, chan, NULL, NULL, NULL, 0);
+ * ast_bridge_join(bridge, chan, NULL, NULL, NULL, AST_BRIDGE_JOIN_PASS_REFERENCE);
  * \endcode
  *
  * This adds a channel pointed to by the chan pointer to the bridge pointed to by
@@ -460,7 +482,18 @@ int ast_bridge_join(struct ast_bridge *bridge,
 	struct ast_channel *swap,
 	struct ast_bridge_features *features,
 	struct ast_bridge_tech_optimizations *tech_args,
-	int pass_reference);
+	enum ast_bridge_join_flags flags);
+
+enum ast_bridge_impart_flags {
+	/*! Field describing what the caller can do with the channel after it is imparted. */
+	AST_BRIDGE_IMPART_CHAN_MASK = (1 << 0),
+	/*! The caller wants to reclaim the channel using ast_bridge_depart(). */
+	AST_BRIDGE_IMPART_CHAN_DEPARTABLE = (0 << 0),
+	/*! The caller is passing channel control entirely to the bridging system. */
+	AST_BRIDGE_IMPART_CHAN_INDEPENDENT = (1 << 0),
+	/*! The initial bridge join does not cause a COLP exchange. */
+	AST_BRIDGE_IMPART_INHIBIT_JOIN_COLP = (1 << 1),
+};
 
 /*!
  * \brief Impart (non-blocking) a channel onto a bridge
@@ -469,7 +502,7 @@ int ast_bridge_join(struct ast_bridge *bridge,
  * \param chan Channel to impart (The channel reference is stolen if impart successful.)
  * \param swap Channel to swap out if swapping.  NULL if not swapping.
  * \param features Bridge features structure.
- * \param independent TRUE if caller does not want to reclaim the channel using ast_bridge_depart().
+ * \param flags defined by enum ast_bridge_impart_flags.
  *
  * \note The features parameter must be NULL or obtained by
  * ast_bridge_features_new().  You must not dereference features
@@ -478,12 +511,12 @@ int ast_bridge_join(struct ast_bridge *bridge,
  * \note chan is locked by this function.
  *
  * \retval 0 on success
- * \retval -1 on failure
+ * \retval -1 on failure (Caller still has ownership of chan)
  *
  * Example usage:
  *
  * \code
- * ast_bridge_impart(bridge, chan, NULL, NULL, 0);
+ * ast_bridge_impart(bridge, chan, NULL, NULL, AST_BRIDGE_IMPART_CHAN_INDEPENDENT);
  * \endcode
  *
  * \details
@@ -501,20 +534,26 @@ int ast_bridge_join(struct ast_bridge *bridge,
  * features structure can be specified in the features
  * parameter.
  *
- * \note If you impart a channel as not independent you MUST
+ * \note If you impart a channel with
+ * AST_BRIDGE_IMPART_CHAN_DEPARTABLE you MUST
  * ast_bridge_depart() the channel if this call succeeds.  The
  * bridge channel thread is created join-able.  The implication
  * is that the channel is special and will not behave like a
  * normal channel.
  *
- * \note If you impart a channel as independent you must not
+ * \note If you impart a channel with
+ * AST_BRIDGE_IMPART_CHAN_INDEPENDENT you must not
  * ast_bridge_depart() the channel.  The bridge channel thread
  * is created non-join-able.  The channel must be treated as if
  * it were placed into the bridge by ast_bridge_join().
  * Channels placed into a bridge by ast_bridge_join() are
  * removed by a third party using ast_bridge_remove().
  */
-int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struct ast_channel *swap, struct ast_bridge_features *features, int independent);
+int ast_bridge_impart(struct ast_bridge *bridge,
+	struct ast_channel *chan,
+	struct ast_channel *swap,
+	struct ast_bridge_features *features,
+	enum ast_bridge_impart_flags flags) attribute_warn_unused_result;
 
 /*!
  * \brief Depart a channel from a bridge
@@ -537,7 +576,8 @@ int ast_bridge_impart(struct ast_bridge *bridge, struct ast_channel *chan, struc
  * This does not hang up the channel.
  *
  * \note This API call can only be used on channels that were added to the bridge
- *       using the ast_bridge_impart API call with the independent flag FALSE.
+ *       using the ast_bridge_impart API call with the AST_BRIDGE_IMPART_CHAN_DEPARTABLE
+ *       flag.
  */
 int ast_bridge_depart(struct ast_channel *chan);
 
@@ -924,6 +964,19 @@ enum ast_transfer_result ast_bridge_transfer_attended(struct ast_channel *to_tra
 		struct ast_channel *to_transfer_target);
 
 /*!
+ * \brief Set the relevant transfer variables for a single channel
+ *
+ * Sets either the ATTENDEDTRANSFER or BLINDTRANSFER variable for a channel while clearing
+ * the opposite.
+ *
+ * \param chan Channel the variable is being set for
+ * \param value Value the variable is being set to
+ * \param is_attended false  set BLINDTRANSFER and unset ATTENDEDTRANSFER
+ *                    true   set ATTENDEDTRANSFER and unset BLINDTRANSFER
+ */
+void ast_bridge_set_transfer_variables(struct ast_channel *chan, const char *value, int is_attended);
+
+/*!
  * \brief Get a container of all channels in the bridge
  * \since 12.0.0
  *
@@ -988,6 +1041,17 @@ struct ast_channel *ast_bridge_peer(struct ast_bridge *bridge, struct ast_channe
  * \return Nothing
  */
 void ast_bridge_features_remove(struct ast_bridge_features *features, enum ast_bridge_hook_remove_flags flags);
+
+/*!
+ * \brief Find bridge by id
+ * \since 12.0.0
+ *
+ * \param bridge_id Bridge identifier
+ *
+ * \return NULL bridge not found
+ * \return non-NULL reference to bridge
+ */
+struct ast_bridge *ast_bridge_find_by_id(const char *bridge_id);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

@@ -143,7 +143,7 @@ static int refer_progress_notify(void *data)
 }
 
 static void refer_progress_bridge(void *data, struct stasis_subscription *sub,
-		struct stasis_topic *topic, struct stasis_message *message)
+		struct stasis_message *message)
 {
 	struct refer_progress *progress = data;
 	struct ast_bridge_blob *enter_blob;
@@ -191,20 +191,25 @@ static struct ast_frame *refer_progress_framehook(struct ast_channel *chan, stru
 		/* Media is passing without progress, this means the call has been answered */
 		notification = refer_progress_notification_alloc(progress, 200, PJSIP_EVSUB_STATE_TERMINATED);
 	} else if (f->frametype == AST_FRAME_CONTROL) {
-		progress->subclass = f->subclass.integer;
 
 		/* Based on the control frame being written we can send a NOTIFY advising of the progress */
 		if ((f->subclass.integer == AST_CONTROL_RING) || (f->subclass.integer == AST_CONTROL_RINGING)) {
+			progress->subclass = f->subclass.integer;
 			notification = refer_progress_notification_alloc(progress, 180, PJSIP_EVSUB_STATE_ACTIVE);
 		} else if (f->subclass.integer == AST_CONTROL_BUSY) {
+			progress->subclass = f->subclass.integer;
 			notification = refer_progress_notification_alloc(progress, 486, PJSIP_EVSUB_STATE_TERMINATED);
 		} else if (f->subclass.integer == AST_CONTROL_CONGESTION) {
+			progress->subclass = f->subclass.integer;
 			notification = refer_progress_notification_alloc(progress, 503, PJSIP_EVSUB_STATE_TERMINATED);
 		} else if (f->subclass.integer == AST_CONTROL_PROGRESS) {
+			progress->subclass = f->subclass.integer;
 			notification = refer_progress_notification_alloc(progress, 183, PJSIP_EVSUB_STATE_ACTIVE);
 		} else if (f->subclass.integer == AST_CONTROL_PROCEEDING) {
+			progress->subclass = f->subclass.integer;
 			notification = refer_progress_notification_alloc(progress, 100, PJSIP_EVSUB_STATE_ACTIVE);
 		} else if (f->subclass.integer == AST_CONTROL_ANSWER) {
+			progress->subclass = f->subclass.integer;
 			notification = refer_progress_notification_alloc(progress, 200, PJSIP_EVSUB_STATE_TERMINATED);
 		}
 	}
@@ -754,7 +759,9 @@ static int refer_incoming_invite_request(struct ast_sip_session *session, struct
 		goto end;
 	}
 
+	ast_channel_lock(session->channel);
 	ast_setstate(session->channel, AST_STATE_RING);
+	ast_channel_unlock(session->channel);
 	ast_raw_answer(session->channel);
 
 	if (!invite.bridge) {
@@ -768,7 +775,8 @@ static int refer_incoming_invite_request(struct ast_sip_session *session, struct
 			response = 500;
 		}
 	} else {
-		if (ast_bridge_impart(invite.bridge, session->channel, invite.channel, NULL, 1)) {
+		if (ast_bridge_impart(invite.bridge, session->channel, invite.channel, NULL,
+			AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
 			response = 500;
 		}
 	}
@@ -911,7 +919,7 @@ static void refer_outgoing_request(struct ast_sip_session *session, struct pjsip
 }
 
 static struct ast_sip_session_supplement refer_supplement = {
-	.priority = AST_SIP_SESSION_SUPPLEMENT_PRIORITY_CHANNEL + 1,
+	.priority = AST_SIP_SUPPLEMENT_PRIORITY_CHANNEL + 1,
 	.incoming_request = refer_incoming_request,
 	.outgoing_request = refer_outgoing_request,
 };

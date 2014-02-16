@@ -38,6 +38,7 @@
 
 #include "asterisk/channel.h"
 #include "asterisk/dsp.h"
+#include "asterisk/app.h"
 
 #if defined(__cplusplus) || defined(c_plusplus)
 extern "C" {
@@ -149,9 +150,9 @@ struct dahdi_pvt {
 	struct dahdi_pvt *oprpeer;				/*!< "Operator Services" peer tech_pvt ptr */
 	/*! \brief Amount of gain to increase during caller id */
 	float cid_rxgain;
-	/*! \brief Rx gain set by chan_dahdi.conf */
+	/*! \brief Software Rx gain set by chan_dahdi.conf */
 	float rxgain;
-	/*! \brief Tx gain set by chan_dahdi.conf */
+	/*! \brief Software Tx gain set by chan_dahdi.conf */
 	float txgain;
 
 	float txdrc; /*!< Dynamic Range Compression factor. a number between 1 and 6ish */
@@ -613,7 +614,7 @@ struct dahdi_pvt {
 	 * \brief Voice mailbox location.
 	 * \note Set from the "mailbox" string read in from chan_dahdi.conf
 	 */
-	char mailbox[AST_MAX_EXTENSION];
+	char mailbox[AST_MAX_MAILBOX_UNIQUEID];
 	/*! \brief Opaque event subscription parameters for message waiting indication support. */
 	struct stasis_subscription *mwi_event_sub;
 	/*! \brief Delayed dialing for E911.  Overlap digits for ISDN. */

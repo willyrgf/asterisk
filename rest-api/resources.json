@@ -2,9 +2,9 @@
 	"_copyright": "Copyright (C) 2012 - 2013, Digium, Inc.",
 	"_author": "David M. Lee, II <dlee@digium.com>",
 	"_svn_revision": "$Revision$",
-	"apiVersion": "0.0.1",
+	"apiVersion": "1.1.0",
 	"swaggerVersion": "1.1",
-	"basePath": "http://localhost:8088/stasis",
+	"basePath": "http://localhost:8088/ari",
 	"apis": [
 		{
 			"path": "/api-docs/asterisk.{format}",
@@ -31,12 +31,24 @@
 			"description": "Sound resources"
 		},
 		{
-			"path": "/api-docs/playback.{format}",
+			"path": "/api-docs/playbacks.{format}",
 			"description": "Playback control resources"
+		},
+		{
+			"path": "/api-docs/deviceStates.{format}",
+			"description": "Device state resources"
+		},
+		{
+			"path": "/api-docs/mailboxes.{format}",
+			"description": "Mailboxes resources"
 		},
 		{
 			"path": "/api-docs/events.{format}",
 			"description": "WebSocket resource"
+		},
+		{
+			"path": "/api-docs/applications.{format}",
+			"description": "Stasis application resources"
 		}
 	]
 }

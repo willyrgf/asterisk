@@ -431,17 +431,13 @@ int ast_cdr_clear_property(const char *channel_name, enum ast_cdr_options option
 /*!
  * \brief Reset the detail record
  * \param channel_name The channel that the CDR is associated with
- * \param options Options that control what the reset operation does.
- *
- * Valid options are:
- * \ref AST_CDR_FLAG_KEEP_VARS - keep the variables during the reset
- * \ref AST_CDR_FLAG_DISABLE_ALL - when used with \ref ast_cdr_reset, re-enables
- * the CDR
+ * \param keep_variables Keep the variables during the reset. If zero,
+ *        variables are discarded during the reset.
  *
  * \retval 0 on success
  * \retval -1 on failure
  */
-int ast_cdr_reset(const char *channel_name, struct ast_flags *options);
+int ast_cdr_reset(const char *channel_name, int keep_variables);
 
 /*!
  * \brief Serializes all the data and variables for a current CDR record
@@ -471,6 +467,20 @@ int ast_cdr_is_enabled(void);
  */
 struct ast_cdr *ast_cdr_alloc(void);
 
+struct stasis_message_router;
+
+/*!
+ * \brief Return the message router for the CDR engine
+ *
+ * This returns the \ref stasis_message_router that the CDR engine
+ * uses for dispatching \ref stasis messages. The reference on the
+ * message router is bumped and must be released by the caller of
+ * this function.
+ *
+ * \retval NULL if the CDR engine is disabled or unavailable
+ * \retval the \ref stasis_message_router otherwise
+ */
+struct stasis_message_router *ast_cdr_message_router(void);
 
 /*!
  * \brief Duplicate a public CDR
@@ -503,8 +513,27 @@ int ast_cdr_register(const char *name, const char *desc, ast_cdrbe be);
  * \brief Unregister a CDR handling engine
  * \param name name of CDR handler to unregister
  * Unregisters a CDR by it's name
+ *
+ * \retval 0 The backend unregistered successfully
+ * \retval -1 The backend could not be unregistered at this time
  */
-void ast_cdr_unregister(const char *name);
+int ast_cdr_unregister(const char *name);
+
+/*!
+ * \brief Suspend a CDR backend temporarily
+ *
+  * \retval 0 The backend is suspdended
+  * \retval -1 The backend could not be suspended
+  */
+int ast_cdr_backend_suspend(const char *name);
+
+/*!
+ * \brief Unsuspend a CDR backend
+ *
+ * \retval 0 The backend was unsuspended
+ * \retval -1 The back could not be unsuspended
+ */
+int ast_cdr_backend_unsuspend(const char *name);
 
 /*!
  * \brief Disposition to a string

@@ -5954,7 +5954,9 @@ static int read_config(struct chan_list *ch)
 	chan_misdn_log(1, port, "read_config: Getting Config\n");
 
 	misdn_cfg_get(port, MISDN_CFG_LANGUAGE, lang, sizeof(lang));
+	ast_channel_lock(ast);
 	ast_channel_language_set(ast, lang);
+	ast_channel_unlock(ast);
 
 	misdn_cfg_get(port, MISDN_CFG_MUSICCLASS, ch->mohinterpret, sizeof(ch->mohinterpret));
 
@@ -6000,7 +6002,9 @@ static int read_config(struct chan_list *ch)
 
 	misdn_cfg_get(bc->port, MISDN_CFG_CONTEXT, ch->context, sizeof(ch->context));
 
+	ast_channel_lock(ast);
 	ast_channel_context_set(ast, ch->context);
+	ast_channel_unlock(ast);
 
 #ifdef MISDN_1_2
 	update_pipeline_config(bc);
@@ -6017,8 +6021,10 @@ static int read_config(struct chan_list *ch)
 	misdn_cfg_get(port, MISDN_CFG_PICKUPGROUP, &pg, sizeof(pg));
 	misdn_cfg_get(port, MISDN_CFG_CALLGROUP, &cg, sizeof(cg));
 	chan_misdn_log(5, port, " --> * CallGrp:%s PickupGrp:%s\n", ast_print_group(buf, sizeof(buf), cg), ast_print_group(buf2, sizeof(buf2), pg));
+	ast_channel_lock(ast);
 	ast_channel_pickupgroup_set(ast, pg);
 	ast_channel_callgroup_set(ast, cg);
+	ast_channel_unlock(ast);
 
 	misdn_cfg_get(port, MISDN_CFG_NAMEDPICKUPGROUP, &npg, sizeof(npg));
 	misdn_cfg_get(port, MISDN_CFG_NAMEDCALLGROUP, &ncg, sizeof(ncg));
@@ -6031,8 +6037,10 @@ static int read_config(struct chan_list *ch)
 		ast_free(tmp_str);
 	}
 
+	ast_channel_lock(ast);
 	ast_channel_named_pickupgroups_set(ast, npg);
 	ast_channel_named_callgroups_set(ast, ncg);
+	ast_channel_unlock(ast);
 
 	if (ch->originator == ORG_AST) {
 		char callerid[BUFFERSIZE + 1];
@@ -6086,7 +6094,9 @@ static int read_config(struct chan_list *ch)
 		/* Add configured prefix to dialed.number */
 		misdn_add_number_prefix(bc->port, bc->dialed.number_type, bc->dialed.number, sizeof(bc->dialed.number));
 
+		ast_channel_lock(ast);
 		ast_channel_exten_set(ast, bc->dialed.number);
+		ast_channel_unlock(ast);
 
 		misdn_cfg_get(bc->port, MISDN_CFG_OVERLAP_DIAL, &ch->overlap_dial, sizeof(ch->overlap_dial));
 		ast_mutex_init(&ch->overlap_tv_lock);
@@ -8226,6 +8236,8 @@ static struct ast_channel *misdn_new(struct chan_list *chlist, int state,  char 
 		ast_channel_rings_set(tmp, (state == AST_STATE_RING) ? 1 : 0);
 
 		ast_jb_configure(tmp, misdn_get_global_jbconf());
+
+		ast_channel_unlock(tmp);
 	} else {
 		chan_misdn_log(-1, 0, "Unable to allocate channel structure\n");
 	}
@@ -8948,6 +8960,8 @@ static void misdn_cc_pbx_notify(long record_id, const struct misdn_cc_notify *no
 	ast_channel_priority_set(chan, notify->priority);
 	ast_free(ast_channel_dialed(chan)->number.str);
 	ast_channel_dialed(chan)->number.str = ast_strdup(notify->exten);
+
+	ast_channel_unlock(chan);
 
 	if (ast_pbx_start(chan)) {
 		ast_log(LOG_WARNING, "Unable to start pbx channel %s!\n", ast_channel_name(chan));
@@ -10193,7 +10207,7 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		ch->addr = bc->addr;
 
 		{
-			struct ast_format_cap *cap = ast_format_cap_alloc_nolock();
+			struct ast_format_cap *cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 			struct ast_format tmpfmt;
 			if (!(cap)) {
 				return RESPONSE_ERR;
@@ -10228,8 +10242,10 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 
 		export_ch(chan, bc, ch);
 
+		ast_channel_lock(ch->ast);
 		ast_channel_rings_set(ch->ast, 1);
 		ast_setstate(ch->ast, AST_STATE_RINGING);
+		ast_channel_unlock(ch->ast);
 
 		/* Update asterisk channel caller information */
 		chan_misdn_log(2, bc->port, " --> TON: %s(%d)\n", misdn_to_str_ton(bc->caller.number_type), bc->caller.number_type);
@@ -10528,7 +10544,9 @@ cb_events(enum event_e event, struct misdn_bchannel *bc, void *user_data)
 		}
 
 		ast_queue_control(ch->ast, AST_CONTROL_RINGING);
+		ast_channel_lock(ch->ast);
 		ast_setstate(ch->ast, AST_STATE_RINGING);
+		ast_channel_unlock(ch->ast);
 
 		cb_log(7, bc->port, " --> Set State Ringing\n");
 
@@ -11298,7 +11316,7 @@ static int load_module(void)
 	};
 
 
-	if (!(misdn_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(misdn_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_set(&prefformat, AST_FORMAT_ALAW, 0);

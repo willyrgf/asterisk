@@ -208,15 +208,12 @@ struct ast_channel_snapshot *ast_channel_snapshot_create(struct ast_channel *cha
 	ast_string_field_set(snapshot, exten, ast_channel_exten(chan));
 
 	ast_string_field_set(snapshot, caller_name,
-		S_COR(ast_channel_caller(chan)->ani.name.valid, ast_channel_caller(chan)->ani.name.str,
-		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, "")));
+		S_COR(ast_channel_caller(chan)->id.name.valid, ast_channel_caller(chan)->id.name.str, ""));
 	ast_string_field_set(snapshot, caller_number,
-		S_COR(ast_channel_caller(chan)->ani.number.valid, ast_channel_caller(chan)->ani.number.str,
-		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, "")));
+		S_COR(ast_channel_caller(chan)->id.number.valid, ast_channel_caller(chan)->id.number.str, ""));
 	ast_string_field_set(snapshot, caller_dnid, S_OR(ast_channel_dialed(chan)->number.str, ""));
 	ast_string_field_set(snapshot, caller_subaddr,
-		S_COR(ast_channel_caller(chan)->ani.subaddress.valid, ast_channel_caller(chan)->ani.subaddress.str,
-		S_COR(ast_channel_caller(chan)->id.subaddress.valid, ast_channel_caller(chan)->id.subaddress.str, "")));
+		S_COR(ast_channel_caller(chan)->id.subaddress.valid, ast_channel_caller(chan)->id.subaddress.str, ""));
 	ast_string_field_set(snapshot, dialed_subaddr,
 		S_COR(ast_channel_dialed(chan)->subaddress.valid, ast_channel_dialed(chan)->subaddress.str, ""));
 	ast_string_field_set(snapshot, caller_ani,
@@ -290,14 +287,21 @@ static void channel_blob_dtor(void *obj)
 	ast_json_unref(event->blob);
 }
 
+/*! \brief Dummy callback for receiving events */
+static void dummy_event_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
+{
+}
+
 void ast_channel_publish_dial_forward(struct ast_channel *caller, struct ast_channel *peer,
-	const char *dialstring, const char *dialstatus, const char *forward)
+	struct ast_channel *forwarded, const char *dialstring, const char *dialstatus,
+	const char *forward)
 {
 	RAII_VAR(struct ast_multi_channel_blob *, payload, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
 	RAII_VAR(struct ast_channel_snapshot *, caller_snapshot, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_channel_snapshot *, peer_snapshot, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_channel_snapshot *, forwarded_snapshot, NULL, ao2_cleanup);
 
 	ast_assert(peer != NULL);
 	blob = ast_json_pack("{s: s, s: s, s: s}",
@@ -313,31 +317,50 @@ void ast_channel_publish_dial_forward(struct ast_channel *caller, struct ast_cha
 	}
 
 	if (caller) {
+		ast_channel_lock(caller);
 		caller_snapshot = ast_channel_snapshot_create(caller);
+		ast_channel_unlock(caller);
 		if (!caller_snapshot) {
 			return;
 		}
 		ast_multi_channel_blob_add_channel(payload, "caller", caller_snapshot);
 	}
 
+	ast_channel_lock(peer);
 	peer_snapshot = ast_channel_snapshot_create(peer);
+	ast_channel_unlock(peer);
 	if (!peer_snapshot) {
 		return;
 	}
 	ast_multi_channel_blob_add_channel(payload, "peer", peer_snapshot);
+
+	if (forwarded) {
+		forwarded_snapshot = ast_channel_snapshot_create(forwarded);
+		if (!forwarded_snapshot) {
+			return;
+		}
+		ast_multi_channel_blob_add_channel(payload, "forwarded", forwarded_snapshot);
+	}
 
 	msg = stasis_message_create(ast_channel_dial_type(), payload);
 	if (!msg) {
 		return;
 	}
 
-	publish_message_for_channel_topics(msg, caller);
+	if (forwarded) {
+		struct stasis_subscription *subscription = stasis_subscribe(ast_channel_topic(peer), dummy_event_cb, NULL);
+
+		stasis_publish(ast_channel_topic(peer), msg);
+		stasis_unsubscribe_and_join(subscription);
+	} else {
+		publish_message_for_channel_topics(msg, caller);
+	}
 }
 
 void ast_channel_publish_dial(struct ast_channel *caller, struct ast_channel *peer,
 	const char *dialstring, const char *dialstatus)
 {
-	ast_channel_publish_dial_forward(caller, peer, dialstring, dialstatus, NULL);
+	ast_channel_publish_dial_forward(caller, peer, NULL, dialstring, dialstatus, NULL);
 }
 
 static struct stasis_message *create_channel_blob_message(struct ast_channel_snapshot *snapshot,
@@ -600,10 +623,25 @@ struct ast_json *ast_multi_channel_blob_get_json(struct ast_multi_channel_blob *
 	return obj->blob;
 }
 
+void ast_channel_stage_snapshot(struct ast_channel *chan)
+{
+	ast_set_flag(ast_channel_flags(chan), AST_FLAG_SNAPSHOT_STAGE);
+}
+
+void ast_channel_stage_snapshot_done(struct ast_channel *chan)
+{
+	ast_clear_flag(ast_channel_flags(chan), AST_FLAG_SNAPSHOT_STAGE);
+	ast_channel_publish_snapshot(chan);
+}
+
 void ast_channel_publish_snapshot(struct ast_channel *chan)
 {
 	RAII_VAR(struct ast_channel_snapshot *, snapshot, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_message *, message, NULL, ao2_cleanup);
+
+	if (ast_test_flag(ast_channel_flags(chan), AST_FLAG_SNAPSHOT_STAGE)) {
+		return;
+	}
 
 	snapshot = ast_channel_snapshot_create(chan);
 	if (!snapshot) {
@@ -743,11 +781,15 @@ void ast_publish_channel_state(struct ast_channel *chan)
 	stasis_publish(ast_channel_topic(chan), message);
 }
 
-struct ast_json *ast_channel_snapshot_to_json(const struct ast_channel_snapshot *snapshot)
+struct ast_json *ast_channel_snapshot_to_json(
+	const struct ast_channel_snapshot *snapshot,
+	const struct stasis_message_sanitizer *sanitize)
 {
 	RAII_VAR(struct ast_json *, json_chan, NULL, ast_json_unref);
 
-	if (snapshot == NULL) {
+	if (snapshot == NULL
+		|| (sanitize && sanitize->channel_snapshot
+		&& sanitize->channel_snapshot(snapshot))) {
 		return NULL;
 	}
 
@@ -805,8 +847,10 @@ int ast_channel_snapshot_caller_id_equal(
 		strcmp(old_snapshot->caller_name, new_snapshot->caller_name) == 0;
 }
 
-static struct ast_json *channel_blob_to_json(struct stasis_message *message,
-	const char *type)
+static struct ast_json *channel_blob_to_json(
+	struct stasis_message *message,
+	const char *type,
+	const struct stasis_message_sanitizer *sanitize)
 {
 	RAII_VAR(struct ast_json *, out, NULL, ast_json_unref);
 	struct ast_channel_blob *channel_blob = stasis_message_data(message);
@@ -832,8 +876,13 @@ static struct ast_json *channel_blob_to_json(struct stasis_message *message,
 
 	/* For global channel messages, the snapshot is optional */
 	if (snapshot) {
-		res |= ast_json_object_set(out, "channel",
-			ast_channel_snapshot_to_json(snapshot));
+		struct ast_json *json_channel = ast_channel_snapshot_to_json(snapshot, sanitize);
+
+		if (!json_channel) {
+			return NULL;
+		}
+
+		res |= ast_json_object_set(out, "channel", json_channel);
 	}
 
 	if (res != 0) {
@@ -843,7 +892,9 @@ static struct ast_json *channel_blob_to_json(struct stasis_message *message,
 	return ast_json_ref(out);
 }
 
-static struct ast_json *dtmf_end_to_json(struct stasis_message *message)
+static struct ast_json *dtmf_end_to_json(
+	struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
 {
 	struct ast_channel_blob *channel_blob = stasis_message_data(message);
 	struct ast_json *blob = channel_blob->blob;
@@ -851,9 +902,14 @@ static struct ast_json *dtmf_end_to_json(struct stasis_message *message)
 	const char *direction =
 		ast_json_string_get(ast_json_object_get(blob, "direction"));
 	const struct timeval *tv = stasis_message_timestamp(message);
+	struct ast_json *json_channel = ast_channel_snapshot_to_json(snapshot, sanitize);
 
 	/* Only present received DTMF end events as JSON */
 	if (strcasecmp("Received", direction) != 0) {
+		return NULL;
+	}
+
+	if (!json_channel) {
 		return NULL;
 	}
 
@@ -862,39 +918,93 @@ static struct ast_json *dtmf_end_to_json(struct stasis_message *message)
 		"timestamp", ast_json_timeval(*tv, NULL),
 		"digit", ast_json_object_get(blob, "digit"),
 		"duration_ms", ast_json_object_get(blob, "duration_ms"),
-		"channel", ast_channel_snapshot_to_json(snapshot));
+		"channel", json_channel);
 }
 
-static struct ast_json *user_event_to_json(struct stasis_message *message)
+static struct ast_json *user_event_to_json(
+	struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
 {
 	struct ast_channel_blob *channel_blob = stasis_message_data(message);
 	struct ast_json *blob = channel_blob->blob;
 	struct ast_channel_snapshot *snapshot = channel_blob->snapshot;
 	const struct timeval *tv = stasis_message_timestamp(message);
+	struct ast_json *json_channel = ast_channel_snapshot_to_json(snapshot, sanitize);
+
+	if (!json_channel) {
+		return NULL;
+	}
 
 	return ast_json_pack("{s: s, s: o, s: O, s: O, s: o}",
 		"type", "ChannelUserevent",
 		"timestamp", ast_json_timeval(*tv, NULL),
 		"eventname", ast_json_object_get(blob, "eventname"),
 		"userevent", blob,
-		"channel", ast_channel_snapshot_to_json(snapshot));
+		"channel", json_channel);
 }
 
-static struct ast_json *varset_to_json(struct stasis_message *message)
+static struct ast_json *varset_to_json(
+	struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
 {
-	return channel_blob_to_json(message, "ChannelVarset");
+	return channel_blob_to_json(message, "ChannelVarset", sanitize);
 }
 
-static struct ast_json *hangup_request_to_json(struct stasis_message *message)
+static struct ast_json *hangup_request_to_json(
+	struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
 {
-	return channel_blob_to_json(message, "ChannelHangupRequest");
+	return channel_blob_to_json(message, "ChannelHangupRequest", sanitize);
+}
+
+static struct ast_json *dial_to_json(
+	struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
+{
+	struct ast_multi_channel_blob *payload = stasis_message_data(message);
+	struct ast_json *blob = ast_multi_channel_blob_get_json(payload);
+	struct ast_json *caller_json = ast_channel_snapshot_to_json(ast_multi_channel_blob_get_channel(payload, "caller"), sanitize);
+	struct ast_json *peer_json = ast_channel_snapshot_to_json(ast_multi_channel_blob_get_channel(payload, "peer"), sanitize);
+	struct ast_json *forwarded_json = ast_channel_snapshot_to_json(ast_multi_channel_blob_get_channel(payload, "forwarded"), sanitize);
+	struct ast_json *json;
+	const struct timeval *tv = stasis_message_timestamp(message);
+	int res = 0;
+
+	json = ast_json_pack("{s: s, s: o, s: O, s: O, s: O}",
+		"type", "Dial",
+		"timestamp", ast_json_timeval(*tv, NULL),
+		"dialstatus", ast_json_object_get(blob, "dialstatus"),
+		"forward", ast_json_object_get(blob, "forward"),
+		"dialstring", ast_json_object_get(blob, "dialstring"));
+	if (!json) {
+		return NULL;
+	}
+
+	if (caller_json) {
+		res |= ast_json_object_set(json, "caller", caller_json);
+	}
+	if (peer_json) {
+		res |= ast_json_object_set(json, "peer", peer_json);
+	}
+	if (forwarded_json) {
+		res |= ast_json_object_set(json, "forwarded", forwarded_json);
+	}
+
+	if (res) {
+		ast_json_unref(json);
+		return NULL;
+	}
+
+	return json;
 }
 
 /*!
  * @{ \brief Define channel message types.
  */
 STASIS_MESSAGE_TYPE_DEFN(ast_channel_snapshot_type);
-STASIS_MESSAGE_TYPE_DEFN(ast_channel_dial_type);
+STASIS_MESSAGE_TYPE_DEFN(ast_channel_dial_type,
+	.to_json = dial_to_json,
+	);
 STASIS_MESSAGE_TYPE_DEFN(ast_channel_varset_type,
 	.to_ami = varset_to_ami,
 	.to_json = varset_to_json,

@@ -38,6 +38,9 @@
 #include <pjlib.h>
 /* Needed for ast_rtp_dtls_cfg struct */
 #include "asterisk/rtp_engine.h"
+/* Needed for ast_sip_for_each_channel_snapshot struct */
+#include "asterisk/stasis_channels.h"
+#include "asterisk/stasis_endpoints.h"
 
 /* Forward declarations of PJSIP stuff */
 struct pjsip_rx_data;
@@ -144,6 +147,10 @@ struct ast_sip_contact {
 	AST_DECLARE_STRING_FIELDS(
 		/*! Full URI of the contact */
 		AST_STRING_FIELD(uri);
+		/*! Outbound proxy to use for qualify */
+		AST_STRING_FIELD(outbound_proxy);
+		/*! Path information to place in Route headers */
+		AST_STRING_FIELD(path);
 	);
 	/*! Absolute time that this contact is no longer valid after */
 	struct timeval expiration_time;
@@ -180,17 +187,6 @@ struct ast_sip_contact_status {
 };
 
 /*!
- * \brief A transport to be used for messages to a contact
- */
-struct ast_sip_contact_transport {
-	AST_DECLARE_STRING_FIELDS(
-		/*! Full URI of the contact */
-		AST_STRING_FIELD(uri);
-	);
-	pjsip_transport *transport;
-};
-
-/*!
  * \brief A SIP address of record
  */
 struct ast_sip_aor {
@@ -199,6 +195,8 @@ struct ast_sip_aor {
 	AST_DECLARE_STRING_FIELDS(
 		/*! Voicemail boxes for this AOR */
 		AST_STRING_FIELD(mailboxes);
+		/*! Outbound proxy for OPTIONS requests */
+		AST_STRING_FIELD(outbound_proxy);
 	);
 	/*! Minimum expiration time */
 	unsigned int minimum_expiration;
@@ -216,6 +214,8 @@ struct ast_sip_aor {
 	unsigned int remove_existing;
 	/*! Any permanent configured contacts */
 	struct ao2_container *permanent_contacts;
+	/*! Determines whether SIP Path headers are supported */
+	unsigned int support_path;
 };
 
 /*!
@@ -314,6 +314,15 @@ enum ast_sip_session_media_encryption {
 	AST_SIP_MEDIA_ENCRYPT_SDES,
 	/*! Offer encrypted session media with datagram TLS key exchange */
 	AST_SIP_MEDIA_ENCRYPT_DTLS,
+};
+
+enum ast_sip_session_redirect {
+	/*! User portion of the target URI should be used as the target in the dialplan */
+	AST_SIP_REDIRECT_USER = 0,
+	/*! Target URI should be used as the target in the dialplan */
+	AST_SIP_REDIRECT_URI_CORE,
+	/*! Target URI should be used as the target within chan_pjsip itself */
+	AST_SIP_REDIRECT_URI_PJSIP,
 };
 
 /*!
@@ -490,8 +499,8 @@ struct ast_sip_t38_configuration {
  */
 struct ast_sip_endpoint_media_configuration {
 	AST_DECLARE_STRING_FIELDS(
-		/*! Optional external media address to use in SDP */
-		AST_STRING_FIELD(external_address);
+		/*! Optional media address to use in SDP */
+		AST_STRING_FIELD(address);
 		/*! SDP origin username */
 		AST_STRING_FIELD(sdpowner);
 		/*! SDP session name */
@@ -574,6 +583,10 @@ struct ast_sip_endpoint {
 	unsigned int faxdetect;
 	/*! Determines if transfers (using REFER) are allowed by this endpoint */
 	unsigned int allowtransfer;
+	/*! Method used when handling redirects */
+	enum ast_sip_session_redirect redirect_method;
+	/*! Variables set on channel creation */
+	struct ast_variable *channel_vars;
 };
 
 /*!
@@ -803,32 +816,42 @@ struct ast_sorcery *ast_sip_get_sorcery(void);
 /*!
  * \brief Initialize transport support on a sorcery instance
  *
- * \param sorcery The sorcery instance
+ * \retval -1 failure
+ * \retval 0 success
+ */
+int ast_sip_initialize_sorcery_transport(void);
+
+/*!
+ * \brief Destroy transport support on a sorcery instance
  *
  * \retval -1 failure
  * \retval 0 success
  */
-int ast_sip_initialize_sorcery_transport(struct ast_sorcery *sorcery);
+int ast_sip_destroy_sorcery_transport(void);
 
 /*!
  * \brief Initialize qualify support on a sorcery instance
  *
- * \param sorcery The sorcery instance
- *
  * \retval -1 failure
  * \retval 0 success
  */
-int ast_sip_initialize_sorcery_qualify(struct ast_sorcery *sorcery);
+int ast_sip_initialize_sorcery_qualify(void);
 
 /*!
  * \brief Initialize location support on a sorcery instance
  *
- * \param sorcery The sorcery instance
+ * \retval -1 failure
+ * \retval 0 success
+ */
+int ast_sip_initialize_sorcery_location(void);
+
+/*!
+ * \brief Destroy location support on a sorcery instance
  *
  * \retval -1 failure
  * \retval 0 success
  */
-int ast_sip_initialize_sorcery_location(struct ast_sorcery *sorcery);
+int ast_sip_destroy_sorcery_location(void);
 
 /*!
  * \brief Retrieve a named AOR
@@ -879,47 +902,18 @@ struct ast_sip_contact *ast_sip_location_retrieve_contact_from_aor_list(const ch
 struct ast_sip_contact *ast_sip_location_retrieve_contact(const char *contact_name);
 
 /*!
- * \brief Add a transport for a contact to use
- */
-
-void ast_sip_location_add_contact_transport(struct ast_sip_contact_transport *ct);
-
-/*!
- * \brief Delete a transport for a contact that went away
- */
-void ast_sip_location_delete_contact_transport(struct ast_sip_contact_transport *ct);
-
-/*!
- * \brief Retrieve a contact_transport, by URI
- *
- * \param contact_uri URI of the contact
- *
- * \retval NULL if not found
- * \retval non-NULL if found
- */
-struct ast_sip_contact_transport *ast_sip_location_retrieve_contact_transport_by_uri(const char *contact_uri);
-
-/*!
- * \brief Retrieve a contact_transport, by transport
- *
- * \param transport transport the contact uses
- *
- * \retval NULL if not found
- * \retval non-NULL if found
- */
-struct ast_sip_contact_transport *ast_sip_location_retrieve_contact_transport_by_transport(pjsip_transport *transport);
-
-/*!
  * \brief Add a new contact to an AOR
  *
  * \param aor Pointer to the AOR
  * \param uri Full contact URI
  * \param expiration_time Optional expiration time of the contact
+ * \param path_info Path information
  *
  * \retval -1 failure
  * \retval 0 success
  */
-int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri, struct timeval expiration_time);
+int ast_sip_location_add_contact(struct ast_sip_aor *aor, const char *uri,
+	struct timeval expiration_time, const char *path_info);
 
 /*!
  * \brief Update a contact
@@ -944,22 +938,26 @@ int ast_sip_location_delete_contact(struct ast_sip_contact *contact);
 /*!
  * \brief Initialize domain aliases support on a sorcery instance
  *
- * \param sorcery The sorcery instance
- *
  * \retval -1 failure
  * \retval 0 success
  */
-int ast_sip_initialize_sorcery_domain_alias(struct ast_sorcery *sorcery);
+int ast_sip_initialize_sorcery_domain_alias(void);
 
 /*!
  * \brief Initialize authentication support on a sorcery instance
  *
- * \param sorcery The sorcery instance
+ * \retval -1 failure
+ * \retval 0 success
+ */
+int ast_sip_initialize_sorcery_auth(void);
+
+/*!
+ * \brief Destroy authentication support on a sorcery instance
  *
  * \retval -1 failure
  * \retval 0 success
  */
-int ast_sip_initialize_sorcery_auth(struct ast_sorcery *sorcery);
+int ast_sip_destroy_sorcery_auth(void);
 
 /*!
  * \brief Callback called when an outbound request with authentication credentials is to be sent in dialog
@@ -1188,7 +1186,7 @@ struct ast_sip_body {
 };
 
 /*!
- * \brief General purpose method for creating a dialog with an endpoint
+ * \brief General purpose method for creating a UAC dialog with an endpoint
  *
  * \param endpoint A pointer to the endpoint
  * \param aor_name Optional name of the AOR to target, may even be an explicit SIP URI
@@ -1197,7 +1195,15 @@ struct ast_sip_body {
  * \retval non-NULL success
  * \retval NULL failure
  */
- pjsip_dialog *ast_sip_create_dialog(const struct ast_sip_endpoint *endpoint, const char *aor_name, const char *request_user);
+pjsip_dialog *ast_sip_create_dialog_uac(const struct ast_sip_endpoint *endpoint, const char *aor_name, const char *request_user);
+
+/*!
+ * \brief General purpose method for creating a UAS dialog with an endpoint
+ *
+ * \param endpoint A pointer to the endpoint
+ * \param rdata The request that is starting the dialog
+ */
+pjsip_dialog *ast_sip_create_dialog_uas(const struct ast_sip_endpoint *endpoint, pjsip_rx_data *rdata);
 
 /*!
  * \brief General purpose method for creating a SIP request
@@ -1215,18 +1221,22 @@ struct ast_sip_body {
  *
  * \param method The method of the SIP request to send
  * \param dlg Optional. If specified, the dialog on which to request the message.
- * \param endpoint Optional. If specified, the request will be created out-of-dialog
- * to the endpoint.
+ * \param endpoint Optional. If specified, the request will be created out-of-dialog to the endpoint.
  * \param uri Optional. If specified, the request will be sent to this URI rather
- * this value.
  * than one configured for the endpoint.
+ * \param contact The contact with which this request is associated for out-of-dialog requests.
  * \param[out] tdata The newly-created request
+ *
+ * The provided contact is attached to tdata with its reference bumped, but will
+ * not survive for the entire lifetime of tdata since the contact is cleaned up
+ * when all supplements have completed execution.
+ *
  * \retval 0 Success
  * \retval -1 Failure
  */
 int ast_sip_create_request(const char *method, struct pjsip_dialog *dlg,
 		struct ast_sip_endpoint *endpoint, const char *uri,
-		pjsip_tx_data **tdata);
+		struct ast_sip_contact *contact, pjsip_tx_data **tdata);
 
 /*!
  * \brief General purpose method for sending a SIP request
@@ -1241,10 +1251,48 @@ int ast_sip_create_request(const char *method, struct pjsip_dialog *dlg,
  * \param tdata The request to send
  * \param dlg Optional. If specified, the dialog on which the request should be sent
  * \param endpoint Optional. If specified, the request is sent out-of-dialog to the endpoint.
+ * \param token Data to be passed to the callback upon receipt of response
+ * \param callback Callback to be called upon receipt of response
+ *
  * \retval 0 Success
  * \retval -1 Failure
  */
-int ast_sip_send_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg, struct ast_sip_endpoint *endpoint);
+int ast_sip_send_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg,
+	struct ast_sip_endpoint *endpoint, void *token,
+	void (*callback)(void *token, pjsip_event *e));
+
+/*!
+ * \brief General purpose method for creating a SIP response
+ *
+ * Its typical use would be to create responses for out of dialog
+ * requests.
+ *
+ * \param rdata The rdata from the incoming request.
+ * \param st_code The response code to transmit.
+ * \param contact The contact with which this request is associated.
+ * \param[out] tdata The newly-created response
+ *
+ * The provided contact is attached to tdata with its reference bumped, but will
+ * not survive for the entire lifetime of tdata since the contact is cleaned up
+ * when all supplements have completed execution.
+ *
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_sip_create_response(const pjsip_rx_data *rdata, int st_code,
+	struct ast_sip_contact *contact, pjsip_tx_data **p_tdata);
+
+/*!
+ * \brief Send a response to an out of dialog request
+ *
+ * \param res_addr The response address for this response
+ * \param tdata The response to send
+ * \param endpoint The ast_sip_endpoint associated with this response
+ *
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_sip_send_response(pjsip_response_addr *res_addr, pjsip_tx_data *tdata, struct ast_sip_endpoint *sip_endpoint);
 
 /*!
  * \brief Determine if an incoming request requires authentication
@@ -1302,6 +1350,16 @@ int ast_sip_create_request_with_auth(const struct ast_sip_auth_array *auths, pjs
  * \retval non-NULL The matching endpoint
  */
 struct ast_sip_endpoint *ast_sip_identify_endpoint(pjsip_rx_data *rdata);
+
+/*!
+ * \brief Set the outbound proxy for an outbound SIP message
+ *
+ * \param tdata The message to set the outbound proxy on
+ * \param proxy SIP uri of the proxy
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_sip_set_outbound_proxy(pjsip_tx_data *tdata, const char *proxy);
 
 /*!
  * \brief Add a header to an outbound SIP message
@@ -1395,6 +1453,13 @@ struct ast_sip_endpoint *ast_pjsip_rdata_get_endpoint(pjsip_rx_data *rdata);
 struct ao2_container *ast_sip_get_endpoints(void);
 
 /*!
+ * \brief Retrieve the default outbound endpoint.
+ *
+ * \retval The default outbound endpoint, NULL if not found.
+ */
+struct ast_sip_endpoint *ast_sip_default_outbound_endpoint(void);
+
+/*!
  * \brief Retrieve relevant SIP auth structures from sorcery
  *
  * \param auths Array of sorcery IDs of auth credentials to retrieve
@@ -1470,12 +1535,370 @@ void ast_sip_report_auth_success(struct ast_sip_endpoint *endpoint, pjsip_rx_dat
  */
 void ast_sip_report_auth_challenge_sent(struct ast_sip_endpoint *endpoint, pjsip_rx_data *rdata, pjsip_tx_data *tdata);
 
+/*!
+ * \brief Send a security event notification for when a request is not supported
+ *
+ * \param endpoint Pointer to the endpoint in use
+ * \param rdata Received message
+ * \param req_type the type of request
+ */
+void ast_sip_report_req_no_support(struct ast_sip_endpoint *endpoint, pjsip_rx_data *rdata,
+				   const char* req_type);
+
+/*!
+ * \brief Send a security event notification for when a memory limit is hit.
+ *
+ * \param endpoint Pointer to the endpoint in use
+ * \param rdata Received message
+ */
+void ast_sip_report_mem_limit(struct ast_sip_endpoint *endpoint, pjsip_rx_data *rdata);
+
 void ast_sip_initialize_global_headers(void);
 void ast_sip_destroy_global_headers(void);
 
 int ast_sip_add_global_request_header(const char *name, const char *value, int replace);
 int ast_sip_add_global_response_header(const char *name, const char *value, int replace);
 
-int ast_sip_initialize_sorcery_global(struct ast_sorcery *sorcery);
+int ast_sip_initialize_sorcery_global(void);
+
+/*!
+ * \brief Retrieves the value associated with the given key.
+ *
+ * \param ht the hash table/dictionary to search
+ * \param key the key to find
+ *
+ * \retval the value associated with the key, NULL otherwise.
+ */
+void *ast_sip_dict_get(void *ht, const char *key);
+
+/*!
+ * \brief Using the dictionary stored in mod_data array at a given id,
+ *        retrieve the value associated with the given key.
+ *
+ * \param mod_data a module data array
+ * \param id the mod_data array index
+ * \param key the key to find
+ *
+ * \retval the value associated with the key, NULL otherwise.
+ */
+#define ast_sip_mod_data_get(mod_data, id, key)		\
+	ast_sip_dict_get(mod_data[id], key)
+
+/*!
+ * \brief Set the value for the given key.
+ *
+ * Note - if the hash table does not exist one is created first, the key/value
+ * pair is set, and the hash table returned.
+ *
+ * \param pool the pool to allocate memory in
+ * \param ht the hash table/dictionary in which to store the key/value pair
+ * \param key the key to associate a value with
+ * \param val the value to associate with a key
+ *
+ * \retval the given, or newly created, hash table.
+ */
+void *ast_sip_dict_set(pj_pool_t* pool, void *ht,
+		       const char *key, void *val);
+
+/*!
+ * \brief Utilizing a mod_data array for a given id, set the value
+ *        associated with the given key.
+ *
+ * For a given structure's mod_data array set the element indexed by id to
+ * be a dictionary containing the key/val pair.
+ *
+ * \param pool a memory allocation pool
+ * \param mod_data a module data array
+ * \param id the mod_data array index
+ * \param key the key to find
+ * \param val the value to associate with a key
+ */
+#define ast_sip_mod_data_set(pool, mod_data, id, key, val)		\
+	mod_data[id] = ast_sip_dict_set(pool, mod_data[id], key, val)
+
+/*!
+ * \brief For every contact on an AOR call the given 'on_contact' handler.
+ *
+ * \param aor the aor containing a list of contacts to iterate
+ * \param on_contact callback on each contact on an AOR
+ * \param arg user data passed to handler
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_for_each_contact(const struct ast_sip_aor *aor,
+		ao2_callback_fn on_contact, void *arg);
+
+/*!
+ * \brief Handler used to convert a contact to a string.
+ *
+ * \param object the ast_sip_aor_contact_pair containing a list of contacts to iterate and the contact
+ * \param arg user data passed to handler
+ * \param flags
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_contact_to_str(void *object, void *arg, int flags);
+
+/*!
+ * \brief For every aor in the comma separated aors string call the
+ *        given 'on_aor' handler.
+ *
+ * \param aors a comma separated list of aors
+ * \param on_aor callback for each aor
+ * \param arg user data passed to handler
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_for_each_aor(const char *aors, ao2_callback_fn on_aor, void *arg);
+
+/*!
+ * \brief For every auth in the array call the given 'on_auth' handler.
+ *
+ * \param array an array of auths
+ * \param on_auth callback for each auth
+ * \param arg user data passed to handler
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_for_each_auth(const struct ast_sip_auth_array *array,
+			  ao2_callback_fn on_auth, void *arg);
+
+/*!
+ * \brief Converts the given auth type to a string
+ *
+ * \param type the auth type to convert
+ * \retval a string representative of the auth type
+ */
+const char *ast_sip_auth_type_to_str(enum ast_sip_auth_type type);
+
+/*!
+ * \brief Converts an auths array to a string of comma separated values
+ *
+ * \param auths an auth array
+ * \param buf the string buffer to write the object data
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_auths_to_str(const struct ast_sip_auth_array *auths, char **buf);
+
+/*
+ * \brief AMI variable container
+ */
+struct ast_sip_ami {
+	/*! Manager session */
+	struct mansession *s;
+	/*! Manager message */
+	const struct message *m;
+	/*! user specified argument data */
+	void *arg;
+};
+
+/*!
+ * \brief Creates a string to store AMI event data in.
+ *
+ * \param event the event to set
+ * \param ami AMI session and message container
+ * \retval an initialized ast_str or NULL on error.
+ */
+struct ast_str *ast_sip_create_ami_event(const char *event,
+					 struct ast_sip_ami *ami);
+
+/*!
+ * \brief An entity responsible formatting endpoint information.
+ */
+struct ast_sip_endpoint_formatter {
+	/*!
+	 * \brief Callback used to format endpoint information over AMI.
+	 */
+	int (*format_ami)(const struct ast_sip_endpoint *endpoint,
+			  struct ast_sip_ami *ami);
+	AST_RWLIST_ENTRY(ast_sip_endpoint_formatter) next;
+};
+
+/*!
+ * \brief Register an endpoint formatter.
+ *
+ * \param obj the formatter to register
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_sip_register_endpoint_formatter(struct ast_sip_endpoint_formatter *obj);
+
+/*!
+ * \brief Unregister an endpoint formatter.
+ *
+ * \param obj the formatter to unregister
+ */
+void ast_sip_unregister_endpoint_formatter(struct ast_sip_endpoint_formatter *obj);
+
+/*!
+ * \brief Converts a sorcery object to a string of object properties.
+ *
+ * \param obj the sorcery object to convert
+ * \param str the string buffer to write the object data
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_sorcery_object_to_ami(const void *obj, struct ast_str **buf);
+
+/*!
+ * \brief Formats the endpoint and sends over AMI.
+ *
+ * \param endpoint the endpoint to format and send
+ * \param endpoint ami AMI variable container
+ * \param count the number of formatters operated on
+ * \retval 0 Success, otherwise non-zero on error
+ */
+int ast_sip_format_endpoint_ami(struct ast_sip_endpoint *endpoint,
+				struct ast_sip_ami *ami, int *count);
+
+/*!
+ * \brief Format auth details for AMI.
+ *
+ * \param auths an auth array
+ * \param ami ami variable container
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_format_auths_ami(const struct ast_sip_auth_array *auths,
+			     struct ast_sip_ami *ami);
+
+/*!
+ * \brief Retrieve the endpoint snapshot for an endpoint
+ *
+ * \param endpoint The endpoint whose snapshot is to be retreieved.
+ * \retval The endpoint snapshot
+ */
+struct ast_endpoint_snapshot *ast_sip_get_endpoint_snapshot(
+	const struct ast_sip_endpoint *endpoint);
+
+/*!
+ * \brief Retrieve the device state for an endpoint.
+ *
+ * \param endpoint The endpoint whose state is to be retrieved.
+ * \retval The device state.
+ */
+const char *ast_sip_get_device_state(const struct ast_sip_endpoint *endpoint);
+
+/*!
+ * \brief For every channel snapshot on an endpoint snapshot call the given
+ *        'on_channel_snapshot' handler.
+ *
+ * \param endpoint_snapshot snapshot of an endpoint
+ * \param on_channel_snapshot callback for each channel snapshot
+ * \param arg user data passed to handler
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_for_each_channel_snapshot(const struct ast_endpoint_snapshot *endpoint_snapshot,
+		ao2_callback_fn on_channel_snapshot,
+				      void *arg);
+
+/*!
+ * \brief For every channel snapshot on an endpoint all the given
+ *        'on_channel_snapshot' handler.
+ *
+ * \param endpoint endpoint
+ * \param on_channel_snapshot callback for each channel snapshot
+ * \param arg user data passed to handler
+ * \retval 0 Success, non-zero on failure
+ */
+int ast_sip_for_each_channel(const struct ast_sip_endpoint *endpoint,
+		ao2_callback_fn on_channel_snapshot,
+				      void *arg);
+
+enum ast_sip_supplement_priority {
+	/*! Top priority. Supplements with this priority are those that need to run before any others */
+	AST_SIP_SUPPLEMENT_PRIORITY_FIRST = 0,
+	/*! Channel creation priority.
+	 * chan_pjsip creates a channel at this priority. If your supplement depends on being run before
+	 * or after channel creation, then set your priority to be lower or higher than this value.
+	 */
+	AST_SIP_SUPPLEMENT_PRIORITY_CHANNEL = 1000000,
+	/*! Lowest priority. Supplements with this priority should be run after all other supplements */
+	AST_SIP_SUPPLEMENT_PRIORITY_LAST = INT_MAX,
+};
+
+/*!
+ * \brief A supplement to SIP message processing
+ *
+ * These can be registered by any module in order to add
+ * processing to incoming and outgoing SIP out of dialog
+ * requests and responses
+ */
+struct ast_sip_supplement {
+	/*! Method on which to call the callbacks. If NULL, call on all methods */
+	const char *method;
+	/*! Priority for this supplement. Lower numbers are visited before higher numbers */
+	enum ast_sip_supplement_priority priority;
+	/*!
+	 * \brief Called on incoming SIP request
+	 * This method can indicate a failure in processing in its return. If there
+	 * is a failure, it is required that this method sends a response to the request.
+	 * This method is always called from a SIP servant thread.
+	 *
+	 * \note
+	 * The following PJSIP methods will not work properly:
+	 * pjsip_rdata_get_dlg()
+	 * pjsip_rdata_get_tsx()
+	 * The reason is that the rdata passed into this function is a cloned rdata structure,
+	 * and its module data is not copied during the cloning operation.
+	 * If you need to get the dialog, you can get it via session->inv_session->dlg.
+	 *
+	 * \note
+	 * There is no guarantee that a channel will be present on the session when this is called.
+	 */
+	int (*incoming_request)(struct ast_sip_endpoint *endpoint, struct pjsip_rx_data *rdata);
+	/*!
+	 * \brief Called on an incoming SIP response
+	 * This method is always called from a SIP servant thread.
+	 *
+	 * \note
+	 * The following PJSIP methods will not work properly:
+	 * pjsip_rdata_get_dlg()
+	 * pjsip_rdata_get_tsx()
+	 * The reason is that the rdata passed into this function is a cloned rdata structure,
+	 * and its module data is not copied during the cloning operation.
+	 * If you need to get the dialog, you can get it via session->inv_session->dlg.
+	 *
+	 * \note
+	 * There is no guarantee that a channel will be present on the session when this is called.
+	 */
+	void (*incoming_response)(struct ast_sip_endpoint *endpoint, struct pjsip_rx_data *rdata);
+	/*!
+	 * \brief Called on an outgoing SIP request
+	 * This method is always called from a SIP servant thread.
+	 */
+	void (*outgoing_request)(struct ast_sip_endpoint *endpoint, struct ast_sip_contact *contact, struct pjsip_tx_data *tdata);
+	/*!
+	 * \brief Called on an outgoing SIP response
+	 * This method is always called from a SIP servant thread.
+	 */
+	void (*outgoing_response)(struct ast_sip_endpoint *endpoint, struct ast_sip_contact *contact, struct pjsip_tx_data *tdata);
+	/*! Next item in the list */
+	AST_LIST_ENTRY(ast_sip_supplement) next;
+};
+
+/*!
+ * \brief Register a supplement to SIP out of dialog processing
+ *
+ * This allows for someone to insert themselves in the processing of out
+ * of dialog SIP requests and responses. This, for example could allow for
+ * a module to set channel data based on headers in an incoming message.
+ * Similarly, a module could reject an incoming request if desired.
+ *
+ * \param supplement The supplement to register
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_sip_register_supplement(struct ast_sip_supplement *supplement);
+
+/*!
+ * \brief Unregister a an supplement to SIP out of dialog processing
+ *
+ * \param supplement The supplement to unregister
+ */
+void ast_sip_unregister_supplement(struct ast_sip_supplement *supplement);
+
+/*!
+ * \brief Retrieve the system debug setting (yes|no|host).
+ *
+ * \note returned string needs to be de-allocated by caller.
+ *
+ * \retval the system debug setting.
+ */
+char *ast_sip_get_debug(void);
 
 #endif /* _RES_PJSIP_H */

@@ -42,6 +42,7 @@
 #include "asterisk/musiconhold.h"
 #include "asterisk/cli.h"
 #include "asterisk/transcap.h"
+#include "asterisk/stasis_channels.h"
 
 #include "sig_ss7.h"
 #if defined(LIBSS7_ABI_COMPATIBILITY)
@@ -621,6 +622,8 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 
 	sig_ss7_set_echocanceller(p, 1);
 
+	ast_channel_stage_snapshot(c);
+
 	/*
 	 * It is reasonably safe to set the following
 	 * channel variables while the channel private
@@ -699,6 +702,8 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		/* Clear this after we set it */
 		p->generic_name[0] = 0;
 	}
+
+	ast_channel_stage_snapshot_done(c);
 
 	sig_ss7_unlock_private(p);
 	ast_channel_unlock(c);
@@ -788,7 +793,9 @@ void *ss7_linkset(void *data)
 	ss7_event *e = NULL;
 	struct sig_ss7_chan *p;
 	struct pollfd pollers[SIG_SS7_NUM_DCHANS];
-	int nextms = 0;
+	int nextms;
+
+#define SS7_MAX_POLL	60000	/* Maximum poll time in ms. */
 
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
@@ -813,6 +820,11 @@ void *ss7_linkset(void *data)
 			}
 			nextms = tv.tv_sec * 1000;
 			nextms += tv.tv_usec / 1000;
+			if (SS7_MAX_POLL < nextms) {
+				nextms = SS7_MAX_POLL;
+			}
+		} else {
+			nextms = SS7_MAX_POLL;
 		}
 
 		for (i = 0; i < linkset->numsigchans; i++) {

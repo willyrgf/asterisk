@@ -172,11 +172,30 @@ static struct control_list *control_list_create(struct ast_ari_response *respons
 	return list;
 }
 
-void ast_ari_add_channel_to_bridge(struct ast_variable *headers, struct ast_add_channel_to_bridge_args *args, struct ast_ari_response *response)
+static int check_add_remove_channel(struct ast_ari_response *response,
+				    struct stasis_app_control *control,
+				    enum stasis_app_control_channel_result result)
+{
+	switch (result) {
+	case STASIS_APP_CHANNEL_RECORDING :
+		ast_ari_response_error(
+			response, 409, "Conflict", "Channel %s currently recording",
+			stasis_app_control_get_channel_id(control));
+		return -1;
+	case STASIS_APP_CHANNEL_OKAY:
+		return 0;
+	}
+	return 0;
+}
+
+void ast_ari_bridges_add_channel(struct ast_variable *headers,
+	struct ast_ari_bridges_add_channel_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 	RAII_VAR(struct control_list *, list, NULL, ao2_cleanup);
 	size_t i;
+	int has_error = 0;
 
 	if (!bridge) {
 		/* Response filled in by find_bridge() */
@@ -200,13 +219,21 @@ void ast_ari_add_channel_to_bridge(struct ast_variable *headers, struct ast_add_
 	}
 
 	for (i = 0; i < list->count; ++i) {
-		stasis_app_control_add_channel_to_bridge(list->controls[i], bridge);
+		if ((has_error = check_add_remove_channel(response, list->controls[i],
+			     stasis_app_control_add_channel_to_bridge(
+				    list->controls[i], bridge)))) {
+			break;
+		}
 	}
 
-	ast_ari_response_no_content(response);
+	if (!has_error) {
+		ast_ari_response_no_content(response);
+	}
 }
 
-void ast_ari_remove_channel_from_bridge(struct ast_variable *headers, struct ast_remove_channel_from_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_remove_channel(struct ast_variable *headers,
+	struct ast_ari_bridges_remove_channel_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 	RAII_VAR(struct control_list *, list, NULL, ao2_cleanup);
@@ -276,7 +303,7 @@ static struct ast_channel *prepare_bridge_media_channel(const char *type)
 	RAII_VAR(struct ast_format_cap *, cap, NULL, ast_format_cap_destroy);
 	struct ast_format format;
 
-	cap = ast_format_cap_alloc_nolock();
+	cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	if (!cap) {
 		return NULL;
 	}
@@ -290,7 +317,9 @@ static struct ast_channel *prepare_bridge_media_channel(const char *type)
 	return ast_request(type, cap, NULL, "ARI", NULL);
 }
 
-void ast_ari_play_on_bridge(struct ast_variable *headers, struct ast_play_on_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_play(struct ast_variable *headers,
+	struct ast_ari_bridges_play_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 	RAII_VAR(struct ast_channel *, play_channel, NULL, ast_hangup);
@@ -382,10 +411,12 @@ void ast_ari_play_on_bridge(struct ast_variable *headers, struct ast_play_on_bri
 	play_channel = NULL;
 	control = NULL;
 
-	ast_ari_response_created(response, playback_url, json);
+	ast_ari_response_created(response, playback_url, ast_json_ref(json));
 }
 
-void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_record(struct ast_variable *headers,
+	struct ast_ari_bridges_record_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 	RAII_VAR(struct ast_channel *, record_channel, NULL, ast_hangup);
@@ -439,6 +470,27 @@ void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridg
 		stasis_app_recording_if_exists_parse(args->if_exists);
 	options->beep = args->beep;
 
+	if (options->terminate_on == STASIS_APP_RECORDING_TERMINATE_INVALID) {
+		ast_ari_response_error(
+			response, 400, "Bad Request",
+			"terminateOn invalid");
+		return;
+	}
+
+	if (options->if_exists == -1) {
+		ast_ari_response_error(
+			response, 400, "Bad Request",
+			"ifExists invalid");
+		return;
+	}
+
+	if (!ast_get_format_for_file_ext(options->format)) {
+		ast_ari_response_error(
+			response, 422, "Unprocessable Entity",
+			"specified format is unknown on this system");
+		return;
+	}
+
 	recording = stasis_app_control_record(control, options);
 	if (recording == NULL) {
 		switch(errno) {
@@ -452,7 +504,7 @@ void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridg
 			break;
 		case EEXIST:
 			ast_ari_response_error(response, 409, "Conflict",
-				"Recording '%s' already in progress",
+				"Recording '%s' already exists and can not be overwritten",
 				args->name);
 			break;
 		case ENOMEM:
@@ -514,10 +566,12 @@ void ast_ari_record_bridge(struct ast_variable *headers, struct ast_record_bridg
 	record_channel = NULL;
 	control = NULL;
 
-	ast_ari_response_created(response, recording_url, json);
+	ast_ari_response_created(response, recording_url, ast_json_ref(json));
 }
 
-void ast_ari_moh_start_bridge(struct ast_variable *headers, struct ast_moh_start_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_start_moh(struct ast_variable *headers,
+	struct ast_ari_bridges_start_moh_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 	struct ast_channel *moh_channel;
@@ -540,7 +594,9 @@ void ast_ari_moh_start_bridge(struct ast_variable *headers, struct ast_moh_start
 
 }
 
-void ast_ari_moh_stop_bridge(struct ast_variable *headers, struct ast_moh_stop_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_stop_moh(struct ast_variable *headers,
+	struct ast_ari_bridges_stop_moh_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 
@@ -559,7 +615,9 @@ void ast_ari_moh_stop_bridge(struct ast_variable *headers, struct ast_moh_stop_b
 	ast_ari_response_no_content(response);
 }
 
-void ast_ari_get_bridge(struct ast_variable *headers, struct ast_get_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_get(struct ast_variable *headers,
+	struct ast_ari_bridges_get_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge_snapshot *, snapshot, ast_bridge_snapshot_get_latest(args->bridge_id), ao2_cleanup);
 	if (!snapshot) {
@@ -570,10 +628,12 @@ void ast_ari_get_bridge(struct ast_variable *headers, struct ast_get_bridge_args
 	}
 
 	ast_ari_response_ok(response,
-		ast_bridge_snapshot_to_json(snapshot));
+		ast_bridge_snapshot_to_json(snapshot, stasis_app_get_sanitizer()));
 }
 
-void ast_ari_delete_bridge(struct ast_variable *headers, struct ast_delete_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_destroy(struct ast_variable *headers,
+	struct ast_ari_bridges_destroy_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct ast_bridge *, bridge, find_bridge(response, args->bridge_id), ao2_cleanup);
 	if (!bridge) {
@@ -584,7 +644,9 @@ void ast_ari_delete_bridge(struct ast_variable *headers, struct ast_delete_bridg
 	ast_ari_response_no_content(response);
 }
 
-void ast_ari_get_bridges(struct ast_variable *headers, struct ast_get_bridges_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_list(struct ast_variable *headers,
+	struct ast_ari_bridges_list_args *args,
+	struct ast_ari_response *response)
 {
 	RAII_VAR(struct stasis_cache *, cache, NULL, ao2_cleanup);
 	RAII_VAR(struct ao2_container *, snapshots, NULL, ao2_cleanup);
@@ -617,7 +679,10 @@ void ast_ari_get_bridges(struct ast_variable *headers, struct ast_get_bridges_ar
 	while ((obj = ao2_iterator_next(&i))) {
 		RAII_VAR(struct stasis_message *, msg, obj, ao2_cleanup);
 		struct ast_bridge_snapshot *snapshot = stasis_message_data(msg);
-		if (ast_json_array_append(json, ast_bridge_snapshot_to_json(snapshot))) {
+		struct ast_json *json_bridge = ast_bridge_snapshot_to_json(snapshot, stasis_app_get_sanitizer());
+
+		if (!json_bridge || ast_json_array_append(json, json_bridge)) {
+			ao2_iterator_destroy(&i);
 			ast_ari_response_alloc_failed(response);
 			return;
 		}
@@ -627,9 +692,11 @@ void ast_ari_get_bridges(struct ast_variable *headers, struct ast_get_bridges_ar
 	ast_ari_response_ok(response, ast_json_ref(json));
 }
 
-void ast_ari_new_bridge(struct ast_variable *headers, struct ast_new_bridge_args *args, struct ast_ari_response *response)
+void ast_ari_bridges_create(struct ast_variable *headers,
+	struct ast_ari_bridges_create_args *args,
+	struct ast_ari_response *response)
 {
-	RAII_VAR(struct ast_bridge *, bridge, stasis_app_bridge_create(args->type), ao2_cleanup);
+	RAII_VAR(struct ast_bridge *, bridge, stasis_app_bridge_create(args->type, args->name), ao2_cleanup);
 	RAII_VAR(struct ast_bridge_snapshot *, snapshot, NULL, ao2_cleanup);
 
 	if (!bridge) {
@@ -648,5 +715,5 @@ void ast_ari_new_bridge(struct ast_variable *headers, struct ast_new_bridge_args
 	}
 
 	ast_ari_response_ok(response,
-		ast_bridge_snapshot_to_json(snapshot));
+		ast_bridge_snapshot_to_json(snapshot, stasis_app_get_sanitizer()));
 }

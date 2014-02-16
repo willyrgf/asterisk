@@ -254,7 +254,7 @@ int __ast_bucket_scheme_register(const char *name, struct ast_sorcery_wizard *bu
 	bucket_file_destroy_cb destroy_cb, struct ast_module *module)
 {
 	SCOPED_AO2WRLOCK(lock, schemes);
-	struct ast_bucket_scheme *scheme;
+	RAII_VAR(struct ast_bucket_scheme *, scheme, NULL, ao2_cleanup);
 
 	if (ast_strlen_zero(name) || !bucket || !file ||
 	    !bucket->create || !bucket->delete || !bucket->retrieve_id ||
@@ -473,7 +473,7 @@ int ast_bucket_observer_add(const struct ast_sorcery_observer *callbacks)
 	return ast_sorcery_observer_add(bucket_sorcery, "bucket", callbacks);
 }
 
-void ast_bucket_observer_remove(struct ast_sorcery_observer *callbacks)
+void ast_bucket_observer_remove(const struct ast_sorcery_observer *callbacks)
 {
 	ast_sorcery_observer_remove(bucket_sorcery, "bucket", callbacks);
 }
@@ -520,6 +520,7 @@ struct ast_json *ast_bucket_json(const struct ast_bucket *bucket)
 
 		if (!bucket_uri || ast_json_array_append(buckets, bucket_uri)) {
 			res = -1;
+			ao2_ref(uri, -1);
 			break;
 		}
 	}
@@ -544,6 +545,7 @@ struct ast_json *ast_bucket_json(const struct ast_bucket *bucket)
 
 		if (!file_uri || ast_json_array_append(files, file_uri)) {
 			res = -1;
+			ao2_ref(uri, -1);
 			break;
 		}
 	}
@@ -761,7 +763,7 @@ int ast_bucket_file_observer_add(const struct ast_sorcery_observer *callbacks)
 	return ast_sorcery_observer_add(bucket_sorcery, "file", callbacks);
 }
 
-void ast_bucket_file_observer_remove(struct ast_sorcery_observer *callbacks)
+void ast_bucket_file_observer_remove(const struct ast_sorcery_observer *callbacks)
 {
 	ast_sorcery_observer_remove(bucket_sorcery, "file", callbacks);
 }

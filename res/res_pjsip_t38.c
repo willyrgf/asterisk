@@ -113,11 +113,7 @@ static struct t38_parameters_task_data *t38_parameters_task_data_alloc(struct as
 
 	data->session = session;
 	ao2_ref(session, +1);
-
-	if (!(data->frame = ast_frdup(frame))) {
-		ao2_cleanup(data);
-		return NULL;
-	}
+	data->frame = frame;
 
 	return data;
 }
@@ -175,6 +171,10 @@ static void t38_change_state(struct ast_sip_session *session, struct ast_sip_ses
 		break;
 	case T38_LOCAL_REINVITE:
 		/* wait until we get a peer response before responding to local reinvite */
+		break;
+	case T38_MAX_ENUM:
+		/* Well, that shouldn't happen */
+		ast_assert(0);
 		break;
 	}
 
@@ -396,6 +396,8 @@ static struct ast_frame *t38_framehook_write(struct ast_sip_session *session, st
 		if (ast_sip_push_task(session->serializer, t38_interpret_parameters, data)) {
 			ao2_ref(data, -1);
 		}
+
+		f = &ast_null_frame;
 	} else if (f->frametype == AST_FRAME_MODEM) {
 		RAII_VAR(struct ast_sip_session_media *, session_media, NULL, ao2_cleanup);
 
@@ -446,7 +448,10 @@ static void t38_attach_framehook(struct ast_sip_session *session)
 		.event_cb = t38_framehook,
 	};
 
-	if ((ast_channel_state(session->channel) == AST_STATE_UP) || !session->endpoint->media.t38.enabled) {
+	/* Only attach the framehook on the first outgoing INVITE or the first incoming INVITE */
+	if ((session->inv_session->state != PJSIP_INV_STATE_NULL &&
+		session->inv_session->state != PJSIP_INV_STATE_INCOMING) ||
+		!session->endpoint->media.t38.enabled) {
 		return;
 	}
 
@@ -493,7 +498,7 @@ static unsigned int t38_get_rate(enum ast_control_t38_rate rate)
 /*! \brief Supplement for adding framehook to session channel */
 static struct ast_sip_session_supplement t38_supplement = {
 	.method = "INVITE",
-	.priority = AST_SIP_SESSION_SUPPLEMENT_PRIORITY_CHANNEL + 1,
+	.priority = AST_SIP_SUPPLEMENT_PRIORITY_CHANNEL + 1,
 	.incoming_request = t38_incoming_invite_request,
 	.outgoing_request = t38_outgoing_invite_request,
 };
@@ -671,7 +676,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 	media->desc.media = pj_str(session_media->stream_type);
 	media->desc.transport = STR_UDPTL;
 
-	if (ast_strlen_zero(session->endpoint->media.external_address)) {
+	if (ast_strlen_zero(session->endpoint->media.address)) {
 		pj_sockaddr localaddr;
 
 		if (pj_gethostip(session->endpoint->media.t38.ipv6 ? pj_AF_INET6() : pj_AF_INET(), &localaddr)) {
@@ -679,7 +684,7 @@ static int create_outgoing_sdp_stream(struct ast_sip_session *session, struct as
 		}
 		pj_sockaddr_print(&localaddr, hostip, sizeof(hostip), 2);
 	} else {
-		ast_copy_string(hostip, session->endpoint->media.external_address, sizeof(hostip));
+		ast_copy_string(hostip, session->endpoint->media.address, sizeof(hostip));
 	}
 
 	media->conn->net_type = STR_IN;
@@ -774,6 +779,11 @@ static void change_outgoing_sdp_stream_media_address(pjsip_tx_data *tdata, struc
 {
 	char host[NI_MAXHOST];
 	struct ast_sockaddr addr = { { 0, } };
+
+	/* If the stream has been rejected there will be no connection line */
+	if (!stream->conn) {
+		return;
+	}
 
 	ast_copy_pj_str(host, &stream->conn->addr, sizeof(host));
 	ast_sockaddr_parse(&addr, host, PARSE_PORT_FORBID);

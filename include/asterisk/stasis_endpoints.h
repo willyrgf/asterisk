@@ -194,14 +194,12 @@ struct stasis_cache *ast_endpoint_cache(void);
  *
  * \param tech Name of the endpoint's technology.
  * \param resource Resource name of the endpoint.
- * \param guaranteed Whether to require all pending messages to have been processed or not.
  * \return Snapshot of the endpoint with the given name.
  * \return \c NULL if endpoint is not found, or on error.
  * \since 12
  */
 struct ast_endpoint_snapshot *ast_endpoint_latest_snapshot(const char *tech,
-	const char *resource,
-	unsigned int guaranteed
+	const char *resource
 );
 
 /*! @} */
@@ -210,11 +208,14 @@ struct ast_endpoint_snapshot *ast_endpoint_latest_snapshot(const char *tech,
  * \brief Build a JSON object from a \ref ast_endpoint_snapshot.
  *
  * \param snapshot Endpoint snapshot.
+ * \param sanitize The message sanitizer to use on the snapshot
+ *
  * \return JSON object representing endpoint snapshot.
  * \return \c NULL on error
  */
 struct ast_json *ast_endpoint_snapshot_to_json(
-	const struct ast_endpoint_snapshot *snapshot);
+	const struct ast_endpoint_snapshot *snapshot,
+	const struct stasis_message_sanitizer *sanitize);
 
 /*!
  * \brief Initialization function for endpoint stasis support.

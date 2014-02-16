@@ -2,8 +2,8 @@
 	"_copyright": "Copyright (C) 2012 - 2013, Digium, Inc.",
 	"_author": "David M. Lee, II <dlee@digium.com>",
 	"_svn_revision": "$Revision$",
-	"apiVersion": "0.0.1",
-	"swaggerVersion": "1.3",
+	"apiVersion": "1.1.0",
+	"swaggerVersion": "1.2",
 	"basePath": "http://localhost:8088/stasis",
 	"resourcePath": "/api-docs/events.{format}",
 	"apis": [
@@ -43,11 +43,14 @@
 					"required": true,
 					"description": "Indicates the type of this message."
 				}
-			}
+			},
+			"subTypes": [
+				"MissingParams",
+				"Event"
+			]
 		},
 		"MissingParams": {
 			"id": "MissingParams",
-			"extends": "Message",
 			"description": "Error event sent when required params are missing.",
 			"properties": {
 				"params": {
@@ -59,7 +62,6 @@
 		},
 		"Event": {
 			"id": "Event",
-			"extends": "Message",
 			"description": "Base type for asynchronous events from Asterisk.",
 			"properties": {
 				"application": {
@@ -72,11 +74,50 @@
 					"description": "Time at which this event was created.",
 					"required": false
 				}
+			},
+			"subTypes": [
+				"DeviceStateChanged",
+				"PlaybackStarted",
+				"PlaybackFinished",
+				"RecordingStarted",
+				"RecordingFinished",
+				"RecordingFailed",
+				"ApplicationReplaced",
+				"BridgeCreated",
+				"BridgeDestroyed",
+				"BridgeMerged",
+				"BridgeBlindTransfer",
+				"BridgeAttendedTransfer",
+				"ChannelCreated",
+				"ChannelDestroyed",
+				"ChannelEnteredBridge",
+				"ChannelLeftBridge",
+				"ChannelStateChange",
+				"ChannelDtmfReceived",
+				"ChannelDialplan",
+				"ChannelCallerId",
+				"ChannelUserevent",
+				"ChannelHangupRequest",
+				"ChannelVarset",
+				"EndpointStateChange",
+				"Dial",
+				"StasisEnd",
+				"StasisStart"
+			]
+		},
+		"DeviceStateChanged": {
+			"id": "DeviceStateChanged",
+			"description": "Notification that a device state has changed.",
+			"properties": {
+				"device_state": {
+					"type": "DeviceState",
+					"description": "Device state object",
+					"required": true
+				}
 			}
 		},
 		"PlaybackStarted": {
 			"id": "PlaybackStarted",
-			"extends": "Event",
 			"description": "Event showing the start of a media playback operation.",
 			"properties": {
 				"playback": {
@@ -88,7 +129,6 @@
 		},
 		"PlaybackFinished": {
 			"id": "PlaybackFinished",
-			"extends": "Event",
 			"description": "Event showing the completion of a media playback operation.",
 			"properties": {
 				"playback": {
@@ -98,15 +138,49 @@
 				}
 			}
 		},
+		"RecordingStarted": {
+			"id": "RecordingStarted",
+			"extends": "Event",
+			"description": "Event showing the start of a recording operation.",
+			"properties": {
+				"recording": {
+					"type": "LiveRecording",
+					"description": "Recording control object",
+					"required": true
+				}
+			}
+		},
+		"RecordingFinished": {
+			"id": "RecordingFinished",
+			"extends": "Event",
+			"description": "Event showing the completion of a recording operation.",
+			"properties": {
+				"recording": {
+					"type": "LiveRecording",
+					"description": "Recording control object",
+					"required": true
+				}
+			}
+		},
+		"RecordingFailed": {
+			"id": "RecordingFailed",
+			"extends": "Event",
+			"description": "Event showing failure of a recording operation.",
+			"properties": {
+				"recording": {
+					"type": "LiveRecording",
+					"description": "Recording control object",
+					"required": true
+				}
+			}
+		},
 		"ApplicationReplaced": {
 			"id": "ApplicationReplaced",
-			"extends": "Event",
 			"description": "Notification that another WebSocket has taken over for an application.\n\nAn application may only be subscribed to by a single WebSocket at a time. If multiple WebSockets attempt to subscribe to the same application, the newer WebSocket wins, and the older one receives this event.",
 			"properties": {}
 		},
 		"BridgeCreated": {
 			"id": "BridgeCreated",
-			"extends": "Event",
 			"description": "Notification that a bridge has been created.",
 			"properties": {
 				"bridge": {
@@ -117,7 +191,6 @@
 		},
 		"BridgeDestroyed": {
 			"id": "BridgeDestroyed",
-			"extends": "Event",
 			"description": "Notification that a bridge has been destroyed.",
 			"properties": {
 				"bridge": {
@@ -128,7 +201,6 @@
 		},
 		"BridgeMerged": {
 			"id": "BridgeMerged",
-			"extends": "Event",
 			"description": "Notification that one bridge has merged into another.",
 			"properties": {
 				"bridge": {
@@ -141,9 +213,106 @@
 				}
 			}
 		},
+		"BridgeBlindTransfer": {
+			"id": "BridgeBlindTransfer",
+			"description": "Notification that a blind transfer has occurred.",
+			"properties": {
+				"channel": {
+					"description": "The channel performing the blind transfer",
+					"required": true,
+					"type": "Channel"
+				},
+				"exten": {
+					"description": "The extension transferred to",
+					"required": true,
+					"type": "string"
+				},
+				"context": {
+					"description": "The context transferred to",
+					"required": true,
+					"type": "string"
+				},
+				"result": {
+					"description": "The result of the transfer attempt",
+					"required": true,
+					"type": "string"
+				},
+				"is_external": {
+					"description": "Whether the transfer was externally initiated or not",
+					"required": true,
+					"type": "boolean"
+				},
+				"bridge": {
+					"description": "The bridge being transferred",
+					"type": "Bridge"
+				}
+			}
+		},
+		"BridgeAttendedTransfer": {
+			"id": "BridgeAttendedTransfer",
+			"description": "Notification that an attended transfer has occurred.",
+			"properties": {
+				"transferer_first_leg": {
+					"description": "First leg of the transferer",
+					"required": true,
+					"type": "Channel"
+				},
+				"transferer_second_leg": {
+					"description": "Second leg of the transferer",
+					"required": true,
+					"type": "Channel"
+				},
+				"result": {
+					"description": "The result of the transfer attempt",
+					"required": true,
+					"type": "string"
+				},
+				"is_external": {
+					"description": "Whether the transfer was externally initiated or not",
+					"required": true,
+					"type": "boolean"
+				},
+				"transferer_first_leg_bridge": {
+					"description": "Bridge the transferer first leg is in",
+					"type": "Bridge"
+				},
+				"transferer_second_leg_bridge": {
+					"description": "Bridge the transferer second leg is in",
+					"type": "Bridge"
+				},
+				"destination_type": {
+					"description": "How the transfer was accomplished",
+					"required": true,
+					"type": "string"
+				},
+				"destination_bridge": {
+					"description": "Bridge that survived the merge result",
+					"type": "string"
+				},
+				"destination_application": {
+					"description": "Application that has been transferred into",
+					"type": "string"
+				},
+				"destination_link_first_leg": {
+					"description": "First leg of a link transfer result",
+					"type": "Channel"
+				},
+				"destination_link_second_leg": {
+					"description": "Second leg of a link transfer result",
+					"type": "Channel"
+				},
+				"destination_threeway_channel": {
+					"description": "Transferer channel that survived the threeway result",
+					"type": "Channel"
+				},
+				"destination_threeway_bridge": {
+					"description": "Bridge that survived the threeway result",
+					"type": "Bridge"
+				}
+			}
+		},
 		"ChannelCreated": {
 			"id": "ChannelCreated",
-			"extends": "Event",
 			"description": "Notification that a channel has been created.",
 			"properties": {
 				"channel": {
@@ -154,7 +323,6 @@
 		},
 		"ChannelDestroyed": {
 			"id": "ChannelDestroyed",
-			"extends": "Event",
 			"description": "Notification that a channel has been destroyed.",
 			"properties": {
 				"cause": {
@@ -175,7 +343,6 @@
 		},
 		"ChannelEnteredBridge": {
 			"id": "ChannelEnteredBridge",
-			"extends": "Event",
 			"description": "Notification that a channel has entered a bridge.",
 			"properties": {
 				"bridge": {
@@ -189,7 +356,6 @@
 		},
 		"ChannelLeftBridge": {
 			"id": "ChannelLeftBridge",
-			"extends": "Event",
 			"description": "Notification that a channel has left a bridge.",
 			"properties": {
 				"bridge": {
@@ -204,7 +370,6 @@
 		},
 		"ChannelStateChange": {
 			"id": "ChannelStateChange",
-			"extends": "Event",
 			"description": "Notification of a channel's state change.",
 			"properties": {
 				"channel": {
@@ -215,7 +380,6 @@
 		},
 		"ChannelDtmfReceived": {
 			"id": "ChannelDtmfReceived",
-			"extends": "Event",
 			"description": "DTMF received on a channel.\n\nThis event is sent when the DTMF ends. There is no notification about the start of DTMF",
 			"properties": {
 				"digit": {
@@ -237,7 +401,6 @@
 		},
 		"ChannelDialplan": {
 			"id": "ChannelDialplan",
-			"extends": "Event",
 			"description": "Channel changed location in the dialplan.",
 			"properties": {
 				"channel": {
@@ -259,7 +422,6 @@
 		},
 		"ChannelCallerId": {
 			"id": "ChannelCallerId",
-			"extends": "Event",
 			"description": "Channel changed Caller ID.",
 			"properties": {
 				"caller_presentation": {
@@ -281,7 +443,6 @@
 		},
 		"ChannelUserevent": {
 			"id": "ChannelUserevent",
-			"extends": "Event",
 			"description": "User-generated event with additional user-defined fields in the object.",
 			"properties": {
 				"eventname": {
@@ -293,12 +454,16 @@
 					"required": true,
 					"type": "Channel",
 					"description": "The channel that signaled the user event."
+				},
+				"userevent": {
+					"required": true,
+					"type": "object",
+					"description": "Custom Userevent data"
 				}
 			}
 		},
 		"ChannelHangupRequest": {
 			"id": "ChannelHangupRequest",
-			"extends": "Event",
 			"description": "A hangup was requested on the channel.",
 			"properties": {
 				"cause": {
@@ -318,7 +483,6 @@
 		},
 		"ChannelVarset": {
 			"id": "ChannelVarset",
-			"extends": "Event",
 			"description": "Channel variable changed.",
 			"properties": {
 				"variable": {
@@ -338,10 +502,55 @@
 				}
 			}
 		},
+		"EndpointStateChange": {
+			"id": "EndpointStateChange",
+			"description": "Endpoint state changed.",
+			"properties": {
+				"endpoint": {
+					"required": true,
+					"type": "Endpoint"
+				}
+			}
+		},
+		"Dial": {
+			"id": "Dial",
+			"description": "Dialing state has changed.",
+			"properties": {
+				"caller": {
+					"required": false,
+					"type": "Channel",
+					"description": "The calling channel."
+				},
+				"peer": {
+					"required": true,
+					"type": "Channel",
+					"description": "The dialed channel."
+				},
+				"forward": {
+					"required": false,
+					"type": "string",
+					"description": "Forwarding target requested by the original dialed channel."
+				},
+				"forwarded": {
+					"required": false,
+					"type": "Channel",
+					"description": "Channel that the caller has been forwarded to."
+				},
+				"dialstring": {
+					"required": false,
+					"type": "string",
+					"description": "The dial string for calling the peer channel."
+				},
+				"dialstatus": {
+					"required": true,
+					"type": "string",
+					"description": "Current status of the dialing attempt to the peer."
+				}
+			}
+		},
 		"StasisEnd": {
 			"id": "StasisEnd",
-			"extends": "Event",
-			"description": "Notification that a channel has left a Stasis appliction.",
+			"description": "Notification that a channel has left a Stasis application.",
 			"properties": {
 				"channel": {
 					"required": true,
@@ -351,8 +560,7 @@
 		},
 		"StasisStart": {
 			"id": "StasisStart",
-			"extends": "Event",
-			"description": "Notification that a channel has entered a Stasis appliction.",
+			"description": "Notification that a channel has entered a Stasis application.",
 			"properties": {
 				"args": {
 					"required": true,

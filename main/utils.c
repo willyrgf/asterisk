@@ -597,6 +597,8 @@ struct thr_lock_info {
 		enum ast_lock_type type;
 		/*! This thread is waiting on this lock */
 		int pending:2;
+		/*! A condition has suspended this lock */
+		int suspended:1;
 #ifdef HAVE_BKTR
 		struct ast_bt *backtrace;
 #endif
@@ -654,9 +656,10 @@ static void lock_info_destroy(void *data)
 	}
 
 	pthread_mutex_destroy(&lock_info->lock);
-	if (lock_info->thread_name)
-		free((void *) lock_info->thread_name);
-	free(lock_info);
+	if (lock_info->thread_name) {
+		ast_free((void *) lock_info->thread_name);
+	}
+	ast_free(lock_info);
 }
 
 /*!
@@ -783,6 +786,60 @@ int ast_find_lock_info(void *lock_addr, char *filename, size_t filename_size, in
 	return 0;
 }
 
+void ast_suspend_lock_info(void *lock_addr)
+{
+	struct thr_lock_info *lock_info;
+	int i = 0;
+
+	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info)))) {
+		return;
+	}
+
+	pthread_mutex_lock(&lock_info->lock);
+
+	for (i = lock_info->num_locks - 1; i >= 0; i--) {
+		if (lock_info->locks[i].lock_addr == lock_addr)
+			break;
+	}
+
+	if (i == -1) {
+		/* Lock not found :( */
+		pthread_mutex_unlock(&lock_info->lock);
+		return;
+	}
+
+	lock_info->locks[i].suspended = 1;
+
+	pthread_mutex_unlock(&lock_info->lock);
+}
+
+void ast_restore_lock_info(void *lock_addr)
+{
+	struct thr_lock_info *lock_info;
+	int i = 0;
+
+	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info))))
+		return;
+
+	pthread_mutex_lock(&lock_info->lock);
+
+	for (i = lock_info->num_locks - 1; i >= 0; i--) {
+		if (lock_info->locks[i].lock_addr == lock_addr)
+			break;
+	}
+
+	if (i == -1) {
+		/* Lock not found :( */
+		pthread_mutex_unlock(&lock_info->lock);
+		return;
+	}
+
+	lock_info->locks[i].suspended = 0;
+
+	pthread_mutex_unlock(&lock_info->lock);
+}
+
+
 #ifdef HAVE_BKTR
 void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
 #else
@@ -876,7 +933,7 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 	ast_mutex_t *lock;
 	struct ast_lock_track *lt;
 
-	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n",
+	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d%s)\n",
 				   lock_info->locks[i].pending > 0 ? "Waiting for " :
 				   lock_info->locks[i].pending < 0 ? "Tried and failed to get " : "", i,
 				   lock_info->locks[i].file,
@@ -884,7 +941,8 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 				   lock_info->locks[i].line_num,
 				   lock_info->locks[i].func, lock_info->locks[i].lock_name,
 				   lock_info->locks[i].lock_addr,
-				   lock_info->locks[i].times_locked);
+				   lock_info->locks[i].times_locked,
+				   lock_info->locks[i].suspended ? " - suspended" : "");
 #ifdef HAVE_BKTR
 	append_backtrace_information(str, lock_info->locks[i].backtrace);
 #endif
@@ -982,20 +1040,32 @@ struct ast_str *ast_dump_locks(void)
 	pthread_mutex_lock(&lock_infos_lock.mutex);
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
-		if (lock_info->num_locks) {
-			ast_str_append(&str, 0, "=== Thread ID: 0x%lx (%s)\n", (long) lock_info->thread_id,
-				lock_info->thread_name);
-			pthread_mutex_lock(&lock_info->lock);
-			for (i = 0; str && i < lock_info->num_locks; i++) {
-				append_lock_information(&str, lock_info, i);
+		int header_printed = 0;
+		pthread_mutex_lock(&lock_info->lock);
+		for (i = 0; str && i < lock_info->num_locks; i++) {
+			/* Don't show suspended locks */
+			if (lock_info->locks[i].suspended) {
+				continue;
 			}
-			pthread_mutex_unlock(&lock_info->lock);
-			if (!str)
-				break;
+
+			if (!header_printed) {
+				ast_str_append(&str, 0, "=== Thread ID: 0x%lx (%s)\n", (long) lock_info->thread_id,
+					lock_info->thread_name);
+				header_printed = 1;
+			}
+
+			append_lock_information(&str, lock_info, i);
+		}
+		pthread_mutex_unlock(&lock_info->lock);
+		if (!str) {
+			break;
+		}
+		if (header_printed) {
 			ast_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
-			               "===\n");
-			if (!str)
-				break;
+				"===\n");
+		}
+		if (!str) {
+			break;
 		}
 	}
 	pthread_mutex_unlock(&lock_infos_lock.mutex);
@@ -1637,7 +1707,7 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with)
 	return dataPut;
 }
 
-void ast_join(char *s, size_t len, const char * const w[])
+void ast_join_delim(char *s, size_t len, const char * const w[], unsigned int size, char delim)
 {
 	int x, ofs = 0;
 	const char *src;
@@ -1645,15 +1715,34 @@ void ast_join(char *s, size_t len, const char * const w[])
 	/* Join words into a string */
 	if (!s)
 		return;
-	for (x = 0; ofs < len && w[x]; x++) {
+	for (x = 0; ofs < len && w[x] && x < size; x++) {
 		if (x > 0)
-			s[ofs++] = ' ';
+			s[ofs++] = delim;
 		for (src = w[x]; *src && ofs < len; src++)
 			s[ofs++] = *src;
 	}
 	if (ofs == len)
 		ofs--;
 	s[ofs] = '\0';
+}
+
+char *ast_to_camel_case_delim(const char *s, const char *delim)
+{
+	char *res = ast_strdup(s);
+	char *front, *back, *buf = res;
+	int size;
+
+	front = strtok_r(buf, delim, &back);
+
+	while (front) {
+		size = strlen(front);
+		*front = toupper(*front);
+		ast_copy_string(buf, front, size + 1);
+		buf += size;
+		front = strtok_r(NULL, delim, &back);
+	}
+
+	return res;
 }
 
 /*
@@ -2115,7 +2204,7 @@ int ast_mkdir(const char *path, int mode)
 
 static int safe_mkdir(const char *base_path, char *path, int mode)
 {
-	RAII_VAR(char *, absolute_path, NULL, free);
+	RAII_VAR(char *, absolute_path, NULL, ast_std_free);
 
 	absolute_path = realpath(path, NULL);
 
@@ -2137,7 +2226,7 @@ static int safe_mkdir(const char *base_path, char *path, int mode)
 		int res;
 
 		while (path_term) {
-			RAII_VAR(char *, absolute_subpath, NULL, free);
+			RAII_VAR(char *, absolute_subpath, NULL, ast_std_free);
 
 			/* Truncate the path one past the slash */
 			char c = *(path_term + 1);
@@ -2185,7 +2274,7 @@ static int safe_mkdir(const char *base_path, char *path, int mode)
 
 int ast_safe_mkdir(const char *base_path, const char *path, int mode)
 {
-	RAII_VAR(char *, absolute_base_path, NULL, free);
+	RAII_VAR(char *, absolute_base_path, NULL, ast_std_free);
 	RAII_VAR(char *, p, NULL, ast_free);
 
 	if (base_path == NULL || path == NULL) {
@@ -2207,6 +2296,15 @@ int ast_safe_mkdir(const char *base_path, const char *path, int mode)
 	return safe_mkdir(absolute_base_path, p, mode);
 }
 
+static void utils_shutdown(void)
+{
+	close(dev_urandom_fd);
+	dev_urandom_fd = -1;
+#if defined(DEBUG_THREADS) && !defined(LOW_MEMORY)
+	ast_cli_unregister_multiple(utils_cli, ARRAY_LEN(utils_cli));
+#endif
+}
+
 int ast_utils_init(void)
 {
 	dev_urandom_fd = open("/dev/urandom", O_RDONLY);
@@ -2216,6 +2314,7 @@ int ast_utils_init(void)
 	ast_cli_register_multiple(utils_cli, ARRAY_LEN(utils_cli));
 #endif
 #endif
+	ast_register_atexit(utils_shutdown);
 	return 0;
 }
 

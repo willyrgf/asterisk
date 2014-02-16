@@ -189,7 +189,7 @@
 				<configOption name="disallow">
 					<synopsis>Media Codec(s) to disallow</synopsis>
 				</configOption>
-				<configOption name="dtmfmode" default="rfc4733">
+				<configOption name="dtmf_mode" default="rfc4733">
 					<synopsis>DTMF mode</synopsis>
 					<description>
 						<para>This setting allows to choose the DTMF mode for endpoint communication.</para>
@@ -208,8 +208,17 @@
 						</enumlist>
 					</description>
 				</configOption>
-				<configOption name="external_media_address">
-					<synopsis>IP used for External Media handling</synopsis>
+				<configOption name="media_address">
+					<synopsis>IP address used in SDP for media handling</synopsis>
+					<description><para>
+						At the time of SDP creation, the IP address defined here will be used as
+						the media address for individual streams in the SDP.
+					</para>
+					<note><para>
+						Be aware that the <literal>external_media_address</literal> option, set in Transport
+						configuration, can also affect the final media address used in the SDP.
+					</para></note>
+					</description>
 				</configOption>
 				<configOption name="force_rport" default="yes">
 					<synopsis>Force use of return port</synopsis>
@@ -235,17 +244,49 @@
 						</enumlist>
 					</description>
 				</configOption>
-				<configOption name="mailboxes">
-					<synopsis>Mailbox(es) to be associated with</synopsis>
+				<configOption name="redirect_method">
+					<synopsis>How redirects received from an endpoint are handled</synopsis>
+					<description><para>
+						When a redirect is received from an endpoint there are multiple ways it can be handled.
+						If this option is set to <literal>user</literal> the user portion of the redirect target
+						is treated as an extension within the dialplan and dialed using a Local channel. If this option
+						is set to <literal>uri_core</literal> the target URI is returned to the dialing application
+						which dials it using the PJSIP channel driver and endpoint originally used. If this option is
+						set to <literal>uri_pjsip</literal> the redirect occurs within chan_pjsip itself and is not exposed
+						to the core at all. The <literal>uri_pjsip</literal> option has the benefit of being more efficient
+						and also supporting multiple potential redirect targets. The con is that since redirection occurs
+						within chan_pjsip redirecting information is not forwarded and redirection can not be
+						prevented.
+						</para>
+						<enumlist>
+							<enum name="user" />
+							<enum name="uri_core" />
+							<enum name="uri_pjsip" />
+						</enumlist>
+					</description>
 				</configOption>
-				<configOption name="mohsuggest" default="default">
+				<configOption name="mailboxes">
+					<synopsis>NOTIFY the endpoint when state changes for any of the specified mailboxes</synopsis>
+					<description><para>
+						Asterisk will send unsolicited MWI NOTIFY messages to the endpoint when state
+						changes happen for any of the specified mailboxes. More than one mailbox can be
+						specified with a comma-delimited string. app_voicemail mailboxes must be specified
+						as mailbox@context; for example: mailboxes=6001@default. For mailboxes provided by
+						external sources, such as through the res_external_mwi module, you must specify
+						strings supported by the external system.
+					</para><para>
+						For endpoints that SUBSCRIBE for MWI, use the <literal>mailboxes</literal> option in your AOR
+						configuration.
+					</para></description>
+				</configOption>
+				<configOption name="moh_suggest" default="default">
 					<synopsis>Default Music On Hold class</synopsis>
 				</configOption>
 				<configOption name="outbound_auth">
 					<synopsis>Authentication object used for outbound requests</synopsis>
 				</configOption>
 				<configOption name="outbound_proxy">
-					<synopsis>Proxy through which to send requests</synopsis>
+					<synopsis>Proxy through which to send requests, a full SIP URI must be provided</synopsis>
 				</configOption>
 				<configOption name="rewrite_contact">
 					<synopsis>Allow Contact header to be rewritten with the source IP address-port</synopsis>
@@ -379,49 +420,49 @@
 						to indicate ringing and will NOT send it as audio.
 					</para></description>
 				</configOption>
-				<configOption name="callgroup">
+				<configOption name="call_group">
 					<synopsis>The numeric pickup groups for a channel.</synopsis>
 					<description><para>
 						Can be set to a comma separated list of numbers or ranges between the values
 						of 0-63 (maximum of 64 groups).
 					</para></description>
 				</configOption>
-				<configOption name="pickupgroup">
+				<configOption name="pickup_group">
 					<synopsis>The numeric pickup groups that a channel can pickup.</synopsis>
 					<description><para>
 						Can be set to a comma separated list of numbers or ranges between the values
 						of 0-63 (maximum of 64 groups).
 					</para></description>
 				</configOption>
-				<configOption name="namedcallgroup">
+				<configOption name="named_call_group">
 					<synopsis>The named pickup groups for a channel.</synopsis>
 					<description><para>
 						Can be set to a comma separated list of case sensitive strings limited by
 						supported line length.
 					</para></description>
 				</configOption>
-				<configOption name="namedpickupgroup">
+				<configOption name="named_pickup_group">
 					<synopsis>The named pickup groups that a channel can pickup.</synopsis>
 					<description><para>
 						Can be set to a comma separated list of case sensitive strings limited by
 						supported line length.
 					</para></description>
 				</configOption>
-				<configOption name="devicestate_busy_at" default="0">
+				<configOption name="device_state_busy_at" default="0">
 					<synopsis>The number of in-use channels which will cause busy to be returned as device state</synopsis>
 					<description><para>
 						When the number of in-use channels for the endpoint matches the devicestate_busy_at setting the
 						PJSIP channel driver will return busy as the device state instead of in use.
 					</para></description>
 				</configOption>
-				<configOption name="t38udptl" default="no">
+				<configOption name="t38_udptl" default="no">
 					<synopsis>Whether T.38 UDPTL support is enabled or not</synopsis>
 					<description><para>
 						If set to yes T.38 UDPTL support will be enabled, and T.38 negotiation requests will be accepted
 						and relayed.
 					</para></description>
 				</configOption>
-				<configOption name="t38udptl_ec" default="none">
+				<configOption name="t38_udptl_ec" default="none">
 					<synopsis>T.38 UDPTL error correction method</synopsis>
 					<description>
 						<enumlist>
@@ -437,34 +478,34 @@
 						</enumlist>
 					</description>
 				</configOption>
-				<configOption name="t38udptl_maxdatagram" default="0">
+				<configOption name="t38_udptl_maxdatagram" default="0">
 					<synopsis>T.38 UDPTL maximum datagram size</synopsis>
 					<description><para>
 						This option can be set to override the maximum datagram of a remote endpoint for broken
 						endpoints.
 					</para></description>
 				</configOption>
-				<configOption name="faxdetect" default="no">
+				<configOption name="fax_detect" default="no">
 					<synopsis>Whether CNG tone detection is enabled</synopsis>
 					<description><para>
 						This option can be set to send the session to the fax extension when a CNG tone is
 						detected.
 					</para></description>
 				</configOption>
-				<configOption name="t38udptl_nat" default="no">
+				<configOption name="t38_udptl_nat" default="no">
 					<synopsis>Whether NAT support is enabled on UDPTL sessions</synopsis>
 					<description><para>
 						When enabled the UDPTL stack will send UDPTL packets to the source address of
 						received packets.
 					</para></description>
 				</configOption>
-				<configOption name="t38udptl_ipv6" default="no">
+				<configOption name="t38_udptl_ipv6" default="no">
 					<synopsis>Whether IPv6 is used for UDPTL Sessions</synopsis>
 					<description><para>
 						When enabled the UDPTL stack will use IPv6.
 					</para></description>
 				</configOption>
-				<configOption name="tonezone">
+				<configOption name="tone_zone">
 					<synopsis>Set which country's indications to use for channels created for this endpoint.</synopsis>
 				</configOption>
 				<configOption name="language">
@@ -477,7 +518,7 @@
 						<ref type="configOption">recordofffeature</ref>
 					</see-also>
 				</configOption>
-				<configOption name="recordonfeature" default="automixmon">
+				<configOption name="record_on_feature" default="automixmon">
 					<synopsis>The feature to enact when one-touch recording is turned on.</synopsis>
 					<description>
 						<para>When an INFO request for one-touch recording arrives with a Record header set to "on", this
@@ -490,7 +531,7 @@
 						<ref type="configOption">recordofffeature</ref>
 					</see-also>
 				</configOption>
-				<configOption name="recordofffeature" default="automixmon">
+				<configOption name="record_off_feature" default="automixmon">
 					<synopsis>The feature to enact when one-touch recording is turned off.</synopsis>
 					<description>
 						<para>When an INFO request for one-touch recording arrives with a Record header set to "off", this
@@ -503,16 +544,16 @@
 						<ref type="configOption">recordonfeature</ref>
 					</see-also>
 				</configOption>
-				<configOption name="rtpengine" default="asterisk">
+				<configOption name="rtp_engine" default="asterisk">
 					<synopsis>Name of the RTP engine to use for channels created for this endpoint</synopsis>
 				</configOption>
-				<configOption name="allowtransfer" default="yes">
+				<configOption name="allow_transfer" default="yes">
 					<synopsis>Determines whether SIP REFER transfers are allowed for this endpoint</synopsis>
 				</configOption>
-				<configOption name="sdpowner" default="-">
+				<configOption name="sdp_owner" default="-">
 					<synopsis>String placed as the username portion of an SDP origin (o=) line.</synopsis>
 				</configOption>
-				<configOption name="sdpsession" default="Asterisk">
+				<configOption name="sdp_session" default="Asterisk">
 					<synopsis>String used for the SDP session (s=) line.</synopsis>
 				</configOption>
 				<configOption name="tos_audio">
@@ -539,29 +580,29 @@
 						See https://wiki.asterisk.org/wiki/display/AST/IP+Quality+of+Service for more information about QoS settings
 					</para></description>
 				</configOption>
-				<configOption name="allowsubscribe" default="yes">
+				<configOption name="allow_subscribe" default="yes">
 					<synopsis>Determines if endpoint is allowed to initiate subscriptions with Asterisk.</synopsis>
 				</configOption>
-				<configOption name="subminexpiry" default="60">
+				<configOption name="sub_min_expiry" default="60">
 					<synopsis>The minimum allowed expiry time for subscriptions initiated by the endpoint.</synopsis>
 				</configOption>
-				<configOption name="fromuser">
+				<configOption name="from_user">
 					<synopsis>Username to use in From header for requests to this endpoint.</synopsis>
 				</configOption>
-				<configOption name="mwifromuser">
+				<configOption name="mwi_from_user">
 					<synopsis>Username to use in From header for unsolicited MWI NOTIFYs to this endpoint.</synopsis>
 				</configOption>
-				<configOption name="fromdomain">
+				<configOption name="from_domain">
 					<synopsis>Domain to user in From header for requests to this endpoint.</synopsis>
 				</configOption>
-				<configOption name="dtlsverify">
+				<configOption name="dtls_verify">
 					<synopsis>Verify that the provided peer certificate is valid</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
 						set to <literal>dtls</literal>.
 					</para></description>
 				</configOption>
-				<configOption name="dtlsrekey">
+				<configOption name="dtls_rekey">
 					<synopsis>Interval at which to renegotiate the TLS session and rekey the SRTP session</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
@@ -570,21 +611,21 @@
 						If this is not set or the value provided is 0 rekeying will be disabled.
 					</para></description>
 				</configOption>
-				<configOption name="dtlscertfile">
+				<configOption name="dtls_cert_file">
 					<synopsis>Path to certificate file to present to peer</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
 						set to <literal>dtls</literal>.
 					</para></description>
 				</configOption>
-				<configOption name="dtlsprivatekey">
+				<configOption name="dtls_private_key">
 					<synopsis>Path to private key for certificate file</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
 						set to <literal>dtls</literal>.
 					</para></description>
 				</configOption>
-				<configOption name="dtlscipher">
+				<configOption name="dtls_cipher">
 					<synopsis>Cipher to use for DTLS negotiation</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
@@ -594,21 +635,21 @@
 						http://www.openssl.org/docs/apps/ciphers.html#CIPHER_STRINGS
 					</para></description>
 				</configOption>
-				<configOption name="dtlscafile">
+				<configOption name="dtls_ca_file">
 					<synopsis>Path to certificate authority certificate</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
 						set to <literal>dtls</literal>.
 					</para></description>
 				</configOption>
-				<configOption name="dtlscapath">
+				<configOption name="dtls_ca_path">
 					<synopsis>Path to a directory containing certificate authority certificates</synopsis>
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
 						set to <literal>dtls</literal>.
 					</para></description>
 				</configOption>
-				<configOption name="dtlssetup">
+				<configOption name="dtls_setup">
 					<synopsis>Whether we are willing to accept connections, connect to the other party, or both.</synopsis>
 					<description>
 						<para>
@@ -633,6 +674,14 @@
 					<description><para>
 						This option only applies if <replaceable>media_encryption</replaceable> is
 						set to <literal>sdes</literal> or <literal>dtls</literal>.
+					</para></description>
+				</configOption>
+				<configOption name="set_var">
+					<synopsis>Variable set on a channel involving the endpoint.</synopsis>
+					<description><para>
+					        When a new channel is created using the endpoint set the specified
+						variable(s) on that channel. For multiple channel variables specify
+						multiple 'set_var'(s).
 					</para></description>
 				</configOption>
 			</configObject>
@@ -730,7 +779,14 @@
 					<synopsis>Domain the transport comes from</synopsis>
 				</configOption>
 				<configOption name="external_media_address">
-					<synopsis>External Address to use in RTP handling</synopsis>
+					<synopsis>External IP address to use in RTP handling</synopsis>
+					<description><para>
+						When a request or response is sent out, if the destination of the
+						message is outside the IP network defined in the option <literal>localnet</literal>,
+						and the media address in the SDP is within the localnet network, then the
+						media address in the SDP will be rewritten to the value defined for
+						<literal>external_media_address</literal>.
+					</para></description>
 				</configOption>
 				<configOption name="external_signaling_address">
 					<synopsis>External address for SIP signalling</synopsis>
@@ -751,7 +807,7 @@
 						</enumlist>
 					</description>
 				</configOption>
-				<configOption name="localnet">
+				<configOption name="local_net">
 					<synopsis>Network to consider local (used for NAT purposes).</synopsis>
 					<description><para>This must be in CIDR or dotted decimal format with the IP
 					and mask separated with a slash ('/').</para></description>
@@ -759,7 +815,7 @@
 				<configOption name="password">
 					<synopsis>Password required for transport</synopsis>
 				</configOption>
-				<configOption name="privkey_file">
+				<configOption name="priv_key_file">
 					<synopsis>Private key file (TLS ONLY)</synopsis>
 				</configOption>
 				<configOption name="protocol" default="udp">
@@ -831,6 +887,16 @@
 						If <literal>0</literal> never qualify. Time in seconds.
 					</para></description>
 				</configOption>
+				<configOption name="outbound_proxy">
+					<synopsis>Outbound proxy used when sending OPTIONS request</synopsis>
+					<description><para>
+						If set the provided URI will be used as the outbound proxy when an
+						OPTIONS request is sent to a contact for qualify purposes.
+					</para></description>
+				</configOption>
+				<configOption name="path">
+					<synopsis>Stored Path vector for use in Route headers on outgoing requests.</synopsis>
+				</configOption>
 			</configObject>
 			<configObject name="aor">
 				<synopsis>The configuration for a location of an endpoint</synopsis>
@@ -867,10 +933,18 @@
 					<synopsis>Default expiration time in seconds for contacts that are dynamically bound to an AoR.</synopsis>
 				</configOption>
 				<configOption name="mailboxes">
-					<synopsis>Mailbox(es) to be associated with</synopsis>
+					<synopsis>Allow subscriptions for the specified mailbox(es)</synopsis>
 					<description><para>This option applies when an external entity subscribes to an AoR
-					for message waiting indications. The mailboxes specified will be subscribed to.
-					More than one mailbox can be specified with a comma-delimited string.</para></description>
+						for Message Waiting Indications. The mailboxes specified will be subscribed to.
+						More than one mailbox can be specified with a comma-delimited string.
+						app_voicemail mailboxes must be specified as mailbox@context;
+						for example: mailboxes=6001@default. For mailboxes provided by external sources,
+						such as through the res_external_mwi module, you must specify strings supported by
+						the external system.
+					</para><para>
+						For endpoints that cannot SUBSCRIBE for MWI, you can set the <literal>mailboxes</literal> option in your
+						endpoint configuration section to enable unsolicited MWI NOTIFYs to the endpoint.
+					</para></description>
 				</configOption>
 				<configOption name="maximum_expiration" default="7200">
 					<synopsis>Maximum time to keep an AoR</synopsis>
@@ -927,6 +1001,22 @@
 						authentication is attempted before declaring the contact available.
 					</para></description>
 				</configOption>
+				<configOption name="outbound_proxy">
+					<synopsis>Outbound proxy used when sending OPTIONS request</synopsis>
+					<description><para>
+						If set the provided URI will be used as the outbound proxy when an
+						OPTIONS request is sent to a contact for qualify purposes.
+					</para></description>
+				</configOption>
+				<configOption name="support_path">
+					<synopsis>Enables Path support for REGISTER requests and Route support for other requests.</synopsis>
+					<description><para>
+						When this option is enabled, the Path headers in register requests will be saved
+						and its contents will be used in Route headers for outbound out-of-dialog requests
+						and in Path headers for outbound 200 responses. Path support will also be indicated
+						in the Supported header.
+					</para></description>
+				</configOption>
 			</configObject>
 			<configObject name="system">
 				<synopsis>Options that apply to the SIP stack as well as other system-wide settings</synopsis>
@@ -936,7 +1026,7 @@
 					before the SIP stack is initialized. The only way to reset these values is to either
 					restart Asterisk, or unload res_pjsip.so and then load it again.
 				</para></description>
-				<configOption name="timert1" default="500">
+				<configOption name="timer_t1" default="500">
 					<synopsis>Set transaction timer T1 value (milliseconds).</synopsis>
 					<description><para>
 						Timer T1 is the base for determining how long to wait before retransmitting
@@ -944,7 +1034,7 @@
 						For more information on this timer, see RFC 3261, Section 17.1.1.1.
 					</para></description>
 				</configOption>
-				<configOption name="timerb" default="32000">
+				<configOption name="timer_b" default="32000">
 					<synopsis>Set transaction timer B value (milliseconds).</synopsis>
 					<description><para>
 						Timer B determines the maximum amount of time to wait after sending an INVITE
@@ -953,7 +1043,7 @@
 						this timer, see RFC 3261, Section 17.1.1.1.
 					</para></description>
 				</configOption>
-				<configOption name="compactheaders" default="no">
+				<configOption name="compact_headers" default="no">
 					<synopsis>Use the short forms of common SIP header names.</synopsis>
 				</configOption>
 				<configOption name="threadpool_initial_size" default="0">
@@ -979,14 +1069,21 @@
 					The settings in this section are global. Unlike options in the <literal>system</literal>
 					section, these options can be refreshed by performing a reload.
 				</para></description>
-				<configOption name="maxforwards" default="70">
+				<configOption name="max_forwards" default="70">
 					<synopsis>Value used in Max-Forwards header for SIP requests.</synopsis>
 				</configOption>
 				<configOption name="type">
 					<synopsis>Must be of type 'global'.</synopsis>
 				</configOption>
-				<configOption name="useragent" default="Asterisk &lt;Asterisk Version&gt;">
+				<configOption name="user_agent" default="Asterisk &lt;Asterisk Version&gt;">
 					<synopsis>Value used in User-Agent header for SIP requests and Server header for SIP responses.</synopsis>
+				</configOption>
+				<configOption name="default_outbound_endpoint" default="default_outbound_endpoint">
+					<synopsis>Endpoint to use when sending an outbound request to a URI without a specified endpoint.</synopsis>
+				</configOption>
+				<configOption name="debug" default="no">
+					<synopsis>Enable/Disable SIP debug logging.  Valid options include yes|no or
+                                        a host address</synopsis>
 				</configOption>
 			</configObject>
 		</configFile>
@@ -1005,8 +1102,44 @@
 			<para>Qualify a chan_pjsip endpoint.</para>
 		</description>
 	</manager>
+	<manager name="PJSIPShowEndpoints" language="en_US">
+		<synopsis>
+			Lists PJSIP endpoints.
+		</synopsis>
+		<syntax />
+		<description>
+			<para>
+			Provides a listing of all endpoints.  For each endpoint an <literal>EndpointList</literal> event
+			is raised that contains relevant attributes and status information.  Once all
+			endpoints have been listed an <literal>EndpointListComplete</literal> event is issued.
+                        </para>
+		</description>
+	</manager>
+	<manager name="PJSIPShowEndpoint" language="en_US">
+		<synopsis>
+			Detail listing of an endpoint and its objects.
+		</synopsis>
+		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
+			<parameter name="Endpoint" required="true">
+				<para>The endpoint to list.</para>
+			</parameter>
+		</syntax>
+		<description>
+			<para>
+			Provides a detailed listing of options for a given endpoint.  Events are issued
+			showing the configuration and status of the endpoint and associated objects.  These
+			events include <literal>EndpointDetail</literal>, <literal>AorDetail</literal>,
+			<literal>AuthDetail</literal>, <literal>TransportDetail</literal>, and
+			<literal>IdentifyDetail</literal>.  Some events may be listed multiple times if multiple objects are
+			associated (for instance AoRs).  Once all detail events have been raised a final
+			<literal>EndpointDetailComplete</literal> event is issued.
+                        </para>
+		</description>
+	</manager>
  ***/
 
+#define MOD_DATA_CONTACT "contact"
 
 static pjsip_endpoint *ast_pjsip_endpoint;
 
@@ -1189,6 +1322,49 @@ struct ast_sip_endpoint *ast_sip_identify_endpoint(pjsip_rx_data *rdata)
 	return endpoint;
 }
 
+AST_RWLIST_HEAD_STATIC(endpoint_formatters, ast_sip_endpoint_formatter);
+
+int ast_sip_register_endpoint_formatter(struct ast_sip_endpoint_formatter *obj)
+{
+	SCOPED_LOCK(lock, &endpoint_formatters, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_RWLIST_INSERT_TAIL(&endpoint_formatters, obj, next);
+	ast_module_ref(ast_module_info->self);
+	return 0;
+}
+
+void ast_sip_unregister_endpoint_formatter(struct ast_sip_endpoint_formatter *obj)
+{
+	struct ast_sip_endpoint_formatter *i;
+	SCOPED_LOCK(lock, &endpoint_formatters, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&endpoint_formatters, i, next) {
+		if (i == obj) {
+			AST_RWLIST_REMOVE_CURRENT(next);
+			ast_module_unref(ast_module_info->self);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+}
+
+int ast_sip_format_endpoint_ami(struct ast_sip_endpoint *endpoint,
+				struct ast_sip_ami *ami, int *count)
+{
+	int res = 0;
+	struct ast_sip_endpoint_formatter *i;
+	SCOPED_LOCK(lock, &endpoint_formatters, AST_RWLIST_RDLOCK, AST_RWLIST_UNLOCK);
+	*count = 0;
+	AST_RWLIST_TRAVERSE(&endpoint_formatters, i, next) {
+		if (i->format_ami && ((res = i->format_ami(endpoint, ami)) < 0)) {
+			return res;
+		}
+
+		if (!res) {
+			(*count)++;
+		}
+	}
+	return 0;
+}
+
 pjsip_endpoint *ast_sip_get_pjsip_endpoint(void)
 {
 	return ast_pjsip_endpoint;
@@ -1242,8 +1418,7 @@ static int sip_dialog_create_from(pj_pool_t *pool, pj_str_t *from, const char *u
 	if (!ast_strlen_zero(domain)) {
 		from->ptr = pj_pool_alloc(pool, PJSIP_MAX_URL_SIZE);
 		from->slen = pj_ansi_snprintf(from->ptr, PJSIP_MAX_URL_SIZE,
-				"<%s:%s@%s%s%s>",
-				(pjsip_transport_get_flag_from_type(type) & PJSIP_TRANSPORT_SECURE) ? "sips" : "sip",
+				"<sip:%s@%s%s%s>",
 				user,
 				domain,
 				(type != PJSIP_TRANSPORT_UDP && type != PJSIP_TRANSPORT_UDP6) ? ";transport=" : "",
@@ -1254,7 +1429,10 @@ static int sip_dialog_create_from(pj_pool_t *pool, pj_str_t *from, const char *u
 	/* Get the local bound address for the transport that will be used when communicating with the provided URI */
 	if (pjsip_tpmgr_find_local_addr(pjsip_endpt_get_tpmgr(ast_sip_get_pjsip_endpoint()), pool, type, selector,
 							      &local_addr, &local_port) != PJ_SUCCESS) {
-		return -1;
+
+		/* If no local address can be retrieved using the transport manager use the host one */
+		pj_strdup(pool, &local_addr, pj_gethostname());
+		local_port = pjsip_transport_get_default_port_for_type(PJSIP_TRANSPORT_UDP);
 	}
 
 	/* If IPv6 was specified in the transport, set the proper type */
@@ -1264,8 +1442,7 @@ static int sip_dialog_create_from(pj_pool_t *pool, pj_str_t *from, const char *u
 
 	from->ptr = pj_pool_alloc(pool, PJSIP_MAX_URL_SIZE);
 	from->slen = pj_ansi_snprintf(from->ptr, PJSIP_MAX_URL_SIZE,
-				      "<%s:%s@%s%.*s%s:%d%s%s>",
-				      (pjsip_transport_get_flag_from_type(type) & PJSIP_TRANSPORT_SECURE) ? "sips" : "sip",
+				      "<sip:%s@%s%.*s%s:%d%s%s>",
 				      user,
 				      (type & PJSIP_TRANSPORT_IPV6) ? "[" : "",
 				      (int)local_addr.slen,
@@ -1308,37 +1485,25 @@ static int sip_get_tpselector_from_endpoint(const struct ast_sip_endpoint *endpo
 	return 0;
 }
 
-static int sip_get_tpselector_from_uri(const char *uri, pjsip_tpselector *selector)
+pjsip_dialog *ast_sip_create_dialog_uac(const struct ast_sip_endpoint *endpoint, const char *uri, const char *request_user)
 {
-	RAII_VAR(struct ast_sip_contact_transport *, contact_transport, NULL, ao2_cleanup);
-
-	contact_transport = ast_sip_location_retrieve_contact_transport_by_uri(uri);
-
-	if (!contact_transport) {
-		return -1;
-	}
-
-	selector->type = PJSIP_TPSELECTOR_TRANSPORT;
-	selector->u.transport = contact_transport->transport;
-
-	return 0;
-}
-
-pjsip_dialog *ast_sip_create_dialog(const struct ast_sip_endpoint *endpoint, const char *uri, const char *request_user)
-{
-	pj_str_t local_uri = { "sip:temp@temp", 13 }, remote_uri;
+	char enclosed_uri[PJSIP_MAX_URL_SIZE];
+	pj_str_t local_uri = { "sip:temp@temp", 13 }, remote_uri, target_uri;
 	pjsip_dialog *dlg = NULL;
 	const char *outbound_proxy = endpoint->outbound_proxy;
 	pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
 	static const pj_str_t HCONTACT = { "Contact", 7 };
 
-	pj_cstr(&remote_uri, uri);
+	snprintf(enclosed_uri, sizeof(enclosed_uri), "<%s>", uri);
+	pj_cstr(&remote_uri, enclosed_uri);
 
-	if (pjsip_dlg_create_uac(pjsip_ua_instance(), &local_uri, NULL, &remote_uri, NULL, &dlg) != PJ_SUCCESS) {
+	pj_cstr(&target_uri, uri);
+
+	if (pjsip_dlg_create_uac(pjsip_ua_instance(), &local_uri, NULL, &remote_uri, &target_uri, &dlg) != PJ_SUCCESS) {
 		return NULL;
 	}
 
-	if (sip_get_tpselector_from_uri(uri, &selector) && sip_get_tpselector_from_endpoint(endpoint, &selector)) {
+	if (sip_get_tpselector_from_endpoint(endpoint, &selector)) {
 		pjsip_dlg_terminate(dlg);
 		return NULL;
 	}
@@ -1354,9 +1519,17 @@ pjsip_dialog *ast_sip_create_dialog(const struct ast_sip_endpoint *endpoint, con
 	dlg->local.contact = pjsip_parse_hdr(dlg->pool, &HCONTACT, local_uri.ptr, local_uri.slen, NULL);
 
 	/* If a request user has been specified and we are permitted to change it, do so */
-	if (!ast_strlen_zero(request_user) && (PJSIP_URI_SCHEME_IS_SIP(dlg->target) || PJSIP_URI_SCHEME_IS_SIPS(dlg->target))) {
-		pjsip_sip_uri *target = pjsip_uri_get_uri(dlg->target);
-		pj_strdup2(dlg->pool, &target->user, request_user);
+	if (!ast_strlen_zero(request_user)) {
+		pjsip_sip_uri *sip_uri;
+
+		if (PJSIP_URI_SCHEME_IS_SIP(dlg->target) || PJSIP_URI_SCHEME_IS_SIPS(dlg->target)) {
+			sip_uri = pjsip_uri_get_uri(dlg->target);
+			pj_strdup2(dlg->pool, &sip_uri->user, request_user);
+		}
+		if (PJSIP_URI_SCHEME_IS_SIP(dlg->remote.info->uri) || PJSIP_URI_SCHEME_IS_SIPS(dlg->remote.info->uri)) {
+			sip_uri = pjsip_uri_get_uri(dlg->remote.info->uri);
+			pj_strdup2(dlg->pool, &sip_uri->user, request_user);
+		}
 	}
 
 	/* We have to temporarily bump up the sess_count here so the dialog is not prematurely destroyed */
@@ -1373,10 +1546,11 @@ pjsip_dialog *ast_sip_create_dialog(const struct ast_sip_endpoint *endpoint, con
 
 		pj_strdup2_with_null(dlg->pool, &tmp, outbound_proxy);
 		if (!(route = pjsip_parse_hdr(dlg->pool, &ROUTE_HNAME, tmp.ptr, tmp.slen, NULL))) {
+			dlg->sess_count--;
 			pjsip_dlg_terminate(dlg);
 			return NULL;
 		}
-		pj_list_push_back(&route_set, route);
+		pj_list_insert_nodes_before(&route_set, route);
 
 		pjsip_dlg_set_route_set(dlg, &route_set);
 	}
@@ -1386,9 +1560,40 @@ pjsip_dialog *ast_sip_create_dialog(const struct ast_sip_endpoint *endpoint, con
 	return dlg;
 }
 
+pjsip_dialog *ast_sip_create_dialog_uas(const struct ast_sip_endpoint *endpoint, pjsip_rx_data *rdata)
+{
+	pjsip_dialog *dlg;
+	pj_str_t contact;
+	pjsip_transport_type_e type = rdata->tp_info.transport->key.type;
+	pj_status_t status;
+
+	contact.ptr = pj_pool_alloc(rdata->tp_info.pool, PJSIP_MAX_URL_SIZE);
+	contact.slen = pj_ansi_snprintf(contact.ptr, PJSIP_MAX_URL_SIZE,
+			"<sip:%s%.*s%s:%d%s%s>",
+			(type & PJSIP_TRANSPORT_IPV6) ? "[" : "",
+			(int)rdata->tp_info.transport->local_name.host.slen,
+			rdata->tp_info.transport->local_name.host.ptr,
+			(type & PJSIP_TRANSPORT_IPV6) ? "]" : "",
+			rdata->tp_info.transport->local_name.port,
+			(type != PJSIP_TRANSPORT_UDP && type != PJSIP_TRANSPORT_UDP6) ? ";transport=" : "",
+			(type != PJSIP_TRANSPORT_UDP && type != PJSIP_TRANSPORT_UDP6) ? pjsip_transport_get_type_name(type) : "");
+
+	status = pjsip_dlg_create_uas(pjsip_ua_instance(), rdata, &contact, &dlg);
+	if (status != PJ_SUCCESS) {
+		char err[PJ_ERR_MSG_SIZE];
+
+		pj_strerror(status, err, sizeof(err));
+		ast_log(LOG_ERROR, "Could not create dialog with endpoint %s. %s\n",
+				ast_sorcery_object_get_id(endpoint), err);
+		return NULL;
+	}
+
+	return dlg;
+}
+
 /* PJSIP doesn't know about the INFO method, so we have to define it ourselves */
-const pjsip_method pjsip_info_method = {PJSIP_OTHER_METHOD, {"INFO", 4} };
-const pjsip_method pjsip_message_method = {PJSIP_OTHER_METHOD, {"MESSAGE", 7} };
+static const pjsip_method info_method = {PJSIP_OTHER_METHOD, {"INFO", 4} };
+static const pjsip_method message_method = {PJSIP_OTHER_METHOD, {"MESSAGE", 7} };
 
 static struct {
 	const char *method;
@@ -1403,8 +1608,8 @@ static struct {
 	{ "SUBSCRIBE", &pjsip_subscribe_method },
 	{ "NOTIFY", &pjsip_notify_method },
 	{ "PUBLISH", &pjsip_publish_method },
-	{ "INFO", &pjsip_info_method },
-	{ "MESSAGE", &pjsip_message_method },
+	{ "INFO", &info_method },
+	{ "MESSAGE", &message_method },
 };
 
 static const pjsip_method *get_pjsip_method(const char *method)
@@ -1428,22 +1633,32 @@ static int create_in_dialog_request(const pjsip_method *method, struct pjsip_dia
 	return 0;
 }
 
+static pj_bool_t supplement_on_rx_request(pjsip_rx_data *rdata);
+static pjsip_module supplement_module = {
+	.name = { "Out of dialog supplement hook", 29 },
+	.id = -1,
+	.priority = PJSIP_MOD_PRIORITY_APPLICATION - 1,
+	.on_rx_request = supplement_on_rx_request,
+};
+
 static int create_out_of_dialog_request(const pjsip_method *method, struct ast_sip_endpoint *endpoint,
-		const char *uri, pjsip_tx_data **tdata)
+		const char *uri, struct ast_sip_contact *provided_contact, pjsip_tx_data **tdata)
 {
-	RAII_VAR(struct ast_sip_contact *, contact, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_sip_contact *, contact, ao2_bump(provided_contact), ao2_cleanup);
 	pj_str_t remote_uri;
 	pj_str_t from;
 	pj_pool_t *pool;
 	pjsip_tpselector selector = { .type = PJSIP_TPSELECTOR_NONE, };
 
 	if (ast_strlen_zero(uri)) {
-		if (!endpoint) {
+		if (!endpoint && !contact) {
 			ast_log(LOG_ERROR, "An endpoint and/or uri must be specified\n");
 			return -1;
 		}
 
-		contact = ast_sip_location_retrieve_contact_from_aor_list(endpoint->aors);
+		if (!contact) {
+			contact = ast_sip_location_retrieve_contact_from_aor_list(endpoint->aors);
+		}
 		if (!contact || ast_strlen_zero(contact->uri)) {
 			ast_log(LOG_ERROR, "Unable to retrieve contact for endpoint %s\n",
 					ast_sorcery_object_get_id(endpoint));
@@ -1486,6 +1701,17 @@ static int create_out_of_dialog_request(const pjsip_method *method, struct ast_s
 		return -1;
 	}
 
+	/* If an outbound proxy is specified on the endpoint apply it to this request */
+	if (endpoint && !ast_strlen_zero(endpoint->outbound_proxy) &&
+		ast_sip_set_outbound_proxy((*tdata), endpoint->outbound_proxy)) {
+		ast_log(LOG_ERROR, "Unable to apply outbound proxy on request %.*s to endpoint %s\n",
+			(int) pj_strlen(&method->name), pj_strbuf(&method->name), ast_sorcery_object_get_id(endpoint));
+		pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
+		return -1;
+	}
+
+	ast_sip_mod_data_set((*tdata)->pool, (*tdata)->mod_data, supplement_module.id, MOD_DATA_CONTACT, ao2_bump(contact));
+
 	/* We can release this pool since request creation copied all the necessary
 	 * data into the outbound request's pool
 	 */
@@ -1495,7 +1721,7 @@ static int create_out_of_dialog_request(const pjsip_method *method, struct ast_s
 
 int ast_sip_create_request(const char *method, struct pjsip_dialog *dlg,
 		struct ast_sip_endpoint *endpoint, const char *uri,
-		pjsip_tx_data **tdata)
+		struct ast_sip_contact *contact, pjsip_tx_data **tdata)
 {
 	const pjsip_method *pmethod = get_pjsip_method(method);
 
@@ -1507,8 +1733,46 @@ int ast_sip_create_request(const char *method, struct pjsip_dialog *dlg,
 	if (dlg) {
 		return create_in_dialog_request(pmethod, dlg, tdata);
 	} else {
-		return create_out_of_dialog_request(pmethod, endpoint, uri, tdata);
+		return create_out_of_dialog_request(pmethod, endpoint, uri, contact, tdata);
 	}
+}
+
+AST_RWLIST_HEAD_STATIC(supplements, ast_sip_supplement);
+
+int ast_sip_register_supplement(struct ast_sip_supplement *supplement)
+{
+	struct ast_sip_supplement *iter;
+	int inserted = 0;
+	SCOPED_LOCK(lock, &supplements, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&supplements, iter, next) {
+		if (iter->priority > supplement->priority) {
+			AST_RWLIST_INSERT_BEFORE_CURRENT(supplement, next);
+			inserted = 1;
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+
+	if (!inserted) {
+		AST_RWLIST_INSERT_TAIL(&supplements, supplement, next);
+	}
+	ast_module_ref(ast_module_info->self);
+	return 0;
+}
+
+void ast_sip_unregister_supplement(struct ast_sip_supplement *supplement)
+{
+	struct ast_sip_supplement *iter;
+	SCOPED_LOCK(lock, &supplements, AST_RWLIST_WRLOCK, AST_RWLIST_UNLOCK);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&supplements, iter, next) {
+		if (supplement == iter) {
+			AST_RWLIST_REMOVE_CURRENT(next);
+			ast_module_unref(ast_module_info->self);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
 }
 
 static int send_in_dialog_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg)
@@ -1520,46 +1784,137 @@ static int send_in_dialog_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg
 	return 0;
 }
 
+static pj_bool_t does_method_match(const pj_str_t *message_method, const char *supplement_method)
+{
+	pj_str_t method;
+
+	if (ast_strlen_zero(supplement_method)) {
+		return PJ_TRUE;
+	}
+
+	pj_cstr(&method, supplement_method);
+
+	return pj_stristr(&method, message_method) ? PJ_TRUE : PJ_FALSE;
+}
+
+/*! \brief Structure to hold information about an outbound request */
+struct send_request_data {
+	struct ast_sip_endpoint *endpoint;		/*! The endpoint associated with this request */
+	void *token;					/*! Information to be provided to the callback upon receipt of a response */
+	void (*callback)(void *token, pjsip_event *e);	/*! The callback to be called upon receipt of a response */
+};
+
+static void send_request_data_destroy(void *obj)
+{
+	struct send_request_data *req_data = obj;
+	ao2_cleanup(req_data->endpoint);
+}
+
+static struct send_request_data *send_request_data_alloc(struct ast_sip_endpoint *endpoint,
+	void *token, void (*callback)(void *token, pjsip_event *e))
+{
+	struct send_request_data *req_data = ao2_alloc(sizeof(*req_data), send_request_data_destroy);
+
+	if (!req_data) {
+		return NULL;
+	}
+
+	req_data->endpoint = ao2_bump(endpoint);
+	req_data->token = token;
+	req_data->callback = callback;
+
+	return req_data;
+}
+
 static void send_request_cb(void *token, pjsip_event *e)
 {
-	RAII_VAR(struct ast_sip_endpoint *, endpoint, token, ao2_cleanup);
+	RAII_VAR(struct send_request_data *, req_data, token, ao2_cleanup);
 	pjsip_transaction *tsx = e->body.tsx_state.tsx;
 	pjsip_rx_data *challenge = e->body.tsx_state.src.rdata;
 	pjsip_tx_data *tdata;
+	struct ast_sip_supplement *supplement;
 
-	if (tsx->status_code != 401 && tsx->status_code != 407) {
+	AST_RWLIST_RDLOCK(&supplements);
+	AST_LIST_TRAVERSE(&supplements, supplement, next) {
+		if (supplement->incoming_response && does_method_match(&challenge->msg_info.cseq->method.name, supplement->method)) {
+			supplement->incoming_response(req_data->endpoint, challenge);
+		}
+	}
+	AST_RWLIST_UNLOCK(&supplements);
+
+	if (tsx->status_code == 401 || tsx->status_code == 407) {
+		if (!ast_sip_create_request_with_auth(&req_data->endpoint->outbound_auths, challenge, tsx, &tdata)) {
+			pjsip_endpt_send_request(ast_sip_get_pjsip_endpoint(), tdata, -1, req_data->token, req_data->callback);
+		}
 		return;
 	}
 
-	if (!ast_sip_create_request_with_auth(&endpoint->outbound_auths, challenge, tsx, &tdata)) {
-		pjsip_endpt_send_request(ast_sip_get_pjsip_endpoint(), tdata, -1, NULL, NULL);
+	if (req_data->callback) {
+		req_data->callback(req_data->token, e);
 	}
 }
 
-static int send_out_of_dialog_request(pjsip_tx_data *tdata, struct ast_sip_endpoint *endpoint)
+static int send_out_of_dialog_request(pjsip_tx_data *tdata, struct ast_sip_endpoint *endpoint,
+	void *token, void (*callback)(void *token, pjsip_event *e))
 {
-	ao2_ref(endpoint, +1);
-	if (pjsip_endpt_send_request(ast_sip_get_pjsip_endpoint(), tdata, -1, endpoint, send_request_cb) != PJ_SUCCESS) {
+	struct ast_sip_supplement *supplement;
+	struct send_request_data *req_data = send_request_data_alloc(endpoint, token, callback);
+	struct ast_sip_contact *contact = ast_sip_mod_data_get(tdata->mod_data, supplement_module.id, MOD_DATA_CONTACT);
+
+	if (!req_data) {
+		return -1;
+	}
+
+	AST_RWLIST_RDLOCK(&supplements);
+	AST_LIST_TRAVERSE(&supplements, supplement, next) {
+		if (supplement->outgoing_request && does_method_match(&tdata->msg->line.req.method.name, supplement->method)) {
+			supplement->outgoing_request(endpoint, contact, tdata);
+		}
+	}
+	AST_RWLIST_UNLOCK(&supplements);
+
+	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, supplement_module.id, MOD_DATA_CONTACT, NULL);
+	ao2_cleanup(contact);
+
+	if (pjsip_endpt_send_request(ast_sip_get_pjsip_endpoint(), tdata, -1, req_data, send_request_cb) != PJ_SUCCESS) {
 		ast_log(LOG_ERROR, "Error attempting to send outbound %.*s request to endpoint %s\n",
 				(int) pj_strlen(&tdata->msg->line.req.method.name),
 				pj_strbuf(&tdata->msg->line.req.method.name),
 				ast_sorcery_object_get_id(endpoint));
-		ao2_ref(endpoint, -1);
+		ao2_cleanup(req_data);
 		return -1;
 	}
 
 	return 0;
 }
 
-int ast_sip_send_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg, struct ast_sip_endpoint *endpoint)
+int ast_sip_send_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg,
+	struct ast_sip_endpoint *endpoint, void *token,
+	void (*callback)(void *token, pjsip_event *e))
 {
 	ast_assert(tdata->msg->type == PJSIP_REQUEST_MSG);
 
 	if (dlg) {
 		return send_in_dialog_request(tdata, dlg);
 	} else {
-		return send_out_of_dialog_request(tdata, endpoint);
+		return send_out_of_dialog_request(tdata, endpoint, token, callback);
 	}
+}
+
+int ast_sip_set_outbound_proxy(pjsip_tx_data *tdata, const char *proxy)
+{
+	pjsip_route_hdr *route;
+	static const pj_str_t ROUTE_HNAME = { "Route", 5 };
+	pj_str_t tmp;
+
+	pj_strdup2_with_null(tdata->pool, &tmp, proxy);
+	if (!(route = pjsip_parse_hdr(tdata->pool, &ROUTE_HNAME, tmp.ptr, tmp.slen, NULL))) {
+		return -1;
+	}
+
+	pj_list_insert_nodes_before(&tdata->msg->hdr, (pjsip_hdr*)route);
+
+	return 0;
 }
 
 int ast_sip_add_header(pjsip_tx_data *tdata, const char *name, const char *value)
@@ -1680,6 +2035,11 @@ int ast_sip_push_task_synchronous(struct ast_taskprocessor *serializer, int (*si
 {
 	/* This method is an onion */
 	struct sync_task_data std;
+
+	if (ast_sip_thread_is_servant()) {
+		return sip_task(task_data);
+	}
+
 	ast_mutex_init(&std.lock);
 	ast_cond_init(&std.cond, NULL);
 	std.fail = std.complete = 0;
@@ -1788,6 +2148,80 @@ int ast_sip_thread_is_servant(void)
 	return *servant_id == SIP_SERVANT_ID;
 }
 
+void *ast_sip_dict_get(void *ht, const char *key)
+{
+	unsigned int hval = 0;
+
+	if (!ht) {
+		return NULL;
+	}
+
+	return pj_hash_get(ht, key, PJ_HASH_KEY_STRING, &hval);
+}
+
+void *ast_sip_dict_set(pj_pool_t* pool, void *ht,
+		       const char *key, void *val)
+{
+	if (!ht) {
+		ht = pj_hash_create(pool, 11);
+	}
+
+	pj_hash_set(pool, ht, key, PJ_HASH_KEY_STRING, 0, val);
+
+	return ht;
+}
+
+static pj_bool_t supplement_on_rx_request(pjsip_rx_data *rdata)
+{
+	struct ast_sip_supplement *supplement;
+
+	if (pjsip_rdata_get_dlg(rdata)) {
+		return PJ_FALSE;
+	}
+
+	AST_RWLIST_RDLOCK(&supplements);
+	AST_LIST_TRAVERSE(&supplements, supplement, next) {
+		if (supplement->incoming_request && does_method_match(&rdata->msg_info.msg->line.req.method.name, supplement->method)) {
+			supplement->incoming_request(ast_pjsip_rdata_get_endpoint(rdata), rdata);
+		}
+	}
+	AST_RWLIST_UNLOCK(&supplements);
+
+	return PJ_FALSE;
+}
+
+int ast_sip_send_response(pjsip_response_addr *res_addr, pjsip_tx_data *tdata, struct ast_sip_endpoint *sip_endpoint)
+{
+	struct ast_sip_supplement *supplement;
+	pjsip_cseq_hdr *cseq = pjsip_msg_find_hdr(tdata->msg, PJSIP_H_CSEQ, NULL);
+	struct ast_sip_contact *contact = ast_sip_mod_data_get(tdata->mod_data, supplement_module.id, MOD_DATA_CONTACT);
+
+	AST_RWLIST_RDLOCK(&supplements);
+	AST_LIST_TRAVERSE(&supplements, supplement, next) {
+		if (supplement->outgoing_response && does_method_match(&cseq->method.name, supplement->method)) {
+			supplement->outgoing_response(sip_endpoint, contact, tdata);
+		}
+	}
+	AST_RWLIST_UNLOCK(&supplements);
+
+	ast_sip_mod_data_set(tdata->pool, tdata->mod_data, supplement_module.id, MOD_DATA_CONTACT, NULL);
+	ao2_cleanup(contact);
+
+	return pjsip_endpt_send_response(ast_sip_get_pjsip_endpoint(), res_addr, tdata, NULL, NULL);
+}
+
+int ast_sip_create_response(const pjsip_rx_data *rdata, int st_code,
+	struct ast_sip_contact *contact, pjsip_tx_data **tdata)
+{
+	int res = pjsip_endpt_create_response(ast_sip_get_pjsip_endpoint(), rdata, st_code, NULL, tdata);
+
+	if (!res) {
+		ast_sip_mod_data_set((*tdata)->pool, (*tdata)->mod_data, supplement_module.id, MOD_DATA_CONTACT, ao2_bump(contact));
+	}
+
+	return res;
+}
+
 static void remove_request_headers(pjsip_endpoint *endpt)
 {
 	const pjsip_hdr *request_headers = pjsip_endpt_get_request_headers(endpt);
@@ -1821,7 +2255,8 @@ static int load_module(void)
 	pj_caching_pool_init(&caching_pool, NULL, 1024 * 1024);
 	if (pjsip_endpt_create(&caching_pool.factory, "SIP", &ast_pjsip_endpoint) != PJ_SUCCESS) {
 		ast_log(LOG_ERROR, "Failed to create PJSIP endpoint structure. Aborting load\n");
-		goto error;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	/* PJSIP will automatically try to add a Max-Forwards header. Since we want to control that,
@@ -1832,12 +2267,20 @@ static int load_module(void)
 	memory_pool = pj_pool_create(&caching_pool.factory, "SIP", 1024, 1024, NULL);
 	if (!memory_pool) {
 		ast_log(LOG_ERROR, "Failed to create memory pool for SIP. Aborting load\n");
-		goto error;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	if (ast_sip_initialize_system()) {
-		ast_log(LOG_ERROR, "Failed to initialize SIP system configuration. Aborting load\n");
-		goto error;
+		ast_log(LOG_ERROR, "Failed to initialize SIP 'system' configuration section. Aborting load\n");
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	sip_get_threadpool_options(&options);
@@ -1845,7 +2288,12 @@ static int load_module(void)
 	sip_threadpool = ast_threadpool_create("SIP", NULL, &options);
 	if (!sip_threadpool) {
 		ast_log(LOG_ERROR, "Failed to create SIP threadpool. Aborting load\n");
-		goto error;
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	pjsip_tsx_layer_init_module(ast_pjsip_endpoint);
@@ -1856,49 +2304,75 @@ static int load_module(void)
 			NULL, PJ_THREAD_DEFAULT_STACK_SIZE * 2, 0, &monitor_thread);
 	if (status != PJ_SUCCESS) {
 		ast_log(LOG_ERROR, "Failed to start SIP monitor thread. Aborting load\n");
-		goto error;
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	ast_sip_initialize_global_headers();
 
-	if (ast_res_pjsip_initialize_configuration()) {
+	if (ast_res_pjsip_initialize_configuration(ast_module_info)) {
 		ast_log(LOG_ERROR, "Failed to initialize SIP configuration. Aborting load\n");
-		goto error;
+		ast_sip_destroy_global_headers();
+		stop_monitor_thread();
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	if (ast_sip_initialize_distributor()) {
 		ast_log(LOG_ERROR, "Failed to register distributor module. Aborting load\n");
-		goto error;
+		ast_res_pjsip_destroy_configuration();
+		ast_sip_destroy_global_headers();
+		stop_monitor_thread();
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
+	}
+
+	if (ast_sip_register_service(&supplement_module)) {
+		ast_log(LOG_ERROR, "Failed to initialize supplement hooks. Aborting load\n");
+		ast_sip_destroy_distributor();
+		ast_res_pjsip_destroy_configuration();
+		ast_sip_destroy_global_headers();
+		stop_monitor_thread();
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	if (ast_sip_initialize_outbound_authentication()) {
 		ast_log(LOG_ERROR, "Failed to initialize outbound authentication. Aborting load\n");
-		goto error;
+		ast_sip_unregister_service(&supplement_module);
+		ast_sip_destroy_distributor();
+		ast_res_pjsip_destroy_configuration();
+		ast_sip_destroy_global_headers();
+		stop_monitor_thread();
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	ast_res_pjsip_init_options_handling(0);
 
-	ast_res_pjsip_init_contact_transports();
+	ast_module_ref(ast_module_info->self);
 
-return AST_MODULE_LOAD_SUCCESS;
-
-error:
-	ast_sip_destroy_distributor();
-	ast_res_pjsip_destroy_configuration();
-	ast_sip_destroy_global_headers();
-	if (monitor_thread) {
-		stop_monitor_thread();
-	}
-	if (memory_pool) {
-		pj_pool_release(memory_pool);
-		memory_pool = NULL;
-	}
-	if (ast_pjsip_endpoint) {
-		pjsip_endpt_destroy(ast_pjsip_endpoint);
-		ast_pjsip_endpoint = NULL;
-	}
-	pj_caching_pool_destroy(&caching_pool);
-	return AST_MODULE_LOAD_DECLINE;
+	return AST_MODULE_LOAD_SUCCESS;
 }
 
 static int reload_module(void)
@@ -1910,36 +2384,9 @@ static int reload_module(void)
 	return 0;
 }
 
-static int unload_pjsip(void *data)
-{
-	if (memory_pool) {
-		pj_pool_release(memory_pool);
-		memory_pool = NULL;
-	}
-	if (ast_pjsip_endpoint) {
-		pjsip_endpt_destroy(ast_pjsip_endpoint);
-		ast_pjsip_endpoint = NULL;
-	}
-	pj_caching_pool_destroy(&caching_pool);
-	return 0;
-}
-
 static int unload_module(void)
 {
-	ast_res_pjsip_cleanup_options_handling();
-	ast_sip_destroy_distributor();
-	ast_res_pjsip_destroy_configuration();
-	ast_sip_destroy_global_headers();
-	if (monitor_thread) {
-		stop_monitor_thread();
-	}
-	/* The thread this is called from cannot call PJSIP/PJLIB functions,
-	 * so we have to push the work to the threadpool to handle
-	 */
-	ast_sip_push_task_synchronous(NULL, unload_pjsip, NULL);
-
-	ast_threadpool_shutdown(sip_threadpool);
-
+	/* This will never get called as this module can't be unloaded */
 	return 0;
 }
 

@@ -235,12 +235,16 @@ void ast_bridge_channel_update_linkedids(struct ast_bridge_channel *bridge_chann
 		return;
 	}
 
+	ast_channel_lock(bridge_channel->chan);
 	ast_channel_linkedid_set(bridge_channel->chan, oldest_linkedid);
+	ast_channel_unlock(bridge_channel->chan);
 	AST_LIST_TRAVERSE(&bridge->channels, other, entry) {
 		if (other == swap) {
 			continue;
 		}
+		ast_channel_lock(other->chan);
 		ast_channel_linkedid_set(other->chan, oldest_linkedid);
+		ast_channel_unlock(other->chan);
 	}
 }
 
@@ -253,6 +257,7 @@ void ast_bridge_channel_update_accountcodes(struct ast_bridge_channel *bridge_ch
 		if (other == swap) {
 			continue;
 		}
+		ast_channel_lock_both(bridge_channel->chan, other->chan);
 
 		if (!ast_strlen_zero(ast_channel_accountcode(bridge_channel->chan)) && ast_strlen_zero(ast_channel_peeraccount(other->chan))) {
 			ast_debug(1, "Setting peeraccount to %s for %s from data on channel %s\n",
@@ -286,6 +291,8 @@ void ast_bridge_channel_update_accountcodes(struct ast_bridge_channel *bridge_ch
 				ast_channel_peeraccount_set(bridge_channel->chan, ast_channel_accountcode(other->chan));
 			}
 		}
+		ast_channel_unlock(bridge_channel->chan);
+		ast_channel_unlock(other->chan);
 	}
 }
 
@@ -624,14 +631,18 @@ int ast_bridge_channel_write_hold(struct ast_bridge_channel *bridge_channel, con
 		datalen = 0;
 	}
 
+	ast_channel_lock(bridge_channel->chan);
 	ast_channel_publish_blob(bridge_channel->chan, ast_channel_hold_type(), blob);
+	ast_channel_unlock(bridge_channel->chan);
 	return ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_HOLD,
 		moh_class, datalen);
 }
 
 int ast_bridge_channel_write_unhold(struct ast_bridge_channel *bridge_channel)
 {
+	ast_channel_lock(bridge_channel->chan);
 	ast_channel_publish_blob(bridge_channel->chan, ast_channel_unhold_type(), NULL);
+	ast_channel_unlock(bridge_channel->chan);
 	return ast_bridge_channel_write_control_data(bridge_channel, AST_CONTROL_UNHOLD, NULL, 0);
 }
 
@@ -1092,6 +1103,7 @@ static void testsuite_notify_feature_success(struct ast_channel *chan, const cha
 #ifdef TEST_FRAMEWORK
 	char *feature = "unknown";
 	struct ast_featuremap_config *featuremap = ast_get_chan_featuremap_config(chan);
+	struct ast_features_xfer_config *xfer = ast_get_chan_features_xfer_config(chan);
 
 	if (featuremap) {
 		if (!strcmp(dtmf, featuremap->blindxfer)) {
@@ -1106,6 +1118,8 @@ static void testsuite_notify_feature_success(struct ast_channel *chan, const cha
 			feature = "automixmon";
 		} else if (!strcmp(dtmf, featuremap->parkcall)) {
 			feature = "parkcall";
+		} else if (!strcmp(dtmf, xfer->atxferthreeway)) {
+			feature = "atxferthreeway";
 		}
 	}
 
@@ -1566,7 +1580,6 @@ int bridge_channel_internal_push(struct ast_bridge_channel *bridge_channel)
 		|| ast_bridge_channel_establish_roles(bridge_channel)) {
 		ast_debug(1, "Bridge %s: pushing %p(%s) into bridge failed\n",
 			bridge->uniqueid, bridge_channel, ast_channel_name(bridge_channel->chan));
-		ast_bridge_features_remove(bridge_channel->features, AST_BRIDGE_HOOK_REMOVE_ON_PULL);
 		return -1;
 	}
 	bridge_channel->in_bridge = 1;
@@ -1879,9 +1892,6 @@ static void bridge_channel_wait(struct ast_bridge_channel *bridge_channel)
 			ast_channel_name(bridge_channel->chan));
 		ast_cond_wait(&bridge_channel->cond, ao2_object_get_lockaddr(bridge_channel));
 	} else {
-		ast_debug(10, "Bridge %s: %p(%s) is going into a waitfor\n",
-			bridge_channel->bridge->uniqueid, bridge_channel,
-			ast_channel_name(bridge_channel->chan));
 		ast_bridge_channel_unlock(bridge_channel);
 		outfd = -1;
 		ms = bridge_channel_next_interval(bridge_channel);
@@ -1972,8 +1982,7 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 	 */
 	ast_bridge_lock(bridge_channel->bridge);
 
-	/* Make sure we're still good to be put into a bridge
-	 */
+	/* Make sure we're still good to be put into a bridge */
 	ast_channel_lock(bridge_channel->chan);
 	if (ast_channel_internal_bridge(bridge_channel->chan)
 		|| ast_test_flag(ast_channel_flags(bridge_channel->chan), AST_FLAG_ZOMBIE)) {
@@ -1996,11 +2005,17 @@ int bridge_channel_internal_join(struct ast_bridge_channel *bridge_channel)
 	}
 
 	if (bridge_channel_internal_push(bridge_channel)) {
-		ast_bridge_channel_leave_bridge(bridge_channel,
-			BRIDGE_CHANNEL_STATE_END_NO_DISSOLVE, bridge_channel->bridge->cause);
+		int cause = bridge_channel->bridge->cause;
+
+		ast_bridge_unlock(bridge_channel->bridge);
+		ast_bridge_channel_kick(bridge_channel, cause);
+		ast_bridge_channel_lock_bridge(bridge_channel);
+		ast_bridge_features_remove(bridge_channel->features,
+			AST_BRIDGE_HOOK_REMOVE_ON_PULL);
+		bridge_channel_dissolve_check(bridge_channel);
 		res = -1;
 	}
-	bridge_reconfigured(bridge_channel->bridge, 1);
+	bridge_reconfigured(bridge_channel->bridge, !bridge_channel->inhibit_colp);
 
 	if (bridge_channel->state == BRIDGE_CHANNEL_STATE_WAIT) {
 		/*

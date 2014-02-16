@@ -1353,7 +1353,7 @@ static void bridge_agent_hold_pull(struct ast_bridge *self, struct ast_bridge_ch
  */
 static void bridge_agent_hold_dissolving(struct ast_bridge *self)
 {
-	ao2_global_obj_replace_unref(agent_holding, NULL);
+	ao2_global_obj_release(agent_holding);
 	ast_bridge_base_v_table.dissolving(self);
 }
 
@@ -1366,7 +1366,8 @@ static struct ast_bridge *bridge_agent_hold_new(void)
 	bridge = bridge_alloc(sizeof(struct ast_bridge), &bridge_agent_hold_v_table);
 	bridge = bridge_base_init(bridge, AST_BRIDGE_CAPABILITY_HOLDING,
 		AST_BRIDGE_FLAG_MERGE_INHIBIT_TO | AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM
-			| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED);
+			| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_TRANSFER_PROHIBITED,
+		"AgentPool", NULL);
 	bridge = bridge_register(bridge);
 	return bridge;
 }
@@ -1464,7 +1465,9 @@ static void agent_logout(struct agent_pvt *agent)
 		ast_bridge_destroy(caller_bridge, AST_CAUSE_USER_BUSY);
 	}
 
+	ast_channel_lock(logged);
 	send_agent_logoff(logged, agent->username, time_logged_in);
+	ast_channel_unlock(logged);
 	ast_verb(2, "Agent '%s' logged out.  Logged in for %ld seconds.\n",
 		agent->username, time_logged_in);
 	ast_channel_unref(logged);
@@ -1509,7 +1512,8 @@ static void agent_run(struct agent_pvt *agent, struct ast_channel *logged)
 		 * want to put the agent back into the holding bridge for the
 		 * next caller.
 		 */
-		ast_bridge_join(holding, logged, NULL, &features, NULL, 1);
+		ast_bridge_join(holding, logged, NULL, &features, NULL,
+			AST_BRIDGE_JOIN_PASS_REFERENCE);
 		if (logged != agent->logged) {
 			/* This channel is no longer the logged in agent. */
 			break;
@@ -1890,7 +1894,8 @@ static int agent_request_exec(struct ast_channel *chan, const char *data)
 	}
 
 	ast_indicate(chan, AST_CONTROL_RINGING);
-	ast_bridge_join(caller_bridge, chan, NULL, &caller_features, NULL, 1);
+	ast_bridge_join(caller_bridge, chan, NULL, &caller_features, NULL,
+		AST_BRIDGE_JOIN_PASS_REFERENCE);
 	ast_bridge_features_cleanup(&caller_features);
 
 	return -1;
@@ -2030,6 +2035,7 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 	agent->logged = ast_channel_ref(chan);
 	agent->last_disconnect = ast_tvnow();
 	time(&agent->login_start);
+	agent->deferred_logoff = 0;
 	agent_unlock(agent);
 
 	agent_login_channel_config(agent, chan);
@@ -2042,7 +2048,9 @@ static int agent_login_exec(struct ast_channel *chan, const char *data)
 	ast_verb(2, "Agent '%s' logged in (format %s/%s)\n", agent->username,
 		ast_getformatname(ast_channel_readformat(chan)),
 		ast_getformatname(ast_channel_writeformat(chan)));
+	ast_channel_lock(chan);
 	send_agent_login(chan, agent->username);
+	ast_channel_unlock(chan);
 
 	agent_run(agent, chan);
 	return -1;

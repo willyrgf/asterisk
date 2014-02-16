@@ -436,7 +436,7 @@ static int gtalk_invite(struct gtalk_pvt *p, char *to, char *from, char *sid, in
 	iks_insert_attrib(dcodecs, "xmlns", GOOGLE_AUDIO_NS);
 	iks_insert_attrib(dcodecs, "xml:lang", "en");
 
-	if (!(alreadysent = ast_format_cap_alloc_nolock())) {
+	if (!(alreadysent = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK))) {
 		return 0;
 	}
 	for (x = 0; x < AST_CODEC_PREF_SIZE; x++) {
@@ -1063,9 +1063,9 @@ static struct gtalk_pvt *gtalk_alloc(struct gtalk *client, const char *us, const
 	if (!(tmp = ast_calloc(1, sizeof(*tmp)))) {
 		return NULL;
 	}
-	tmp->cap = ast_format_cap_alloc_nolock();
-	tmp->jointcap = ast_format_cap_alloc_nolock();
-	tmp->peercap = ast_format_cap_alloc_nolock();
+	tmp->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
+	tmp->jointcap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
+	tmp->peercap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	if (!tmp->jointcap || !tmp->peercap || !tmp->cap) {
 		tmp->cap = ast_format_cap_destroy(tmp->cap);
 		tmp->jointcap = ast_format_cap_destroy(tmp->jointcap);
@@ -1149,6 +1149,9 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 		ast_log(LOG_WARNING, "Unable to allocate Gtalk channel structure!\n");
 		return NULL;
 	}
+
+	ast_channel_stage_snapshot(tmp);
+
 	ast_channel_tech_set(tmp, &gtalk_tech);
 
 	/* Select our native format based on codec preference until we receive
@@ -1221,6 +1224,10 @@ static struct ast_channel *gtalk_new(struct gtalk *client, struct gtalk_pvt *i, 
 	ast_channel_priority_set(tmp, 1);
 	if (i->rtp)
 		ast_jb_configure(tmp, &global_jbconf);
+
+	ast_channel_stage_snapshot_done(tmp);
+	ast_channel_unlock(tmp);
+
 	if (state != AST_STATE_DOWN && ast_pbx_start(tmp)) {
 		ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(tmp));
 		ast_channel_hangupcause_set(tmp, AST_CAUSE_SWITCH_CONGESTION);
@@ -1413,7 +1420,9 @@ static int gtalk_newcall(struct gtalk *client, ikspak *pak)
 	ast_format_cap_joint_copy(p->cap, p->peercap, p->jointcap);
 	ast_mutex_unlock(&p->lock);
 
+	ast_channel_lock(chan);
 	ast_setstate(chan, AST_STATE_RING);
+	ast_channel_unlock(chan);
 	if (ast_format_cap_is_empty(p->jointcap)) {
 		ast_log(LOG_WARNING, "Capabilities don't match : us - %s, peer - %s, combined - %s \n", ast_getformatname_multiple(s1, BUFSIZ, p->cap),
 			ast_getformatname_multiple(s2, BUFSIZ, p->peercap),
@@ -2250,7 +2259,7 @@ static int gtalk_load_config(void)
 			member = ast_calloc(1, sizeof(*member));
 			ASTOBJ_INIT(member);
 			ASTOBJ_WRLOCK(member);
-			member->cap = ast_format_cap_alloc_nolock();
+			member->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 			if (!strcasecmp(cat, "guest")) {
 				ast_copy_string(member->name, "guest", sizeof(member->name));
 				ast_copy_string(member->user, "guest", sizeof(member->user));
@@ -2330,10 +2339,10 @@ static int load_module(void)
 	char *jabber_loaded = ast_module_helper("", "res_jabber.so", 0, 0, 0, 0);
 	struct ast_format tmpfmt;
 
-	if (!(gtalk_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(gtalk_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
-	if (!(global_capability = ast_format_cap_alloc())) {
+	if (!(global_capability = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 

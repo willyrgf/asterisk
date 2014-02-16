@@ -469,8 +469,8 @@ enum ao2_alloc_opts {
 #endif
 
 void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, unsigned int options, const char *tag,
-	const char *file, int line, const char *func, int ref_debug);
-void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned int options);
+	const char *file, int line, const char *func, int ref_debug) attribute_warn_unused_result;
+void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned int options) attribute_warn_unused_result;
 
 /*! @} */
 
@@ -699,7 +699,7 @@ void __ao2_global_obj_release(struct ao2_global_obj *holder, const char *tag, co
 	__ao2_global_obj_replace(&holder, (obj), NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__, #holder)
 #endif
 
-void *__ao2_global_obj_replace(struct ao2_global_obj *holder, void *obj, const char *tag, const char *file, int line, const char *func, const char *name);
+void *__ao2_global_obj_replace(struct ao2_global_obj *holder, void *obj, const char *tag, const char *file, int line, const char *func, const char *name) attribute_warn_unused_result;
 
 /*!
  * \brief Replace an ao2 object in the global holder, throwing away any old object.
@@ -757,7 +757,7 @@ int __ao2_global_obj_replace_unref(struct ao2_global_obj *holder, void *obj, con
 	__ao2_global_obj_ref(&holder, NULL, __FILE__, __LINE__, __PRETTY_FUNCTION__, #holder)
 #endif
 
-void *__ao2_global_obj_ref(struct ao2_global_obj *holder, const char *tag, const char *file, int line, const char *func, const char *name);
+void *__ao2_global_obj_ref(struct ao2_global_obj *holder, const char *tag, const char *file, int line, const char *func, const char *name) attribute_warn_unused_result;
 
 
 /*!
@@ -895,34 +895,6 @@ enum search_flags {
 	 * result of of the callback function has the CMP_STOP bit set.
 	 */
 	OBJ_MULTIPLE = (1 << 2),
-	/*!
-	 * \brief Continue if a match is not found.
-	 *
-	 * \details
-	 * This flag forces a whole container search.  The
-	 * OBJ_SEARCH_OBJECT, OBJ_SEARCH_KEY, and OBJ_SEARCH_PARTIAL_KEY
-	 * flags just specify where to start the search in the
-	 * container.  If the search is not stopped early then the
-	 * search _continues_ until the search wraps around to the
-	 * starting point.
-	 *
-	 * Normal searches start where the search key specifies to start
-	 * and end when the search key indicates that the object is not
-	 * in the container.
-	 *
-	 * For hash containers, this tells the ao2_callback() core to
-	 * keep searching through the rest of the buckets if a match is
-	 * not found in the starting bucket defined by the hash value on
-	 * the argument.
-	 *
-	 * For rbtree containers, if the search key is not in the
-	 * container, the search will start either at the first item
-	 * before the search key or the first item after the search key.
-	 *
-	 * \note The supplied ao2_callback_fn is called for every node
-	 * in the container from the starting point.
-	 */
-	OBJ_CONTINUE = (1 << 3),
 	/*!
 	 * \brief Assume that the ao2_container is already locked.
 	 *
@@ -1127,6 +1099,8 @@ typedef int (ao2_callback_data_fn)(void *obj, void *arg, void *data, int flags);
  *   OBJ_SEARCH_OBJECT - if set, 'obj', is an object.
  *   OBJ_SEARCH_KEY - if set, 'obj', is a search key item that is not an object.
  *
+ * \note This function must be idempotent.
+ *
  * \return Computed hash value.
  */
 typedef int (ao2_hash_fn)(const void *obj, int flags);
@@ -1140,6 +1114,8 @@ typedef int (ao2_hash_fn)(const void *obj, int flags);
  *   OBJ_SEARCH_OBJECT - if set, 'obj_right', is an object.
  *   OBJ_SEARCH_KEY - if set, 'obj_right', is a search key item that is not an object.
  *   OBJ_SEARCH_PARTIAL_KEY - if set, 'obj_right', is a partial search key item that is not an object.
+ *
+ * \note This function must be idempotent.
  *
  * \retval <0 if obj_left < obj_right
  * \retval =0 if obj_left == obj_right
@@ -1227,11 +1203,11 @@ struct ao2_container;
 
 struct ao2_container *__ao2_container_alloc_hash(unsigned int ao2_options,
 	unsigned int container_options, unsigned int n_buckets, ao2_hash_fn *hash_fn,
-	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn) attribute_warn_unused_result;
 struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
 	unsigned int container_options, unsigned int n_buckets, ao2_hash_fn *hash_fn,
 	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *func, int ref_debug);
+	const char *tag, const char *file, int line, const char *func, int ref_debug) attribute_warn_unused_result;
 
 /*!
  * \brief Allocate and initialize a list container.
@@ -1272,10 +1248,10 @@ struct ao2_container *__ao2_container_alloc_hash_debug(unsigned int ao2_options,
 #endif
 
 struct ao2_container *__ao2_container_alloc_list(unsigned int ao2_options,
-	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn) attribute_warn_unused_result;
 struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
 	unsigned int container_options, ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *func, int ref_debug);
+	const char *tag, const char *file, int line, const char *func, int ref_debug) attribute_warn_unused_result;
 
 /*!
  * \brief Allocate and initialize a red-black tree container.
@@ -1315,10 +1291,10 @@ struct ao2_container *__ao2_container_alloc_list_debug(unsigned int ao2_options,
 #endif
 
 struct ao2_container *__ao2_container_alloc_rbtree(unsigned int ao2_options, unsigned int container_options,
-	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn);
+	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn) attribute_warn_unused_result;
 struct ao2_container *__ao2_container_alloc_rbtree_debug(unsigned int ao2_options, unsigned int container_options,
 	ao2_sort_fn *sort_fn, ao2_callback_fn *cmp_fn,
-	const char *tag, const char *file, int line, const char *func, int ref_debug);
+	const char *tag, const char *file, int line, const char *func, int ref_debug) attribute_warn_unused_result;
 
 /*! \brief
  * Returns the number of elements in a container.
@@ -1358,8 +1334,8 @@ int ao2_container_dup(struct ao2_container *dest, struct ao2_container *src, enu
  * \retval Clone container on success.
  * \retval NULL on error.
  */
-struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags);
-struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *func, int ref_debug);
+struct ao2_container *__ao2_container_clone(struct ao2_container *orig, enum search_flags flags) attribute_warn_unused_result;
+struct ao2_container *__ao2_container_clone_debug(struct ao2_container *orig, enum search_flags flags, const char *tag, const char *file, int line, const char *func, int ref_debug) attribute_warn_unused_result;
 #if defined(REF_DEBUG)
 
 #define ao2_t_container_clone(orig, flags, tag)	__ao2_container_clone_debug(orig, flags, tag, __FILE__, __LINE__, __PRETTY_FUNCTION__, 1)
@@ -1895,7 +1871,7 @@ enum ao2_iterator_flags {
  *
  * This function will take a reference on the container being iterated.
  */
-struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags);
+struct ao2_iterator ao2_iterator_init(struct ao2_container *c, int flags) attribute_warn_unused_result;
 
 /*!
  * \brief Destroy a container iterator
@@ -1925,8 +1901,8 @@ void ao2_iterator_destroy(struct ao2_iterator *iter);
 
 #endif
 
-void *__ao2_iterator_next_debug(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func);
-void *__ao2_iterator_next(struct ao2_iterator *iter);
+void *__ao2_iterator_next_debug(struct ao2_iterator *iter, const char *tag, const char *file, int line, const char *func) attribute_warn_unused_result;
+void *__ao2_iterator_next(struct ao2_iterator *iter) attribute_warn_unused_result;
 
 /*!
  * \brief Restart an iteration.
@@ -1956,5 +1932,14 @@ void __ao2_cleanup_debug(void *obj, const char *file, int line, const char *func
 #define ao2_cleanup(obj) __ao2_cleanup(obj)
 #endif
 void ao2_iterator_cleanup(struct ao2_iterator *iter);
+
+/*!
+ * \brief Get a count of the iterated container objects.
+ *
+ * \param iter the iterator to query
+ *
+ * \retval The number of objects in the iterated container
+ */
+int ao2_iterator_count(struct ao2_iterator *iter);
 
 #endif /* _ASTERISK_ASTOBJ2_H */

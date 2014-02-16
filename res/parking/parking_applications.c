@@ -639,7 +639,8 @@ static int parked_call_app_exec(struct ast_channel *chan, const char *data)
 	}
 
 	/* Now we should try to join the new bridge ourselves... */
-	ast_bridge_join(retrieval_bridge, chan, NULL, &chan_features, NULL, 1);
+	ast_bridge_join(retrieval_bridge, chan, NULL, &chan_features, NULL,
+		AST_BRIDGE_JOIN_PASS_REFERENCE);
 
 	ast_bridge_features_cleanup(&chan_features);
 
@@ -686,7 +687,7 @@ static void announce_to_dial(char *dial_string, char *announce_string, int parki
 	struct ast_channel *dchan;
 	struct outgoing_helper oh = { 0, };
 	int outstate;
-	struct ast_format_cap *cap_slin = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap_slin = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	char buf[13];
 	char *dial_tech;
 	char *cur_announce;
@@ -738,7 +739,7 @@ announce_cleanup:
 	cap_slin = ast_format_cap_destroy(cap_slin);
 }
 
-static void park_announce_update_cb(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message)
+static void park_announce_update_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
 {
 	struct park_announce_subscription_data *pa_data = data;
 	char *dial_string = pa_data->dial_string;

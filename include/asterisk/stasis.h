@@ -187,6 +187,42 @@ struct stasis_message_type;
 struct stasis_message;
 
 /*!
+ * \brief Opaque type for a Stasis subscription.
+ * \since 12
+ */
+struct stasis_subscription;
+
+/*!
+ * \brief Structure containing callbacks for Stasis message sanitization
+ *
+ * \note If either callback is implemented, both should be implemented since
+ * not all callers may have access to the full snapshot.
+ */
+struct stasis_message_sanitizer {
+	/*!
+	 * \brief Callback which determines whether a channel should be sanitized from
+	 * a message based on the channel's unique ID
+	 *
+	 * \param channel_id The unique ID of the channel
+	 *
+	 * \retval non-zero if the channel should be left out of the message
+	 * \retval zero if the channel should remain in the message
+	 */
+	int (*channel_id)(const char *channel_id);
+
+	/*!
+	 * \brief Callback which determines whether a channel should be sanitized from
+	 * a message based on the channel's snapshot
+	 *
+	 * \param snapshot A snapshot generated from the channel
+	 *
+	 * \retval non-zero if the channel should be left out of the message
+	 * \retval zero if the channel should remain in the message
+	 */
+	int (*channel_snapshot)(const struct ast_channel_snapshot *snapshot);
+};
+
+/*!
  * \brief Virtual table providing methods for messages.
  * \since 12
  */
@@ -198,17 +234,19 @@ struct stasis_message_vtable {
 	 * The returned object should be ast_json_unref()'ed.
 	 *
 	 * \param message Message to convert to JSON string.
+	 * \param sanitize Snapshot sanitization callback.
+	 *
 	 * \return Newly allocated JSON message.
 	 * \return \c NULL on error.
 	 * \return \c NULL if JSON format is not supported.
 	 */
-	struct ast_json *(*to_json)(struct stasis_message *message);
+	struct ast_json *(*to_json)(struct stasis_message *message, const struct stasis_message_sanitizer *sanitize);
 
 	/*!
 	 * \brief Build the AMI representation of the message.
 	 *
 	 * May be \c NULL, or may return \c NULL, to indicate no representation.
-	 * The returned object should be ao2_cleankup()'ed.
+	 * The returned object should be ao2_cleanup()'ed.
 	 *
 	 * \param message Message to convert to AMI string.
 	 * \return Newly allocated \ref ast_manager_event_blob.
@@ -292,11 +330,13 @@ const struct timeval *stasis_message_timestamp(const struct stasis_message *msg)
  * be ast_json_unref()'ed.
  *
  * \param message Message to convert to JSON string.
+ * \param sanitize Snapshot sanitization callback.
+ *
  * \return Newly allocated string with JSON message.
  * \return \c NULL on error.
  * \return \c NULL if JSON format is not supported.
  */
-struct ast_json *stasis_message_to_json(struct stasis_message *message);
+struct ast_json *stasis_message_to_json(struct stasis_message *message, struct stasis_message_sanitizer *sanitize);
 
 /*!
  * \brief Build the AMI representation of the message.
@@ -343,49 +383,42 @@ const char *stasis_topic_name(const struct stasis_topic *topic);
  * \brief Publish a message to a topic's subscribers.
  * \param topic Topic.
  * \param message Message to publish.
+ *
+ * This call is asynchronous and will return immediately upon queueing
+ * the message for delivery to the topic's subscribers.
+ *
  * \since 12
  */
 void stasis_publish(struct stasis_topic *topic, struct stasis_message *message);
 
 /*!
- * \brief Publish a message from a specified topic to all the subscribers of a
- * possibly different topic.
- * \param topic Topic to publish message to.
- * \param topic Original topic message was from.
- * \param message Message
- * \since 12
+ * \brief Publish a message to a topic's subscribers, synchronizing
+ * on the specified subscriber
+ * \param sub Subscription to synchronize on.
+ * \param message Message to publish.
+ *
+ * The caller of stasis_publish_sync will block until the specified
+ * subscriber completes handling of the message.
+ *
+ * All other subscribers to the topic the \ref stasis_subpscription
+ * is subscribed to are also delivered the message; this delivery however
+ * happens asynchronously.
+ *
+ * \since 12.1.0
  */
-void stasis_forward_message(struct stasis_topic *topic,
-			    struct stasis_topic *publisher_topic,
-			    struct stasis_message *message);
-
-/*!
- * \brief Wait for all pending messages on a given topic to be processed.
- * \param topic Topic to await pending messages on.
- * \return 0 on success.
- * \return Non-zero on error.
- * \since 12
- */
-int stasis_topic_wait(struct stasis_topic *topic);
+void stasis_publish_sync(struct stasis_subscription *sub, struct stasis_message *message);
 
 /*! @} */
 
 /*! @{ */
 
 /*!
- * \brief Opaque type for a Stasis subscription.
- * \since 12
- */
-struct stasis_subscription;
-
-/*!
  * \brief Callback function type for Stasis subscriptions.
  * \param data Data field provided with subscription.
- * \param topic Topic to which the message was published.
  * \param message Published message.
  * \since 12
  */
-typedef void (*stasis_subscription_cb)(void *data, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *message);
+typedef void (*stasis_subscription_cb)(void *data, struct stasis_subscription *sub, struct stasis_message *message);
 
 /*!
  * \brief Create a subscription.
@@ -464,6 +497,8 @@ int stasis_subscription_is_done(struct stasis_subscription *subscription);
 struct stasis_subscription *stasis_unsubscribe_and_join(
 	struct stasis_subscription *subscription);
 
+struct stasis_forward;
+
 /*!
  * \brief Create a subscription which forwards all messages from one topic to
  * another.
@@ -477,8 +512,10 @@ struct stasis_subscription *stasis_unsubscribe_and_join(
  * \return \c NULL on error.
  * \since 12
  */
-struct stasis_subscription *stasis_forward_all(struct stasis_topic *from_topic,
+struct stasis_forward *stasis_forward_all(struct stasis_topic *from_topic,
 	struct stasis_topic *to_topic);
+
+struct stasis_forward *stasis_forward_cancel(struct stasis_forward *forward);
 
 /*!
  * \brief Get the unique ID for the subscription.
@@ -579,8 +616,6 @@ struct stasis_message_type *stasis_cache_update_type(void);
  * \since 12
  */
 struct stasis_cache_update {
-	/*! \brief Topic that published \c new_snapshot */
-	struct stasis_topic *topic;
 	/*! \brief Convenience reference to snapshot type */
 	struct stasis_message_type *type;
 	/*! \brief Old value from the cache */
@@ -751,7 +786,7 @@ struct ao2_container *stasis_cache_dump(struct stasis_cache *cache,
 void stasis_log_bad_type_access(const char *name);
 
 /*!
- * \brief Boiler-plate removing macro for defining message types.
+ * \brief Boiler-plate messaging macro for defining public message types.
  *
  * \code
  *	STASIS_MESSAGE_TYPE_DEFN(ast_foo_type,
@@ -777,7 +812,7 @@ void stasis_log_bad_type_access(const char *name);
 	}
 
 /*!
- * \brief Boiler-plate removing macro for defining local message types.
+ * \brief Boiler-plate messaging macro for defining local message types.
  *
  * \code
  *	STASIS_MESSAGE_TYPE_DEFN_LOCAL(ast_foo_type,
@@ -803,7 +838,7 @@ void stasis_log_bad_type_access(const char *name);
 	}
 
 /*!
-* \brief Boiler-plate removing macro for initializing message types.
+* \brief Boiler-plate messaging macro for initializing message types.
  *
  * \code
  *	if (STASIS_MESSAGE_TYPE_INIT(ast_foo_type) != 0) {
@@ -825,7 +860,7 @@ void stasis_log_bad_type_access(const char *name);
 	})
 
 /*!
- * \brief Boiler-plate removing macro for cleaning up message types.
+ * \brief Boiler-plate messaging macro for cleaning up message types.
  *
  * Note that if your type is defined in core instead of a loadable module, you
  * should call message type cleanup from an ast_register_cleanup() handler
@@ -878,21 +913,6 @@ int stasis_cache_init(void);
  * \since 12
  */
 int stasis_config_init(void);
-
-/*!
- * \internal
- */
-int stasis_wait_init(void);
-
-struct ast_threadpool_options;
-
-/*!
- * \internal
- * \brief Retrieves the Stasis threadpool configuration.
- * \param[out] threadpool_options Filled with Stasis threadpool options.
- */
-void stasis_config_get_threadpool_options(
-	struct ast_threadpool_options *threadpool_options);
 
 /*! @} */
 

@@ -79,6 +79,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/abstract_jb.h"
 #include "asterisk/jabber.h"
 #include "asterisk/jingle.h"
+#include "asterisk/stasis_channels.h"
 
 #define JINGLE_CONFIG "jingle.conf"
 
@@ -321,7 +322,7 @@ static int jingle_accept_call(struct jingle *client, struct jingle_pvt *p)
 	iks *iq, *jingle, *dcodecs, *payload_red, *payload_audio, *payload_cn;
 	int x;
 	struct ast_format pref_codec;
-	struct ast_format_cap *alreadysent = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *alreadysent = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 
 	if (p->initiator || !alreadysent)
 		return 1;
@@ -797,9 +798,9 @@ static struct jingle_pvt *jingle_alloc(struct jingle *client, const char *from, 
 		return NULL;
 	}
 
-	tmp->cap = ast_format_cap_alloc_nolock();
-	tmp->jointcap = ast_format_cap_alloc_nolock();
-	tmp->peercap = ast_format_cap_alloc_nolock();
+	tmp->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
+	tmp->jointcap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
+	tmp->peercap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	if (!tmp->cap || !tmp->jointcap || !tmp->peercap) {
 		tmp->cap = ast_format_cap_destroy(tmp->cap);
 		tmp->jointcap = ast_format_cap_destroy(tmp->jointcap);
@@ -862,6 +863,9 @@ static struct ast_channel *jingle_new(struct jingle *client, struct jingle_pvt *
 		ast_log(LOG_WARNING, "Unable to allocate Jingle channel structure!\n");
 		return NULL;
 	}
+
+	ast_channel_stage_snapshot(tmp);
+
 	ast_channel_tech_set(tmp, &jingle_tech);
 
 	/* Select our native format based on codec preference until we receive
@@ -935,6 +939,10 @@ static struct ast_channel *jingle_new(struct jingle *client, struct jingle_pvt *
 	ast_channel_priority_set(tmp, 1);
 	if (i->rtp)
 		ast_jb_configure(tmp, &global_jbconf);
+
+	ast_channel_stage_snapshot_done(tmp);
+	ast_channel_unlock(tmp);
+
 	if (state != AST_STATE_DOWN && ast_pbx_start(tmp)) {
 		ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(tmp));
 		ast_channel_hangupcause_set(tmp, AST_CAUSE_SWITCH_CONGESTION);
@@ -1108,7 +1116,9 @@ static int jingle_newcall(struct jingle *client, ikspak *pak)
 	}
 
 	ast_mutex_unlock(&p->lock);
+	ast_channel_lock(chan);
 	ast_setstate(chan, AST_STATE_RING);
+	ast_channel_unlock(chan);
 	res = ast_pbx_start(chan);
 	
 	switch (res) {
@@ -1890,7 +1900,7 @@ static int jingle_load_config(void)
 			member = ast_calloc(1, sizeof(*member));
 			ASTOBJ_INIT(member);
 			ASTOBJ_WRLOCK(member);
-			member->cap = ast_format_cap_alloc_nolock();
+			member->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 			if (!strcasecmp(cat, "guest")) {
 				ast_copy_string(member->name, "guest", sizeof(member->name));
 				ast_copy_string(member->user, "guest", sizeof(member->user));
@@ -1974,12 +1984,12 @@ static int load_module(void)
 
 	char *jabber_loaded = ast_module_helper("", "res_jabber.so", 0, 0, 0, 0);
 
-	if (!(jingle_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(jingle_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
 	ast_format_cap_add_all_by_type(jingle_tech.capabilities, AST_FORMAT_TYPE_AUDIO);
-	if (!(global_capability = ast_format_cap_alloc())) {
+	if (!(global_capability = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(global_capability, ast_format_set(&tmpfmt, AST_FORMAT_ULAW, 0));

@@ -273,7 +273,7 @@ static int begin_dial_prerun(struct ast_dial_channel *channel, struct ast_channe
 	} else if (chan) {
 		cap_request = ast_channel_nativeformats(chan);
 	} else {
-		cap_all_audio = ast_format_cap_alloc_nolock();
+		cap_all_audio = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 		ast_format_cap_add_all_by_type(cap_all_audio, AST_FORMAT_TYPE_AUDIO);
 		cap_request = cap_all_audio;
 	}
@@ -285,6 +285,9 @@ static int begin_dial_prerun(struct ast_dial_channel *channel, struct ast_channe
 	}
 	cap_request = NULL;
 	cap_all_audio = ast_format_cap_destroy(cap_all_audio);
+
+	ast_channel_lock(channel->owner);
+	ast_channel_stage_snapshot(channel->owner);
 
 	ast_channel_appl_set(channel->owner, "AppDial2");
 	ast_channel_data_set(channel->owner, "(Outgoing Line)");
@@ -311,6 +314,9 @@ static int begin_dial_prerun(struct ast_dial_channel *channel, struct ast_channe
 		ast_channel_adsicpe_set(channel->owner, ast_channel_adsicpe(chan));
 		ast_channel_transfercapability_set(channel->owner, ast_channel_transfercapability(chan));
 	}
+
+	ast_channel_stage_snapshot_done(channel->owner);
+	ast_channel_unlock(channel->owner);
 
 	return 0;
 }
@@ -398,6 +404,15 @@ static int handle_call_forward(struct ast_dial *dial, struct ast_dial_channel *c
 		*stuff++ = '\0';
 		tech = tmp;
 		device = stuff;
+	} else {
+		const char *forward_context;
+		char destination[AST_MAX_CONTEXT + AST_MAX_EXTENSION + 1];
+
+		ast_channel_lock(original);
+		forward_context = pbx_builtin_getvar_helper(original, "FORWARD_CONTEXT");
+		snprintf(destination, sizeof(destination), "%s@%s", tmp, S_OR(forward_context, ast_channel_context(original)));
+		ast_channel_unlock(original);
+		device = ast_strdupa(destination);
 	}
 
 	/* Drop old destination information */
@@ -409,10 +424,15 @@ static int handle_call_forward(struct ast_dial *dial, struct ast_dial_channel *c
 	channel->device = ast_strdup(device);
 	AST_LIST_UNLOCK(&dial->channels);
 
+	/* Drop the original channel */
+	channel->owner = NULL;
+
 	/* Finally give it a go... send it out into the world */
 	begin_dial_channel(channel, chan, chan ? 0 : 1);
 
-	/* Drop the original channel */
+	ast_channel_publish_dial_forward(chan, original, channel->owner, NULL, "CANCEL",
+		ast_channel_call_forward(original));
+
 	ast_hangup(original);
 
 	return 0;

@@ -2471,6 +2471,7 @@ static struct ast_channel *vpb_new(struct vpb_pvt *me, enum ast_channel_state st
 			ast_channel_exten_set(tmp, "s");
 		if (!ast_strlen_zero(me->language))
 			ast_channel_language_set(tmp, me->language);
+		ast_channel_unlock(tmp);
 
 		me->owner = tmp;
 
@@ -2673,10 +2674,12 @@ static enum ast_module_load_result load_module()
 	struct ast_format tmpfmt;
 	int num_cards = 0;
 
-	if (!(vpb_tech.capabilities = ast_format_cap_alloc())) {
+	vpb_tech.capabilities = ast_format_cap_alloc((enum ast_format_cap_flags) 0);
+	if (!vpb_tech.capabilities) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
-	if (!(vpb_tech_indicate.capabilities = ast_format_cap_alloc())) {
+	vpb_tech_indicate.capabilities = ast_format_cap_alloc((enum ast_format_cap_flags) 0);
+	if (!vpb_tech_indicate.capabilities) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(vpb_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));

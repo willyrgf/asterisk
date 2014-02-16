@@ -9,6 +9,120 @@
 ==============================================================================
 
 ------------------------------------------------------------------------------
+--- Functionality changes from Asterisk 12.0.0 to Asterisk 12.1.0 ------------
+------------------------------------------------------------------------------
+
+AMI
+------------------
+ * Added a new module that provides AMI control over MWI within Asterisk,
+   res_mwi_external_ami. Note that this module depends on res_mwi_external;
+   for more information on enabling this module, see res_mwi_external.
+   This module provides the MWIGet/MWIUpdate/MWIDelete actions, as well as
+   the MWIGet/MWIGetComplete events.
+
+ * The DialStatus field in the DialEnd event can now contain additional
+   statuses that convey how the dial operation terminated. This includes
+   ABORT, CONTINUE, and GOTO.
+
+ * AMI will now emit security events. A new class authorization has been
+   added in manager.conf for the security events, 'security'. The new events
+   are:
+    - FailedACL - raised when a request violates an ACL check
+    - InvalidAccountID - raised when a request fails an authentication
+      check due to an invalid account ID
+    - SessionLimit - raised when a request fails due to exceeding the
+      number of allowed concurrent sessions for a service
+    - MemoryLimit - raised when a request fails due to an internal memory
+      allocation failure
+    - LoadAverageLimit - raised when a request fails because a configured
+      load average limit has been reached
+    - RequestNotAllowed - raised when a request is not allowed by
+      the service
+    - AuthMethodNotAllowed - raised when a request used an authentication
+      method not allowed by the service
+    - RequestBadFormat - raised when a request is received with bad formatting
+    - SuccessfulAuth - raised when a request successfully authenticates
+    - UnexpectedAddress - raised when a request has a different source address
+      then what is expected for a session already in progress with a service
+    - ChallengeResponseFailed - raised when a request's attempt to authenticate
+      has been challenged, and the request failed the authentication challenge
+    - InvalidPassword - raised when a request provides an invalid password
+      during an authentication attempt
+    - ChallengeSent - raised when an Asterisk service send an authentication
+      challenge to a request
+    - InvalidTransport - raised when a request attempts to use a transport not
+      allowed by the Asterisk service
+
+ * Bridge related events now have two additional fields: BridgeName and
+   BridgeCreator. BridgeName is a descriptive name for the bridge;
+   BridgeCreator is the name of the entity that created the bridge. This
+   affects the following events: ConfbridgeStart, ConfbridgeEnd,
+   ConfbridgeJoin, ConfbridgeLeave, ConfbridgeRecord, ConfbridgeStopRecord,
+   ConfbridgeMute, ConfbridgeUnmute, ConfbridgeTalking, BlindTransfer,
+   AttendedTransfer, BridgeCreate, BridgeDestroy, BridgeEnter, BridgeLeave
+
+ARI
+------------------
+ * The Bridge data model now contains the additional fields 'name' and
+   'creator'. The 'name' field conveys a descriptive name for the bridge;
+   the 'creator' field conveys the name of the entity that created the bridge.
+   This affects all responses to HTTP requests that return a Bridge data model
+   as well as all event derived data models that contain a Bridge data model.
+   The POST /bridges operation may now optionally specify a name to give to
+   the bridge being created.
+
+ * Added a new ARI resource 'mailboxes' which allows the creation and
+   modification of mailboxes managed by external MWI. Modules res_mwi_external
+   and res_stasis_mailbox must be enabled to use this resource. For more
+   information on external MWI control, see res_mwi_external.
+
+ * Added new events for externally initiated transfers. The event
+   BridgeBlindTransfer is now raised when a channel initiates a blind transfer
+   of a bridge in the ARI controlled application to the dialplan; the
+   BridgeAttendedTransfer event is raised when a channel initiates an
+   attended transfer of a bridge in the ARI controlled application to the
+   dialplan.
+
+ * Channel variables may now be specified as a body parameter to the
+   POST /channels operation. The 'variables' key in the JSON is interpreted
+   as a sequence of key/value pairs that will be added to the created channel
+   as channel variables. Other parameters in the JSON body are treated as
+   query parameters of the same name.
+
+HTTP
+------------------
+ * Asterisk's HTTP server now supports chunked Transfer-Encoding. This will be
+   automatically handled by the HTTP server if a request is received with a
+   Transfer-Encoding type of "chunked".
+
+res_pjsip
+------------------
+ * Path support has been added with the 'support_path' option in registration
+   and aor sections.
+
+ * A 'debug' option has been added to the globals section that will allow
+   sip messages to be logged.
+
+ * A 'set_var' option has been added to endpoints that will automatically
+   set the desired variable(s) on a channel created for that endpoint.
+
+ * Several new tables and columns have been added to the realtime schema for
+   the res_pjsip related modules. See the UPGRADE.txt notes for updating
+   the database schema.
+
+res_mwi_external
+------------------
+ * A new module, res_mwi_external, has been added to Asterisk. This module
+   acts as a base framework that other modules can build on top of to allow
+   an external system to control MWI within Asterisk. For implementations
+   that make use of res_mwi_external, see res_mwi_external_ami and
+   res_ari_mailboxes. Note that res_mwi_external canflicts with other modules
+   that may produce MWI themselves, such as app_voicemail. res_mwi_external
+   and other modules that depend on it cannot be built or loaded with
+   app_voicemail present.
+
+
+------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 11 to Asterisk 12 --------------------
 ------------------------------------------------------------------------------
 
@@ -131,6 +245,12 @@ AlarmReceiver
  * Added configuration option no_group_meta. If enabled, grouping of metadata
    information in the AlarmReceiver log file will be skipped.
 
+Answer
+------------------
+ * It is now no longer possible to bypass updating the CDR on the channel
+   when answering. CDRs reflect the state of the channel and will always
+   reflect the time they were Answered.
+
 BridgeWait
 ------------------
  * A new application in Asterisk, this will place the calling channel
@@ -160,6 +280,10 @@ ConfBridge
  * Added a new option for conference recording, record_file_append. If enabled,
    when the recording is stopped and then re-started, the existing recording
    will be used and appended to.
+
+ * ConfBridge now has the ability to set the language of announcements to the
+   conference.  The language can be set on a bridge profile in confbridge.conf
+   or by the dialplan function CONFBRIDGE(bridge,language)=en.
 
 ControlPlayback
 ------------------
@@ -333,6 +457,12 @@ UserEvent
 
 VoiceMail
 ------------------
+ * Mailboxes defined by app_voicemail MUST be referenced by the rest of the
+   system as mailbox@context.  The rest of the system cannot add @default
+   to mailbox identifiers for app_voicemail that do not specify a context
+   any longer.  It is a mailbox identifier format that should only be
+   interpreted by app_voicemail.
+
  * The voicemail.conf configuration file now has an 'alias' configuration
    parameter for use with the Directory application. The voicemail realtime
    database table schema has also been updated with an 'alias' column.
@@ -562,6 +692,9 @@ AMI (Asterisk Manager Interface)
    They contain information about the transfer that just completed, including
    the location of the transfered channel.
 
+ * Added a 'security' class to AMI which outputs the required fields for
+   security messages similar to the log messages from res_security_log
+
 CDR (Call Detail Records)
 ------------------
  * Significant changes have been made to the behavior of CDRs. The CDR engine
@@ -770,7 +903,6 @@ Stasis Message Bus
    Stasis can be configured in stasis.conf. Note that these parameters operate
    at a very low level in Asterisk, and generally will not require changes.
 
-
 Channel Drivers
 ------------------
  * When a channel driver is configured to enable jiterbuffers, they are now
@@ -815,6 +947,17 @@ chan_dahdi
    specified to be created, or the keyword 'new' can be used to add channels
    not yet created.
 
+ * The script specified by the chan_dahdi.conf mwimonitornotify option now gets
+   the exact configured mailbox name.  For app_voicemail mailboxes this is
+   mailbox@context.
+
+ * Added mwi_vm_boxes that also must be configured for ISDN MWI to be enabled.
+
+chan_iax2
+------------------
+ * IPv6 support has been added.  We are now able to bind to and
+   communicate using IPv6 addresses.
+
 chan_local
 ------------------
  * The /b option has been removed.
@@ -853,6 +996,10 @@ chan_sip
 
  * Added 'ignore_requested_pref'. When enabled, this will use the preferred
    codecs configured for a peer instead of the requested codec.
+
+ * The option "register_retry_403" has been added to chan_sip to work around
+   servers that are known to erroneously send 403 in response to valid
+   REGISTER requests and allows Asterisk to continue attepmting to connect.
 
 chan_skinny
 ------------------
@@ -951,6 +1098,14 @@ SPEECH_ENGINE
 ------------------
  * The SPEECH_ENGINE function now supports read operations. When read from, it
    will return the current value of the requested attribute.
+
+VMCOUNT:
+------------------
+ * Mailboxes defined by app_voicemail MUST be referenced by the rest of the
+   system as mailbox@context.  The rest of the system cannot add @default
+   to mailbox identifiers for app_voicemail that do not specify a context
+   any longer.  It is a mailbox identifier format that should only be
+   interpreted by app_voicemail.
 
 
 Resources
@@ -1075,6 +1230,9 @@ res_pjsip (and many others)
    various SIP functionality in Asterisk. The majority of configuration for
    these modules is performed in pjsip.conf. Other modules may use their
    own configuration files.
+
+ * Added 'set_var' option for an endpoint. For each variable specified that
+   variable gets set upon creation of a channel involving the endpoint.
 
 res_rtp_asterisk
 ------------------

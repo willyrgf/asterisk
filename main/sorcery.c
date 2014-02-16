@@ -34,6 +34,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/logger.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/format.h"
+#include "asterisk/format_cap.h"
 #include "asterisk/strings.h"
 #include "asterisk/config_options.h"
 #include "asterisk/netsock2.h"
@@ -41,6 +43,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/taskprocessor.h"
 #include "asterisk/threadpool.h"
 #include "asterisk/json.h"
+#include "asterisk/format_pref.h"
 
 /* To prevent DEBUG_FD_LEAKS from interfering with things we undef open and close */
 #undef open
@@ -51,9 +54,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 /*! \brief Number of buckets for types (should be prime for performance reasons) */
 #define TYPE_BUCKETS 53
-
-/*! \brief Maximum length of an object field name */
-#define MAX_OBJECT_FIELD 128
 
 /*! \brief Thread pool for observers */
 static struct ast_threadpool *threadpool;
@@ -220,11 +220,20 @@ static int chararray_handler_fn(const void *obj, const intptr_t *args, char **bu
 	return !(*buf = ast_strdup(field)) ? -1 : 0;
 }
 
+static int codec_handler_fn(const void *obj, const intptr_t *args, char **buf)
+{
+	char tmp_buf[256];
+	struct ast_codec_pref *pref = (struct ast_codec_pref *)(obj + args[0]);
+	ast_codec_pref_string(pref, tmp_buf, sizeof(tmp_buf));
+	return !(*buf = ast_strdup(tmp_buf));
+}
+
 static sorcery_field_handler sorcery_field_default_handler(enum aco_option_type type)
 {
 	switch(type) {
 	case OPT_BOOL_T: return bool_handler_fn;
 	case OPT_CHAR_ARRAY_T: return chararray_handler_fn;
+	case OPT_CODEC_T: return codec_handler_fn;
 	case OPT_DOUBLE_T: return double_handler_fn;
 	case OPT_INT_T: return int_handler_fn;
 	case OPT_SOCKADDR_T: return sockaddr_handler_fn;
@@ -475,7 +484,7 @@ static void sorcery_object_wizard_destructor(void *obj)
 /*! \brief Internal function which creates an object type and adds a wizard mapping */
 static int sorcery_apply_wizard_mapping(struct ast_sorcery *sorcery, const char *type, const char *module, const char *name, const char *data, unsigned int caching)
 {
-	RAII_VAR(struct ast_sorcery_object_type *, object_type,  ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
+	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
 	RAII_VAR(struct ast_sorcery_wizard *, wizard, ao2_find(wizards, name, OBJ_KEY), ao2_cleanup);
 	RAII_VAR(struct ast_sorcery_object_wizard *, object_wizard, ao2_alloc(sizeof(*object_wizard), sorcery_object_wizard_destructor), ao2_cleanup);
 	int created = 0;
@@ -516,19 +525,21 @@ int __ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name, co
 	struct ast_variable *mapping;
 	int res = 0;
 
-	if (!config || (config == CONFIG_STATUS_FILEMISSING) || (config == CONFIG_STATUS_FILEINVALID)) {
+	if (!config || config == CONFIG_STATUS_FILEINVALID) {
 		return -1;
 	}
 
 	for (mapping = ast_variable_browse(config, name); mapping; mapping = mapping->next) {
 		RAII_VAR(char *, mapping_name, ast_strdup(mapping->name), ast_free);
 		RAII_VAR(char *, mapping_value, ast_strdup(mapping->value), ast_free);
-		char *options = mapping_name, *name = strsep(&options, "/");
-		char *data = mapping_value, *wizard = strsep(&data, ",");
+		char *options = mapping_name;
+		char *type = strsep(&options, "/");
+		char *data = mapping_value;
+		char *wizard = strsep(&data, ",");
 		unsigned int caching = 0;
 
-		/* If no wizard exists just skip, nothing we can do */
-		if (ast_strlen_zero(wizard)) {
+		/* If no object type or wizard exists just skip, nothing we can do */
+		if (ast_strlen_zero(type) || ast_strlen_zero(wizard)) {
 			continue;
 		}
 
@@ -538,7 +549,8 @@ int __ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name, co
 		}
 
 		/* Any error immediately causes us to stop */
-		if ((res = sorcery_apply_wizard_mapping(sorcery, name, module, wizard, data, caching))) {
+		if (sorcery_apply_wizard_mapping(sorcery, type, module, wizard, data, caching)) {
+			res = -1;
 			break;
 		}
 	}
@@ -550,7 +562,7 @@ int __ast_sorcery_apply_config(struct ast_sorcery *sorcery, const char *name, co
 
 int __ast_sorcery_apply_default(struct ast_sorcery *sorcery, const char *type, const char *module, const char *name, const char *data)
 {
-	RAII_VAR(struct ast_sorcery_object_type *, object_type,  ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
+	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
 
 	/* Defaults can not be added if any existing mapping exists */
 	if (object_type) {
@@ -685,13 +697,13 @@ int __ast_sorcery_object_field_register(struct ast_sorcery *sorcery, const char 
 		__aco_option_register(object_type->info, name, ACO_EXACT, object_type->file->types, default_val, opt_type, config_handler, flags, no_doc, argc);
 	} else if (argc == 1) {
 		__aco_option_register(object_type->info, name, ACO_EXACT, object_type->file->types, default_val, opt_type, config_handler, flags, no_doc, argc,
-				      object_field->args[0]);
+			object_field->args[0]);
 	} else if (argc == 2) {
 		__aco_option_register(object_type->info, name, ACO_EXACT, object_type->file->types, default_val, opt_type, config_handler, flags, no_doc, argc,
-				      object_field->args[0], object_field->args[1]);
+			object_field->args[0], object_field->args[1]);
 	} else if (argc == 3) {
 		__aco_option_register(object_type->info, name, ACO_EXACT, object_type->file->types, default_val, opt_type, config_handler, flags, no_doc, argc,
-				      object_field->args[0], object_field->args[1], object_field->args[2]);
+			object_field->args[0], object_field->args[1], object_field->args[2]);
 	} else {
 		ast_assert(0); /* The hack... she does us no good for this */
 	}
@@ -927,6 +939,7 @@ struct ast_json *ast_sorcery_objectset_json_create(const struct ast_sorcery *sor
 			struct ast_variable *field;
 
 			if ((res = object_field->multiple_handler(object, &tmp))) {
+				ao2_ref(object_field, -1);
 				break;
 			}
 
@@ -1083,7 +1096,7 @@ void *ast_sorcery_alloc(const struct ast_sorcery *sorcery, const char *type, con
 	struct ast_sorcery_object_details *details;
 
 	if (!object_type || !object_type->type.item_alloc ||
-	    !(details = object_type->type.item_alloc(id))) {
+		!(details = object_type->type.item_alloc(id))) {
 		return NULL;
 	}
 
@@ -1196,7 +1209,7 @@ void *ast_sorcery_retrieve_by_id(const struct ast_sorcery *sorcery, const char *
 	i = ao2_iterator_init(object_type->wizards, 0);
 	for (; (wizard = ao2_iterator_next(&i)); ao2_ref(wizard, -1)) {
 		if (wizard->wizard->retrieve_id &&
-		    !(object = wizard->wizard->retrieve_id(sorcery, wizard->data, object_type->name, id))) {
+			!(object = wizard->wizard->retrieve_id(sorcery, wizard->data, object_type->name, id))) {
 			continue;
 		}
 
@@ -1205,7 +1218,7 @@ void *ast_sorcery_retrieve_by_id(const struct ast_sorcery *sorcery, const char *
 		ao2_ref(wizard, -1);
 		break;
 	}
-        ao2_iterator_destroy(&i);
+	ao2_iterator_destroy(&i);
 
 	if (!cached && object) {
 		ao2_callback(object_type->wizards, 0, sorcery_cache_create, object);
@@ -1528,6 +1541,7 @@ int ast_sorcery_observer_add(const struct ast_sorcery *sorcery, const char *type
 {
 	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
 	struct ast_sorcery_object_type_observer *observer;
+	int res;
 
 	if (!object_type || !callbacks) {
 		return -1;
@@ -1538,10 +1552,13 @@ int ast_sorcery_observer_add(const struct ast_sorcery *sorcery, const char *type
 	}
 
 	observer->callbacks = callbacks;
-	ao2_link(object_type->observers, observer);
+	res = 0;
+	if (!ao2_link(object_type->observers, observer)) {
+		res = -1;
+	}
 	ao2_ref(observer, -1);
 
-	return 0;
+	return res;
 }
 
 /*! \brief Internal callback function for removing an observer */
@@ -1552,13 +1569,27 @@ static int sorcery_observer_remove(void *obj, void *arg, int flags)
 	return (observer->callbacks == arg) ? CMP_MATCH | CMP_STOP : 0;
 }
 
-void ast_sorcery_observer_remove(const struct ast_sorcery *sorcery, const char *type, struct ast_sorcery_observer *callbacks)
+void ast_sorcery_observer_remove(const struct ast_sorcery *sorcery, const char *type, const struct ast_sorcery_observer *callbacks)
 {
-	RAII_VAR(struct ast_sorcery_object_type *, object_type, ao2_find(sorcery->types, type, OBJ_KEY), ao2_cleanup);
+	RAII_VAR(struct ast_sorcery_object_type *, object_type, NULL, ao2_cleanup);
+	struct ast_sorcery_observer *cbs = (struct ast_sorcery_observer *) callbacks;/* Remove const for traversal. */
 
+	if (!sorcery) {
+		return;
+	}
+	object_type = ao2_find(sorcery->types, type, OBJ_KEY);
 	if (!object_type) {
 		return;
 	}
 
-	ao2_callback(object_type->observers, OBJ_NODATA | OBJ_UNLINK, sorcery_observer_remove, callbacks);
+	ao2_callback(object_type->observers, OBJ_NODATA | OBJ_UNLINK,
+		sorcery_observer_remove, cbs);
+}
+
+int ast_sorcery_object_id_compare(const void *obj_left, const void *obj_right, int flags)
+{
+	if (!obj_left || !obj_right) {
+		return 0;
+	}
+	return strcmp(ast_sorcery_object_get_id(obj_left), ast_sorcery_object_get_id(obj_right));
 }

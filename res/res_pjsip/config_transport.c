@@ -22,10 +22,50 @@
 #include <pjlib.h>
 
 #include "asterisk/res_pjsip.h"
+#include "asterisk/res_pjsip_cli.h"
 #include "asterisk/logger.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/acl.h"
+#include "include/res_pjsip_private.h"
+
+static int sip_transport_to_ami(const struct ast_sip_transport *transport,
+				struct ast_str **buf)
+{
+	return ast_sip_sorcery_object_to_ami(transport, buf);
+}
+
+static int format_ami_endpoint_transport(const struct ast_sip_endpoint *endpoint,
+					 struct ast_sip_ami *ami)
+{
+	RAII_VAR(struct ast_str *, buf,
+		 ast_sip_create_ami_event("TransportDetail", ami), ast_free);
+	RAII_VAR(struct ast_sip_transport *,
+		 transport, ast_sorcery_retrieve_by_id(
+			 ast_sip_get_sorcery(), "transport",
+			 endpoint->transport), ao2_cleanup);
+	if (!buf) {
+		return -1;
+	}
+
+	if (!transport) {
+		astman_send_error_va(ami->s, ami->m, "Unable to retrieve "
+				     "transport %s\n", endpoint->transport);
+		return -1;
+	}
+
+	sip_transport_to_ami(transport, &buf);
+
+	ast_str_append(&buf, 0, "EndpointName: %s\r\n",
+		       ast_sorcery_object_get_id(endpoint));
+
+	astman_append(ami->s, "%s\r\n", ast_str_buffer(buf));
+	return 0;
+}
+
+struct ast_sip_endpoint_formatter endpoint_transport_formatter = {
+	.format_ami = format_ami_endpoint_transport
+};
 
 static int destroy_transport_state(void *data)
 {
@@ -184,7 +224,7 @@ static int transport_apply(const struct ast_sorcery *sorcery, void *obj)
 	if (res != PJ_SUCCESS) {
 		char msg[PJ_ERR_MSG_SIZE];
 
-		pjsip_strerror(res, msg, sizeof(msg));
+		pj_strerror(res, msg, sizeof(msg));
 		ast_log(LOG_ERROR, "Transport '%s' could not be started: %s\n", ast_sorcery_object_get_id(obj), msg);
 		return -1;
 	}
@@ -213,13 +253,47 @@ static int transport_protocol_handler(const struct aco_option *opt, struct ast_v
 	return 0;
 }
 
+static const char *transport_types[] = {
+	[AST_TRANSPORT_UDP] = "udp",
+	[AST_TRANSPORT_TCP] = "tcp",
+	[AST_TRANSPORT_TLS] = "tls",
+	[AST_TRANSPORT_WS] = "ws",
+	[AST_TRANSPORT_WSS] = "wss"
+};
+
+static int transport_protocol_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_transport *transport = obj;
+
+	if (ARRAY_IN_BOUNDS(transport->type, transport_types)) {
+		*buf = ast_strdup(transport_types[transport->type]);
+	}
+
+	return 0;
+}
+
 /*! \brief Custom handler for turning a string bind into a pj_sockaddr */
 static int transport_bind_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
 	struct ast_sip_transport *transport = obj;
 	pj_str_t buf;
+	int rc = pj_sockaddr_parse(pj_AF_UNSPEC(), 0, pj_cstr(&buf, var->value), &transport->host);
 
-	return (pj_sockaddr_parse(pj_AF_UNSPEC(), 0, pj_cstr(&buf, var->value), &transport->host) != PJ_SUCCESS) ? -1 : 0;
+	return rc != PJ_SUCCESS ? -1 : 0;
+}
+
+static int transport_bind_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_transport *transport = obj;
+
+	if (!(*buf = ast_calloc(MAX_OBJECT_FIELD, sizeof(char)))) {
+		return -1;
+	}
+
+	/* include port as well as brackets if IPv6 */
+	pj_sockaddr_print(&transport->host, *buf, MAX_OBJECT_FIELD, 1 | 2);
+
+	return 0;
 }
 
 /*! \brief Custom handler for TLS boolean settings */
@@ -237,6 +311,27 @@ static int transport_tls_bool_handler(const struct aco_option *opt, struct ast_v
 		return -1;
 	}
 
+	return 0;
+}
+
+static int verify_server_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_transport *transport = obj;
+	*buf = ast_strdup(AST_YESNO(transport->tls.verify_server));
+	return 0;
+}
+
+static int verify_client_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_transport *transport = obj;
+	*buf = ast_strdup(AST_YESNO(transport->tls.verify_client));
+	return 0;
+}
+
+static int require_client_cert_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_transport *transport = obj;
+	*buf = ast_strdup(AST_YESNO(transport->tls.require_client_cert));
 	return 0;
 }
 
@@ -261,6 +356,24 @@ static int transport_tls_method_handler(const struct aco_option *opt, struct ast
 		return -1;
 	}
 
+	return 0;
+}
+
+static const char *tls_method_map[] = {
+	[PJSIP_SSL_DEFAULT_METHOD] = "default",
+	[PJSIP_SSL_UNSPECIFIED_METHOD] = "unspecified",
+	[PJSIP_TLSV1_METHOD] = "tlsv1",
+	[PJSIP_SSLV2_METHOD] = "sslv2",
+	[PJSIP_SSLV3_METHOD] = "sslv3",
+	[PJSIP_SSLV23_METHOD] = "sslv23",
+};
+
+static int tls_method_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	const struct ast_sip_transport *transport = obj;
+	if (ARRAY_IN_BOUNDS(transport->tls.method, tls_method_map)) {
+		*buf = ast_strdup(tls_method_map[transport->tls.method]);
+	}
 	return 0;
 }
 
@@ -291,6 +404,27 @@ static int transport_tls_cipher_handler(const struct aco_option *opt, struct ast
 	}
 }
 
+static int transport_tls_cipher_to_str(const void *obj, const intptr_t *args, char **buf)
+{
+	RAII_VAR(struct ast_str *, str, ast_str_create(MAX_OBJECT_FIELD), ast_free);
+	const struct ast_sip_transport *transport = obj;
+	int i;
+
+	if (!str) {
+		return -1;
+	}
+
+	for (i = 0; i < transport->tls.ciphers_num; ++i) {
+		ast_str_append(&str, 0, "%s", pj_ssl_cipher_name(transport->ciphers[i]));
+		if (i < transport->tls.ciphers_num - 1) {
+			ast_str_append(&str, 0, ",");
+		}
+	}
+
+	*buf = ast_strdup(ast_str_buffer(str));
+	return 0;
+}
+
 /*! \brief Custom handler for localnet setting */
 static int transport_localnet_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
@@ -304,9 +438,125 @@ static int transport_localnet_handler(const struct aco_option *opt, struct ast_v
 	return error;
 }
 
-/*! \brief Initialize sorcery with transport support */
-int ast_sip_initialize_sorcery_transport(struct ast_sorcery *sorcery)
+static int localnet_to_str(const void *obj, const intptr_t *args, char **buf)
 {
+	RAII_VAR(struct ast_str *, str, ast_str_create(MAX_OBJECT_FIELD), ast_free);
+	const struct ast_sip_transport *transport = obj;
+
+	ast_ha_join(transport->localnet, &str);
+	*buf = ast_strdup(ast_str_buffer(str));
+	return 0;
+}
+
+static struct ao2_container *cli_get_container(void)
+{
+	RAII_VAR(struct ao2_container *, container, NULL, ao2_cleanup);
+	RAII_VAR(struct ao2_container *, s_container, NULL, ao2_cleanup);
+
+	container = ast_sorcery_retrieve_by_fields(ast_sip_get_sorcery(), "transport",
+		AST_RETRIEVE_FLAG_MULTIPLE | AST_RETRIEVE_FLAG_ALL, NULL);
+	if (!container) {
+		return NULL;
+	}
+
+	s_container = ao2_container_alloc_list(AO2_ALLOC_OPT_LOCK_NOLOCK, 0,
+		ast_sorcery_object_id_compare, NULL);
+	if (!s_container) {
+		return NULL;
+	}
+
+	if (ao2_container_dup(s_container, container, 0)) {
+		return NULL;
+	}
+	ao2_ref(s_container, +1);
+	return s_container;
+}
+
+static int cli_iterator(const void *container, ao2_callback_fn callback, void *args)
+{
+	const struct ast_sip_endpoint *endpoint = container;
+	struct ast_sip_transport *transport = ast_sorcery_retrieve_by_id(ast_sip_get_sorcery(),
+		"transport", endpoint->transport);
+
+	if (!transport) {
+		return -1;
+	}
+	return callback(transport, args, 0);
+}
+
+static int cli_print_header(void *obj, void *arg, int flags)
+{
+	struct ast_sip_cli_context *context = arg;
+	int indent = CLI_INDENT_TO_SPACES(context->indent_level);
+	int filler = CLI_MAX_WIDTH - indent - 61;
+
+	if (!context->output_buffer) {
+		return -1;
+	}
+
+	ast_str_append(&context->output_buffer, 0,
+		"%*s:  <TransportId........>  <Type>  <cos>  <tos>  <BindAddress%*.*s>\n",
+		indent, "Transport", filler, filler, CLI_HEADER_FILLER);
+
+	return 0;
+}
+
+static int cli_print_body(void *obj, void *arg, int flags)
+{
+	struct ast_sip_transport *transport = obj;
+	struct ast_sip_cli_context *context = arg;
+	char hoststr[PJ_INET6_ADDRSTRLEN];
+
+	if (!context->output_buffer) {
+		return -1;
+	}
+
+	pj_sockaddr_print(&transport->host, hoststr, sizeof(hoststr), 3);
+
+	ast_str_append(&context->output_buffer, 0, "%*s:  %-21s  %6s  %5x  %5x  %s\n",
+		CLI_INDENT_TO_SPACES(context->indent_level), "Transport",
+		ast_sorcery_object_get_id(transport),
+		ARRAY_IN_BOUNDS(transport->type, transport_types) ? transport_types[transport->type] : "Unknown",
+		transport->cos, transport->tos, hoststr);
+
+	if (context->show_details
+		|| (context->show_details_only_level_0 && context->indent_level == 0)) {
+		ast_str_append(&context->output_buffer, 0, "\n");
+		ast_sip_cli_print_sorcery_objectset(transport, context, 0);
+	}
+
+	return 0;
+}
+
+static struct ast_sip_cli_formatter_entry  cli_formatter = {
+	.name = "transport",
+	.print_header = cli_print_header,
+	.print_body = cli_print_body,
+	.get_container = cli_get_container,
+	.iterator = cli_iterator,
+	.comparator = ast_sorcery_object_id_compare,
+};
+
+static struct ast_cli_entry cli_commands[] = {
+	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "List PJSIP Transports",
+		.command = "pjsip list transports",
+		.usage = "Usage: pjsip list transports\n"
+				 "       List the configured PJSIP Transports\n"),
+	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Transports",
+		.command = "pjsip show transports",
+		.usage = "Usage: pjsip show transports\n"
+				 "       Show the configured PJSIP Transport\n"),
+	AST_CLI_DEFINE(ast_sip_cli_traverse_objects, "Show PJSIP Transport",
+		.command = "pjsip show transport",
+		.usage = "Usage: pjsip show transport <id>\n"
+				 "       Show the configured PJSIP Transport\n"),
+};
+
+/*! \brief Initialize sorcery with transport support */
+int ast_sip_initialize_sorcery_transport(void)
+{
+	struct ast_sorcery *sorcery = ast_sip_get_sorcery();
+
 	ast_sorcery_apply_default(sorcery, "transport", "config", "pjsip.conf,criteria=type=transport");
 
 	if (ast_sorcery_object_register_no_reload(sorcery, "transport", transport_alloc, NULL, transport_apply)) {
@@ -314,25 +564,36 @@ int ast_sip_initialize_sorcery_transport(struct ast_sorcery *sorcery)
 	}
 
 	ast_sorcery_object_field_register(sorcery, "transport", "type", "", OPT_NOOP_T, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "protocol", "udp", transport_protocol_handler, NULL, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "bind", "", transport_bind_handler, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "protocol", "udp", transport_protocol_handler, transport_protocol_to_str, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "bind", "", transport_bind_handler, transport_bind_to_str, 0, 0);
 	ast_sorcery_object_field_register(sorcery, "transport", "async_operations", "1", OPT_UINT_T, 0, FLDSET(struct ast_sip_transport, async_operations));
 	ast_sorcery_object_field_register(sorcery, "transport", "ca_list_file", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, ca_list_file));
 	ast_sorcery_object_field_register(sorcery, "transport", "cert_file", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, cert_file));
-	ast_sorcery_object_field_register(sorcery, "transport", "privkey_file", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, privkey_file));
+	ast_sorcery_object_field_register(sorcery, "transport", "priv_key_file", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, privkey_file));
 	ast_sorcery_object_field_register(sorcery, "transport", "password", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, password));
 	ast_sorcery_object_field_register(sorcery, "transport", "external_signaling_address", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, external_signaling_address));
 	ast_sorcery_object_field_register(sorcery, "transport", "external_signaling_port", "0", OPT_UINT_T, PARSE_IN_RANGE, FLDSET(struct ast_sip_transport, external_signaling_port), 0, 65535);
 	ast_sorcery_object_field_register(sorcery, "transport", "external_media_address", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, external_media_address));
 	ast_sorcery_object_field_register(sorcery, "transport", "domain", "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct ast_sip_transport, domain));
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "verify_server", "", transport_tls_bool_handler, NULL, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "verify_client", "", transport_tls_bool_handler, NULL, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "require_client_cert", "", transport_tls_bool_handler, NULL, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "method", "", transport_tls_method_handler, NULL, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "cipher", "", transport_tls_cipher_handler, NULL, 0, 0);
-	ast_sorcery_object_field_register_custom(sorcery, "transport", "localnet", "", transport_localnet_handler, NULL, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "verify_server", "", transport_tls_bool_handler, verify_server_to_str, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "verify_client", "", transport_tls_bool_handler, verify_client_to_str, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "require_client_cert", "", transport_tls_bool_handler, require_client_cert_to_str, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "method", "", transport_tls_method_handler, tls_method_to_str, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "cipher", "", transport_tls_cipher_handler, transport_tls_cipher_to_str, 0, 0);
+	ast_sorcery_object_field_register_custom(sorcery, "transport", "local_net", "", transport_localnet_handler, localnet_to_str, 0, 0);
 	ast_sorcery_object_field_register(sorcery, "transport", "tos", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_transport, tos));
 	ast_sorcery_object_field_register(sorcery, "transport", "cos", "0", OPT_UINT_T, 0, FLDSET(struct ast_sip_transport, cos));
 
+	ast_sip_register_endpoint_formatter(&endpoint_transport_formatter);
+	ast_sip_register_cli_formatter(&cli_formatter);
+	ast_cli_register_multiple(cli_commands, ARRAY_LEN(cli_commands));
+
+	return 0;
+}
+
+int ast_sip_destroy_sorcery_transport(void)
+{
+	ast_cli_unregister_multiple(cli_commands, ARRAY_LEN(cli_commands));
+	ast_sip_unregister_cli_formatter(&cli_formatter);
 	return 0;
 }

@@ -93,12 +93,33 @@ void stasis_message_router_unsubscribe_and_join(
 int stasis_message_router_is_done(struct stasis_message_router *router);
 
 /*!
+ * \brief Publish a message to a message router's subscription synchronously
+ *
+ * \param router Router
+ * \param message The \ref stasis message
+ *
+ * This should be used when a message needs to be published synchronously to
+ * the underlying subscription created by a message router. This is analagous
+ * to \ref stasis_publish_sync.
+ *
+ * Note that the caller will be blocked until the thread servicing the message
+ * on the message router's subscription completes handling of the message.
+ *
+ * \since 12.1.0
+ */
+void stasis_message_router_publish_sync(struct stasis_message_router *router,
+	struct stasis_message *message);
+
+/*!
  * \brief Add a route to a message router.
  *
  * A particular \a message_type may have at most one route per \a router. If
  * you route \ref stasis_cache_update messages, the callback will only receive
  * updates for types not handled by routes added with
  * stasis_message_router_add_cache_update().
+ *
+ * Adding multiple routes for the same message type results in undefined
+ * behavior.
  *
  * \param router Router to add the route to.
  * \param message_type Type of message to route.
@@ -121,6 +142,9 @@ int stasis_message_router_add(struct stasis_message_router *router,
  * These are distinct from regular routes, so one could have both a regular
  * route and a cache route for the same \a message_type.
  *
+ * Adding multiple routes for the same message type results in undefined
+ * behavior.
+ *
  * \param router Router to add the route to.
  * \param message_type Subtype of cache update to route.
  * \param callback Callback to forard messages of \a message_type to.
@@ -138,6 +162,11 @@ int stasis_message_router_add_cache_update(struct stasis_message_router *router,
 /*!
  * \brief Remove a route from a message router.
  *
+ * If a route is removed from another thread, there is no notification that
+ * all messages using this route have been processed. This typically means that
+ * the associated \c data pointer for this route must be kept until the
+ * route itself is disposed of.
+ *
  * \param router Router to remove the route from.
  * \param message_type Type of message to route.
  *
@@ -148,6 +177,11 @@ void stasis_message_router_remove(struct stasis_message_router *router,
 
 /*!
  * \brief Remove a cache route from a message router.
+ *
+ * If a route is removed from another thread, there is no notification that
+ * all messages using this route have been processed. This typically means that
+ * the associated \c data pointer for this route must be kept until the
+ * route itself is disposed of.
  *
  * \param router Router to remove the route from.
  * \param message_type Type of message to route.

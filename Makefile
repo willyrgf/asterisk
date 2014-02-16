@@ -359,12 +359,16 @@ makeopts.embed_rules: menuselect.makeopts
 $(SUBDIRS): makeopts .lastclean main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
 ifeq ($(findstring $(OSARCH), mingw32 cygwin ),)
+  ifeq ($(shell grep ^MENUSELECT_EMBED=$$ menuselect.makeopts 2>/dev/null),)
     # Non-windows:
     # ensure that all module subdirectories are processed before 'main' during
     # a parallel build, since if there are modules selected to be embedded the
     # directories containing them must be completed before the main Asterisk
-    # binary can be built
+    # binary can be built.
+    # If MENUSELECT_EMBED is empty, we don't need this and allow 'main' to be
+    # be built without building all dependencies first.
 main: $(filter-out main,$(MOD_SUBDIRS))
+  endif
 else
     # Windows: we need to build main (i.e. the asterisk dll) first,
     # followed by res, followed by the other directories, because
@@ -437,15 +441,18 @@ distclean: $(SUBDIRS_DIST_CLEAN) _clean
 
 datafiles: _all doc/core-en_US.xml
 	CFLAGS="$(_ASTCFLAGS) $(ASTCFLAGS)" build_tools/mkpkgconfig "$(DESTDIR)$(libdir)/pkgconfig";
-# Should static HTTP be installed during make samples or even with its own target ala
-# webvoicemail?  There are portions here that *could* be customized but might also be
-# improved a lot.  I'll put it here for now.
 
-	for x in static-http/*; do \
-		$(INSTALL) -m 644 $$x "$(DESTDIR)$(ASTDATADIR)/static-http" ; \
+#	# Recursively install contents of the static-http directory, in case
+#	# extra content is provided there. See contrib/scripts/get_swagger_ui.sh
+	find static-http | while read x; do \
+		if test -d $$x; then \
+			$(INSTALL) -m 755 -d "$(DESTDIR)$(ASTDATADIR)/$$x"; \
+		else \
+			$(INSTALL) -m 644 $$x "$(DESTDIR)$(ASTDATADIR)/$$x" ; \
+		fi \
 	done
 	$(INSTALL) -m 644 doc/core-en_US.xml "$(DESTDIR)$(ASTDATADIR)/static-http";
-	$(INSTALL) -m 644 doc/snapshots.xslt "$(DESTDIR)$(ASTDATADIR)/static-http";
+	$(INSTALL) -m 644 doc/appdocsxml.xslt "$(DESTDIR)$(ASTDATADIR)/static-http";
 	if [ -d doc/tex/asterisk ] ; then \
 		$(INSTALL) -d "$(DESTDIR)$(ASTDATADIR)/static-http/docs" ; \
 		for n in doc/tex/asterisk/* ; do \
@@ -468,7 +475,7 @@ doc/core-en_US.xml: makeopts .lastclean $(XML_core_en_US)
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
-	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"snapshots.xslt\"?>" > $@
+	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"appdocsxml.xslt\"?>" > $@
 	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
 	@for x in $(MOD_SUBDIRS); do \
 		printf "$$x " ; \
@@ -492,7 +499,7 @@ else
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
-	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"snapshots.xslt\"?>" > $@
+	@echo "<?xml-stylesheet type=\"text/xsl\" href=\"appdocsxml.xslt\"?>" > $@
 	@echo "<docs xmlns:xi=\"http://www.w3.org/2001/XInclude\">" >> $@
 	@for x in $(MOD_SUBDIRS); do \
 		printf "$$x " ; \
@@ -575,9 +582,10 @@ bininstall: _all installdirs $(SUBDIRS_INSTALL) main-bininstall
 	fi
 
 	$(INSTALL) -m 644 doc/core-*.xml "$(DESTDIR)$(ASTDATADIR)/documentation"
-	$(INSTALL) -m 644 doc/snapshots.xslt "$(DESTDIR)$(ASTDATADIR)/documentation"
+	$(INSTALL) -m 644 doc/appdocsxml.xslt "$(DESTDIR)$(ASTDATADIR)/documentation"
 	$(INSTALL) -m 644 doc/appdocsxml.dtd "$(DESTDIR)$(ASTDATADIR)/documentation"
 	$(INSTALL) -m 644 doc/asterisk.8 "$(DESTDIR)$(ASTMANDIR)/man8"
+	$(INSTALL) -m 644 doc/astdb*.8 "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -m 644 contrib/scripts/astgenkey.8 "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -m 644 contrib/scripts/autosupport.8 "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -m 644 contrib/scripts/safe_asterisk.8 "$(DESTDIR)$(ASTMANDIR)/man8"

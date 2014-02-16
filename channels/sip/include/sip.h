@@ -1019,6 +1019,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(theirprovtag); /*!< Provisional their tag, used when evaluating responses to invites */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
@@ -1231,7 +1232,7 @@ struct sip_pkt {
 /*!
  * \brief A peer's mailbox
  *
- * We could use STRINGFIELDS here, but for only two strings, it seems like
+ * We could use STRINGFIELDS here, but for only one string, its
  * too much effort ...
  */
 struct sip_mailbox {
@@ -1239,8 +1240,7 @@ struct sip_mailbox {
 	struct stasis_subscription *event_sub;
 	AST_LIST_ENTRY(sip_mailbox) entry;
 	unsigned int delme:1;
-	char *context;
-	char mailbox[2];
+	char id[1];
 };
 
 /*! \brief Structure for SIP peer data, we place calls to peers if registered  or fixed IP address (host)
@@ -1389,6 +1389,7 @@ struct sip_registry {
 		AST_STRING_FIELD(md5secret);  /*!< Password in md5 */
 		AST_STRING_FIELD(callback);   /*!< Contact extension */
 		AST_STRING_FIELD(peername);   /*!< Peer registering to */
+		AST_STRING_FIELD(localtag);   /*!< Local tag generated same time as callid */
 	);
 	enum ast_transport transport;   /*!< Transport for this registration UDP, TCP or TLS */
 	int portno;                     /*!< Optional port override */

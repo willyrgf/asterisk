@@ -58,17 +58,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_get_bridges_cb(
+static void ast_ari_bridges_list_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_get_bridges_args args = {};
+	struct ast_ari_bridges_list_args args = {};
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
 #endif /* AST_DEVMODE */
 
-	ast_ari_get_bridges(headers, &args, response);
+	ast_ari_bridges_list(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -100,6 +102,23 @@ static void ast_ari_get_bridges_cb(
 fin: __attribute__((unused))
 	return;
 }
+int ast_ari_bridges_create_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_create_args *args)
+{
+	struct ast_json *field;
+	/* Parse query parameters out of it */
+	field = ast_json_object_get(body, "type");
+	if (field) {
+		args->type = ast_json_string_get(field);
+	}
+	field = ast_json_object_get(body, "name");
+	if (field) {
+		args->name = ast_json_string_get(field);
+	}
+	return 0;
+}
+
 /*!
  * \brief Parameter parsing callback for /bridges.
  * \param get_params GET parameters in the HTTP request.
@@ -107,12 +126,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_new_bridge_cb(
+static void ast_ari_bridges_create_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_new_bridge_args args = {};
+	struct ast_ari_bridges_create_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -122,9 +143,31 @@ static void ast_ari_new_bridge_cb(
 		if (strcmp(i->name, "type") == 0) {
 			args.type = (i->value);
 		} else
+		if (strcmp(i->name, "name") == 0) {
+			args.name = (i->value);
+		} else
 		{}
 	}
-	ast_ari_new_bridge(headers, &args, response);
+	/* Look for a JSON request entity */
+	body = ast_http_get_json(ser, headers);
+	if (!body) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(response, 413, "Request Entity Too Large", "Request body too large");
+			goto fin;
+		case ENOMEM:
+			ast_ari_response_error(response, 500, "Internal Server Error", "Error processing request");
+			goto fin;
+		case EIO:
+			ast_ari_response_error(response, 400, "Bad Request", "Error parsing request body");
+			goto fin;
+		}
+	}
+	if (ast_ari_bridges_create_parse_body(body, &args)) {
+		ast_ari_response_alloc_failed(response);
+		goto fin;
+	}
+	ast_ari_bridges_create(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -163,12 +206,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_get_bridge_cb(
+static void ast_ari_bridges_get_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_get_bridge_args args = {};
+	struct ast_ari_bridges_get_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -180,7 +225,7 @@ static void ast_ari_get_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_get_bridge(headers, &args, response);
+	ast_ari_bridges_get(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -220,12 +265,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_delete_bridge_cb(
+static void ast_ari_bridges_destroy_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_delete_bridge_args args = {};
+	struct ast_ari_bridges_destroy_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -237,7 +284,7 @@ static void ast_ari_delete_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_delete_bridge(headers, &args, response);
+	ast_ari_bridges_destroy(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -270,6 +317,48 @@ static void ast_ari_delete_bridge_cb(
 fin: __attribute__((unused))
 	return;
 }
+int ast_ari_bridges_add_channel_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_add_channel_args *args)
+{
+	struct ast_json *field;
+	/* Parse query parameters out of it */
+	field = ast_json_object_get(body, "channel");
+	if (field) {
+		/* If they were silly enough to both pass in a query param and a
+		 * JSON body, free up the query value.
+		 */
+		ast_free(args->channel);
+		if (ast_json_typeof(field) == AST_JSON_ARRAY) {
+			/* Multiple param passed as array */
+			size_t i;
+			args->channel_count = ast_json_array_size(field);
+			args->channel = ast_malloc(sizeof(*args->channel) * args->channel_count);
+
+			if (!args->channel) {
+				return -1;
+			}
+
+			for (i = 0; i < args->channel_count; ++i) {
+				args->channel[i] = ast_json_string_get(ast_json_array_get(field, i));
+			}
+		} else {
+			/* Multiple param passed as single value */
+			args->channel_count = 1;
+			args->channel = ast_malloc(sizeof(*args->channel) * args->channel_count);
+			if (!args->channel) {
+				return -1;
+			}
+			args->channel[0] = ast_json_string_get(field);
+		}
+	}
+	field = ast_json_object_get(body, "role");
+	if (field) {
+		args->role = ast_json_string_get(field);
+	}
+	return 0;
+}
+
 /*!
  * \brief Parameter parsing callback for /bridges/{bridgeId}/addChannel.
  * \param get_params GET parameters in the HTTP request.
@@ -277,12 +366,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_add_channel_to_bridge_cb(
+static void ast_ari_bridges_add_channel_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_add_channel_to_bridge_args args = {};
+	struct ast_ari_bridges_add_channel_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -343,7 +434,26 @@ static void ast_ari_add_channel_to_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_add_channel_to_bridge(headers, &args, response);
+	/* Look for a JSON request entity */
+	body = ast_http_get_json(ser, headers);
+	if (!body) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(response, 413, "Request Entity Too Large", "Request body too large");
+			goto fin;
+		case ENOMEM:
+			ast_ari_response_error(response, 500, "Internal Server Error", "Error processing request");
+			goto fin;
+		case EIO:
+			ast_ari_response_error(response, 400, "Bad Request", "Error parsing request body");
+			goto fin;
+		}
+	}
+	if (ast_ari_bridges_add_channel_parse_body(body, &args)) {
+		ast_ari_response_alloc_failed(response);
+		goto fin;
+	}
+	ast_ari_bridges_add_channel(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -355,7 +465,7 @@ static void ast_ari_add_channel_to_bridge_cb(
 	case 501: /* Not Implemented */
 	case 400: /* Channel not found */
 	case 404: /* Bridge not found */
-	case 409: /* Bridge not in Stasis application */
+	case 409: /* Bridge not in Stasis application; Channel currently recording */
 	case 422: /* Channel not in Stasis application */
 		is_valid = 1;
 		break;
@@ -381,6 +491,44 @@ fin: __attribute__((unused))
 	ast_free(args.channel);
 	return;
 }
+int ast_ari_bridges_remove_channel_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_remove_channel_args *args)
+{
+	struct ast_json *field;
+	/* Parse query parameters out of it */
+	field = ast_json_object_get(body, "channel");
+	if (field) {
+		/* If they were silly enough to both pass in a query param and a
+		 * JSON body, free up the query value.
+		 */
+		ast_free(args->channel);
+		if (ast_json_typeof(field) == AST_JSON_ARRAY) {
+			/* Multiple param passed as array */
+			size_t i;
+			args->channel_count = ast_json_array_size(field);
+			args->channel = ast_malloc(sizeof(*args->channel) * args->channel_count);
+
+			if (!args->channel) {
+				return -1;
+			}
+
+			for (i = 0; i < args->channel_count; ++i) {
+				args->channel[i] = ast_json_string_get(ast_json_array_get(field, i));
+			}
+		} else {
+			/* Multiple param passed as single value */
+			args->channel_count = 1;
+			args->channel = ast_malloc(sizeof(*args->channel) * args->channel_count);
+			if (!args->channel) {
+				return -1;
+			}
+			args->channel[0] = ast_json_string_get(field);
+		}
+	}
+	return 0;
+}
+
 /*!
  * \brief Parameter parsing callback for /bridges/{bridgeId}/removeChannel.
  * \param get_params GET parameters in the HTTP request.
@@ -388,12 +536,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_remove_channel_from_bridge_cb(
+static void ast_ari_bridges_remove_channel_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_remove_channel_from_bridge_args args = {};
+	struct ast_ari_bridges_remove_channel_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -451,7 +601,26 @@ static void ast_ari_remove_channel_from_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_remove_channel_from_bridge(headers, &args, response);
+	/* Look for a JSON request entity */
+	body = ast_http_get_json(ser, headers);
+	if (!body) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(response, 413, "Request Entity Too Large", "Request body too large");
+			goto fin;
+		case ENOMEM:
+			ast_ari_response_error(response, 500, "Internal Server Error", "Error processing request");
+			goto fin;
+		case EIO:
+			ast_ari_response_error(response, 400, "Bad Request", "Error parsing request body");
+			goto fin;
+		}
+	}
+	if (ast_ari_bridges_remove_channel_parse_body(body, &args)) {
+		ast_ari_response_alloc_failed(response);
+		goto fin;
+	}
+	ast_ari_bridges_remove_channel(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -489,19 +658,34 @@ fin: __attribute__((unused))
 	ast_free(args.channel);
 	return;
 }
+int ast_ari_bridges_start_moh_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_start_moh_args *args)
+{
+	struct ast_json *field;
+	/* Parse query parameters out of it */
+	field = ast_json_object_get(body, "mohClass");
+	if (field) {
+		args->moh_class = ast_json_string_get(field);
+	}
+	return 0;
+}
+
 /*!
- * \brief Parameter parsing callback for /bridges/{bridgeId}/mohStart.
+ * \brief Parameter parsing callback for /bridges/{bridgeId}/moh.
  * \param get_params GET parameters in the HTTP request.
  * \param path_vars Path variables extracted from the request.
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_moh_start_bridge_cb(
+static void ast_ari_bridges_start_moh_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_moh_start_bridge_args args = {};
+	struct ast_ari_bridges_start_moh_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -519,7 +703,26 @@ static void ast_ari_moh_start_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_moh_start_bridge(headers, &args, response);
+	/* Look for a JSON request entity */
+	body = ast_http_get_json(ser, headers);
+	if (!body) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(response, 413, "Request Entity Too Large", "Request body too large");
+			goto fin;
+		case ENOMEM:
+			ast_ari_response_error(response, 500, "Internal Server Error", "Error processing request");
+			goto fin;
+		case EIO:
+			ast_ari_response_error(response, 400, "Bad Request", "Error parsing request body");
+			goto fin;
+		}
+	}
+	if (ast_ari_bridges_start_moh_parse_body(body, &args)) {
+		ast_ari_response_alloc_failed(response);
+		goto fin;
+	}
+	ast_ari_bridges_start_moh(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -538,13 +741,13 @@ static void ast_ari_moh_start_bridge_cb(
 			is_valid = ast_ari_validate_void(
 				response->message);
 		} else {
-			ast_log(LOG_ERROR, "Invalid error response %d for /bridges/{bridgeId}/mohStart\n", code);
+			ast_log(LOG_ERROR, "Invalid error response %d for /bridges/{bridgeId}/moh\n", code);
 			is_valid = 0;
 		}
 	}
 
 	if (!is_valid) {
-		ast_log(LOG_ERROR, "Response validation failed for /bridges/{bridgeId}/mohStart\n");
+		ast_log(LOG_ERROR, "Response validation failed for /bridges/{bridgeId}/moh\n");
 		ast_ari_response_error(response, 500,
 			"Internal Server Error", "Response validation failed");
 	}
@@ -554,18 +757,20 @@ fin: __attribute__((unused))
 	return;
 }
 /*!
- * \brief Parameter parsing callback for /bridges/{bridgeId}/mohStop.
+ * \brief Parameter parsing callback for /bridges/{bridgeId}/moh.
  * \param get_params GET parameters in the HTTP request.
  * \param path_vars Path variables extracted from the request.
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_moh_stop_bridge_cb(
+static void ast_ari_bridges_stop_moh_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_moh_stop_bridge_args args = {};
+	struct ast_ari_bridges_stop_moh_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -577,7 +782,7 @@ static void ast_ari_moh_stop_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_moh_stop_bridge(headers, &args, response);
+	ast_ari_bridges_stop_moh(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -596,13 +801,13 @@ static void ast_ari_moh_stop_bridge_cb(
 			is_valid = ast_ari_validate_void(
 				response->message);
 		} else {
-			ast_log(LOG_ERROR, "Invalid error response %d for /bridges/{bridgeId}/mohStop\n", code);
+			ast_log(LOG_ERROR, "Invalid error response %d for /bridges/{bridgeId}/moh\n", code);
 			is_valid = 0;
 		}
 	}
 
 	if (!is_valid) {
-		ast_log(LOG_ERROR, "Response validation failed for /bridges/{bridgeId}/mohStop\n");
+		ast_log(LOG_ERROR, "Response validation failed for /bridges/{bridgeId}/moh\n");
 		ast_ari_response_error(response, 500,
 			"Internal Server Error", "Response validation failed");
 	}
@@ -611,6 +816,31 @@ static void ast_ari_moh_stop_bridge_cb(
 fin: __attribute__((unused))
 	return;
 }
+int ast_ari_bridges_play_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_play_args *args)
+{
+	struct ast_json *field;
+	/* Parse query parameters out of it */
+	field = ast_json_object_get(body, "media");
+	if (field) {
+		args->media = ast_json_string_get(field);
+	}
+	field = ast_json_object_get(body, "lang");
+	if (field) {
+		args->lang = ast_json_string_get(field);
+	}
+	field = ast_json_object_get(body, "offsetms");
+	if (field) {
+		args->offsetms = ast_json_integer_get(field);
+	}
+	field = ast_json_object_get(body, "skipms");
+	if (field) {
+		args->skipms = ast_json_integer_get(field);
+	}
+	return 0;
+}
+
 /*!
  * \brief Parameter parsing callback for /bridges/{bridgeId}/play.
  * \param get_params GET parameters in the HTTP request.
@@ -618,12 +848,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_play_on_bridge_cb(
+static void ast_ari_bridges_play_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_play_on_bridge_args args = {};
+	struct ast_ari_bridges_play_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -650,7 +882,26 @@ static void ast_ari_play_on_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_play_on_bridge(headers, &args, response);
+	/* Look for a JSON request entity */
+	body = ast_http_get_json(ser, headers);
+	if (!body) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(response, 413, "Request Entity Too Large", "Request body too large");
+			goto fin;
+		case ENOMEM:
+			ast_ari_response_error(response, 500, "Internal Server Error", "Error processing request");
+			goto fin;
+		case EIO:
+			ast_ari_response_error(response, 400, "Bad Request", "Error parsing request body");
+			goto fin;
+		}
+	}
+	if (ast_ari_bridges_play_parse_body(body, &args)) {
+		ast_ari_response_alloc_failed(response);
+		goto fin;
+	}
+	ast_ari_bridges_play(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -684,6 +935,43 @@ static void ast_ari_play_on_bridge_cb(
 fin: __attribute__((unused))
 	return;
 }
+int ast_ari_bridges_record_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_record_args *args)
+{
+	struct ast_json *field;
+	/* Parse query parameters out of it */
+	field = ast_json_object_get(body, "name");
+	if (field) {
+		args->name = ast_json_string_get(field);
+	}
+	field = ast_json_object_get(body, "format");
+	if (field) {
+		args->format = ast_json_string_get(field);
+	}
+	field = ast_json_object_get(body, "maxDurationSeconds");
+	if (field) {
+		args->max_duration_seconds = ast_json_integer_get(field);
+	}
+	field = ast_json_object_get(body, "maxSilenceSeconds");
+	if (field) {
+		args->max_silence_seconds = ast_json_integer_get(field);
+	}
+	field = ast_json_object_get(body, "ifExists");
+	if (field) {
+		args->if_exists = ast_json_string_get(field);
+	}
+	field = ast_json_object_get(body, "beep");
+	if (field) {
+		args->beep = ast_json_is_true(field);
+	}
+	field = ast_json_object_get(body, "terminateOn");
+	if (field) {
+		args->terminate_on = ast_json_string_get(field);
+	}
+	return 0;
+}
+
 /*!
  * \brief Parameter parsing callback for /bridges/{bridgeId}/record.
  * \param get_params GET parameters in the HTTP request.
@@ -691,12 +979,14 @@ fin: __attribute__((unused))
  * \param headers HTTP headers.
  * \param[out] response Response to the HTTP request.
  */
-static void ast_ari_record_bridge_cb(
+static void ast_ari_bridges_record_cb(
+	struct ast_tcptls_session_instance *ser,
 	struct ast_variable *get_params, struct ast_variable *path_vars,
 	struct ast_variable *headers, struct ast_ari_response *response)
 {
-	struct ast_record_bridge_args args = {};
+	struct ast_ari_bridges_record_args args = {};
 	struct ast_variable *i;
+	RAII_VAR(struct ast_json *, body, NULL, ast_json_unref);
 #if defined(AST_DEVMODE)
 	int is_valid;
 	int code;
@@ -732,7 +1022,26 @@ static void ast_ari_record_bridge_cb(
 		} else
 		{}
 	}
-	ast_ari_record_bridge(headers, &args, response);
+	/* Look for a JSON request entity */
+	body = ast_http_get_json(ser, headers);
+	if (!body) {
+		switch (errno) {
+		case EFBIG:
+			ast_ari_response_error(response, 413, "Request Entity Too Large", "Request body too large");
+			goto fin;
+		case ENOMEM:
+			ast_ari_response_error(response, 500, "Internal Server Error", "Error processing request");
+			goto fin;
+		case EIO:
+			ast_ari_response_error(response, 400, "Bad Request", "Error parsing request body");
+			goto fin;
+		}
+	}
+	if (ast_ari_bridges_record_parse_body(body, &args)) {
+		ast_ari_response_alloc_failed(response);
+		goto fin;
+	}
+	ast_ari_bridges_record(headers, &args, response);
 #if defined(AST_DEVMODE)
 	code = response->response_code;
 
@@ -742,6 +1051,10 @@ static void ast_ari_record_bridge_cb(
 		break;
 	case 500: /* Internal Server Error */
 	case 501: /* Not Implemented */
+	case 400: /* Invalid parameters */
+	case 404: /* Bridge not found */
+	case 409: /* Bridge is not in a Stasis application; A recording with the same name already exists on the system and can not be overwritten because it is in progress or ifExists=fail */
+	case 422: /* The format specified is unknown on this system */
 		is_valid = 1;
 		break;
 	default:
@@ -769,7 +1082,7 @@ fin: __attribute__((unused))
 static struct stasis_rest_handlers bridges_bridgeId_addChannel = {
 	.path_segment = "addChannel",
 	.callbacks = {
-		[AST_HTTP_POST] = ast_ari_add_channel_to_bridge_cb,
+		[AST_HTTP_POST] = ast_ari_bridges_add_channel_cb,
 	},
 	.num_children = 0,
 	.children = {  }
@@ -778,25 +1091,17 @@ static struct stasis_rest_handlers bridges_bridgeId_addChannel = {
 static struct stasis_rest_handlers bridges_bridgeId_removeChannel = {
 	.path_segment = "removeChannel",
 	.callbacks = {
-		[AST_HTTP_POST] = ast_ari_remove_channel_from_bridge_cb,
+		[AST_HTTP_POST] = ast_ari_bridges_remove_channel_cb,
 	},
 	.num_children = 0,
 	.children = {  }
 };
 /*! \brief REST handler for /api-docs/bridges.{format} */
-static struct stasis_rest_handlers bridges_bridgeId_mohStart = {
-	.path_segment = "mohStart",
+static struct stasis_rest_handlers bridges_bridgeId_moh = {
+	.path_segment = "moh",
 	.callbacks = {
-		[AST_HTTP_POST] = ast_ari_moh_start_bridge_cb,
-	},
-	.num_children = 0,
-	.children = {  }
-};
-/*! \brief REST handler for /api-docs/bridges.{format} */
-static struct stasis_rest_handlers bridges_bridgeId_mohStop = {
-	.path_segment = "mohStop",
-	.callbacks = {
-		[AST_HTTP_POST] = ast_ari_moh_stop_bridge_cb,
+		[AST_HTTP_POST] = ast_ari_bridges_start_moh_cb,
+		[AST_HTTP_DELETE] = ast_ari_bridges_stop_moh_cb,
 	},
 	.num_children = 0,
 	.children = {  }
@@ -805,7 +1110,7 @@ static struct stasis_rest_handlers bridges_bridgeId_mohStop = {
 static struct stasis_rest_handlers bridges_bridgeId_play = {
 	.path_segment = "play",
 	.callbacks = {
-		[AST_HTTP_POST] = ast_ari_play_on_bridge_cb,
+		[AST_HTTP_POST] = ast_ari_bridges_play_cb,
 	},
 	.num_children = 0,
 	.children = {  }
@@ -814,7 +1119,7 @@ static struct stasis_rest_handlers bridges_bridgeId_play = {
 static struct stasis_rest_handlers bridges_bridgeId_record = {
 	.path_segment = "record",
 	.callbacks = {
-		[AST_HTTP_POST] = ast_ari_record_bridge_cb,
+		[AST_HTTP_POST] = ast_ari_bridges_record_cb,
 	},
 	.num_children = 0,
 	.children = {  }
@@ -824,18 +1129,18 @@ static struct stasis_rest_handlers bridges_bridgeId = {
 	.path_segment = "bridgeId",
 	.is_wildcard = 1,
 	.callbacks = {
-		[AST_HTTP_GET] = ast_ari_get_bridge_cb,
-		[AST_HTTP_DELETE] = ast_ari_delete_bridge_cb,
+		[AST_HTTP_GET] = ast_ari_bridges_get_cb,
+		[AST_HTTP_DELETE] = ast_ari_bridges_destroy_cb,
 	},
-	.num_children = 6,
-	.children = { &bridges_bridgeId_addChannel,&bridges_bridgeId_removeChannel,&bridges_bridgeId_mohStart,&bridges_bridgeId_mohStop,&bridges_bridgeId_play,&bridges_bridgeId_record, }
+	.num_children = 5,
+	.children = { &bridges_bridgeId_addChannel,&bridges_bridgeId_removeChannel,&bridges_bridgeId_moh,&bridges_bridgeId_play,&bridges_bridgeId_record, }
 };
 /*! \brief REST handler for /api-docs/bridges.{format} */
 static struct stasis_rest_handlers bridges = {
 	.path_segment = "bridges",
 	.callbacks = {
-		[AST_HTTP_GET] = ast_ari_get_bridges_cb,
-		[AST_HTTP_POST] = ast_ari_new_bridge_cb,
+		[AST_HTTP_GET] = ast_ari_bridges_list_cb,
+		[AST_HTTP_POST] = ast_ari_bridges_create_cb,
 	},
 	.num_children = 1,
 	.children = { &bridges_bridgeId, }

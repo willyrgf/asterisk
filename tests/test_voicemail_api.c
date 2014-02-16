@@ -72,7 +72,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * envelope files on the file system
  */
 #define VM_API_TEST_SETUP do { \
-	if (test_vm_api_test_setup()) { \
+	if (!ast_vm_is_registered()) { \
+		ast_test_status_update(test, "No voicemail provider registered.\n"); \
+		return AST_TEST_FAIL; \
+	} else if (test_vm_api_test_setup()) { \
 		VM_API_TEST_CLEANUP; \
 		ast_test_status_update(test, "Failed to set up necessary mock objects for voicemail API test\n"); \
 		return AST_TEST_FAIL; \
@@ -829,6 +832,8 @@ static struct ast_channel *test_vm_api_create_mock_channel(void)
 	ast_format_set(ast_channel_readformat(mock_channel), AST_FORMAT_GSM, 0);
 	ast_format_set(ast_channel_rawreadformat(mock_channel), AST_FORMAT_GSM, 0);
 	ast_channel_tech_set(mock_channel, &mock_channel_tech);
+
+	ast_channel_unlock(mock_channel);
 
 	return mock_channel;
 }

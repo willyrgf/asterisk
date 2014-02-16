@@ -146,6 +146,15 @@ class AsteriskProcessor(SwaggerPostProcessor):
         'boolean': 'ast_true',
     }
 
+    #: JSON conversion functions
+    json_convert_mapping = {
+        'string': 'ast_json_string_get',
+        'int': 'ast_json_integer_get',
+        'long': 'ast_json_integer_get',
+        'double': 'ast_json_real_get',
+        'boolean': 'ast_json_is_true',
+    }
+
     def __init__(self, wiki_prefix):
         self.wiki_prefix = wiki_prefix
 
@@ -157,6 +166,7 @@ class AsteriskProcessor(SwaggerPostProcessor):
         # Now in all caps, for include guard
         resource_api.name_caps = resource_api.name.upper()
         resource_api.name_title = resource_api.name.capitalize()
+        resource_api.c_name = snakify(resource_api.name)
         # Construct the PathSegement tree for the API.
         if resource_api.api_declaration:
             resource_api.root_path = PathSegment('', None)
@@ -182,30 +192,42 @@ class AsteriskProcessor(SwaggerPostProcessor):
         api.wiki_path = wikify(api.path)
 
     def process_operation(self, operation, context):
-        # Nicknames are camelcase, Asterisk coding is snake case
+        # Nicknames are camelCase, Asterisk coding is snake case
         operation.c_nickname = snakify(operation.nickname)
         operation.c_http_method = 'AST_HTTP_' + operation.http_method
         if not operation.summary.endswith("."):
             raise SwaggerError("Summary should end with .", context)
+        operation.wiki_summary = wikify(operation.summary or "")
         operation.wiki_notes = wikify(operation.notes or "")
+        operation.parse_body = (operation.body_parameter or operation.has_query_parameters) and True
 
     def process_parameter(self, parameter, context):
-        if not parameter.data_type in self.type_mapping:
-            raise SwaggerError(
-                "Invalid parameter type %s" % parameter.data_type, context)
+        if parameter.param_type == 'body':
+	    parameter.is_body_parameter = True;
+            parameter.c_data_type = 'struct ast_json *'
+        else:
+	    parameter.is_body_parameter = False;
+            if not parameter.data_type in self.type_mapping:
+                raise SwaggerError(
+                    "Invalid parameter type %s" % parameter.data_type, context)
+            # Type conversions
+            parameter.c_data_type = self.type_mapping[parameter.data_type]
+            parameter.c_convert = self.convert_mapping[parameter.data_type]
+            parameter.json_convert = self.json_convert_mapping[parameter.data_type]
+
         # Parameter names are camelcase, Asterisk convention is snake case
         parameter.c_name = snakify(parameter.name)
-        parameter.c_data_type = self.type_mapping[parameter.data_type]
-        parameter.c_convert = self.convert_mapping[parameter.data_type]
         # You shouldn't put a space between 'char *' and the variable
         if parameter.c_data_type.endswith('*'):
             parameter.c_space = ''
         else:
             parameter.c_space = ' '
+        parameter.wiki_description = wikify(parameter.description)
 
     def process_model(self, model, context):
         model.description_dox = model.description.replace('\n', '\n * ')
         model.description_dox = re.sub(' *\n', '\n', model.description_dox)
+        model.wiki_description = wikify(model.description)
         model.c_id = snakify(model.id)
         return model
 
@@ -215,6 +237,7 @@ class AsteriskProcessor(SwaggerPostProcessor):
         if prop.name != prop.name.lower():
             raise SwaggerError("Property name should be all lowercase",
                                context)
+        prop.wiki_description = wikify(prop.description)
 
     def process_type(self, swagger_type, context):
         swagger_type.c_name = snakify(swagger_type.name)
