@@ -80,25 +80,55 @@ static struct stasis_message_router *sounds_system_router;
 static int sounds_snapshot_hash(const void *obj, const int flags)
 {
 	const char *key;
-
-	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
-	case OBJ_KEY:
+ 
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_KEY:
 		key = obj;
-		return ast_str_hash(key);
-	case OBJ_POINTER:
-		return ast_str_hash(ast_sorcery_object_get_id(obj));
+		break;
+	case OBJ_SEARCH_OBJECT:
+		key = ast_sorcery_object_get_id(obj);
+		break;
 	default:
+		/* Hash can only work on something with a full key. */
 		ast_assert(0);
 		return 0;
 	}
+	return ast_str_hash(key);
 }
 
 /*! \brief Comparison function for buckets AND files - this can be common due to usage of sorcery */
 static int sounds_snapshot_cmp(void *obj, void *arg, int flags)
 {
-	const char *id = arg;
+	const char *right_key = arg;
+	int cmp;
+ 
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
+		right_key = ast_sorcery_object_get_id(arg);
+		/* Fall through */
+	case OBJ_SEARCH_KEY:
+		cmp = strcmp(ast_sorcery_object_get_id(obj), right_key);
+		break;
+	case OBJ_SEARCH_PARTIAL_KEY:
+		/*
+		 * We could also use a partial key struct containing a length
+		 * so strlen() does not get called for every comparison instead.
+		 */
+		cmp = strncmp(ast_sorcery_object_get_id(obj), right_key, strlen(right_key));
+		break;
+	default:
+		/*
+		 * What arg points to is specific to this traversal callback
+		 * and has no special meaning to astobj2.
+		 */
+		cmp = 0;
+		break;
+	}
+	if (cmp) {
+		return 0;
+	}
 
-	return !strcmp(ast_sorcery_object_get_id(obj), flags & OBJ_KEY ? id : ast_sorcery_object_get_id(arg)) ? CMP_MATCH | CMP_STOP : 0;
+	return CMP_MATCH;
 }
 
 /*! \brief Destructor for sounds snapshot */
@@ -702,8 +732,8 @@ static char *handle_cli_bucket_show(struct ast_cli_entry *e, int cmd, struct ast
 	case CLI_GENERATE:
 	{
 		int length = strlen(a->word);
-        int which = 0;
-        struct ao2_iterator it_buckets;
+		int which = 0;
+		struct ao2_iterator it_buckets;
 		char *match = NULL;
 		void *object;
 
@@ -713,17 +743,17 @@ static char *handle_cli_bucket_show(struct ast_cli_entry *e, int cmd, struct ast
 		}
 
 		it_buckets = ao2_iterator_init(snapshot->buckets, 0);
-        while ((object = ao2_iterator_next(&it_buckets))) {
-            if (!strncasecmp(a->word, ast_sorcery_object_get_id(object), length) && ++which > a->n) {
-                match = ast_strdup(ast_sorcery_object_get_id(object));
-                ao2_ref(object, -1);
-                break;
-            }
-            ao2_ref(object, -1);
-        }
-        ao2_iterator_destroy(&it_buckets);
-        ao2_ref(snapshot, -1);
-        return match;
+		while ((object = ao2_iterator_next(&it_buckets))) {
+			if (!strncasecmp(a->word, ast_sorcery_object_get_id(object), length) && ++which > a->n) {
+				match = ast_strdup(ast_sorcery_object_get_id(object));
+				ao2_ref(object, -1);
+				break;
+			}
+			ao2_ref(object, -1);
+		}
+		ao2_iterator_destroy(&it_buckets);
+		ao2_ref(snapshot, -1);
+		return match;
 	}
 	}
 
@@ -778,8 +808,8 @@ static char *handle_cli_file_show(struct ast_cli_entry *e, int cmd, struct ast_c
 	case CLI_GENERATE:
 	{
 		int length = strlen(a->word);
-        int which = 0;
-        struct ao2_iterator it_files;
+		int which = 0;
+		struct ao2_iterator it_files;
 		char *match = NULL;
 		void *object;
 
@@ -789,17 +819,17 @@ static char *handle_cli_file_show(struct ast_cli_entry *e, int cmd, struct ast_c
 		}
 
 		it_files = ao2_iterator_init(snapshot->files, 0);
-        while ((object = ao2_iterator_next(&it_files))) {
-            if (!strncasecmp(a->word, ast_sorcery_object_get_id(object), length) && ++which > a->n) {
-                match = ast_strdup(ast_sorcery_object_get_id(object));
-                ao2_ref(object, -1);
-                break;
-            }
-            ao2_ref(object, -1);
-        }
-        ao2_iterator_destroy(&it_files);
-        ao2_ref(snapshot, -1);
-        return match;
+		while ((object = ao2_iterator_next(&it_files))) {
+			if (!strncasecmp(a->word, ast_sorcery_object_get_id(object), length) && ++which > a->n) {
+				match = ast_strdup(ast_sorcery_object_get_id(object));
+				ao2_ref(object, -1);
+				break;
+			}
+			ao2_ref(object, -1);
+		}
+		ao2_iterator_destroy(&it_files);
+		ao2_ref(snapshot, -1);
+		return match;
 	}
 	}
 
