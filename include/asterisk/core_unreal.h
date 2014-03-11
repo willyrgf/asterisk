@@ -58,27 +58,28 @@ enum ast_unreal_channel_indicator {
 struct ast_unreal_pvt_callbacks {
 	/*!
 	 * \brief Called when an optimization attempt has started
-	 * \note p is locked when this callback is called
-	 * \param p The \ref ast_unreal_pvt object
+	 * \param owner The owner channel
+	 * \param chan The outbound channel
 	 * \param source The channel that is optimizing into an unreal_pvt channel's bridge.
 	 * If NULL, the optimization is being accomplished via a bridge merge.
 	 * \param dest Indicator of which channel's bridge in the unreal_pvt will survive the
 	 * optimization
 	 * \param id Unique identifier for this optimization operation.
 	 */
-	void (* const optimization_started)(struct ast_unreal_pvt *p, struct ast_channel *source,
-			enum ast_unreal_channel_indicator dest, unsigned int id);
+	void (* const optimization_started)(struct ast_channel *owner, struct ast_channel *chan,
+		struct ast_channel *source, enum ast_unreal_channel_indicator dest, unsigned int id);
 
 	/*!
 	 * \brief Called when an optimization attempt completed successfully
-	 * \note p is locked when this callback is called
-	 * \param p The \ref ast_unreal_pvt object
+	 * \param owner The owner channel
+	 * \param chan The outbound channel
 	 * \param success Non-zero if the optimization succeeded, zero if the optimization
 	 * met with fatal and permanent error
 	 * \param id Unique identifier for this optimization. Same as the one from the optimization_started
 	 * call
 	 */
-	void (* const optimization_finished)(struct ast_unreal_pvt *p, int success, unsigned int id);
+	void (* const optimization_finished)(struct ast_channel *owner, struct ast_channel *chan,
+		int success, unsigned int id);
 };
 
 /*!

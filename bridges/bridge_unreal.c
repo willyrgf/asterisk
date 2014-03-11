@@ -91,6 +91,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 /*! \brief Taskprocessor which optimizes things */
 static struct ast_taskprocessor *taskprocessor;
 
+/*! \brief Integer which is incremented to produce a unique id for optimization attempts */
+static unsigned int optimization_id;
+
 /*! \brief Task structure which contains information for optimizing unreal bridges */
 struct optimize_task_data {
 	/*! \brief Owner channel */
@@ -105,6 +108,8 @@ struct optimize_task_data {
 	struct ast_channel *peer_owner;
 	/*! \brief Peer in the outbound channel bridge */
 	struct ast_channel *peer_chan;
+	/*! \brief Optional callback functions */
+	struct ast_unreal_pvt_callbacks *callbacks;
 };
 
 /*! \brief Destructor for optimize task data */
@@ -124,7 +129,8 @@ static void optimize_task_data_destroy(void *obj)
 static struct optimize_task_data *optimize_task_data_alloc(
 	struct ast_channel *owner, struct ast_channel *chan,
 	struct ast_bridge *bridge_owner, struct ast_bridge *bridge_chan,
-	struct ast_channel *peer_owner, struct ast_channel *peer_chan)
+	struct ast_channel *peer_owner, struct ast_channel *peer_chan,
+	struct ast_unreal_pvt_callbacks *callbacks)
 {
 	struct optimize_task_data *task_data = ao2_alloc(sizeof(*task_data),
 		optimize_task_data_destroy);
@@ -139,6 +145,7 @@ static struct optimize_task_data *optimize_task_data_alloc(
 	task_data->bridge_chan = ao2_bump(bridge_chan);
 	task_data->peer_owner = ast_channel_ref(peer_owner);
 	task_data->peer_chan = ast_channel_ref(peer_chan);
+	task_data->callbacks = callbacks;
 
 	return task_data;
 }
@@ -149,18 +156,44 @@ static int unreal_bridge_optimize_task(void *data)
 	struct optimize_task_data *task_data = data;
 	enum ast_bridge_optimization optimization = ast_bridges_allow_optimization(task_data->bridge_chan,
 		task_data->bridge_owner);
+	unsigned int id = ast_atomic_fetchadd_int((int *) &optimization_id, +1);
+	struct ast_bridge *dst_bridge = NULL, *src_bridge = NULL;
+	struct ast_channel *chan = NULL, *swap = NULL;
+	int res = 0;
 
 	switch (optimization) {
 	case AST_BRIDGE_OPTIMIZE_SWAP_TO_CHAN_BRIDGE:
-		ast_bridge_move(task_data->bridge_chan, task_data->bridge_owner, task_data->peer_owner,
-			task_data->chan, 1);
+		dst_bridge = task_data->bridge_chan;
+		src_bridge = task_data->bridge_owner;
+		chan = task_data->peer_owner;
+		swap = task_data->chan;
 		break;
 	case AST_BRIDGE_OPTIMIZE_SWAP_TO_PEER_BRIDGE:
-		ast_bridge_move(task_data->bridge_owner, task_data->bridge_chan, task_data->peer_chan,
-			task_data->owner, 1);
+		dst_bridge = task_data->bridge_owner;
+		src_bridge = task_data->bridge_chan;
+		chan = task_data->peer_chan;
+		swap = task_data->owner;
 		break;
 	default:
 		break;
+	}
+
+	/* If all required information is not present abort early */
+	if (!dst_bridge || !src_bridge || !chan || !swap) {
+		ao2_ref(task_data, -1);
+		return 0;
+	}
+
+	if (task_data->callbacks && task_data->callbacks->optimization_started) {
+		task_data->callbacks->optimization_started(task_data->owner, task_data->chan,
+			chan, (swap == task_data->owner) ? AST_UNREAL_OWNER : AST_UNREAL_CHAN, id);
+	}
+
+	res = ast_bridge_move(dst_bridge, src_bridge, chan, swap, 1);
+
+	if (task_data->callbacks && task_data->callbacks->optimization_finished) {
+		task_data->callbacks->optimization_finished(task_data->owner, task_data->chan,
+			!res ? 1 : 0, id);
 	}
 
 	ao2_ref(task_data, -1);
@@ -287,7 +320,7 @@ static void unreal_bridge_set(struct ast_bridge *bridge, struct ast_bridge_chann
 	if (changed && pvt->bridge_owner && pvt->bridge_chan) {
 		struct optimize_task_data *task_data = optimize_task_data_alloc(pvt->owner,
 			pvt->chan, pvt->bridge_owner, pvt->bridge_chan, pvt->bridged_owner,
-			pvt->bridged_chan);
+			pvt->bridged_chan, pvt->callbacks);
 
 		ast_debug(1, "Queueing task to remove unreal channels between bridge '%s' and '%s'\n",
 			pvt->bridge_owner->uniqueid, pvt->bridge_chan->uniqueid);
