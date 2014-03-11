@@ -47,6 +47,47 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/core_unreal.h"
 #include "asterisk/taskprocessor.h"
 
+/*!
+ * \page bridge-unreal-impl Unreal Bridge Implementation Notes
+ *
+ * \par Requirements
+ *
+ * The bridge_unreal bridge technology requires at least one Local
+ * channel to be present within a bridge using it. The second channel
+ * MAY or MAY NOT be a second Local channel.
+ *
+ * \par Candidate Collection
+ *
+ * The bridge_unreal bridge technology collects candidates for optimization
+ * when Local channels join the bridge. The bridge itself and the respective
+ * peer channel are stored within the shared private structure of each Local
+ * channel within the bridge.
+ *
+ * \par Candidate Usage
+ *
+ * If after storing candidate information candidates are available from both
+ * the master and outbound Local channel a task is queued with all candidate
+ * information to optimize the channels if possible. This task is queued in
+ * a serialized fashion for execution on a thread outside of the bridging
+ * framework and will be queued only once per set of candidates.
+ *
+ * \par Optimization Task
+ *
+ * The optimization task takes all candidates and performs a bridge move in a
+ * direction permitted by the configuration of each bridge. If the bridge move
+ * fails no retry is attempted.
+ *
+ * \par Resolving Chains
+ *
+ * Chains are automatically resolved by the implementation queueing multiple
+ * optimization tasks as each hop in the chain is resolved. Since a task
+ * preceeding another in the queue may result in the optimization candidates
+ * becoming stale it is possible for the move attempt to fail. This will resolve
+ * itself automatically as the action causing it to become stale will have
+ * already queued a task with updated candidates. Once all tasks have been
+ * attempted the chain will have been resolved as best as possible.
+ */
+
 /*! \brief Taskprocessor which optimizes things */
 static struct ast_taskprocessor *taskprocessor;
 
