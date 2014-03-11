@@ -265,38 +265,6 @@ int ast_unreal_answer(struct ast_channel *ast)
 	return res;
 }
 
-/*!
- * \internal
- * \brief Check and optimize out the unreal channels between bridges.
- * \since 12.0.0
- *
- * \param ast Channel writing a frame into the unreal channels.
- * \param p Unreal channel private.
- *
- * \note It is assumed that ast is locked.
- * \note It is assumed that p is locked.
- *
- * \retval 0 if unreal channels were not optimized out.
- * \retval non-zero if unreal channels were optimized out.
- */
-static int got_optimized_out(struct ast_channel *ast, struct ast_unreal_pvt *p)
-{
-	int res = 0;
-
-	/* Do a few conditional checks early on just to see if this optimization is possible */
-	if (ast_test_flag(p, AST_UNREAL_NO_OPTIMIZATION) || !p->chan || !p->owner) {
-		return res;
-	}
-
-	if (ast == p->owner) {
-		res = ast_bridge_unreal_optimize_out(p->owner, p->chan, p);
-	} else if (ast == p->chan) {
-		res = ast_bridge_unreal_optimize_out(p->chan, p->owner, p);
-	}
-
-	return res;
-}
-
 struct ast_frame  *ast_unreal_read(struct ast_channel *ast)
 {
 	return &ast_null_frame;
@@ -314,17 +282,7 @@ int ast_unreal_write(struct ast_channel *ast, struct ast_frame *f)
 	/* Just queue for delivery to the other side */
 	ao2_ref(p, 1);
 	ao2_lock(p);
-	switch (f->frametype) {
-	case AST_FRAME_VOICE:
-	case AST_FRAME_VIDEO:
-		if (got_optimized_out(ast, p)) {
-			break;
-		}
-		/* fall through */
-	default:
-		res = unreal_queue_frame(p, AST_UNREAL_IS_OUTBOUND(ast, p), f, ast, 1);
-		break;
-	}
+	res = unreal_queue_frame(p, AST_UNREAL_IS_OUTBOUND(ast, p), f, ast, 1);
 	ao2_unlock(p);
 	ao2_ref(p, -1);
 

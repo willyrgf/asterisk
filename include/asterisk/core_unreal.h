@@ -91,7 +91,11 @@ struct ast_unreal_pvt_callbacks {
 struct ast_unreal_pvt {
 	struct ast_unreal_pvt_callbacks *callbacks; /*!< Event callbacks */
 	struct ast_channel *owner;                  /*!< Master Channel - ;1 side */
+	struct ast_bridge *bridge_owner;			/*!< Bridge the master channel is in */
+	struct ast_channel *bridged_owner;			/*!< The peer of the master channel */
 	struct ast_channel *chan;                   /*!< Outbound channel - ;2 side */
+	struct ast_bridge *bridge_chan;				/*!< Bridge the outbound channel is in */
+	struct ast_channel *bridged_chan;			/*!< The peer of the outbound channel */
 	struct ast_format_cap *reqcap;              /*!< Requested format capabilities */
 	struct ast_jb_conf jb_conf;                 /*!< jitterbuffer configuration */
 	unsigned int flags;                         /*!< Private option flags */
