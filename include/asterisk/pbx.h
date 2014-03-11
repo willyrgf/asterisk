@@ -496,6 +496,13 @@ int ast_get_hint(char *hint, int hintsize, char *name, int namesize,
 int ast_str_get_hint(struct ast_str **hint, ssize_t hintsize, struct ast_str **name, ssize_t namesize,
 	struct ast_channel *c, const char *context, const char *exten);
 
+/*! \brief  ast_hint_reinit_provider: Reinitialize hints for a provider after provider
+ *	was added
+ *
+ * \param provider the provider identifier
+ */
+void ast_hint_reinit_provider(const char *provider);
+
 /*!
  * \brief Determine whether an extension exists
  *

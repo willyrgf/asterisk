@@ -5097,6 +5097,34 @@ int ast_str_get_hint(struct ast_str **hint, ssize_t hintsize, struct ast_str **n
 	return -1;
 }
 
+/*! \brief  ast_hint_reinit_provider: Reinitialize hints for a provider after provider
+	was added
+ */
+void ast_hint_reinit_provider(const char *provider)
+{
+	struct ast_hint *hint;
+	struct ao2_iterator i;
+	const char *hinttext;
+	char providerlabel[AST_MAX_EXTENSION];
+
+	snprintf(providerlabel, sizeof(providerlabel), "%s:", provider);
+
+	if (ao2_container_count(hints) == 0) {
+		return;
+	}
+
+	i = ao2_iterator_init(hints, 0);
+
+	for (hint = ao2_iterator_next(&i); hint; ao2_ref(hint, -1), hint = ao2_iterator_next(&i)) {
+		hinttext = ast_get_extension_app(hint->exten);
+		/* If we find the provider label in the hint, we need to reinitialize the hint */
+		if (strcasestr(hinttext, providerlabel)) {
+			ast_extension_state2(hint->exten);
+		}
+	}
+	ao2_iterator_destroy(&i);
+}
+
 int ast_exists_extension(struct ast_channel *c, const char *context, const char *exten, int priority, const char *callerid)
 {
 	return pbx_extension_helper(c, NULL, context, exten, priority, NULL, callerid, E_MATCH, 0, 0);

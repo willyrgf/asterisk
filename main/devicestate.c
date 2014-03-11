@@ -382,6 +382,9 @@ int ast_devstate_prov_add(const char *label, ast_devstate_prov_cb_type callback)
 	AST_RWLIST_INSERT_HEAD(&devstate_provs, devprov, list);
 	AST_RWLIST_UNLOCK(&devstate_provs);
 
+	/* Check if we have devices in the hint list that need initialization */
+	ast_hint_reinit_provider(label);
+
 	return 0;
 }
 
