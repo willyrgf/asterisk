@@ -1067,6 +1067,15 @@
 					<synopsis>Maximum number of threads in the res_pjsip threadpool.
 					A value of 0 indicates no maximum.</synopsis>
 				</configOption>
+				<configOption name="nameservers" default="auto">
+					<synopsis>Set nameservers to use for DNS resolution.</synopsis>
+					<description><para>
+						The nameservers can be specified by order of preference using ',' as a separator.
+						To have the nameservers configured on the system automatically used you can specify
+						the special value of "auto". To disable DNS support and resort to using the system
+						for resolution you can specify the special value of "disabled".
+					</para></description>
+				</configOption>
 				<configOption name="type">
 					<synopsis>Must be of type 'system'.</synopsis>
 				</configOption>
@@ -2296,6 +2305,17 @@ static int load_module(void)
 	sip_threadpool = ast_threadpool_create("SIP", NULL, &options);
 	if (!sip_threadpool) {
 		ast_log(LOG_ERROR, "Failed to create SIP threadpool. Aborting load\n");
+		ast_sip_destroy_system();
+		pj_pool_release(memory_pool);
+		memory_pool = NULL;
+		pjsip_endpt_destroy(ast_pjsip_endpoint);
+		ast_pjsip_endpoint = NULL;
+		pj_caching_pool_destroy(&caching_pool);
+		return AST_MODULE_LOAD_DECLINE;
+	}
+
+	if (ast_sip_initialize_dns()) {
+		ast_log(LOG_ERROR, "Failed to initialize DNS. Aborting load\n");
 		ast_sip_destroy_system();
 		pj_pool_release(memory_pool);
 		memory_pool = NULL;
