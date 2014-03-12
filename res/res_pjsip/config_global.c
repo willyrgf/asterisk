@@ -147,7 +147,7 @@ int ast_sip_initialize_sorcery_global(void)
 
 
 /*! \brief Helper function which gets the system nameservers adds them to the nameservers array */
-static int system_add_resolv_conf_nameservers(pj_pool_t *pool, pj_str_t *nameservers, unsigned int *count)
+static int system_add_system_nameservers(pj_pool_t *pool, pj_str_t *nameservers, unsigned int *count)
 {
 	struct ao2_container *discovered_nameservers;
 	struct ao2_iterator it_nameservers;
@@ -224,7 +224,7 @@ static int system_create_resolver_and_set_nameservers(void *data)
 			if (!pool) {
 				ast_log(LOG_ERROR, "Could not create memory pool for automatic nameserver discovery\n");
 				return -1;
-			} else if (system_add_resolv_conf_nameservers(pool, nameservers, &count)) {
+			} else if (system_add_system_nameservers(pool, nameservers, &count)) {
 				/* A log message will have already been output by system_add_resolv_conf_nameservers */
 				pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
 				return -1;
