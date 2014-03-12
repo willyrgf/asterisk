@@ -25,6 +25,7 @@
 #include "asterisk/sorcery.h"
 #include "include/res_pjsip_private.h"
 #include "asterisk/threadpool.h"
+#include "asterisk/dns.h"
 
 #define TIMER_T1_MIN 100
 #define DEFAULT_TIMER_T1 500
@@ -187,39 +188,34 @@ void ast_sip_destroy_system(void)
 /*! \brief Helper function which parses resolv.conf and automatically adds nameservers if found */
 static int system_add_resolv_conf_nameservers(pj_pool_t *pool, pj_str_t *nameservers, unsigned int *count)
 {
-	FILE *f;
-	char buf[256], *nameserver = buf + 10;
+	struct ao2_container *discovered_nameservers;
+	struct ao2_iterator it_nameservers;
+	char *nameserver;
 
-	f = fopen("/etc/resolv.conf", "r");
-	if (!f) {
-		ast_log(LOG_ERROR, "Could not open '/etc/resolv.conf' for automatic nameserver discovery\n");
+	discovered_nameservers = ast_dns_get_nameservers();
+	if (!discovered_nameservers) {
+		ast_log(LOG_ERROR, "Could not retrieve local system nameservers\n");
 		return -1;
 	}
 
-	while (!feof(f)) {
-		if (!fgets(buf, sizeof(buf), f)) {
-			if (ferror(f)) {
-				ast_log(LOG_ERROR, "Error reading from file /etc/resolv.conf: %s\n", strerror(errno));
-			}
-			continue;
-		} else if (strncmp(buf, "nameserver", 10)) {
-			continue;
-		}
+	if (!ao2_container_count(discovered_nameservers)) {
+		ast_log(LOG_ERROR, "There are no local system nameservers configured\n");
+		ao2_ref(discovered_nameservers, -1);
+		return -1;
+	}
 
-		nameserver = ast_strip((buf + 10));
-		if (ast_strlen_zero(nameserver)) {
-			continue;
-		}
-
-		/* Since the memory where the nameserver is held will be overwritten we duplicate it from a pool passed in*/
+	it_nameservers = ao2_iterator_init(discovered_nameservers, 0);
+	while ((nameserver = ao2_iterator_next(&it_nameservers))) {
 		pj_strdup2(pool, &nameservers[(*count)++], nameserver);
+		ao2_ref(nameserver, -1);
 
 		if (*count == (PJ_DNS_RESOLVER_MAX_NS - 1)) {
 			break;
 		}
 	}
+	ao2_iterator_destroy(&it_nameservers);
 
-	fclose(f);
+	ao2_ref(discovered_nameservers, -1);
 
 	return 0;
 }
