@@ -25,10 +25,12 @@
 #include "include/res_pjsip_private.h"
 #include "asterisk/sorcery.h"
 #include "asterisk/ast_version.h"
+#include "asterisk/dns.h"
 
 #define DEFAULT_MAX_FORWARDS 70
 #define DEFAULT_USERAGENT_PREFIX "Asterisk PBX"
 #define DEFAULT_OUTBOUND_ENDPOINT "default_outbound_endpoint"
+#define DEFAULT_NAMESERVERS "auto"
 
 static char default_useragent[128];
 
@@ -39,6 +41,8 @@ struct global_config {
 		AST_STRING_FIELD(default_outbound_endpoint);
 		/*! Debug logging yes|no|host */
 		AST_STRING_FIELD(debug);
+		/*! Nameservers for DNS */
+		AST_STRING_FIELD(nameservers);
 	);
 	/* Value to put in Max-Forwards header */
 	unsigned int max_forwards;
@@ -135,6 +139,138 @@ int ast_sip_initialize_sorcery_global(void)
 			OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, default_outbound_endpoint));
 	ast_sorcery_object_field_register(sorcery, "global", "debug", "no",
 			OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, debug));
+	ast_sorcery_object_field_register(sorcery, "global", "nameservers", DEFAULT_NAMESERVERS,
+			OPT_STRINGFIELD_T, 0, STRFLDSET(struct global_config, nameservers));
 
 	return 0;
+}
+
+
+/*! \brief Helper function which parses resolv.conf and automatically adds nameservers if found */
+static int system_add_resolv_conf_nameservers(pj_pool_t *pool, pj_str_t *nameservers, unsigned int *count)
+{
+	struct ao2_container *discovered_nameservers;
+	struct ao2_iterator it_nameservers;
+	char *nameserver;
+
+	discovered_nameservers = ast_dns_get_nameservers();
+	if (!discovered_nameservers) {
+		ast_log(LOG_ERROR, "Could not retrieve local system nameservers\n");
+		return -1;
+	}
+
+	if (!ao2_container_count(discovered_nameservers)) {
+		ast_log(LOG_ERROR, "There are no local system nameservers configured\n");
+		ao2_ref(discovered_nameservers, -1);
+		return -1;
+	}
+
+	it_nameservers = ao2_iterator_init(discovered_nameservers, 0);
+	while ((nameserver = ao2_iterator_next(&it_nameservers))) {
+		pj_strdup2(pool, &nameservers[(*count)++], nameserver);
+		ao2_ref(nameserver, -1);
+
+		if (*count == (PJ_DNS_RESOLVER_MAX_NS - 1)) {
+			break;
+		}
+	}
+	ao2_iterator_destroy(&it_nameservers);
+
+	ao2_ref(discovered_nameservers, -1);
+
+	return 0;
+}
+
+static int system_create_resolver_and_set_nameservers(void *data)
+{
+	struct global_config *cfg = get_global_cfg();
+	pj_status_t status;
+	pj_pool_t *pool = NULL;
+	pj_dns_resolver *resolver;
+	pj_str_t nameservers[PJ_DNS_RESOLVER_MAX_NS];
+	unsigned int count = 0;
+	char *nameserver, *remaining;
+
+	if (cfg) {
+		remaining = ast_strdupa(cfg->nameservers);
+	} else {
+		remaining = ast_strdupa(DEFAULT_NAMESERVERS);
+	}
+
+	ao2_cleanup(cfg);
+
+	/* If DNS support has been disabled don't even bother doing anything, just resort to the
+	 * system way of doing lookups
+	 */
+	if (!strcmp(remaining, "disabled")) {
+		return 0;
+	}
+
+	if (!pjsip_endpt_get_resolver(ast_sip_get_pjsip_endpoint())) {
+		status = pjsip_endpt_create_resolver(ast_sip_get_pjsip_endpoint(), &resolver);
+		if (status != PJ_SUCCESS) {
+			ast_log(LOG_ERROR, "Could not create DNS resolver(%d)\n", status);
+			return -1;
+		}
+	}
+
+	while ((nameserver = strsep(&remaining, ","))) {
+		nameserver = ast_strip(nameserver);
+
+		if (!strcmp(nameserver, "auto")) {
+			if (!pool) {
+				pool = pjsip_endpt_create_pool(ast_sip_get_pjsip_endpoint(), "Automatic Nameserver Discovery", 256, 256);
+			}
+			if (!pool) {
+				ast_log(LOG_ERROR, "Could not create memory pool for automatic nameserver discovery\n");
+				return -1;
+			} else if (system_add_resolv_conf_nameservers(pool, nameservers, &count)) {
+				/* A log message will have already been output by system_add_resolv_conf_nameservers */
+				pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
+				return -1;
+			}
+		} else {
+			pj_strset2(&nameservers[count++], nameserver);
+		}
+
+		/* If we have reached the max number of nameservers we can specify bail early */
+		if (count == (PJ_DNS_RESOLVER_MAX_NS - 1)) {
+			break;
+		}
+	}
+
+	if (!count) {
+		ast_log(LOG_ERROR, "No nameservers specified for DNS resolver, resorting to system resolution\n");
+		if (pool) {
+			pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
+		}
+		return 0;
+	}
+
+	status = pj_dns_resolver_set_ns(resolver, count, nameservers, NULL);
+
+	/* Since we no longer need the nameservers we can drop the memory pool they may be allocated from */
+	if (pool) {
+		pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
+	}
+
+	if (status != PJ_SUCCESS) {
+		ast_log(LOG_ERROR, "Could not set nameservers on DNS resolver in PJSIP(%d)\n", status);
+		return -1;
+	}
+
+	if (!pjsip_endpt_get_resolver(ast_sip_get_pjsip_endpoint())) {
+		status = pjsip_endpt_set_resolver(ast_sip_get_pjsip_endpoint(), resolver);
+		if (status != PJ_SUCCESS) {
+			ast_log(LOG_ERROR, "Could not set DNS resolver in PJSIP(%d)\n", status);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+int ast_sip_initialize_dns(void)
+{
+	return ast_sip_push_task_synchronous(NULL, system_create_resolver_and_set_nameservers, NULL);
 }

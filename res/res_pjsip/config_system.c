@@ -25,13 +25,10 @@
 #include "asterisk/sorcery.h"
 #include "include/res_pjsip_private.h"
 #include "asterisk/threadpool.h"
-#include "asterisk/dns.h"
 
 #define TIMER_T1_MIN 100
 #define DEFAULT_TIMER_T1 500
 #define DEFAULT_TIMER_B 32000
-
-#define NAMESERVERS_SIZE 512
 
 struct system_config {
 	SORCERY_OBJECT(details);
@@ -51,15 +48,11 @@ struct system_config {
 		/*! Maxumum number of threads in the threadpool */
 		int max_size;
 	} threadpool;
-	/*! Configured nameservers */
-	char nameservers[NAMESERVERS_SIZE];
 };
 
 static struct ast_threadpool_options sip_threadpool_options = {
 	.version = AST_THREADPOOL_OPTIONS_VERSION,
 };
-
-static char sip_nameservers[NAMESERVERS_SIZE];
 
 void sip_get_threadpool_options(struct ast_threadpool_options *threadpool_options)
 {
@@ -109,8 +102,6 @@ static int system_apply(const struct ast_sorcery *system_sorcery, void *obj)
 	sip_threadpool_options.idle_timeout = system->threadpool.idle_timeout;
 	sip_threadpool_options.max_size = system->threadpool.max_size;
 
-	ast_copy_string(sip_nameservers, system->nameservers, sizeof(sip_nameservers));
-
 	return 0;
 }
 
@@ -151,8 +142,6 @@ int ast_sip_initialize_system(void)
 			OPT_UINT_T, 0, FLDSET(struct system_config, threadpool.idle_timeout));
 	ast_sorcery_object_field_register(system_sorcery, "system", "threadpool_max_size", "0",
 			OPT_UINT_T, 0, FLDSET(struct system_config, threadpool.max_size));
-	ast_sorcery_object_field_register(system_sorcery, "system", "nameservers", "auto",
-			OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct system_config, nameservers));
 
 	ast_sorcery_load(system_sorcery);
 
@@ -185,118 +174,3 @@ void ast_sip_destroy_system(void)
 	ast_sorcery_unref(system_sorcery);
 }
 
-/*! \brief Helper function which parses resolv.conf and automatically adds nameservers if found */
-static int system_add_resolv_conf_nameservers(pj_pool_t *pool, pj_str_t *nameservers, unsigned int *count)
-{
-	struct ao2_container *discovered_nameservers;
-	struct ao2_iterator it_nameservers;
-	char *nameserver;
-
-	discovered_nameservers = ast_dns_get_nameservers();
-	if (!discovered_nameservers) {
-		ast_log(LOG_ERROR, "Could not retrieve local system nameservers\n");
-		return -1;
-	}
-
-	if (!ao2_container_count(discovered_nameservers)) {
-		ast_log(LOG_ERROR, "There are no local system nameservers configured\n");
-		ao2_ref(discovered_nameservers, -1);
-		return -1;
-	}
-
-	it_nameservers = ao2_iterator_init(discovered_nameservers, 0);
-	while ((nameserver = ao2_iterator_next(&it_nameservers))) {
-		pj_strdup2(pool, &nameservers[(*count)++], nameserver);
-		ao2_ref(nameserver, -1);
-
-		if (*count == (PJ_DNS_RESOLVER_MAX_NS - 1)) {
-			break;
-		}
-	}
-	ao2_iterator_destroy(&it_nameservers);
-
-	ao2_ref(discovered_nameservers, -1);
-
-	return 0;
-}
-
-static int system_create_resolver_and_set_nameservers(void *data)
-{
-	pj_status_t status;
-	pj_pool_t *pool = NULL;
-	pj_dns_resolver *resolver;
-	pj_str_t nameservers[PJ_DNS_RESOLVER_MAX_NS];
-	unsigned int count = 0;
-	char *nameserver, *remaining = sip_nameservers;
-
-	status = pjsip_endpt_create_resolver(ast_sip_get_pjsip_endpoint(), &resolver);
-	if (status != PJ_SUCCESS) {
-		ast_log(LOG_ERROR, "Could not create DNS resolver(%d)\n", status);
-		return -1;
-	}
-
-	while ((nameserver = strsep(&remaining, ","))) {
-		nameserver = ast_strip(nameserver);
-
-		if (!strcmp(nameserver, "auto")) {
-			if (!pool) {
-				pool = pjsip_endpt_create_pool(ast_sip_get_pjsip_endpoint(), "Automatic Nameserver Discovery", 256, 256);
-			}
-			if (!pool) {
-				ast_log(LOG_ERROR, "Could not create memory pool for automatic nameserver discovery\n");
-				return -1;
-			} else if (system_add_resolv_conf_nameservers(pool, nameservers, &count)) {
-				/* A log message will have already been output by system_add_resolv_conf_nameservers */
-				pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-				return -1;
-			}
-		} else {
-			pj_strset2(&nameservers[count++], nameserver);
-		}
-
-		/* If we have reached the max number of nameservers we can specify bail early */
-		if (count == (PJ_DNS_RESOLVER_MAX_NS - 1)) {
-			break;
-		}
-	}
-
-	if (!count) {
-		ast_log(LOG_ERROR, "No nameservers specified for DNS resolver, resorting to system resolution\n");
-		if (pool) {
-			pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-		}
-		return 0;
-	}
-
-	status = pj_dns_resolver_set_ns(resolver, count, nameservers, NULL);
-
-	/* Since we no longer need the nameservers we can drop the memory pool they may be allocated from */
-	if (pool) {
-		pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
-	}
-
-	if (status != PJ_SUCCESS) {
-		ast_log(LOG_ERROR, "Could not set nameservers on DNS resolver in PJSIP(%d)\n", status);
-		return -1;
-	}
-
-	status = pjsip_endpt_set_resolver(ast_sip_get_pjsip_endpoint(), resolver);
-	if (status != PJ_SUCCESS) {
-		ast_log(LOG_ERROR, "Could not set DNS resolver in PJSIP(%d)\n", status);
-		return -1;
-	}
-
-	return 0;
-}
-
-int ast_sip_initialize_dns(void)
-{
-	/* If DNS support has been disabled don't even bother doing anything, just resort to the
-	 * system way of doing lookups
-	 */
-	if (!strcmp(sip_nameservers, "disabled")) {
-		return 0;
-	}
-
-	return ast_sip_push_task_synchronous(NULL, system_create_resolver_and_set_nameservers, NULL);
-}
