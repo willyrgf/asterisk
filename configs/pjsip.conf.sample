@@ -688,6 +688,12 @@
                                                         ; int")
 ;debug=no ; Enable/Disable SIP debug logging.  Valid options include yes|no
           ; or a host address (default: "no")
+;nameservers=auto ; The nameservers to use for DNS resolution. Valid options
+                  ; include disabled, auto, or a comma separated list of
+                  ; addresses. If auto is used the system nameservers will be
+                  ; automatically used. If a comma separated list is provided
+                  ; the order of addresses specifies the preference.
+                  ; (default: "auto")
 
 
 ; MODULE PROVIDING BELOW SECTION(S): res_pjsip_acl
