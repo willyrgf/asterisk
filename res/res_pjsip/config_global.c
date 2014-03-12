@@ -146,7 +146,7 @@ int ast_sip_initialize_sorcery_global(void)
 }
 
 
-/*! \brief Helper function which parses resolv.conf and automatically adds nameservers if found */
+/*! \brief Helper function which gets the system nameservers adds them to the nameservers array */
 static int system_add_resolv_conf_nameservers(pj_pool_t *pool, pj_str_t *nameservers, unsigned int *count)
 {
 	struct ao2_container *discovered_nameservers;
