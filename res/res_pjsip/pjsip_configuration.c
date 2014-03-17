@@ -1760,13 +1760,6 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 		return -1;
 	}
 
-	if (ast_sip_initialize_dns()) {
-		ast_log(LOG_ERROR, "Failed to initialize DNS support\n");
-		ast_sorcery_unref(sip_sorcery);
-		sip_sorcery = NULL;
-		return -1;
-	}
-
 	channel_formatter = ao2_alloc(sizeof(struct ast_sip_cli_formatter_entry), NULL);
 	if (!channel_formatter) {
 		ast_log(LOG_ERROR, "Unable to allocate memory for channel_formatter\n");

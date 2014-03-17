@@ -74,11 +74,8 @@ void ast_sip_destroy_system(void);
 
 /*!
  * \brief Initialize nameserver configuration
- *
- * \retval 0 Success
- * \retval non-zero Failure
  */
-int ast_sip_initialize_dns(void);
+void ast_sip_initialize_dns(void);
 
 /*!
  * \brief Initialize global configuration

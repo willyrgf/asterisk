@@ -1093,15 +1093,6 @@
 					<synopsis>Enable/Disable SIP debug logging.  Valid options include yes|no or
                                         a host address</synopsis>
 				</configOption>
-				<configOption name="nameservers" default="auto">
-					<synopsis>Set nameservers to use for DNS resolution.</synopsis>
-					<description><para>
-						The nameservers can be specified by order of preference using ',' as a separator.
-						To have the nameservers configured on the system automatically used you can specify
-						the special value of "auto". To disable DNS support and resort to using the system
-						for resolution you can specify the special value of "disabled".
-					</para></description>
-				</configOption>
 			</configObject>
 		</configFile>
 	</configInfo>
@@ -2314,6 +2305,8 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
+	ast_sip_initialize_dns();
+
 	pjsip_tsx_layer_init_module(ast_pjsip_endpoint);
 	pjsip_ua_init_module(ast_pjsip_endpoint, NULL);
 
@@ -2404,6 +2397,7 @@ static int reload_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_res_pjsip_init_options_handling(1);
+	ast_sip_initialize_dns();
 	return 0;
 }
 
