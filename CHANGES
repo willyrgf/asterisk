@@ -24,9 +24,11 @@ ARI
 
 res_pjsip
 ------------------
- * DNS functionality has now been enabled and can be controlled using the
-   "nameservers" option in the global configuration type. By default this is
-   enabled and set to "auto" which uses the system configured nameservers.
+ * DNS functionality will now automatically be enabled if the system configured
+   nameservers can be retrieved. If the system configured nameservers can not be
+   retrieved the functionality will resort to using system resolution. Functionalty
+   such as SRV records and failover will not be available if system resolution
+   is in use.
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 12.0.0 to Asterisk 12.1.0 ------------

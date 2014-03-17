@@ -29,7 +29,6 @@
 #define DEFAULT_MAX_FORWARDS 70
 #define DEFAULT_USERAGENT_PREFIX "Asterisk PBX"
 #define DEFAULT_OUTBOUND_ENDPOINT "default_outbound_endpoint"
-#define DEFAULT_NAMESERVERS "auto"
 
 static char default_useragent[128];
 
