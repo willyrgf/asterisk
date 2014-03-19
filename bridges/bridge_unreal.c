@@ -80,12 +80,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
  * \par Resolving Chains
  *
  * Chains are automatically resolved by the implementation queueing multiple
- * optimization tasks as each hop in the chain is resolved. Since a task
- * preceeding another in the queue may result in the optimization candidates
- * becoming stale it is possible for the move attempt to fail. This will resolve
- * itself automatically as the action causing it to become stale will have
- * already queued a task with updated candidates. Once all tasks have been
- * attempted the chain will have been resolved as best as possible.
+ * optimization tasks as each hop in the chain successfully gathers candidates.
+ * Since a task preceeding another in the queue may result in the optimization
+ * candidates becoming stale it is possible for the move attempt to fail. This
+ * will resolve itself automatically as the action causing it to become stale
+ * will have already queued a task with updated candidates. Once all tasks have
+ * been attempted the chain will have been resolved as best as possible.
  */
 
 /*! \brief Taskprocessor which optimizes things */
