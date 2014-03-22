@@ -959,6 +959,23 @@ struct ast_sorcery_object_type *ast_sorcery_get_object_type(const struct ast_sor
 int ast_sorcery_is_object_field_registered(const struct ast_sorcery_object_type *object_type,
 		const char *field_name);
 
+/*!
+ * \brief Tell sorcery of composite objects' makeup
+ *
+ * Composite sorcery objects are made up of other sorcery objects.
+ * By telling sorcery of this relationship, sorcery can do some magic to
+ * ensure that when one of the composing objects is requested, it can
+ * be found properly.
+ *
+ * \param composite_type Name of composite type.
+ * \param composing_type Name of the type that composes the composite type.
+ * \param offset The offset within the composite type where the composing type is located.
+ *
+ * \retval 0 Success
+ * \retval -1 Failure
+ */
+int ast_sorcery_object_composes(const char *composite_type, const char *composing_type, size_t offset);
+
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
