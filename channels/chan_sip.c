@@ -4641,8 +4641,20 @@ static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 	const char *msg = NULL;
 	struct ast_channel *chan;
 	int res = 0;
+	int old_sched_id = pvt->provisional_keepalive_sched_id;
 
 	chan = sip_pvt_lock_full(pvt);
+	/* Check that nothing has changed while we were waiting for the lock */
+	if (old_sched_id != pvt->provisional_keepalive_sched_id) {
+		/* Keepalive has been cancelled or rescheduled, clean up and leave */
+		if (chan) {
+			ast_channel_unlock(chan);
+			chan = ast_channel_unref(chan);
+		}
+		sip_pvt_unlock(pvt);
+		dialog_unref(pvt, "dialog ref for provisional keepalive");
+		return 0;
+	}
 
 	if (!pvt->last_provisional || !strncasecmp(pvt->last_provisional, "100", 3)) {
 		msg = "183 Session Progress";
@@ -4668,20 +4680,9 @@ static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 
 	sip_pvt_unlock(pvt);
 
-#if 0
-	/*
-	 * XXX BUG TODO
-	 *
-	 * Without this code, it appears as if this function is leaking its
-	 * reference to the sip_pvt.  However, adding it introduces a crash.
-	 * This points to some sort of reference count imbalance elsewhere,
-	 * but I'm not sure where ...
-	 */
 	if (!res) {
 		dialog_unref(pvt, "dialog ref for provisional keepalive");
 	}
-#endif
-
 	return res;
 }
 
@@ -12574,7 +12575,6 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 	const char *fromdomain;
 	const char *privacy = NULL;
 	const char *screen = NULL;
-	const char *anonymous_string = "\"Anonymous\" <sip:anonymous@anonymous.invalid>";
 	struct ast_party_id connected_id;
 
 	if (!ast_test_flag(&p->flags[0], SIP_SENDRPID)) {
@@ -12600,12 +12600,11 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 	lid_num = ast_uri_encode(lid_num, tmp2, sizeof(tmp2), ast_uri_sip_user);
 
 	if (ast_test_flag(&p->flags[0], SIP_SENDRPID_PAI)) {
-		if ((lid_pres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
-			ast_str_set(&tmp, -1, "%s", anonymous_string);
-		} else {
-			ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>", lid_name, lid_num, fromdomain);
-		}
+		ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>", lid_name, lid_num, fromdomain);
 		add_header(req, "P-Asserted-Identity", ast_str_buffer(tmp));
+		if ((lid_pres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
+			add_header(req, "Privacy", "id");
+		}
 	} else {
 		ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>;party=%s", lid_name, lid_num, fromdomain, p->outgoing_call ? "calling" : "called");
 
@@ -13373,8 +13372,9 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 
 		ast_debug(3, "-- Done with adding codecs to SDP\n");
 
-		if (!p->owner || !ast_internal_timing_enabled(p->owner))
+		if (!p->owner || ast_channel_timingfd(p->owner) == -1) {
 			ast_str_append(&a_audio, 0, "a=silenceSupp:off - - - -\r\n");
+		}
 
 		if (min_audio_packet_size)
 			ast_str_append(&a_audio, 0, "a=ptime:%d\r\n", min_audio_packet_size);
@@ -13889,7 +13889,9 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Init: %s", sip_methods[sipmethod].text);
 
-	d = S_OR(p->fromdomain, ast_sockaddr_stringify_host_remote(&p->ourip));
+	if (ast_strlen_zero(p->fromdomain)) {
+		d = ast_sockaddr_stringify_host_remote(&p->ourip);
+	}
 	if (p->owner) {
 		connected_id = ast_channel_connected_effective_id(p->owner);
 
@@ -13939,6 +13941,12 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		n = p->fromname;
 	else /* Save for any further attempts */
 		ast_string_field_set(p, fromname, n);
+
+	/* Allow domain to be overridden */
+	if (!ast_strlen_zero(p->fromdomain))
+		d = p->fromdomain;
+	else /* Save for any further attempts */
+		ast_string_field_set(p, fromdomain, d);
 
 	ast_copy_string(tmp_l, l, sizeof(tmp_l));
 	if (sip_cfg.pedanticsipchecking) {
@@ -22133,7 +22141,12 @@ static int func_header_read(struct ast_channel *chan, const char *function, char
 	);
 	int i, number, start = 0;
 
- 	if (ast_strlen_zero(data)) {
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
+	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "This function requires a header name.\n");
 		return -1;
 	}
@@ -22318,8 +22331,13 @@ static int function_sipchaninfo_read(struct ast_channel *chan, const char *cmd, 
 	static int deprecated = 0;
 
 	*buf = 0;
-	
- 	if (!data) {
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
+	if (!data) {
 		ast_log(LOG_WARNING, "This function requires a parameter name.\n");
 		return -1;
 	}
@@ -25306,6 +25324,145 @@ static int handle_request_prack(struct sip_pvt *p, struct sip_request *req)
 	return 0;
 }
 
+/*
+ * \internal \brief Check Session Timers for an INVITE request
+ *
+ * \retval 0 ok
+ * \retval -1 failure
+ */
+static int handle_request_invite_st(struct sip_pvt *p, struct sip_request *req,
+		const char *required, int reinvite)
+{
+	const char *p_uac_se_hdr;       /* UAC's Session-Expires header string                      */
+	const char *p_uac_min_se;       /* UAC's requested Min-SE interval (char string)            */
+	int uac_max_se = -1;            /* UAC's Session-Expires in integer format                  */
+	int uac_min_se = -1;            /* UAC's Min-SE in integer format                           */
+	int st_active = FALSE;          /* Session-Timer on/off boolean                             */
+	int st_interval = 0;            /* Session-Timer negotiated refresh interval                */
+	enum st_refresher tmp_st_ref = SESSION_TIMER_REFRESHER_AUTO; /* Session-Timer refresher     */
+	int dlg_min_se = -1;
+	int dlg_max_se = global_max_se;
+	int rtn;
+
+	/* Session-Timers */
+	if ((p->sipoptions & SIP_OPT_TIMER)) {
+		enum st_refresher_param st_ref_param = SESSION_TIMER_REFRESHER_PARAM_UNKNOWN;
+
+		/* The UAC has requested session-timers for this session. Negotiate
+		the session refresh interval and who will be the refresher */
+		ast_debug(2, "Incoming INVITE with 'timer' option supported\n");
+
+		/* Allocate Session-Timers struct w/in the dialog */
+		if (!p->stimer) {
+			sip_st_alloc(p);
+		}
+
+		/* Parse the Session-Expires header */
+		p_uac_se_hdr = sip_get_header(req, "Session-Expires");
+		if (!ast_strlen_zero(p_uac_se_hdr)) {
+			ast_debug(2, "INVITE also has \"Session-Expires\" header.\n");
+			rtn = parse_session_expires(p_uac_se_hdr, &uac_max_se, &st_ref_param);
+			tmp_st_ref = (st_ref_param == SESSION_TIMER_REFRESHER_PARAM_UAC) ? SESSION_TIMER_REFRESHER_THEM : SESSION_TIMER_REFRESHER_US;
+			if (rtn != 0) {
+				transmit_response_reliable(p, "400 Session-Expires Invalid Syntax", req);
+				return -1;
+			}
+		}
+
+		/* Parse the Min-SE header */
+		p_uac_min_se = sip_get_header(req, "Min-SE");
+		if (!ast_strlen_zero(p_uac_min_se)) {
+			ast_debug(2, "INVITE also has \"Min-SE\" header.\n");
+			rtn = parse_minse(p_uac_min_se, &uac_min_se);
+			if (rtn != 0) {
+				transmit_response_reliable(p, "400 Min-SE Invalid Syntax", req);
+				return -1;
+			}
+		}
+
+		dlg_min_se = st_get_se(p, FALSE);
+		switch (st_get_mode(p, 1)) {
+		case SESSION_TIMER_MODE_ACCEPT:
+		case SESSION_TIMER_MODE_ORIGINATE:
+			if (uac_max_se > 0 && uac_max_se < dlg_min_se) {
+				transmit_response_with_minse(p, "422 Session Interval Too Small", req, dlg_min_se);
+				return -1;
+			}
+
+			p->stimer->st_active_peer_ua = TRUE;
+			st_active = TRUE;
+			if (st_ref_param == SESSION_TIMER_REFRESHER_PARAM_UNKNOWN) {
+				tmp_st_ref = st_get_refresher(p);
+			}
+
+			dlg_max_se = st_get_se(p, TRUE);
+			if (uac_max_se > 0) {
+				if (dlg_max_se >= uac_min_se) {
+					st_interval = (uac_max_se < dlg_max_se) ? uac_max_se : dlg_max_se;
+				} else {
+					st_interval = uac_max_se;
+				}
+			} else if (uac_min_se > 0) {
+				st_interval = MAX(dlg_max_se, uac_min_se);
+			} else {
+				st_interval = dlg_max_se;
+			}
+			break;
+
+		case SESSION_TIMER_MODE_REFUSE:
+			if (p->reqsipoptions & SIP_OPT_TIMER) {
+				transmit_response_with_unsupported(p, "420 Option Disabled", req, required);
+				ast_log(LOG_WARNING, "Received SIP INVITE with supported but disabled option: %s\n", required);
+				return -1;
+			}
+			break;
+
+		default:
+			ast_log(LOG_ERROR, "Internal Error %d at %s:%d\n", st_get_mode(p, 1), __FILE__, __LINE__);
+			break;
+		}
+	} else {
+		/* The UAC did not request session-timers.  Asterisk (UAS), will now decide
+		(based on session-timer-mode in sip.conf) whether to run session-timers for
+		this session or not. */
+		switch (st_get_mode(p, 1)) {
+		case SESSION_TIMER_MODE_ORIGINATE:
+			st_active = TRUE;
+			st_interval = st_get_se(p, TRUE);
+			tmp_st_ref = SESSION_TIMER_REFRESHER_US;
+			p->stimer->st_active_peer_ua = (p->sipoptions & SIP_OPT_TIMER) ? TRUE : FALSE;
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	if (reinvite == 0) {
+		/* Session-Timers: Start session refresh timer based on negotiation/config */
+		if (st_active == TRUE) {
+			p->stimer->st_active = TRUE;
+			p->stimer->st_interval = st_interval;
+			p->stimer->st_ref = tmp_st_ref;
+		}
+	} else {
+		if (p->stimer->st_active == TRUE) {
+			/* Session-Timers:  A re-invite request sent within a dialog will serve as
+			a refresh request, no matter whether the re-invite was sent for refreshing
+			the session or modifying it.*/
+			ast_debug (2, "Restarting session-timers on a refresh - %s\n", p->callid);
+
+			/* The UAC may be adjusting the session-timers mid-session */
+			if (st_interval > 0) {
+				p->stimer->st_interval = st_interval;
+				p->stimer->st_ref      = tmp_st_ref;
+			}
+		}
+	}
+
+	return 0;
+}
+
 /*!
  * \brief Handle incoming INVITE request
  * \note If the INVITE has a Replaces header, it is part of an
@@ -25325,19 +25482,9 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 	struct ast_channel *c = NULL;		/* New channel */
 	struct sip_peer *authpeer = NULL;	/* Matching Peer */
 	int reinvite = 0;
-	int rtn;
 	struct ast_party_redirecting redirecting;
 	struct ast_set_party_redirecting update_redirecting;
 
-	const char *p_uac_se_hdr;       /* UAC's Session-Expires header string                      */
-	const char *p_uac_min_se;       /* UAC's requested Min-SE interval (char string)            */
-	int uac_max_se = -1;            /* UAC's Session-Expires in integer format                  */
-	int uac_min_se = -1;            /* UAC's Min-SE in integer format                           */
-	int st_active = FALSE;          /* Session-Timer on/off boolean                             */
-	int st_interval = 0;            /* Session-Timer negotiated refresh interval                */
-	enum st_refresher tmp_st_ref = SESSION_TIMER_REFRESHER_AUTO; /* Session-Timer refresher     */
-	int dlg_min_se = -1;
-	int dlg_max_se = global_max_se;
 	struct {
 		char exten[AST_MAX_EXTENSION];
 		char context[AST_MAX_CONTEXT];
@@ -25836,6 +25983,14 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 			/* Initialize our tag */
 
 			make_our_tag(p);
+
+			if (handle_request_invite_st(p, req, required, reinvite)) {
+				p->invitestate = INV_COMPLETED;
+				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+				res = INV_REQ_ERROR;
+				goto request_invite_cleanup;
+			}
+
 			/* First invitation - create the channel.  Allocation
 			 * failures are handled below. */
 
@@ -25870,6 +26025,16 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 		}
 		if (!req->ignore)
 			reinvite = 1;
+
+		if (handle_request_invite_st(p, req, required, reinvite)) {
+			p->invitestate = INV_COMPLETED;
+			if (!p->lastinvite) {
+				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+			}
+			res = INV_REQ_ERROR;
+			goto request_invite_cleanup;
+		}
+
 		c = p->owner;
 		change_redirecting_information(p, req, &redirecting, &update_redirecting, FALSE); /*Will return immediately if no Diversion header is present */
 		if (c) {
@@ -25881,140 +26046,10 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, str
 	/* Check if OLI/ANI-II is present in From: */
 	parse_oli(req, p->owner);
 
-	/* Session-Timers */
-	if ((p->sipoptions & SIP_OPT_TIMER)) {
-		enum st_refresher_param st_ref_param = SESSION_TIMER_REFRESHER_PARAM_UNKNOWN;
-
-		/* The UAC has requested session-timers for this session. Negotiate
-		the session refresh interval and who will be the refresher */
-		ast_debug(2, "Incoming INVITE with 'timer' option supported\n");
-
-		/* Allocate Session-Timers struct w/in the dialog */
-		if (!p->stimer)
-			sip_st_alloc(p);
-
-		/* Parse the Session-Expires header */
-		p_uac_se_hdr = sip_get_header(req, "Session-Expires");
-		if (!ast_strlen_zero(p_uac_se_hdr)) {
-			ast_debug(2, "INVITE also has \"Session-Expires\" header.\n");
-			rtn = parse_session_expires(p_uac_se_hdr, &uac_max_se, &st_ref_param);
-			tmp_st_ref = (st_ref_param == SESSION_TIMER_REFRESHER_PARAM_UAC) ? SESSION_TIMER_REFRESHER_THEM : SESSION_TIMER_REFRESHER_US;
-			if (rtn != 0) {
-				transmit_response_reliable(p, "400 Session-Expires Invalid Syntax", req);
-				p->invitestate = INV_COMPLETED;
-				if (!p->lastinvite) {
-					sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-				}
-				res = INV_REQ_ERROR;
-				goto request_invite_cleanup;
-			}
-		}
-
-		/* Parse the Min-SE header */
-		p_uac_min_se = sip_get_header(req, "Min-SE");
-		if (!ast_strlen_zero(p_uac_min_se)) {
-			ast_debug(2, "INVITE also has \"Min-SE\" header.\n");
-			rtn = parse_minse(p_uac_min_se, &uac_min_se);
-			if (rtn != 0) {
-				transmit_response_reliable(p, "400 Min-SE Invalid Syntax", req);
-				p->invitestate = INV_COMPLETED;
-				if (!p->lastinvite) {
-					sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-				}
-				res = INV_REQ_ERROR;
-				goto request_invite_cleanup;
-			}
-		}
-
-		dlg_min_se = st_get_se(p, FALSE);
-		switch (st_get_mode(p, 1)) {
-		case SESSION_TIMER_MODE_ACCEPT:
-		case SESSION_TIMER_MODE_ORIGINATE:
-			if (uac_max_se > 0 && uac_max_se < dlg_min_se) {
-				transmit_response_with_minse(p, "422 Session Interval Too Small", req, dlg_min_se);
-				p->invitestate = INV_COMPLETED;
-				if (!p->lastinvite) {
-					sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-				}
-				res = INV_REQ_ERROR;
-				goto request_invite_cleanup;
-			}
-
-			p->stimer->st_active_peer_ua = TRUE;
-			st_active = TRUE;
-			if (st_ref_param == SESSION_TIMER_REFRESHER_PARAM_UNKNOWN) {
-				tmp_st_ref = st_get_refresher(p);
-			}
-
-			dlg_max_se = st_get_se(p, TRUE);
-			if (uac_max_se > 0) {
-				if (dlg_max_se >= uac_min_se) {
-					st_interval = (uac_max_se < dlg_max_se) ? uac_max_se : dlg_max_se;
-				} else {
-					st_interval = uac_max_se;
-				}
-			} else if (uac_min_se > 0) {
-				st_interval = MAX(dlg_max_se, uac_min_se);
-			} else {
-				st_interval = dlg_max_se;
-			}
-			break;
-
-		case SESSION_TIMER_MODE_REFUSE:
-			if (p->reqsipoptions & SIP_OPT_TIMER) {
-				transmit_response_with_unsupported(p, "420 Option Disabled", req, required);
-				ast_log(LOG_WARNING, "Received SIP INVITE with supported but disabled option: %s\n", required);
-				p->invitestate = INV_COMPLETED;
-				if (!p->lastinvite) {
-					sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-				}
-				res = INV_REQ_ERROR;
-				goto request_invite_cleanup;
-			}
-			break;
-
-		default:
-			ast_log(LOG_ERROR, "Internal Error %d at %s:%d\n", st_get_mode(p, 1), __FILE__, __LINE__);
-			break;
-		}
-	} else {
-		/* The UAC did not request session-timers.  Asterisk (UAS), will now decide
-		(based on session-timer-mode in sip.conf) whether to run session-timers for
-		this session or not. */
-		switch (st_get_mode(p, 1)) {
-		case SESSION_TIMER_MODE_ORIGINATE:
-			st_active = TRUE;
-			st_interval = st_get_se(p, TRUE);
-			tmp_st_ref = SESSION_TIMER_REFRESHER_US;
-			p->stimer->st_active_peer_ua = (p->sipoptions & SIP_OPT_TIMER) ? TRUE : FALSE;
-			break;
-
-		default:
-			break;
-		}
-	}
-
-	if (reinvite == 0) {
-		/* Session-Timers: Start session refresh timer based on negotiation/config */
-		if (st_active == TRUE) {
-			p->stimer->st_active = TRUE;
-			p->stimer->st_interval = st_interval;
-			p->stimer->st_ref = tmp_st_ref;
+	if (p->stimer->st_active == TRUE) {
+		if (reinvite == 0) {
 			start_session_timer(p);
-		}
-	} else {
-		if (p->stimer->st_active == TRUE) {
-			/* Session-Timers:  A re-invite request sent within a dialog will serve as
-			a refresh request, no matter whether the re-invite was sent for refreshing
-			the session or modifying it.*/
-			ast_debug (2, "Restarting session-timers on a refresh - %s\n", p->callid);
-
-			/* The UAC may be adjusting the session-timers mid-session */
-			if (st_interval > 0) {
-				p->stimer->st_interval = st_interval;
-				p->stimer->st_ref      = tmp_st_ref;
-			}
-
+		} else {
 			restart_session_timer(p);
 		}
 	}

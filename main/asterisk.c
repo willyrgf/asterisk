@@ -228,6 +228,7 @@ struct console {
 
 struct ast_atexit {
 	void (*func)(void);
+	int is_cleanup;
 	AST_LIST_ENTRY(ast_atexit) list;
 };
 
@@ -242,7 +243,7 @@ static char *remotehostname;
 
 struct console consoles[AST_MAX_CONNECTS];
 
-char defaultlanguage[MAX_LANGUAGE] = DEFAULT_LANGUAGE;
+char ast_defaultlanguage[MAX_LANGUAGE] = DEFAULT_LANGUAGE;
 
 static int ast_el_add_history(char *);
 static int ast_el_read_history(char *);
@@ -503,12 +504,11 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  System:                      %s/%s built by %s on %s %s\n", ast_build_os, ast_build_kernel, ast_build_user, ast_build_machine, ast_build_date);
 	ast_cli(a->fd, "  System name:                 %s\n", ast_config_AST_SYSTEM_NAME);
 	ast_cli(a->fd, "  Entity ID:                   %s\n", eid_str);
-	ast_cli(a->fd, "  Default language:            %s\n", defaultlanguage);
+	ast_cli(a->fd, "  Default language:            %s\n", ast_defaultlanguage);
 	ast_cli(a->fd, "  Language prefix:             %s\n", ast_language_is_prefix ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  User name and group:         %s/%s\n", ast_config_AST_RUN_USER, ast_config_AST_RUN_GROUP);
 	ast_cli(a->fd, "  Executable includes:         %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Transcode via SLIN:          %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSCODE_VIA_SLIN) ? "Enabled" : "Disabled");
-	ast_cli(a->fd, "  Internal timing:             %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Transmit silence during rec: %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_TRANSMIT_SILENCE) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Generic PLC:                 %s\n", ast_test_flag(&ast_options, AST_OPT_FLAG_GENERIC_PLC) ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Min DTMF duration::          %u\n", option_dtmfminduration);
@@ -970,13 +970,13 @@ static char *handle_show_version_files(struct ast_cli_entry *e, int cmd, struct 
 
 #endif /* ! LOW_MEMORY */
 
-static void ast_run_atexits(void)
+static void ast_run_atexits(int run_cleanups)
 {
 	struct ast_atexit *ae;
 
 	AST_LIST_LOCK(&atexits);
 	while ((ae = AST_LIST_REMOVE_HEAD(&atexits, list))) {
-		if (ae->func) {
+		if (ae->func && (!ae->is_cleanup || run_cleanups)) {
 			ae->func();
 		}
 		ast_free(ae);
@@ -998,7 +998,7 @@ static void __ast_unregister_atexit(void (*func)(void))
 	AST_LIST_TRAVERSE_SAFE_END;
 }
 
-int ast_register_atexit(void (*func)(void))
+static int register_atexit(void (*func)(void), int is_cleanup)
 {
 	struct ast_atexit *ae;
 
@@ -1007,6 +1007,7 @@ int ast_register_atexit(void (*func)(void))
 		return -1;
 	}
 	ae->func = func;
+	ae->is_cleanup = is_cleanup;
 
 	AST_LIST_LOCK(&atexits);
 	__ast_unregister_atexit(func);
@@ -1014,6 +1015,16 @@ int ast_register_atexit(void (*func)(void))
 	AST_LIST_UNLOCK(&atexits);
 
 	return 0;
+}
+
+int ast_register_atexit(void (*func)(void))
+{
+	return register_atexit(func, 0);
+}
+
+int ast_register_cleanup(void (*func)(void))
+{
+	return register_atexit(func, 1);
 }
 
 void ast_unregister_atexit(void (*func)(void))
@@ -1802,8 +1813,9 @@ static int can_safely_quit(shutdown_nice_t niceness, int restart)
 static void really_quit(int num, shutdown_nice_t niceness, int restart)
 {
 	int active_channels;
+	int run_cleanups = niceness >= SHUTDOWN_NICE;
 
-	if (niceness >= SHUTDOWN_NICE) {
+	if (run_cleanups) {
 		ast_module_shutdown();
 	}
 
@@ -1861,7 +1873,7 @@ static void really_quit(int num, shutdown_nice_t niceness, int restart)
 		active_channels ? "uncleanly" : "cleanly", num);
 
 	ast_verb(0, "Executing last minute cleanups\n");
-	ast_run_atexits();
+	ast_run_atexits(run_cleanups);
 
 	ast_debug(1, "Asterisk ending (%d).\n", num);
 	if (ast_socket > -1) {
@@ -3215,7 +3227,6 @@ static int show_cli_help(void)
 	printf("   -g              Dump core in case of a crash\n");
 	printf("   -h              This help screen\n");
 	printf("   -i              Initialize crypto keys at startup\n");
-	printf("   -I              Enable internal timing if DAHDI timer is available\n");
 	printf("   -L <load>       Limit the maximum load average before rejecting new calls\n");
 	printf("   -M <value>      Limit the maximum number of calls to the specified value\n");
 	printf("   -m              Mute debugging and console output on the console\n");
@@ -3389,9 +3400,6 @@ static void ast_readconfig(void)
 		/* Transmit SLINEAR silence while a channel is being recorded or DTMF is being generated on a channel */
 		} else if (!strcasecmp(v->name, "transmit_silence_during_record") || !strcasecmp(v->name, "transmit_silence")) {
 			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_TRANSMIT_SILENCE);
-		/* Enable internal timing */
-		} else if (!strcasecmp(v->name, "internal_timing")) {
-			ast_set2_flag(&ast_options, ast_true(v->value), AST_OPT_FLAG_INTERNAL_TIMING);
 		} else if (!strcasecmp(v->name, "mindtmfduration")) {
 			if (sscanf(v->value, "%30u", &option_dtmfminduration) != 1) {
 				option_dtmfminduration = AST_MIN_DTMF_DURATION;
@@ -3435,7 +3443,7 @@ static void ast_readconfig(void)
 		} else if (!strcasecmp(v->name, "languageprefix")) {
 			ast_language_is_prefix = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "defaultlanguage")) {
-			ast_copy_string(defaultlanguage, v->value, MAX_LANGUAGE);
+			ast_copy_string(ast_defaultlanguage, v->value, MAX_LANGUAGE);
 		} else if (!strcasecmp(v->name, "lockmode")) {
 			if (!strcasecmp(v->value, "lockfile")) {
 				ast_set_lock_type(AST_LOCK_TYPE_LOCKFILE);
@@ -3717,9 +3725,6 @@ int main(int argc, char *argv[])
 		case 'h':
 			show_cli_help();
 			exit(0);
-		case 'I':
-			ast_set_flag(&ast_options, AST_OPT_FLAG_INTERNAL_TIMING);
-			break;
 		case 'i':
 			ast_set_flag(&ast_options, AST_OPT_FLAG_INIT_KEYS);
 			break;

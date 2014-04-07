@@ -76,7 +76,7 @@ enum ast_option_flags {
 	AST_OPT_FLAG_DONT_WARN = (1 << 18),
 	/*! End CDRs before the 'h' extension */
 	AST_OPT_FLAG_END_CDR_BEFORE_H_EXTEN = (1 << 19),
-	/*! Use DAHDI Timing for generators if available */
+	/*! Use DAHDI Timing for generators if available (No longer used) */
 	AST_OPT_FLAG_INTERNAL_TIMING = (1 << 20),
 	/*! Always fork, even if verbose or debug settings are non-zero */
 	AST_OPT_FLAG_ALWAYS_FORK = (1 << 21),
@@ -101,11 +101,7 @@ enum ast_option_flags {
 };
 
 /*! These are the options that set by default when Asterisk starts */
-#if (defined(HAVE_DAHDI_VERSION) && HAVE_DAHDI_VERSION >= 230)
-#define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN | AST_OPT_FLAG_INTERNAL_TIMING
-#else
 #define AST_DEFAULT_OPTIONS AST_OPT_FLAG_TRANSCODE_VIA_SLIN
-#endif
 
 #define ast_opt_exec_includes		ast_test_flag(&ast_options, AST_OPT_FLAG_EXEC_INCLUDES)
 #define ast_opt_no_fork			ast_test_flag(&ast_options, AST_OPT_FLAG_NO_FORK)
@@ -162,7 +158,7 @@ extern double option_maxload;
 #if defined(HAVE_SYSINFO)
 extern long option_minmemfree;		/*!< Minimum amount of free system memory - stop accepting calls if free memory falls below this watermark */
 #endif
-extern char defaultlanguage[];
+extern char ast_defaultlanguage[];
 
 extern struct timeval ast_startuptime;
 extern struct timeval ast_lastreloadtime;

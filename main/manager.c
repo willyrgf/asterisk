@@ -1491,6 +1491,15 @@ static void session_destructor(void *obj)
 	}
 
 	if (session->f != NULL) {
+		/*
+		 * Issuing shutdown() is necessary here to avoid a race
+		 * condition where the last data written may not appear
+		 * in the the TCP stream.  See ASTERISK-23548
+		*/
+		fflush(session->f);
+		if (session->fd != -1) {
+			shutdown(session->fd, SHUT_RDWR);
+		}
 		fclose(session->f);
 	}
 	if (eqe) {
@@ -4810,6 +4819,8 @@ static enum add_filter_result manager_add_filter(const char *filter_pattern, str
 		ao2_t_link(whitefilters, new_filter, "link new filter into white user container");
 	}
 
+	ao2_ref(new_filter, -1);
+
 	return FILTER_SUCCESS;
 }
 
@@ -6411,12 +6422,21 @@ static void process_output(struct mansession *s, struct ast_str **out, struct as
 	}
 
 	if (s->f) {
+		/*
+		 * Issuing shutdown() is necessary here to avoid a race
+		 * condition where the last data written may not appear
+		 * in the the TCP stream.  See ASTERISK-23548
+		*/
+		if (s->fd != -1) {
+			shutdown(s->fd, SHUT_RDWR);
+		}
 		if (fclose(s->f)) {
 			ast_log(LOG_ERROR, "fclose() failed: %s\n", strerror(errno));
 		}
 		s->f = NULL;
 		s->fd = -1;
 	} else if (s->fd != -1) {
+		shutdown(s->fd, SHUT_RDWR);
 		if (close(s->fd)) {
 			ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
 		}
