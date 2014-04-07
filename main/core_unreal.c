@@ -814,6 +814,11 @@ void ast_unreal_destructor(void *vdoomed)
 {
 	struct ast_unreal_pvt *doomed = vdoomed;
 
+	ao2_cleanup(doomed->bridge_owner);
+	ast_channel_cleanup(doomed->bridged_owner);
+	ao2_cleanup(doomed->bridge_chan);
+	ast_channel_cleanup(doomed->bridged_chan);
+
 	doomed->reqcap = ast_format_cap_destroy(doomed->reqcap);
 }
 
