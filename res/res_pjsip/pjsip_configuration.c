@@ -1624,8 +1624,6 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 		return -1;
 	}
 
-	ast_sorcery_apply_config(sip_sorcery, "res_pjsip");
-
 	ast_sip_initialize_cli();
 
 	if (ast_sip_initialize_sorcery_auth()) {
@@ -1728,6 +1726,7 @@ int ast_res_pjsip_initialize_configuration(const struct ast_module_info *ast_mod
 	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "srtp_tag_32", "no", OPT_BOOL_T, 1, FLDSET(struct ast_sip_endpoint, media.rtp.srtp_tag_32));
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "redirect_method", "user", redirect_handler, NULL, NULL, 0, 0);
 	ast_sorcery_object_field_register_custom(sip_sorcery, "endpoint", "set_var", "", set_var_handler, set_var_to_str, set_var_to_vl, 0, 0);
+	ast_sorcery_object_field_register(sip_sorcery, "endpoint", "message_context", "", OPT_STRINGFIELD_T, 1, STRFLDSET(struct ast_sip_endpoint, message_context));
 
 	if (ast_sip_initialize_sorcery_transport()) {
 		ast_log(LOG_ERROR, "Failed to register SIP transport support with sorcery\n");

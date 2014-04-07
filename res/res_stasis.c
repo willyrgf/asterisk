@@ -588,19 +588,29 @@ static void control_unlink(struct stasis_app_control *control)
 struct ast_bridge *stasis_app_bridge_create(const char *type, const char *name, const char *id)
 {
 	struct ast_bridge *bridge;
-	int capabilities;
+	char *requested_type, *requested_types = ast_strdupa(S_OR(type, "mixing"));
+	int capabilities = 0;
 	int flags = AST_BRIDGE_FLAG_MERGE_INHIBIT_FROM | AST_BRIDGE_FLAG_MERGE_INHIBIT_TO
 		| AST_BRIDGE_FLAG_SWAP_INHIBIT_FROM | AST_BRIDGE_FLAG_SWAP_INHIBIT_TO
 		| AST_BRIDGE_FLAG_TRANSFER_BRIDGE_ONLY;
 
-	if (ast_strlen_zero(type) || !strcmp(type, "mixing")) {
-		capabilities = AST_BRIDGE_CAPABILITY_1TO1MIX |
-			AST_BRIDGE_CAPABILITY_MULTIMIX |
-			AST_BRIDGE_CAPABILITY_NATIVE;
-		flags |= AST_BRIDGE_FLAG_SMART;
-	} else if (!strcmp(type, "holding")) {
-		capabilities = AST_BRIDGE_CAPABILITY_HOLDING;
-	} else {
+	while ((requested_type = strsep(&requested_types, ","))) {
+		requested_type = ast_strip(requested_type);
+
+		if (!strcmp(requested_type, "mixing")) {
+			capabilities |= AST_BRIDGE_CAPABILITY_1TO1MIX |
+				AST_BRIDGE_CAPABILITY_MULTIMIX |
+				AST_BRIDGE_CAPABILITY_NATIVE;
+			flags |= AST_BRIDGE_FLAG_SMART;
+		} else if (!strcmp(requested_type, "holding")) {
+			capabilities |= AST_BRIDGE_CAPABILITY_HOLDING;
+		} else if (!strcmp(requested_type, "dtmf_events") ||
+			!strcmp(requested_type, "proxy_media")) {
+			capabilities &= ~AST_BRIDGE_CAPABILITY_NATIVE;
+		}
+	}
+
+	if (!capabilities) {
 		return NULL;
 	}
 
@@ -725,7 +735,7 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 
 	RAII_VAR(struct stasis_app *, app, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_app_control *, control, NULL, control_unlink);
-	struct ast_bridge *last_bridge = NULL;
+	struct ast_bridge *bridge = NULL;
 	int res = 0;
 
 	ast_assert(chan != NULL);
@@ -767,7 +777,7 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 		RAII_VAR(struct ast_frame *, f, NULL, ast_frame_dtor);
 		int r;
 		int command_count;
-		struct ast_bridge *bridge = NULL;
+		RAII_VAR(struct ast_bridge *, last_bridge, NULL, ao2_cleanup);
 
 		/* Check to see if a bridge absorbed our hangup frame */
 		if (ast_check_hangup_locked(chan)) {
@@ -775,7 +785,7 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 		}
 
 		last_bridge = bridge;
-		bridge = stasis_app_get_bridge(control);
+		bridge = ao2_bump(stasis_app_get_bridge(control));
 
 		if (bridge != last_bridge) {
 			app_unsubscribe_bridge(app, last_bridge);
@@ -829,6 +839,7 @@ int stasis_app_exec(struct ast_channel *chan, const char *app_name, int argc,
 
 	app_unsubscribe_bridge(app, stasis_app_get_bridge(control));
 	app_unsubscribe_channel(app, chan);
+	ao2_cleanup(bridge);
 
 	res = send_end_msg(app, chan);
 	if (res != 0) {

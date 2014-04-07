@@ -416,7 +416,7 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 
 	/* calc content length */
 	if (out) {
-		content_length += strlen(ast_str_buffer(out));
+		content_length += ast_str_strlen(out);
 	}
 
 	if (fd) {
@@ -443,8 +443,10 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 
 	/* send content */
 	if (method != AST_HTTP_HEAD || status_code >= 400) {
-		if (out) {
-			fprintf(ser->f, "%s", ast_str_buffer(out));
+		if (content_length) {
+			if (fwrite(ast_str_buffer(out), content_length, 1, ser->f) != 1) {
+				ast_log(LOG_ERROR, "fwrite() failed: %s\n", strerror(errno));
+			}
 		}
 
 		if (fd) {
@@ -466,8 +468,7 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 		ast_free(out);
 	}
 
-	fclose(ser->f);
-	ser->f = 0;
+	ast_tcptls_close_session_file(ser);
 	return;
 }
 
@@ -880,9 +881,13 @@ struct ast_json *ast_http_get_json(
 	}
 
 	buf = ast_http_get_contents(&content_length, ser, headers);
-	if (buf == NULL)
-	{
+	if (buf == NULL) {
 		/* errno already set */
+		return NULL;
+	}
+
+	if (!content_length) {
+		/* it is not an error to have zero content */
 		return NULL;
 	}
 

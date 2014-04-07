@@ -117,8 +117,6 @@ int ast_sip_initialize_system(void)
 		return -1;
 	}
 
-	ast_sorcery_apply_config(system_sorcery, "res_pjsip");
-
 	ast_sorcery_apply_default(system_sorcery, "system", "config", "pjsip.conf,criteria=type=system");
 
 	if (ast_sorcery_object_register_no_reload(system_sorcery, "system", system_alloc, NULL, system_apply)) {
@@ -201,6 +199,7 @@ static int system_create_resolver_and_set_nameservers(void *data)
 		status = pjsip_endpt_create_resolver(ast_sip_get_pjsip_endpoint(), &resolver);
 		if (status != PJ_SUCCESS) {
 			ast_log(LOG_ERROR, "Could not create DNS resolver(%d), resorting to system resolution\n", status);
+			ao2_ref(discovered_nameservers, -1);
 			return 0;
 		}
 	}

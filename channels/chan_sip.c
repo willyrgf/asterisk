@@ -4715,8 +4715,20 @@ static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 	const char *msg = NULL;
 	struct ast_channel *chan;
 	int res = 0;
+	int old_sched_id = pvt->provisional_keepalive_sched_id;
 
 	chan = sip_pvt_lock_full(pvt);
+	/* Check that nothing has changed while we were waiting for the lock */
+	if (old_sched_id != pvt->provisional_keepalive_sched_id) {
+		/* Keepalive has been cancelled or rescheduled, clean up and leave */
+		if (chan) {
+			ast_channel_unlock(chan);
+			chan = ast_channel_unref(chan);
+		}
+		sip_pvt_unlock(pvt);
+		dialog_unref(pvt, "dialog ref for provisional keepalive");
+		return 0;
+	}
 
 	if (!pvt->last_provisional || !strncasecmp(pvt->last_provisional, "100", 3)) {
 		msg = "183 Session Progress";
@@ -4742,20 +4754,9 @@ static int send_provisional_keepalive_full(struct sip_pvt *pvt, int with_sdp)
 
 	sip_pvt_unlock(pvt);
 
-#if 0
-	/*
-	 * XXX BUG TODO
-	 *
-	 * Without this code, it appears as if this function is leaking its
-	 * reference to the sip_pvt.  However, adding it introduces a crash.
-	 * This points to some sort of reference count imbalance elsewhere,
-	 * but I'm not sure where ...
-	 */
 	if (!res) {
 		dialog_unref(pvt, "dialog ref for provisional keepalive");
 	}
-#endif
-
 	return res;
 }
 
@@ -12666,7 +12667,6 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 	const char *fromdomain;
 	const char *privacy = NULL;
 	const char *screen = NULL;
-	const char *anonymous_string = "\"Anonymous\" <sip:anonymous@anonymous.invalid>";
 	struct ast_party_id connected_id;
 
 	if (!ast_test_flag(&p->flags[0], SIP_SENDRPID)) {
@@ -12692,12 +12692,11 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 	lid_num = ast_uri_encode(lid_num, tmp2, sizeof(tmp2), ast_uri_sip_user);
 
 	if (ast_test_flag(&p->flags[0], SIP_SENDRPID_PAI)) {
-		if ((lid_pres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
-			ast_str_set(&tmp, -1, "%s", anonymous_string);
-		} else {
-			ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>", lid_name, lid_num, fromdomain);
-		}
+		ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>", lid_name, lid_num, fromdomain);
 		add_header(req, "P-Asserted-Identity", ast_str_buffer(tmp));
+		if ((lid_pres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
+			add_header(req, "Privacy", "id");
+		}
 	} else {
 		ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>;party=%s", lid_name, lid_num, fromdomain, p->outgoing_call ? "calling" : "called");
 
@@ -13467,7 +13466,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 
 		ast_debug(3, "-- Done with adding codecs to SDP\n");
 
-		if (!p->owner || !ast_internal_timing_enabled(p->owner)) {
+		if (!p->owner || ast_channel_timingfd(p->owner) == -1) {
 			ast_str_append(&a_audio, 0, "a=silenceSupp:off - - - -\r\n");
 		}
 
@@ -13979,7 +13978,9 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 
 	snprintf(p->lastmsg, sizeof(p->lastmsg), "Init: %s", sip_methods[sipmethod].text);
 
-	d = S_OR(p->fromdomain, ast_sockaddr_stringify_host_remote(&p->ourip));
+	if (ast_strlen_zero(p->fromdomain)) {
+		d = ast_sockaddr_stringify_host_remote(&p->ourip);
+	}
 	if (p->owner) {
 		connected_id = ast_channel_connected_effective_id(p->owner);
 
@@ -14029,6 +14030,12 @@ static void initreqprep(struct sip_request *req, struct sip_pvt *p, int sipmetho
 		n = p->fromname;
 	else /* Save for any further attempts */
 		ast_string_field_set(p, fromname, n);
+
+	/* Allow domain to be overridden */
+	if (!ast_strlen_zero(p->fromdomain))
+		d = p->fromdomain;
+	else /* Save for any further attempts */
+		ast_string_field_set(p, fromdomain, d);
 
 	ast_copy_string(tmp_l, l, sizeof(tmp_l));
 	if (sip_cfg.pedanticsipchecking) {
@@ -22443,7 +22450,12 @@ static int func_header_read(struct ast_channel *chan, const char *function, char
 	);
 	int i, number, start = 0;
 
- 	if (ast_strlen_zero(data)) {
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
+	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "This function requires a header name.\n");
 		return -1;
 	}
@@ -22629,7 +22641,12 @@ static int function_sipchaninfo_read(struct ast_channel *chan, const char *cmd, 
 
 	*buf = 0;
 
- 	if (!data) {
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
+	if (!data) {
 		ast_log(LOG_WARNING, "This function requires a parameter name.\n");
 		return -1;
 	}

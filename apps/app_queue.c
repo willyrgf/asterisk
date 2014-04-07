@@ -4332,7 +4332,7 @@ static void record_abandoned(struct queue_ent *qe)
 
 	set_queue_variables(qe->parent, qe->chan);
 	ao2_lock(qe->parent);
-	blob = ast_json_pack("{s: s, s: i, s: i}",
+	blob = ast_json_pack("{s: s, s: i, s: i, s: i}",
 			     "Queue", qe->parent->name,
 			     "Position", qe->pos,
 			     "OriginalPosition", qe->opos,
@@ -8537,7 +8537,7 @@ static void reload_single_member(const char *memberdata, struct call_queue *q)
 static int mark_member_dead(void *obj, void *arg, int flags)
 {
 	struct member *member = obj;
-	if (!member->dynamic) {
+	if (!member->dynamic && !member->realtime) {
 		member->delme = 1;
 	}
 	return 0;

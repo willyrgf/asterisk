@@ -2,7 +2,7 @@
 	"_copyright": "Copyright (C) 2012 - 2013, Digium, Inc.",
 	"_author": "David M. Lee, II <dlee@digium.com>",
 	"_svn_revision": "$Revision$",
-	"apiVersion": "1.1.0",
+	"apiVersion": "1.2.0",
 	"swaggerVersion": "1.1",
 	"basePath": "http://localhost:8088/stasis",
 	"resourcePath": "/api-docs/bridges.{format}",
@@ -26,18 +26,11 @@
 					"parameters": [
 						{
 							"name": "type",
-							"description": "Type of bridge to create.",
+							"description": "Comma separated list of bridge type attributes (mixing, holding, dtmf_events, proxy_media).",
 							"paramType": "query",
 							"required": false,
 							"allowMultiple": false,
-							"dataType": "string",
-							"allowableValues": {
-								"valueType": "LIST",
-								"values": [
-									"mixing",
-									"holding"
-								]
-							}
+							"dataType": "string"
 						},
 						{
 							"name": "bridgeId",
@@ -72,18 +65,11 @@
 					"parameters": [
 						{
 							"name": "type",
-							"description": "Set the type of bridge.",
+							"description": "Comma separated list of bridge type attributes (mixing, holding, dtmf_events, proxy_media) to set.",
 							"paramType": "query",
 							"required": false,
 							"allowMultiple": false,
-							"dataType": "string",
-							"allowableValues": {
-								"valueType": "LIST",
-								"values": [
-									"mixing",
-									"holding"
-								]
-							}
+							"dataType": "string"
 						},
 						{
 							"name": "bridgeId",

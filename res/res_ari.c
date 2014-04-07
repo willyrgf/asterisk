@@ -84,6 +84,16 @@
 				<synopsis>General configuration settings</synopsis>
 				<configOption name="enabled">
 					<synopsis>Enable/disable the ARI module</synopsis>
+					<description>
+						<para>This option enables or disables the ARI module.</para>
+						<note>
+							<para>ARI uses Asterisk's HTTP server, which must also be enabled in <filename>http.conf</filename>.</para>
+						</note>
+					</description>
+					<see-also>
+						<ref type="filename">http.conf</ref>
+						<ref type="link">https://wiki.asterisk.org/wiki/display/AST/Asterisk+Builtin+mini-HTTP+Server</ref>
+					</see-also>
 				</configOption>
 				<configOption name="pretty">
 					<synopsis>Responses from ARI are formatted to be human readable</synopsis>
