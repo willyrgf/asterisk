@@ -6924,15 +6924,17 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	struct sip_pvt *p = ast->tech_pvt;
 	int res = 0;
 
-	if (frame == &ast_null_frame) {
+	if (frame == &ast_null_frame || frame->frametype == AST_FRAME_NULL) {
 		/* We do not send null frames. Sorry */
 		return 1;
 	}
 
 	switch (frame->frametype) {
-	case AST_FRAME_CN:
+	case AST_FRAME_CNG:
 		/* We get this frame if silence suppression is active. */
-		ast_rtp_instance_sendcng(dialog->rtp, 64);
+		if (p->rtp) {
+			ast_rtp_instance_sendcng(p->rtp, 64);
+		}
 		res = 0;
 		break;
 	
