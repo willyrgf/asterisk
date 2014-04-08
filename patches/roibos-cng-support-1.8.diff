@@ -1,0 +1,1155 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 411922)
++++ channels/chan_sip.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -4768,6 +4768,10 @@
+ 		 * implied else case here
+ 		 */
+ 		break;
++	case AST_OPTION_CNG_SUPPORT:
++		/* Check if the current dialog has agreed on Comfort Noise support */
++		res = (p->noncodeccapability & AST_RTP_CN);
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -5762,6 +5766,10 @@
+ 		dialog->noncodeccapability |= AST_RTP_DTMF;
+ 	else
+ 		dialog->noncodeccapability &= ~AST_RTP_DTMF;
++
++	if (ast_test_flag(&dialog->flags[1], SIP_PAGE2_ALLOW_CN)) {
++		dialog->noncodeccapability |= AST_RTP_CN;
++	}
+ 	dialog->directmediaha = ast_duplicate_ha_list(peer->directmediaha);
+ 	if (peer->call_limit)
+ 		ast_set_flag(&dialog->flags[0], SIP_CALL_LIMIT);
+@@ -9733,7 +9741,7 @@
+ 		   they are acceptable */
+ 		p->jointcapability = newjointcapability;                /* Our joint codec profile for this call */
+ 		p->peercapability = newpeercapability;                  /* The other side's capability in latest offer */
+-		p->jointnoncodeccapability = newnoncodeccapability;     /* DTMF capabilities */
++		p->jointnoncodeccapability = newnoncodeccapability;     /* CN and DTMF capabilities */
+ 
+ 		/* respond with single most preferred joint codec, limiting the other side's choice */
+ 		if (ast_test_flag(&p->flags[1], SIP_PAGE2_PREFERRED_CODEC)) {
+@@ -11521,6 +11529,7 @@
+ 		fmt = ast_codec_pref_getsize(pref, codec);
+ 	} else /* I don't see how you couldn't have p->rtp, but good to check for and error out if not there like earlier code */
+ 		return;
++
+ 	ast_str_append(m_buf, 0, " %d", rtp_code);
+ 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
+ 		       ast_rtp_lookup_mime_subtype2(1, codec,
+@@ -11640,7 +11649,7 @@
+ 	}
+ }
+ 
+-/*! \brief Add RFC 2833 DTMF offer to SDP */
++/*! \brief Add CN and RFC 2833 DTMF offer to SDP */
+ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
+ 				struct ast_str **m_buf, struct ast_str **a_buf,
+ 				int debug)
+@@ -12006,10 +12015,12 @@
+ 				add_tcodec_to_sdp(p, x, &m_text, &a_text, debug, &min_text_packet_size);
+ 		}
+ 
+-		/* Now add DTMF RFC2833 telephony-event as a codec */
++		/* Now add Comfort Noise and DTMF RFC2833 telephony-event as a codec */
+ 		for (x = 1LL; x <= AST_RTP_MAX; x <<= 1) {
+-			if (!(p->jointnoncodeccapability & x))
++			if (!(p->jointnoncodeccapability & x)) {
++				ast_debug(1, "NOT Adding non-codec 0x%lx (%s) to SDP\n", (int64_t)x, ast_rtp_lookup_mime_subtype2(0, x, 0));
+ 				continue;
++			}
+ 
+ 			add_noncodec_to_sdp(p, x, &m_audio, &a_audio, debug);
+ 		}
+@@ -16806,6 +16817,9 @@
+ 			p->noncodeccapability |= AST_RTP_DTMF;
+ 		else
+ 			p->noncodeccapability &= ~AST_RTP_DTMF;
++		if (ast_test_flag(&p->flags[1], SIP_PAGE2_ALLOW_CN)) {
++			p->noncodeccapability |= AST_RTP_CN;
++		}
+ 		p->jointnoncodeccapability = p->noncodeccapability;
+ 		p->rtptimeout = peer->rtptimeout;
+ 		p->rtpholdtimeout = peer->rtpholdtimeout;
+@@ -18268,6 +18282,7 @@
+ 		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
+ 		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
+ 		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
++		ast_cli(fd, "  Comfort Noise: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)));
+ 		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
+ 		ast_cli(fd, "  Trust RPID   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_TRUSTRPID)));
+ 		ast_cli(fd, "  Send RPID    : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_SENDRPID)));
+@@ -18380,6 +18395,7 @@
+ 		astman_append(s, "SIP-T.38Support: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT)?"Y":"N"));
+ 		astman_append(s, "SIP-T.38EC: %s\r\n", faxec2str(ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT)));
+ 		astman_append(s, "SIP-T.38MaxDtgrm: %d\r\n", peer->t38_maxdatagram);
++		astman_append(s, "SIP-ComfortNoise: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)?"Y":"N"));
+ 		astman_append(s, "SIP-Sess-Timers: %s\r\n", stmode2str(peer->stimer.st_mode_oper));
+ 		astman_append(s, "SIP-Sess-Refresh: %s\r\n", strefresherparam2str(peer->stimer.st_ref));
+ 		astman_append(s, "SIP-Sess-Expires: %d\r\n", peer->stimer.st_max_se);
+@@ -18833,6 +18849,7 @@
+ 				"Disabled");
+ 	ast_cli(a->fd, "  Videosupport:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
+ 	ast_cli(a->fd, "  Textsupport:            %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
++	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
+ 	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
+ 	ast_cli(a->fd, "  AutoCreate Peer:        %s\n", AST_CLI_YESNO(sip_cfg.autocreatepeer));
+ 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
+@@ -19356,6 +19373,7 @@
+ 			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
+ 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
+ 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
++			ast_cli(a->fd, "  Comfort Noise support   %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[1],SIP_PAGE2_ALLOW_CN)));
+ 			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
+ 			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
+ 			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
+@@ -27790,6 +27808,9 @@
+ 	} else if (!strcasecmp(v->name, "buggymwi")) {
+ 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
+ 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
++	} else if (!strcasecmp(v->name, "comfort-noise")) {
++		ast_set_flag(&mask[1], SIP_PAGE2_ALLOW_CN);
++		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOW_CN);
+ 	} else
+ 		res = 0;
+ 
+Index: channels/sip/include/sip.h
+===================================================================
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 411922)
++++ channels/sip/include/sip.h	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -347,6 +347,7 @@
+ #define SIP_PAGE2_VIDEOSUPPORT_ALWAYS       (1 << 27)   /*!< DP: Always set up video, even if endpoints don't support it */
+ #define SIP_PAGE2_HAVEPEERCONTEXT           (1 << 28)   /*< Are we associated with a configured peer context? */
+ #define SIP_PAGE2_USE_SRTP                  (1 << 29)   /*!< DP: Whether we should offer (only)  SRTP */
++#define SIP_PAGE2_ALLOW_CN                  (1 << 30)   /*!< DP: If we allow Comfort Noise generation */
+ 
+ #define SIP_PAGE2_FLAGS_TO_COPY \
+ 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
+@@ -354,7 +355,8 @@
+ 	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
+ 	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS | SIP_PAGE2_PREFERRED_CODEC | \
+ 	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP |\
+-	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP)
++	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP |\
++	SIP_PAGE2_ALLOW_CN )
+ 
+ 
+ #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+Index: funcs/func_frame_trace.c
+===================================================================
+--- funcs/func_frame_trace.c	(.../branches/1.8)	(revision 411922)
++++ funcs/func_frame_trace.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -326,6 +326,9 @@
+ 		case AST_CONTROL_UPDATE_RTP_PEER:
+ 			ast_verbose("SubClass: UPDATE_RTP_PEER\n");
+ 			break;
++		case AST_CONTROL_CNG_END:
++			ast_verbose("SubClass: CNG_END");
++			break;
+ 		}
+ 		
+ 		if (frame->subclass.integer == -1) {
+Index: include/asterisk/channel.h
+===================================================================
+--- include/asterisk/channel.h	(.../branches/1.8)	(revision 411922)
++++ include/asterisk/channel.h	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -2370,6 +2370,42 @@
+ void ast_channel_stop_silence_generator(struct ast_channel *chan, struct ast_silence_generator *state);
+ 
+ /*!
++ * \brief An opaque 'object' structure use by noise generators on channels.
++ */
++struct ast_noise_generator;
++
++/*!
++ * \brief Starts a noise generator on the given channel.
++ * \param chan The channel to generate silence on
++ * \param level The noise level in negative (dBOV)
++ * \return An ast_noise_generator pointer, or NULL if an error occurs
++ *
++ * \details
++ * This function will cause SLINEAR noise to be generated on the supplied
++ * channel until it is disabled; if the channel cannot be put into SLINEAR
++ * mode then the function will fail.
++ *
++ * \note
++ * The pointer returned by this function must be preserved and passed to
++ * ast_channel_stop_noise_generator when you wish to stop the noise
++ * generation.
++ */
++struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel *chan, const float level);
++
++/*!
++ * \brief Stops a previously-started noise generator on the given channel.
++ * \param chan The channel to operate on
++ * \param state The ast_noise_generator pointer return by a previous call to
++ * ast_channel_start_noise_generator.
++ * \return nothing
++ *
++ * \details
++ * This function will stop the operating noise generator and return the channel
++ * to its previous write format.
++ */
++void ast_channel_stop_noise_generator(struct ast_channel *chan, struct ast_noise_generator *state);
++
++/*!
+  * \brief Check if the channel can run in internal timing mode.
+  * \param chan The channel to check
+  * \return boolean
+Index: include/asterisk/frame.h
+===================================================================
+--- include/asterisk/frame.h	(.../branches/1.8)	(revision 411922)
++++ include/asterisk/frame.h	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -301,6 +301,8 @@
+ #define AST_FORMAT_SPEEX16    (1ULL << 33)
+ /*! Raw mu-law data (G.711) */
+ #define AST_FORMAT_TESTLAW    (1ULL << 47)
++/*! Comfort noise. Not a frame type per se, but needs to be added as a codec */
++#define AST_FORMAT_CN    (1ULL << 48)
+ /*! Reserved bit - do not use */
+ #define AST_FORMAT_RESERVED   (1ULL << 63)
+ 
+@@ -362,6 +364,7 @@
+ 	 *
+ 	 * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
+ 	 */
++	AST_CONTROL_CNG_END = 32,	/*!< Disable CNG playout in bridge */
+ };
+ 
+ enum ast_frame_read_action {
+@@ -524,6 +527,10 @@
+ #define AST_OPTION_SECURE_SIGNALING        18
+ #define AST_OPTION_SECURE_MEDIA            19
+ 
++/*! Support of CNG transmission,
++    if not enabled a noise generator will kick in  */
++#define AST_OPTION_CNG_SUPPORT            20
++
+ struct oprmode {
+ 	struct ast_channel *peer;
+ 	int mode;
+Index: main/channel.c
+===================================================================
+--- main/channel.c	(.../branches/1.8)	(revision 411922)
++++ main/channel.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -4425,6 +4425,7 @@
+ 	case AST_CONTROL_AOC:
+ 	case AST_CONTROL_END_OF_Q:
+ 	case AST_CONTROL_UPDATE_RTP_PEER:
++	case AST_CONTROL_CNG_END:
+ 		break;
+ 
+ 	case AST_CONTROL_INCOMPLETE:
+@@ -4594,6 +4595,7 @@
+ 	case AST_CONTROL_SRCUPDATE:
+ 	case AST_CONTROL_SRCCHANGE:
+ 	case AST_CONTROL_RADIO_KEY:
++	case AST_CONTROL_CNG_END:
+ 	case AST_CONTROL_RADIO_UNKEY:
+ 	case AST_CONTROL_OPTION:
+ 	case AST_CONTROL_WINK:
+@@ -7330,6 +7332,12 @@
+ 					ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
+ 				}
+ 				break;
++			case AST_CONTROL_CNG_END:
++				/* If we are playing out CNG noise on the bridged channel, stop it now. 
++				   otherwise, ignore this frame. */
++				ast_debug(1, "*** Bridge got CNG END frame \n");
++				ast_channel_stop_noise_generator(other, NULL);
++				break;
+ 			case AST_CONTROL_HOLD:
+ 			case AST_CONTROL_UNHOLD:
+ 			case AST_CONTROL_VIDUPDATE:
+@@ -7351,6 +7359,21 @@
+ 			if (bridge_exit)
+ 				break;
+ 		}
++		if (f->frametype == AST_FRAME_CNG) {
++			/* We got a CNG frame 
++			  Check if the bridged channel has active CNG 
++			*/
++			int cngsupport = 0;
++			int len = sizeof(cngsupport);
++			ast_channel_queryoption(other, AST_OPTION_CNG_SUPPORT, &cngsupport, &len, 0);
++			if (cngsupport) {
++				ast_debug(1, "*** Bridge got CNG frame. Forwarding it \n");
++				ast_write(other, f);
++			} else {
++				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) Level: - %d\n", f->subclass.integer );
++				ast_channel_start_noise_generator(other, (float)  -f->subclass.integer);
++			}
++		}
+ 		if ((f->frametype == AST_FRAME_VOICE) ||
+ 		    (f->frametype == AST_FRAME_DTMF_BEGIN) ||
+ 		    (f->frametype == AST_FRAME_DTMF) ||
+@@ -8358,6 +8381,305 @@
+ }
+ 
+ 
++#ifdef HAVE_EXP10L
++#define FUNC_EXP10       exp10l
++#elif (defined(HAVE_EXPL) && defined(HAVE_LOGL))
++#define FUNC_EXP10(x)   expl((x) * logl(10.0))
++#elif (defined(HAVE_EXP) && defined(HAVE_LOG))
++#define FUNC_EXP10(x)   (long double)exp((x) * log(10.0))
++#endif
++
++/*! \brief Noise generator default frame */
++static struct ast_frame noiseframedefaults = {
++	.frametype = AST_FRAME_VOICE,
++	.subclass.codec = AST_FORMAT_SLINEAR,
++	.offset = AST_FRIENDLY_OFFSET,
++	.mallocd = 0,
++	.data.ptr = NULL,
++	.datalen = 0,
++	.samples = 0,
++	.src = "noisegenerator",
++	.delivery.tv_sec = 0,
++	.delivery.tv_usec = 0
++};
++
++struct ast_noise_generator {
++	int old_write_format;
++	float level;
++};
++
++
++#ifndef LOW_MEMORY
++/*
++ * We pregenerate 64k of white noise samples that will be used instead of
++ * generating the samples continously and wasting CPU cycles. The buffer
++ * below stores these pregenerated samples.
++ */
++static float pregeneratedsamples[65536L];
++#endif
++
++/* 
++ * We need a nice, not too expensive, gaussian random number generator.
++ * It generates two random numbers at a time, which is great.
++ * From http://www.taygeta.com/random/gaussian.html
++ */
++static void box_muller_rng(float stddev, float *rn1, float *rn2) {
++	const float twicerandmaxinv = 2.0 / RAND_MAX;
++	float x1, x2, w;
++	 
++	do {
++		x1 = random() * twicerandmaxinv - 1.0;
++		x2 = random() * twicerandmaxinv - 1.0;
++		w = x1 * x1 + x2 * x2;
++	} while (w >= 1.0);
++	
++	w = stddev * sqrt((-2.0 * logf(w)) / w);
++	*rn1 = x1 * w;
++	*rn2 = x2 * w;
++}
++
++static void *noise_generator_alloc(struct ast_channel *chan, void *params) {
++	struct ast_noise_generator *state = params;
++	float level = state->level; 	/* level is noise level in dBov */
++	float *pnoisestddev; 		/* pointer to calculated noise standard dev */
++	const float maxsigma = 32767.0 / 3.0;
++
++	/*
++	 * When level is zero (full power, by definition) standard deviation
++	 * (sigma) is calculated so that 3 * sigma equals max sample value
++	 * before overload. For signed linear, which is what we use, this
++	 * value is 32767. The max value of sigma will therefore be
++	 * 32767.0 / 3.0. This guarantees that roughly 99.7% of the samples
++	 * generated will be between -32767 and +32767. The rest, 0.3%,
++	 * will be clipped to comform to the channel limits, i.e., +/-32767.
++	 * 
++	 */
++	pnoisestddev = malloc(sizeof (float));
++	if(pnoisestddev) {
++		*pnoisestddev = maxsigma * FUNC_EXP10(level / 20.0);
++	}
++
++	return (void *) pnoisestddev;
++}
++
++static void noise_generator_release(struct ast_channel *chan, void *data) {
++	free((float *)data);
++}
++
++/*! \brief Generator of White Noise at a certain level.
++
++Current level is defined in the generator data structure as noiselevel (float) in dBov's
++
++
++	Level is a non-positive number. For example, WhiteNoise(0.0) generates
++	white noise at full power, while WhiteNoise(-3.0) generates white noise at
++	half full power. Every -3dBov's reduces white noise power in half. Full
++	power in this case is defined as noise that overloads the channel roughly 0.3%
++	of the time. Note that values below -69 dBov's start to give out silence
++	frequently, resulting in intermittent noise, i.e, alternating periods of
++	silence and noise.
++
++This code orginally contributed to Asterisk by cmantunes in issue ASTERISK-5263
++as part of res_noise.c
++*/
++static int noise_generate(struct ast_channel *chan, void *data, int len, int samples) {
++#ifdef LOW_MEMORY
++	float randomnumber[2];
++	float sampleamplitude;
++	int j;
++#else
++	uint16_t start;
++#endif
++	float noisestddev = *(float *)data;
++	struct ast_frame f;
++	int16_t *buf, *pbuf;
++	int i;
++
++#ifdef LOW_MEMORY
++	/* We need samples to be an even number */
++	if (samples & 0x1) {
++		ast_log(LOG_WARNING, "Samples (%d) needs to be an even number\n", samples);
++		return -1;
++	}
++#endif
++
++	/* Allocate enough space for samples.
++	 * Remember that slin uses signed dword samples */
++	len = samples * sizeof (int16_t);
++	if(!(buf = ast_alloca(len))) {
++		ast_log(LOG_WARNING, "Unable to allocate buffer to generate %d samples\n", samples);
++		return -1;
++	}
++
++	/* Setup frame */
++	memcpy(&f, &noiseframedefaults, sizeof (f));
++	f.data.ptr = buf;
++	f.datalen = len;
++	f.samples = samples;
++
++	/* Let's put together our frame "data" */
++	pbuf = buf;
++
++#ifdef LOW_MEMORY
++	/* We need to generate samples every time we are called */
++	for (i = 0; i < samples; i += 2) {
++		box_muller_rng(noisestddev, &randomnumber[0], &randomnumber[1]);
++		for (j = 0; j < 2; j++) {
++			sampleamplitude = randomnumber[j];
++			if (sampleamplitude > 32767.0)
++				sampleamplitude = 32767.0;
++			else if (sampleamplitude < -32767.0)
++				sampleamplitude = -32767.0;
++			*(pbuf++) = (int16_t)sampleamplitude;
++		}
++	}
++#else
++	/*
++	 * We are going to use pregenerated samples. But we start at
++	 * different points on the pregenerated samples buffer every time
++	 * to create a little bit more randomness
++	 *
++	 */
++	start = (uint16_t) (65536.0 * random() / RAND_MAX);
++	for (i = 0; i < samples; i++) {
++		*(pbuf++) = (int16_t)(noisestddev * pregeneratedsamples[start++]);
++	}
++#endif
++
++	/* Send it out */
++	if (ast_write(chan, &f) < 0) {
++		ast_log(LOG_WARNING, "Failed to write frame to channel '%s'\n", chan->name);
++		return -1;
++	}
++	return 0;
++}
++
++static struct ast_generator noise_generator = 
++{
++	alloc: noise_generator_alloc,
++	release: noise_generator_release,
++	generate: noise_generate,
++} ;
++
++static void *cng_channel_params_copy(void *data)
++{
++	const struct ast_noise_generator *src = data;
++	struct ast_noise_generator *dest = ast_calloc(1, sizeof(struct ast_noise_generator));
++	if (!dest) {
++		return NULL;
++	}
++	dest->level = src->level;
++	dest->old_write_format = src->old_write_format;
++	return dest;
++}
++
++static void cng_channel_params_destroy(void *data)
++{
++	struct ast_noise_generator *ng = data;
++	ast_free(ng);
++}
++
++static const struct ast_datastore_info cng_channel_datastore_info = {
++	.type = "Comfort Noise Generator",
++	.duplicate = cng_channel_params_copy,
++	.destroy = cng_channel_params_destroy,
++};
++
++static int ast_channel_cng_params_init(struct ast_channel *chan, int level, int old_write_format)
++{
++	struct ast_noise_generator *new_cng;
++	struct ast_datastore *cng_datastore;
++
++	/* If we already have a datastore, reuse it */
++	if ((cng_datastore = ast_channel_datastore_find(chan, &cng_channel_datastore_info, NULL))) {
++		new_cng = cng_datastore->data;
++	} else {
++		/* Create new datastore */
++		new_cng = ast_calloc(1, sizeof(struct ast_noise_generator));
++		if (!new_cng) {
++			return -1;
++		}
++
++		if (!(cng_datastore = ast_datastore_alloc(&cng_channel_datastore_info, NULL))) {
++			cng_channel_params_destroy(new_cng);
++			return -1;
++		}
++		cng_datastore->data = new_cng;
++		ast_channel_datastore_add(chan, cng_datastore);
++	}
++	new_cng->level = level;
++	new_cng->old_write_format = old_write_format;
++
++	return 0;
++}
++
++struct ast_noise_generator *ast_channel_start_noise_generator(struct ast_channel *chan, const float level)
++{
++	struct ast_noise_generator  *state;
++	int i;
++
++#ifndef LOW_MEMORY
++	/* This should only be done once per asterisk instance */
++	if (pregeneratedsamples[0] == 0.0) {
++		for (i = 0; i < sizeof (pregeneratedsamples) / sizeof (pregeneratedsamples[0]); i += 2) {
++			box_muller_rng(1.0, &pregeneratedsamples[i], &pregeneratedsamples[i + 1]);
++		}
++	}
++#endif
++
++	if (level > 0) {
++		ast_log(LOG_ERROR, "Noise generator: Invalid argument -  non-positive floating-point argument for noise level in dBov's required \n");
++		return NULL;
++	}
++
++	if (!(state = ast_calloc(1, sizeof(*state)))) {
++		return NULL;
++	}
++
++	state->old_write_format = chan->writeformat;
++	state->level = level;
++
++	if (ast_set_write_format(chan, AST_FORMAT_SLINEAR) < 0) {
++		ast_log(LOG_ERROR, "Could not set write format to SLINEAR\n");
++		ast_free(state);
++		return NULL;
++	}
++
++	/* Store noise generation data in a channel datastore */
++	ast_channel_cng_params_init(chan, level, chan->writeformat);
++
++	ast_activate_generator(chan, &noise_generator, state);
++
++	ast_debug(1, "Started noise generator on '%s'\n", chan->name);
++
++	return state;
++}
++
++void ast_channel_stop_noise_generator(struct ast_channel *chan, struct ast_noise_generator *state)
++{
++	struct ast_datastore *cng_datastore;
++	struct ast_noise_generator *cngstate = state;
++
++	if (!cngstate) {
++		if (!(cng_datastore = ast_channel_datastore_find(chan, &cng_channel_datastore_info, NULL))) {
++			return;
++		}
++		cngstate = cng_datastore->data;
++	}
++
++	/* We will leave the allocated channel datastore in memory for reuse */
++	ast_deactivate_generator(chan);
++
++	ast_debug(1, "Stopped silence generator on '%s'\n", chan->name);
++
++	if (ast_set_write_format(chan, cngstate->old_write_format) < 0)
++		ast_log(LOG_ERROR, "Could not return write format to its original state\n");
++
++	ast_free(state);
++}
++
++
++
+ /*! \ brief Convert channel reloadreason (ENUM) to text string for manager event */
+ const char *channelreloadreason2txt(enum channelreloadreason reason)
+ {
+Index: main/features.c
+===================================================================
+--- main/features.c	(.../branches/1.8)	(revision 411922)
++++ main/features.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -4232,6 +4232,12 @@
+ 				}
+ 				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
+ 				break;
++			case AST_CONTROL_CNG_END:
++				/* If we are playing out CNG noise on the bridged channel, stop it now. 
++				   otherwise, ignore this frame. */
++				ast_debug(2, "*** Bridge got CNG END frame \n");
++				ast_channel_stop_noise_generator(other, NULL);
++				break;
+ 			case AST_CONTROL_AOC:
+ 			case AST_CONTROL_HOLD:
+ 			case AST_CONTROL_UNHOLD:
+@@ -4351,6 +4357,21 @@
+ 					ast_debug(1, "Set feature timer to %ld ms\n", config->feature_timer);
+ 				}
+ 			}
++		} else if (f->frametype == AST_FRAME_CNG) {
++			/* We got a CNG frame 
++			  Check if the bridged channel has active CNG 
++			*/
++			int cngsupport = 0;
++			int len = sizeof(cngsupport);
++			ast_channel_queryoption(other, AST_OPTION_CNG_SUPPORT, &cngsupport, &len, 0);
++			if (cngsupport) {
++				ast_debug(1, "*** Bridge got CNG frame. Forwarding it \n");
++				ast_write(other, f);
++			} else {
++				ast_debug(1, "*** Bridge got CNG frame. Playing out noise. (CNG not supported by other channel) \n");
++				ast_moh_start(other, NULL, NULL);
++			}
++			
+ 		}
+ 		if (f)
+ 			ast_frfree(f);
+Index: main/frame.c
+===================================================================
+--- main/frame.c	(.../branches/1.8)	(revision 411922)
++++ main/frame.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -126,6 +126,7 @@
+ 	{ AST_FORMAT_SIREN14, "siren14", 32000, "ITU G.722.1 Annex C, (Siren14, licensed from Polycom)", 120, 20, 80, 20, 20 },	/*!< Binary commercial distribution */
+ 	{ AST_FORMAT_TESTLAW, "testlaw", 8000, "G.711 test-law", 80, 10, 150, 10, 20 },                        /*!< codec_ulaw.c */
+ 	{ AST_FORMAT_G719, "g719", 48000, "ITU G.719", 160, 20, 80, 20, 20 },
++	{ AST_FORMAT_CN, "cn", 8000, "Comfort Noise"},
+ };
+ 
+ struct ast_frame ast_null_frame = { AST_FRAME_NULL, };
+Index: main/rtp_engine.c
+===================================================================
+--- main/rtp_engine.c	(.../branches/1.8)	(revision 411922)
++++ main/rtp_engine.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -162,7 +162,7 @@
+ 	[16] = {1, AST_FORMAT_ADPCM}, /* 11.025 kHz */
+ 	[17] = {1, AST_FORMAT_ADPCM}, /* 22.050 kHz */
+ 	[18] = {1, AST_FORMAT_G729A},
+-	[19] = {0, AST_RTP_CN},         /* Also used for CN */
++	[19] = {1, AST_FORMAT_CN},         /* Also used for CN */
+ 	[26] = {1, AST_FORMAT_JPEG},
+ 	[31] = {1, AST_FORMAT_H261},
+ 	[34] = {1, AST_FORMAT_H263},
+Index: configs/sip.conf.sample
+===================================================================
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 411922)
++++ configs/sip.conf.sample	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -300,6 +300,12 @@
+ ;allow=ulaw                     ; Allow codecs in order of preference
+ ;allow=ilbc                     ; see https://wiki.asterisk.org/wiki/display/AST/RTP+Packetization
+ 				; for framing options
++;comfort-noise=yes		; Enable Comfort Noise generation on RTP streams
++;				; Available per device too
++;				; Generating comfort noise is a burden to your CPU
++;				; This should not be enabled on low-end devices.
++;				; You should not enable this unless you have internal
++;				; timing support enabled in asterisk.conf
+ ;autoframing=yes		; Set packetization based on the remote endpoint's (ptime)
+ 				; preferences. Defaults to no.
+ ;
+Index: res/res_noise.c
+===================================================================
+--- res/res_noise.c	(.../branches/1.8)	(revision 0)
++++ res/res_noise.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -0,0 +1,164 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 1999 - 2005, Digium, Inc.
++ *
++ * Contributed by Carlos Antunes <cmantunes@gmail.com>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file 
++ *
++ * \brief Just generate white noise 
++ * 
++ */
++
++/*** MODULEINFO
++	<support_level>random</support_level>
++ ***/
++
++
++#include "asterisk.h"
++
++ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
++
++#include "asterisk/lock.h"
++#include "asterisk/file.h"
++#include "asterisk/logger.h"
++#include "asterisk/channel.h"
++#include "asterisk/pbx.h"
++#include "asterisk/module.h"
++#include "asterisk/app.h"
++
++#include <math.h>
++
++static char *app = "WhiteNoise";
++
++
++/*** DOCUMENTATION
++	<application name="WhiteNoise" language="en_US">
++		<synopsis>
++			Generates white noise
++		</synopsis>
++		<syntax>
++		<parameter name="args">
++			<argument name="timeout" required="true" />
++			<argument name="level" required="false" />
++		</parameter>
++		</syntax>
++		<description>
++			<para>Generates white noise at 'level' dBov's for 'timeout' seconds or indefinitely if timeout
++			is absent or is zero.</para>
++			<para>Level is a non-positive number. For example, WhiteNoise(0.0) generates
++			white noise at full power, while WhiteNoise(-3.0) generates white noise at
++			half full power. Every -3dBov's reduces white noise power in half. Full
++			power in this case is defined as noise that overloads the channel roughly 0.3%
++			of the time. Note that values below -69 dBov's start to give out silence
++			frequently, resulting in intermittent noise, i.e, alternating periods of
++			silence and noise.</para>
++
++		</description>
++	</application>
++***/
++
++static int noise_exec(struct ast_channel *chan, const char *data) {
++
++	struct ast_module_user *u;
++	char *excessdata;
++	float level = 0;
++	float timeout = 0;
++	char *s;
++	int res;
++	struct ast_noise_generator *gendata;
++
++        AST_DECLARE_APP_ARGS(args,
++                AST_APP_ARG(timeout);
++                AST_APP_ARG(level);
++        );
++
++	/* Verify we potentially have arguments and get local copy */
++        if (!data) {
++                ast_log(LOG_WARNING, "WhiteNoise usage following: WhiteNoise([timeout[, level]])\n");
++                return -1;
++        }
++	
++	/* Separate arguments */	
++        s = ast_strdupa(data);
++        AST_STANDARD_APP_ARGS(args, s);
++
++	if (args.timeout) {	
++		/* Extract second argument, if available, and validate
++		 * timeout is non-negative. Zero timeout means no timeout */
++		args.timeout = ast_trim_blanks(args.timeout);
++		timeout = strtof(args.timeout, &excessdata);
++		if ((excessdata && *excessdata) || timeout < 0) {
++			ast_log(LOG_WARNING, "Invalid argument 'timeout': WhiteNoise requires non-negative floating-point argument for timeout in seconds\n");				
++			return -1;
++		}
++
++		/* Convert timeout to milliseconds
++		 * and ensure minimum of 20ms      */
++		timeout = roundf(timeout * 1000.0);
++		if (timeout > 0 && timeout < 20) {
++			timeout = 20;
++		}
++	} 
++
++	if (args.level) {
++		/* Extract first argument and ensure we have
++		 * a valid noise level argument value        */
++		args.level = ast_trim_blanks(args.level);
++		level = strtof(args.level, &excessdata);
++		if ((excessdata && *excessdata) || level > 0) {
++			ast_log(LOG_ERROR, "Invalid argument 'level': WhiteNoise requires non-positive floating-point argument for noise level in dBov's\n");
++			return -1;
++		}
++	} 
++
++	ast_debug(1, "Setting up white noise generator with level %.1fdBov's and %.0fms %stimeout\n", level, timeout, timeout == 0 ? "(no) " : "");
++
++	u = ast_module_user_add(chan);
++	if (chan->_state != AST_STATE_UP) {
++		ast_answer(chan);
++	}
++	gendata = ast_channel_start_noise_generator(chan, level);
++	if (data == NULL)	{
++		ast_log(LOG_WARNING, "Failed to activate white noise generator on '%s'\n",chan->name);
++		res = -1;
++	} else {
++		/* Just do the noise... */
++		res = -1;
++		if (timeout > 0) {
++			res = ast_safe_sleep(chan, timeout);
++		} else  {
++			while(!ast_safe_sleep(chan, 10000));
++		}
++		ast_channel_stop_noise_generator(chan, gendata);
++	}
++	ast_module_user_remove(u);
++	return res;
++}
++
++static int unload_module(void) {
++	ast_module_user_hangup_all();
++	
++	return ast_unregister_application(app);
++}
++
++static int load_module(void) {
++	return ast_register_application_xml(app, noise_exec);
++}
++
++AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_GLOBAL_SYMBOLS, "White Noise Generator Application",
++                .load = load_module,
++                .unload = unload_module,
++               );
+
+Property changes on: res/res_noise.c
+___________________________________________________________________
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Index: res/res_rtp_asterisk.c
+===================================================================
+--- res/res_rtp_asterisk.c	(.../branches/1.8)	(revision 411922)
++++ res/res_rtp_asterisk.c	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -114,6 +114,7 @@
+ #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
+ #define FLAG_NEED_MARKER_BIT            (1 << 3)
+ #define FLAG_DTMF_COMPENSATE            (1 << 4)
++#define FLAG_CN_ACTIVE			(1 << 5)
+ 
+ /*! \brief RTP session description */
+ struct ast_rtp {
+@@ -1753,17 +1754,8 @@
+ 	/* Convert comfort noise into audio with various codecs.  Unfortunately this doesn't
+ 	   totally help us out becuase we don't have an engine to keep it going and we are not
+ 	   guaranteed to have it every 20ms or anything */
+-	if (rtpdebug)
++	if (rtpdebug) {
+ 		ast_debug(0, "- RTP 3389 Comfort noise event: Level %" PRId64 " (len = %d)\n", rtp->lastrxformat, len);
+-
+-	if (ast_test_flag(rtp, FLAG_3389_WARNING)) {
+-		struct ast_sockaddr remote_address = { {0,} };
+-
+-		ast_rtp_instance_get_remote_address(instance, &remote_address);
+-
+-		ast_log(LOG_NOTICE, "Comfort noise support incomplete in Asterisk (RFC 3389). Please turn off on client if possible. Client address: %s\n",
+-			ast_sockaddr_stringify(&remote_address));
+-		ast_set_flag(rtp, FLAG_3389_WARNING);
+ 	}
+ 
+ 	/* Must have at least one byte */
+@@ -1780,10 +1772,22 @@
+ 		rtp->f.datalen = 0;
+ 	}
+ 	rtp->f.frametype = AST_FRAME_CNG;
++		/* The noise level is expressed in -dBov with values 0 to 127, representing 0 to -127 dBov
++		   It's in bits 1-7 in the payload. Bit 0 is always 0.
++		*/
+ 	rtp->f.subclass.integer = data[0] & 0x7f;
+ 	rtp->f.samples = 0;
+ 	rtp->f.delivery.tv_usec = rtp->f.delivery.tv_sec = 0;
+ 
++	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
++		ast_set_flag(rtp, FLAG_CN_ACTIVE);
++		ast_debug(2, "ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
++		/* Start the generator on the other end. */
++	
++	} else {
++		/* Check if the level is the same. If not, reactivate. */
++	}
++
+ 	return &rtp->f;
+ }
+ 
+@@ -2368,6 +2372,15 @@
+ 	/* If the payload is not actually an Asterisk one but a special one pass it off to the respective handler */
+ 	if (!payload.asterisk_format) {
+ 		struct ast_frame *f = NULL;
++		if (payload.code != AST_RTP_CN && ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
++			/* Insert a control frame to indicate that we need to shut down Comfort Noise generators, if active */
++			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
++			ast_debug(2, "DEACTIVATING Comfort Noise \n");
++			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
++			f = ast_frdup(&cngoff);
++			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
++			f = NULL;
++		}
+ 		if (payload.code == AST_RTP_DTMF) {
+ 			/* process_dtmf_rfc2833 may need to return multiple frames. We do this
+ 			 * by passing the pointer to the frame list to it so that the method
+@@ -2395,6 +2408,15 @@
+ 		}
+ 		return &ast_null_frame;
+ 	}
++	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
++		struct ast_frame *f = NULL;
++		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
++		ast_debug(2, "DEACTIVATING Comfort Noise \n");
++		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
++		f = ast_frdup(&cngoff);
++		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
++		f = NULL;
++	}
+ 
+ 	rtp->lastrxformat = rtp->f.subclass.codec = payload.code;
+ 	rtp->f.frametype = (rtp->f.subclass.codec & AST_FORMAT_AUDIO_MASK) ? AST_FRAME_VOICE : (rtp->f.subclass.codec & AST_FORMAT_VIDEO_MASK) ? AST_FRAME_VIDEO : AST_FRAME_TEXT;
+Index: README.roibos-cng.txt
+===================================================================
+--- README.roibos-cng.txt	(.../branches/1.8)	(revision 0)
++++ README.roibos-cng.txt	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+@@ -0,0 +1,174 @@
++Edvina AB
++Olle E. Johansson
++
++
++Started: 2012-09-18
++Updated: 2013-12-05
++
++
++
++
++
++Comfort Noise support in Asterisk 1.8
++=====================================
++
++Comfort Noise in SIP/RTP is 
++- negotiated in the SDP as a codec
++- starts activated by a silence in the media stream
++- the sender stops sending media, sends a single CNG RTP packet that indicates
++  a noise level
++- the receiver activated a Comfort Noise Generator in the call until media 
++  reappears from the sender
++
++A requirement for using this is that it is included as a codec with payload
++13 (or dynamic) in the SDP
++
++Asterisk Architecture
++=====================
++In a bridged call, where one end is SIP with CNG enabled, the RTP system
++will get an incoming CNG frame with a noise level. This will be sent
++over the bridge to the bridged channel.
++
++If that channel is SIP with CNG enabled for the call, the RTP system
++will send out a CNG frame.  This is to enable forwarding a CNG frame 
++across to another SIP device which now gets the responsibility to play out 
++the noise.
++
++It that channel is a type that doesn't support CNG or SIP with CNG
++disabled, then Asterisk needs to generate noise in the bridged
++channel - not the SIP channel that received the CNG frame. 
++
++Current state:
++==============
++
++* RTP Channel
++-------------
++
++- Asterisk RTP (res_rtp_asterisk.c) will read CNG packets and produce a warning. 
++  These will be forwarded to the core.
++- CNG packets will be sent only as RTP keepalives
++
++* SIP Channel
++-------------
++- The SIP channel will negotiate any CNG support if offered and
++  offer CNG if configured. SIP.conf setting:
++	;comfort-noise=yes              ; Enable Comfort Noise generation on RTP streams
++	;                               ; Available per device too
++
++* Core
++------
++- If a generator is active and CNG is received, Asterisk moves to timer based
++  generation of outbound packets
++- Comfort noise generator added to core
++- Comfort noise generator will be used when CNG frame is received, until the RTP
++  channel signals that CNG will end.
++
++Detecting Silence
++=================
++The current silence detector in Asterisk only supports signed linear audio.
++This means that for a g.729 call we have to transcode to signed linear, listen 
++for audio and then transcode back. Not a good efficient solution. I will implement
++this as a showcase in the first step.
++
++Later we have to
++- Add silence detection to the codec modules so they can signal silence
++  in an incoming stream to the core
++- Add silence detection as a framehook procedure. This way we only have to
++  convert the media once and have a "fork" listen for silence. We keep
++  the media in the existing format over the bridge.
++
++Debugging
++=========
++Place a call between one phone that supports CN (I've used a SNOM 820) and a
++phone that lacks support for it (or has it disabled for testing). 
++- Turn on RTP debug and SIP debug.
++- Set core debug to 3.
++You will now see that Asterisk receives a CN RTP packet, and will activate
++the noise generator on the other channel. This happens many times during 
++the call.
++
++Todo :: comfort noise support
++-----------------------------
++  - Check how this affects RTP bridge and queue bridge
++  - Add CN support in SDP for outbound calls
++  - As step 2, add silence detection to calls
++  	- Measure noise level
++  	- Start sending CNG
++  	- Listen for talk detection
++  	- Stop sending CNG, send media
++  - Ask Matt J and File about frame hooks and how this solution should look
++
++Done:
++  - Support in core bridge
++  - For inbound streams, generate noise in calls (both inbound and outbound calls)
++  - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
++    This includes a noise generator
++  - Add SIP negotiation in SDP - done
++  - Support CN codec on incoming INVITEs - done
++
++References
++----------
++
++- RFC 3389 http://tools.ietf.org/html/rfc3389
++- Appendix II to Recommendation G.711 (02/2000) - A comfort noise
++        payload definition for ITU-T G.711 use in packet-based
++        multimedia communication systems.
++
++
++Terms
++-----
++- DTX Discontinues Transmission capability
++- VAD Voice Activity Detection
++- CN Comfort Noise , http://en.wikipedia.org/wiki/Comfort_noise
++- CNG Comfort Noise Generator
++- Silence Suppression: http://en.wikipedia.org/wiki/Silence_suppression
++
++RTP Framing (RFC 3389 section 4)
++--------------------------------
++The RTP header for the comfort noise packet SHOULD be constructed as
++   if the comfort noise were an independent codec.  Thus, the RTP
++   timestamp designates the beginning of the comfort noise period.
++
++At the beginning of
++   an inactive voice segment (silence period), a CN packet is
++   transmitted in the same RTP stream and indicated by the CN payload
++   type.  The CN packet update rate is left implementation specific. For
++   example, the CN packet may be sent periodically or only when there is
++   a significant change in the background noise characteristics.  The
++   CNG algorithm at the receiver uses the information in the CN payload
++   to update its noise generation model and then produce an appropriate
++   amount of comfort noise.
++
++Noise Level (RFC 3389 Section 3.1)
++----------------------------------
++The magnitude of the noise level is packed into the least significant
++   bits of the noise-level byte with the most significant bit unused and
++   always set to 0 as shown below in Figure 1.  The least significant
++   bit of the noise level magnitude is packed into the least significant
++   bit of the byte.
++
++   The noise level is expressed in -dBov, with values from 0 to 127
++   representing 0 to -127 dBov.  dBov is the level relative to the
++   overload of the system.  (Note: Representation relative to the
++   overload point of a system is particularly useful for digital
++   implementations, since one does not need to know the relative
++   calibration of the analog circuitry.)  For example, in the case of a
++   u-law system, the reference would be a square wave with values +/-
++   8031, and this square wave represents 0dBov.  This translates into
++   6.18dBm0.
++
++-----------------
++Various notes:
++=============
++From file:
++
++The logic for determining if a native bridge can be performed or not lives in ast_channel_bridge in channel.c - there is an if statement with many conditions that have to be met before doing it. You can extend that and add another which is "if the CN support on channel A is the same as channel B then allow native bridge"
++
++Question: If I run RTP bridge (not the p2p or remote) can we still operate
++on timer? If not, I have to disable RTP bridging totally. If we rely on incoming
++packets (which will not happen) to send out, CN will not work.
++
++Yes, you can still operate on timer. The RTP bridge still has all the normal bridging logic in it. That's how music on hold and such works.
++
++Brian West in ASTERISK-140 2004-04-24:
++"This is the one thing that keeps asterisk out of the big boy toy box.... lets get it going boys."
+
+Property changes on: README.roibos-cng.txt
+___________________________________________________________________
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Index: .
+===================================================================
+--- .	(.../branches/1.8)	(revision 411922)
++++ .	(.../team/oej/roibos-cng-support-1.8)	(revision 411922)
+
+Property changes on: .
+___________________________________________________________________
+Added: svnmerge-integrated
+## -0,0 +1 ##
++/branches/1.8:1-411858
+\ No newline at end of property
+Added: automerge
+## -0,0 +1 ##
++*
+\ No newline at end of property

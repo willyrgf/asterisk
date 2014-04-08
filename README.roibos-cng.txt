@@ -3,14 +3,14 @@ Olle E. Johansson
 
 
 Started: 2012-09-18
-Updated: 2013-12-05
+Updated: 2014-04-07
 
 
 
 
 
-Comfort Noise support in Asterisk 1.8
-=====================================
+Silence Suppression and Comfort Noise support in Asterisk 1.8
+=============================================================
 
 Comfort Noise in SIP/RTP is 
 - negotiated in the SDP as a codec
@@ -67,15 +67,11 @@ Detecting Silence
 =================
 The current silence detector in Asterisk only supports signed linear audio.
 This means that for a g.729 call we have to transcode to signed linear, listen 
-for audio and then transcode back. Not a good efficient solution. I will implement
-this as a showcase in the first step.
+for audio and in some cases, but not all, transcode back.
 
 Later we have to
 - Add silence detection to the codec modules so they can signal silence
   in an incoming stream to the core
-- Add silence detection as a framehook procedure. This way we only have to
-  convert the media once and have a "fork" listen for silence. We keep
-  the media in the existing format over the bridge.
 
 Debugging
 =========
@@ -91,12 +87,6 @@ Todo :: comfort noise support
 -----------------------------
   - Check how this affects RTP bridge and queue bridge
   - Add CN support in SDP for outbound calls
-  - As step 2, add silence detection to calls
-  	- Measure noise level
-  	- Start sending CNG
-  	- Listen for talk detection
-  	- Stop sending CNG, send media
-  - Ask Matt J and File about frame hooks and how this solution should look
 
 Done:
   - Support in core bridge
@@ -105,6 +95,7 @@ Done:
     This includes a noise generator
   - Add SIP negotiation in SDP - done
   - Support CN codec on incoming INVITEs - done
+  - Silence detection and suppression added for SIP calls
 
 References
 ----------

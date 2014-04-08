@@ -1,0 +1,789 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 411922)
++++ channels/chan_sip.c	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -273,6 +273,7 @@
+ #include "sip/include/sdp_crypto.h"
+ #include "asterisk/ccss.h"
+ #include "asterisk/xml.h"
++#include "asterisk/silencedetection.h"
+ #include "sip/include/dialog.h"
+ #include "sip/include/dialplan_functions.h"
+ 
+@@ -6915,6 +6916,11 @@
+ 	struct sip_pvt *p = ast->tech_pvt;
+ 	int res = 0;
+ 
++	if (frame == &ast_null_frame) {
++		/* We do not send null frames. Sorry */
++		return 1;
++	}
++
+ 	switch (frame->frametype) {
+ 	case AST_FRAME_VOICE:
+ 		if (!(frame->subclass.codec & ast->nativeformats)) {
+@@ -7458,6 +7464,38 @@
+ 	return res;
+ }
+ 
++
++/*! \brief Activates a DSP to detect silence, something we can use to suppress silent RTP packets
++	and send CNG (comfort noise generation) requests instead */
++static int activate_silence_detection(struct sip_pvt *dialog)
++{
++	int res = 0;
++	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
++
++	/* Check if we really want silence suppression */
++	if (!dialog || !dialog->rtp || !dialog->owner || !ast_test_flag(&dialog->flags[2], SIP_PAGE3_SILENCE_DETECTION)) {
++		ast_debug(3, "SILDET: Channel does not need silence suppression on %s\n", dialog->callid);
++		return FALSE;
++	}
++
++	if(ast_sildet_activate(dialog->owner, dialog->silencelevel, dialog->silenceframes)) {
++
++		/* We now have a call where we have a DSP. The rest of the magic is happening somewhere else in chan_sip. */
++		ast_debug(3, "SILDET: Activated silence suppression on call %s\n", dialog->callid);
++#ifdef ISTHISNEEDED
++		if ((res = ast_set_read_format(dialog->owner, AST_FORMAT_SLINEAR)) < 0) {
++			/* Put channel in the right codec mode: SLINEAR */
++			ast_log(LOG_WARNING, "Unable to set channel to linear mode, giving up\n");
++			ast_sildet_deactivate(dialog->owner);
++			return FALSE;
++		}
++#endif
++	} else {
++		ast_debug(3, "SILDET: Failed to activate silence detection on call %s\n", dialog->callid);
++	}
++	return TRUE;
++}
++
+ /*!
+  * \brief Initiate a call in the SIP channel
+  *
+@@ -7677,6 +7715,8 @@
+ 			"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
+ 			tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
+ 
++	activate_silence_detection(i);
++
+ 	return tmp;
+ }
+ 
+@@ -7973,7 +8013,6 @@
+ 		ast_frfree(fr);
+ 		fr = &ast_null_frame;
+ 	}
+-
+ 	sip_pvt_unlock(p);
+ 
+ 	return fr;
+@@ -8228,6 +8267,8 @@
+ 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
+ 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
+ 	p->capability = sip_cfg.capability;
++	p->silencelevel = sip_cfg.silencelevel;
++	p->silenceframes = sip_cfg.silenceframes;
+ 	p->allowtransfer = sip_cfg.allowtransfer;
+ 	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
+ 	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO)) {
+@@ -18309,7 +18350,7 @@
+ 		ast_cli(fd, "  Codec Order  : (");
+ 		print_codec_to_cli(fd, &peer->prefs);
+ 		ast_cli(fd, ")\n");
+-
++		ast_cli(fd, "  Silence Det. : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_SILENCE_DETECTION)));
+ 		ast_cli(fd, "  Auto-Framing : %s\n", AST_CLI_YESNO(peer->autoframing));
+ 		ast_cli(fd, "  Status       : ");
+ 		peer_status(peer, status, sizeof(status));
+@@ -18991,6 +19032,9 @@
+ 	ast_cli(a->fd, "  DTMF:                   %s\n", dtmfmode2str(ast_test_flag(&global_flags[0], SIP_DTMF)));
+ 	ast_cli(a->fd, "  Qualify:                %d\n", default_qualify);
+ 	ast_cli(a->fd, "  Use ClientCode:         %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_USECLIENTCODE)));
++	ast_cli(a->fd, "  Silence detection:      %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_SILENCE_DETECTION)));
++	ast_cli(a->fd, "  Silence level: 	  %d\n", sip_cfg.silencelevel);
++	ast_cli(a->fd, "  Silence frames: 	  %d\n", sip_cfg.silenceframes);
+ 	ast_cli(a->fd, "  Progress inband:        %s\n", (ast_test_flag(&global_flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NEVER) ? "Never" : (AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_PROG_INBAND) != SIP_PROG_INBAND_NO)));
+ 	ast_cli(a->fd, "  Language:               %s\n", default_language);
+ 	ast_cli(a->fd, "  MOH Interpret:          %s\n", default_mohinterpret);
+@@ -19386,6 +19430,9 @@
+ 			ast_cli(a->fd, "  Promiscuous Redir:      %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_PROMISCREDIR)));
+ 			ast_cli(a->fd, "  Route:                  %s\n", cur->route ? cur->route->hop : "N/A");
+ 			ast_cli(a->fd, "  DTMF Mode:              %s\n", dtmfmode2str(ast_test_flag(&cur->flags[0], SIP_DTMF)));
++			ast_cli(a->fd, "  Silence Detection:      %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_SILENCE_DETECTION)));
++			ast_cli(a->fd, "  Silence level:          %d\n", cur->silencelevel);
++			ast_cli(a->fd, "  Silence frames:         %d\n", cur->silenceframes);
+ 			ast_cli(a->fd, "  SIP Options:            ");
+ 			if (cur->sipoptions) {
+ 				int x;
+@@ -27790,6 +27837,9 @@
+ 	} else if (!strcasecmp(v->name, "buggymwi")) {
+ 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
+ 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
++	} else if (!strcasecmp(v->name, "silencedetection")) {
++		ast_set_flag(&mask[2], SIP_PAGE3_SILENCE_DETECTION);
++		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_SILENCE_DETECTION);
+ 	} else
+ 		res = 0;
+ 
+@@ -29012,6 +29062,8 @@
+ 	ast_copy_string(default_callerid, DEFAULT_CALLERID, sizeof(default_callerid));
+ 	ast_copy_string(default_mwi_from, DEFAULT_MWI_FROM, sizeof(default_mwi_from));
+ 	sip_cfg.compactheaders = DEFAULT_COMPACTHEADERS;
++	sip_cfg.silencelevel = DEFAULT_SILENCELEVEL;
++	sip_cfg.silenceframes = DEFAULT_SILENCEFRAMES;
+ 	global_reg_timeout = DEFAULT_REGISTRATION_TIMEOUT;
+ 	global_regattempts_max = 0;
+ 	global_reg_retry_403 = 0;
+@@ -29560,6 +29612,18 @@
+ 			}
+ 		} else if (!strcasecmp(v->name, "use_q850_reason")) {
+ 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
++		} else if (!strcasecmp(v->name, "silencelevel")) {
++			if (sscanf(v->value, "%30d", &sip_cfg.silencelevel) != 1
++				|| sip_cfg.silencelevel < 1 ) {
++				ast_log(LOG_WARNING, "'%s' is not a valid silencelevel value at line %d.  Using default.\n", v->value, v->lineno);
++				sip_cfg.silencelevel = DEFAULT_SILENCELEVEL;
++			}
++		} else if (!strcasecmp(v->name, "silenceframes")) {
++			if (sscanf(v->value, "%30d", &sip_cfg.silenceframes) != 1
++				|| sip_cfg.silenceframes < 0 || sip_cfg.silenceframes > 150) {
++				ast_log(LOG_WARNING, "'%s' is not a valid silencelevel value at line %d.  Using default.\n", v->value, v->lineno);
++				sip_cfg.silenceframes = DEFAULT_SILENCEFRAMES;
++			}
+ 		} else if (!strcasecmp(v->name, "maxforwards")) {
+ 			if (sscanf(v->value, "%30d", &sip_cfg.default_max_forwards) != 1
+ 				|| sip_cfg.default_max_forwards < 1 || 255 < sip_cfg.default_max_forwards) {
+Index: channels/sip/include/sip.h
+===================================================================
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 411922)
++++ channels/sip/include/sip.h	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -61,6 +61,8 @@
+ 
+ #define DEFAULT_AUTHLIMIT            100
+ #define DEFAULT_AUTHTIMEOUT          30
++#define DEFAULT_SILENCELEVEL	     100
++#define DEFAULT_SILENCEFRAMES	     7   /* Number of frames of silence to let through before we start suppressing it */
+ 
+ /* guard limit must be larger than guard secs */
+ /* guard min must be < 1000, and should be >= 250 */
+@@ -359,9 +361,10 @@
+ 
+ #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+ #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
++#define SIP_PAGE3_SILENCE_DETECTION      (1 << 21)  /*!< DPG: Enable silence detection?  */
+ 
+ #define SIP_PAGE3_FLAGS_TO_COPY \
+-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
++	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_SILENCE_DETECTION)
+ 
+ /*@}*/
+ 
+@@ -716,6 +719,8 @@
+ 	format_t capability;        /*!< Supported codecs */
+ 	int tcp_enabled;
+ 	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
++	unsigned int silencelevel;	     /*!< Default silence treshold for silence detection */
++	unsigned int silenceframes;	     /*!< Default silence period - how many frames to wait before suppressing silence */
+ };
+ 
+ /*! \brief The SIP socket definition */
+@@ -1088,6 +1093,10 @@
+ 	uint32_t dialogver;                 /*!< SUBSCRIBE: Version for subscription dialog-info */
+ 
+ 	struct ast_dsp *dsp;                /*!< Inband DTMF or Fax CNG tone Detection dsp */
++	unsigned int silencelevel;	    /*!< Silence treshold */
++	unsigned int silenceframes;	    /*!< How many frames to wait for silence before activating silence
++						 support and sending CNG */
++	unsigned int silencecounter;	    /*!< Frame Counter used for silence detection. */
+ 
+ 	struct sip_peer *relatedpeer;       /*!< If this dialog is related to a peer, which one
+ 	                                         Used in peerpoke, mwi subscriptions */
+Index: README.silencegames.txt
+===================================================================
+--- README.silencegames.txt	(.../branches/1.8)	(revision 0)
++++ README.silencegames.txt	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -0,0 +1,4 @@
++
++Where to hook in this stuff
++- sip_new() for calls out
++- answer somewhere for incoming calls
+
+Property changes on: README.silencegames.txt
+___________________________________________________________________
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Index: include/asterisk/silencedetection.h
+===================================================================
+--- include/asterisk/silencedetection.h	(.../branches/1.8)	(revision 0)
++++ include/asterisk/silencedetection.h	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -0,0 +1,49 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2014, Olle E. Johansson
++ *
++ * Olle E. Johansson <oej@edvina.net>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ * \brief Audiohook for silnce detection
++ */
++
++#ifndef _ASTERISK_SILENCEDETECTION_H
++#define _ASTERISK_SILENCEDETECTION_H
++
++#if defined(__cplusplus) || defined(c_plusplus)
++extern "C" {
++#endif
++
++/*! \brief Activation of silence detection 
++	\param chan		The channel
++	\param silencelevel 	Audio treshold for silence
++	\param silenceframes	Number of frames before we react
++
++     \note That this function assumes the channel is set to read signed linear audio
++
++*/
++int ast_sildet_activate(struct ast_channel *chan, unsigned int silencelevel, unsigned int silenceframes);
++
++/*! \brief Deactivation of silence detection 
++	\param chan		The channel
++*/
++int ast_sildet_deactivate(struct ast_channel *chan);
++
++#if defined(__cplusplus) || defined(c_plusplus)
++}
++#endif
++
++#endif /* _ASTERISK_SILENCEDETECTION_H */
+
+Property changes on: include/asterisk/silencedetection.h
+___________________________________________________________________
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Index: include/asterisk/frame.h
+===================================================================
+--- include/asterisk/frame.h	(.../branches/1.8)	(revision 411922)
++++ include/asterisk/frame.h	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -124,6 +124,8 @@
+ 	AST_FRAME_MODEM,	
+ 	/*! DTMF begin event, subclass is the digit */
+ 	AST_FRAME_DTMF_BEGIN,
++	/*! A frame that needs to be killed, dropped or just silently ignored */
++	AST_FRAME_DROP,
+ };
+ #define AST_FRAME_DTMF AST_FRAME_DTMF_END
+ 
+Index: include/asterisk/audiohook.h
+===================================================================
+--- include/asterisk/audiohook.h	(.../branches/1.8)	(revision 411922)
++++ include/asterisk/audiohook.h	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -37,6 +37,7 @@
+ 	AST_AUDIOHOOK_TYPE_SPY = 0,    /*!< Audiohook wants to receive audio */
+ 	AST_AUDIOHOOK_TYPE_WHISPER,    /*!< Audiohook wants to provide audio to be mixed with existing audio */
+ 	AST_AUDIOHOOK_TYPE_MANIPULATE, /*!< Audiohook wants to manipulate the audio */
++	AST_AUDIOHOOK_TYPE_SILDET,     /*!< Audiohook to detect silence. That's all */
+ };
+ 
+ enum ast_audiohook_status {
+Index: main/silencedetection.c
+===================================================================
+--- main/silencedetection.c	(.../branches/1.8)	(revision 0)
++++ main/silencedetection.c	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -0,0 +1,315 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2014, Olle E. Johansson
++ *
++ * Olle E. Johansson <oej@edvina.net>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ *
++ * \brief Silence Detection and suppression audiohooks
++ *
++ * \author Olle E. Johansson <oej@edvina.net>
++ *
++ *
++ * This is an internal API and have no functions, applications or other cool stuff to expose to the admin.
++ * 
++ * If this audiohook is applied, we listen for silence and when silence has been detected for a certain 
++ * number of frames in a row, we replace the frame with a CNG frame and then (want to) drop frames until
++ * we have audio again. Right now the code just clears the frame.
++ *
++ * \note This code only handles audio streams 
++ * 	For silence in video, check Ingmar Bergman movies on Wikipedia. We have
++ *	no current way to detect video "silence" so we can't optimize that type of movies.
++ */
++
++/*** MODULEINFO
++	<support_level>core</support_level>
++ ***/
++
++#include "asterisk.h"
++
++ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
++
++#include "asterisk/options.h"
++#include "asterisk/logger.h"
++#include "asterisk/channel.h"
++#include "asterisk/config.h"
++#include "asterisk/file.h"
++#include "asterisk/pbx.h"
++#include "asterisk/frame.h"
++#include "asterisk/utils.h"
++#include "asterisk/audiohook.h"
++#include "asterisk/dsp.h"
++#include "asterisk/silencedetection.h"
++
++
++/*! Our own datastore */
++struct silence_detection_info {
++	struct ast_audiohook audiohook;
++	struct ast_dsp *dsp;			/*!< DSP used for silence detection */
++	unsigned int silencelevel;		/*!< Silence treshold */
++        unsigned int silenceframes;		/*!< How many frames to wait for silence before activating silence
++							support and sending CNG */
++        unsigned int silencecounter;		/*!< Frame Counter used for silence detection. */
++	int detect;				/*!< Silence detected */
++	int active;
++};
++
++
++#define TRUE 1
++#define FALSE 0
++
++/*! Datastore destroy audiohook callback */
++static void destroy_callback(void *data)
++{
++	struct silence_detection_info *sildet = data;
++
++	ast_dsp_free(sildet->dsp);
++	sildet->dsp = NULL;
++
++	/* Destroy the audiohook, and destroy ourselves */
++	ast_audiohook_destroy(&sildet->audiohook);
++	ast_free(sildet);
++
++	return;
++}
++
++/*! \brief Static structure for datastore information */
++static const struct ast_datastore_info sildet_datastore = {
++	.type = "sildet",
++	.destroy = destroy_callback
++};
++
++/*! \brief The callback from the audiohook subsystem. We basically get a frame to have fun with 
++	Return TRUE to keep original packet
++	Return FALSE to use our packet
++*/
++static int silence_detection_callback(struct ast_audiohook *audiohook, struct ast_channel *chan, struct ast_frame *frame, enum ast_audiohook_direction direction)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++
++	if (direction != AST_AUDIOHOOK_DIRECTION_WRITE) {
++		return 1;
++	}
++
++	/* If the audiohook is stopping it means the channel is shutting down.... but we let the datastore destroy take care of it */
++	if (audiohook->status == AST_AUDIOHOOK_STATUS_DONE) {
++		ast_debug(7, "Audiohook giving up - STATUS_DONE \n");
++		return 1;
++	}
++
++	ast_channel_lock(chan);
++	/* Grab datastore which contains our mute information */
++	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
++		ast_channel_unlock(chan);
++		ast_debug(2, "Can't find any datastore to use. Bad. \n");
++		return 1;
++	}
++
++	sildet = datastore->data;
++	if (!sildet || !sildet->dsp) {
++		ast_channel_unlock(chan);
++		ast_debug(2, "Can't find any DSP to use. Bad. \n");
++		return 1;
++	}
++
++	/* If this is audio then allow them to increase/decrease the gains */
++	if (frame->frametype == AST_FRAME_VOICE) {
++		int dsptime = 0;
++
++		/* Based on direction of frame grab the gain, and confirm it is applicable */
++		if (direction == AST_AUDIOHOOK_DIRECTION_WRITE) {
++			ast_dsp_silence(sildet->dsp, frame, &dsptime);	/* Checking for silence */
++			if (!dsptime) {
++				if (option_debug && sildet->silencecounter > 0) {
++					ast_debug(8, " ++++ Silence stopped ++++ on chan %s\n", chan->name);
++				}
++				if (sildet->silencecounter > 0) {
++					sildet->silencecounter = 0;		/* No more silence */
++					sildet->detect = 0;		/* No more silence */
++				}
++				ast_debug(9, " ++++ We are not silent on write to %s (dsptime %d)\n", chan->name, dsptime);
++			} else {
++				if (option_debug && sildet->silencecounter == 0) {
++					ast_debug(9, "          ++++ Silence starts here %d ++++ on chan %s dsptime %d\n", sildet->silencecounter, chan->name, dsptime);
++				}
++				if (option_debug && sildet->silencecounter > 0) {
++					ast_debug(9, "          ++++ Silence continues %d ++++ on chan %s dsptime %d\n", sildet->silencecounter, chan->name, dsptime);
++				}
++				sildet->silencecounter++;
++				if (sildet->detect == 1 && sildet->silencecounter > sildet->silenceframes) {
++					ast_frame_clear(frame);		/* Should really be dropped. */
++        				frame->samples = 0;
++					frame->datalen = 0;
++					
++					frame->frametype = AST_FRAME_DROP;
++					ast_channel_unlock(chan);
++					return 0;	/* Return TRUE since we manipulated the frame */
++				}
++			}
++			if (sildet->detect == 0 && sildet->silencecounter > sildet->silenceframes) {
++				ast_debug(8, "++++ Silence suppression should start now ++++ on chan %s\n", chan->name);
++				sildet->detect = 1;
++				ast_frame_clear(frame);
++				frame->frametype = AST_FRAME_CNG;
++        			frame->subclass.integer =  0x7f;
++        			frame->samples = 0;
++				ast_channel_unlock(chan);
++				return 0;	/* Return TRUE since we manipulated the frame */
++			}
++			/* Do not touch the frame yet */
++		}
++	}
++	ast_channel_unlock(chan);
++
++	return 1;
++}
++
++/*! \brief Initialize mute hook on channel, but don't activate it
++	\pre Assumes that the channel is locked
++*/
++static struct ast_datastore *initialize_sildethook(struct ast_channel *chan)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++
++	ast_debug(2, "Initializing new Silence Detection Audiohook \n");
++
++	/* Allocate a new datastore to hold the reference to this sildet_datastore and audiohook information */
++	if (!(datastore = ast_datastore_alloc(&sildet_datastore, NULL))) {
++		return NULL;
++	}
++
++	if (!(sildet = ast_calloc(1, sizeof(*sildet)))) {
++		ast_datastore_free(datastore);
++		return NULL;
++	}
++	if (!(sildet->dsp = ast_dsp_new())) {
++		/* We failed to create a DSP */
++		ast_log(LOG_WARNING, "Unable to create silence detector :(\n");
++		ast_free(sildet);
++		ast_datastore_free(datastore);
++		return NULL;
++	}
++	ast_audiohook_init(&sildet->audiohook, AST_AUDIOHOOK_TYPE_MANIPULATE, "Sildet");
++	sildet->audiohook.manipulate_callback = silence_detection_callback;
++	sildet->active = 1;
++	sildet->silencecounter = 0;
++	sildet->detect = 0;
++	datastore->data = sildet;
++	return datastore;
++}
++
++/*! \brief Add or activate mute audiohook on channel
++	Assumes channel is locked
++*/
++static int sildet_add_audiohook(struct ast_channel *chan, struct silence_detection_info *sildet, struct ast_datastore *datastore)
++{
++	/* Activate the settings */
++	ast_channel_datastore_add(chan, datastore);
++	if (ast_audiohook_attach(chan, &sildet->audiohook)) {
++		ast_log(LOG_ERROR, "Failed to attach audiohook for silence detection on channel %s\n", chan->name);
++		return -1;
++	}
++	ast_debug(2, "Initialized audiohook for silence detection on channel %s\n", chan->name);
++	return 0;
++}
++
++/*! \brief Activation of silence detection */
++int ast_sildet_activate(struct ast_channel *chan, unsigned int silencelevel, unsigned int silenceframes)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++
++	int is_new = 0;
++
++	if (!chan) {
++		ast_log(LOG_WARNING, "No channel was provided.\n" );
++		return -1;
++	}
++	if (silenceframes < 3) {
++		ast_log(LOG_WARNING, "Silenceframes is set very low. Are you sure? Value=%d\n", silenceframes);
++	}
++	ast_debug(4, "----> Setting up silence detection/suppression with silence level %d and silence frames %d for chan %s\n", silencelevel, silenceframes, chan->name);
++
++	ast_channel_lock(chan);
++	ast_debug(4, "----> Looking for silence detection datastore for %s\n", chan->name);
++	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
++		if (!(datastore = initialize_sildethook(chan))) {
++			ast_debug(4, "----> Failed to initialize hook for silence detection for %s\n", chan->name);
++			ast_channel_unlock(chan);
++			return 0;
++		}
++		is_new = 1;
++	}
++
++	/* Configure the silence detection */
++	sildet = datastore->data;
++	if (!sildet) {
++		ast_debug(4, "----> No datastore data for silence detection for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	if (!sildet->dsp) {
++		ast_debug(4, "----> No datastore dsp for silence detection for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	ast_debug(4, "----> Looking for silence detection datastore for %s\n", chan->name);
++	ast_dsp_set_threshold(sildet->dsp, silencelevel);
++	sildet->silencelevel = silencelevel;
++	sildet->silenceframes = silenceframes;
++	sildet->active = 1;
++	sildet->silencecounter = 0;
++	sildet->detect = 0;
++
++	if (is_new) {
++		if (sildet_add_audiohook(chan, sildet, datastore)) {
++			/* Can't add audiohook - already printed error message */
++			ast_datastore_free(datastore);
++			ast_free(sildet);
++		}
++	}
++	ast_channel_unlock(chan);
++
++	return 1;
++}
++
++int ast_sildet_deactivate(struct ast_channel *chan)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++	if (!chan) {
++		ast_log(LOG_WARNING, "No channel was provided.\n" );
++		return -1;
++	}
++	ast_channel_lock(chan);
++	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
++		ast_debug(4, "----> No silence detection datastore  for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	sildet = datastore->data;
++	if (!sildet) {
++		ast_debug(4, "----> No datastore data for silence detection for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	sildet->active = 0;
++	ast_audiohook_detach(&sildet->audiohook);
++	ast_channel_unlock(chan);
++	return 1;
++}
+
+Property changes on: main/silencedetection.c
+___________________________________________________________________
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Index: main/audiohook.c
+===================================================================
+--- main/audiohook.c	(.../branches/1.8)	(revision 411922)
++++ main/audiohook.c	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -79,6 +79,9 @@
+ 	case AST_AUDIOHOOK_TYPE_WHISPER:
+ 		ast_slinfactory_init(&audiohook->write_factory);
+ 		break;
++	case AST_AUDIOHOOK_TYPE_SILDET:
++		ast_slinfactory_init(&audiohook->read_factory);	/* We read and forget. */
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -103,6 +106,9 @@
+ 	case AST_AUDIOHOOK_TYPE_WHISPER:
+ 		ast_slinfactory_destroy(&audiohook->write_factory);
+ 		break;
++	case AST_AUDIOHOOK_TYPE_SILDET:
++		ast_slinfactory_destroy(&audiohook->read_factory);
++		break;
+ 	default:
+ 		break;
+ 	}
+@@ -626,6 +632,7 @@
+ 	struct ast_frame *start_frame = frame, *middle_frame = frame, *end_frame = frame;
+ 	struct ast_audiohook *audiohook = NULL;
+ 	int samples = frame->samples;
++	int needsdrop = 0;
+ 
+ 	/* ---Part_1. translate start_frame to SLINEAR if necessary. */
+ 	/* If the frame coming in is not signed linear we have to send it through the in_translate path */
+@@ -705,15 +712,25 @@
+ 				 * be taken here to exit early. */
+ 			}
+ 			ast_audiohook_unlock(audiohook);
++			if (middle_frame->frametype == AST_FRAME_DROP) {
++				/* This frame is going nowhere after this */
++				needsdrop = 1;
++			}
+ 		}
+ 		AST_LIST_TRAVERSE_SAFE_END;
+ 		end_frame = middle_frame;
+ 	}
+ 
+ 	/* ---Part_3: Decide what to do with the end_frame (whether to transcode or not) */
++	if (needsdrop) {
++		/* The frame needs to go away badly */
++		ast_frfree(middle_frame);
++		return &ast_null_frame;
++	}
++
+ 	if (middle_frame == end_frame) {
+ 		/* Middle frame was modified and became the end frame... let's see if we need to transcode */
+-		if (end_frame->subclass.codec != start_frame->subclass.codec) {
++		if (end_frame->frametype == AST_FRAME_AUDIO && end_frame->subclass.codec != start_frame->subclass.codec) {
+ 			if (out_translate->format != start_frame->subclass.codec) {
+ 				if (out_translate->trans_pvt)
+ 					ast_translator_free_path(out_translate->trans_pvt);
+Index: configs/sip.conf.sample
+===================================================================
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 411922)
++++ configs/sip.conf.sample	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -538,6 +538,21 @@
+ ;rtpkeepalive=<secs>            ; Send keepalives in the RTP stream to keep NAT open
+                                 ; (default is off - zero)
+ 
++;--------------------------- SIP Silence detection/suppression for RTP ------------------------------------
++; The silence detection assigns a software DSP to each channel and converts all audio into
++; signed linear in order to be able to detect silence. This will require a lot of CPU
++; per channel including transcoding. 
++; This is only settable in [general] right now, but should be settable per channel
++;silencedetection = YES		; Enable silence detection - by default turned off.
++;				; settable per device too
++;				; You want to enable comfort noise too
++;silencelevel = 850		; Silence detection noise level - below this is considered silent.
++				; Default = 850
++;silenceperiod = 2		; How many frames of silence should we get before we supress
++				; audio. Consider packetization. A normal ALAW stream has 20 ms audio
++				; per RTP packet. 2 means we will start sending CNG at the third silent
++				; packet, after 40 ms of silence.
++
+ ;--------------------------- SIP Session-Timers (RFC 4028)------------------------------------
+ ; SIP Session-Timers provide an end-to-end keep-alive mechanism for active SIP sessions.
+ ; This mechanism can detect and reclaim SIP channels that do not terminate through normal
+Index: res/res_rtp_asterisk.c
+===================================================================
+--- res/res_rtp_asterisk.c	(.../branches/1.8)	(revision 411922)
++++ res/res_rtp_asterisk.c	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+@@ -1753,9 +1753,11 @@
+ 	/* Convert comfort noise into audio with various codecs.  Unfortunately this doesn't
+ 	   totally help us out becuase we don't have an engine to keep it going and we are not
+ 	   guaranteed to have it every 20ms or anything */
+-	if (rtpdebug)
++	if (rtpdebug) {
+ 		ast_debug(0, "- RTP 3389 Comfort noise event: Level %" PRId64 " (len = %d)\n", rtp->lastrxformat, len);
++	}
+ 
++#ifdef OLD
+ 	if (ast_test_flag(rtp, FLAG_3389_WARNING)) {
+ 		struct ast_sockaddr remote_address = { {0,} };
+ 
+@@ -1765,10 +1767,12 @@
+ 			ast_sockaddr_stringify(&remote_address));
+ 		ast_set_flag(rtp, FLAG_3389_WARNING);
+ 	}
++#endif
+ 
+ 	/* Must have at least one byte */
+-	if (!len)
++	if (!len) {
+ 		return NULL;
++	}
+ 	if (len < 24) {
+ 		rtp->f.data.ptr = rtp->rawdata + AST_FRIENDLY_OFFSET;
+ 		rtp->f.datalen = len - 1;
+Index: .
+===================================================================
+--- .	(.../branches/1.8)	(revision 411922)
++++ .	(.../team/oej/silence-detection-games-1.8)	(revision 411922)
+
+Property changes on: .
+___________________________________________________________________
+Added: svnmerge-integrated
+## -0,0 +1 ##
++/branches/1.8:1-411860
+\ No newline at end of property
+Added: automerge-email
+## -0,0 +1 ##
++oej@edvina.net
+\ No newline at end of property
+Added: automerge
+## -0,0 +1 ##
++*
+\ No newline at end of property
