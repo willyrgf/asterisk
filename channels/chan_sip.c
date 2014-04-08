@@ -120,8 +120,6 @@
  *       specially to communication with other peers (proxies).
  * \todo We need to test TCP sessions with SIP proxies and in regards
  *       to the SIP outbound specs.
- * \todo ;transport=tls was deprecated in RFC3261 and should not be used at all. See section 26.2.2.
- *
  * \todo If the message is smaller than the given Content-length, the request should get a 400 Bad request
  *       message. If it's a response, it should be dropped. (RFC 3261, Section 18.3)
  * \todo Since we have had multidomain support in Asterisk for quite a while, we need to support
@@ -18889,6 +18887,21 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Qualify Freq :          %d ms\n", global_qualifyfreq);
 	ast_cli(a->fd, "  Q.850 Reason header:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_Q850_REASON)));
 	ast_cli(a->fd, "  Store SIP_CAUSE:        %s\n", AST_CLI_YESNO(global_store_sip_cause));
+	if (default_tls_cfg.enabled) {
+		ast_cli(a->fd, "\nTLS Settings:\n");
+		ast_cli(a->fd, "-------------------\n");
+		ast_cli(a->fd, "  TLS enabled:             Yes\n");
+		ast_cli(a->fd, "  TLS cert file:           %s\n", default_tls_cfg.certfile);
+		ast_cli(a->fd, "  TLS key file:            %s\n", default_tls_cfg.pvtfile);
+		ast_cli(a->fd, "  TLS CA store dir:        %s\n", default_tls_cfg.capath);
+		ast_cli(a->fd, "  TLS CA file:             %s\n", default_tls_cfg.cafile);
+		ast_cli(a->fd, "  TLS ciphers:             %s\n", default_tls_cfg.cipher);
+		ast_cli(a->fd, "  TLS verify client:       %s\n", AST_CLI_YESNO(ast_test_flag(&default_tls_cfg.flags, AST_SSL_VERIFY_CLIENT)));
+		ast_cli(a->fd, "  TLS don't verify server: %s\n", AST_CLI_YESNO(ast_test_flag(&default_tls_cfg.flags, AST_SSL_DONT_VERIFY_SERVER)));
+		ast_cli(a->fd, "  TLS version: 		%s\n", ast_test_flag(&default_tls_cfg.flags, AST_SSL_TLSV1_CLIENT) ? "TLSv1" : ( ast_test_flag(&default_tls_cfg.flags, AST_SSL_SSLV2_CLIENT)? "SSLv2" : "SSLv3")));
+default_tls_cfg
+	}
+
 	ast_cli(a->fd, "\nNetwork QoS Settings:\n");
 	ast_cli(a->fd, "---------------------------\n");
 	ast_cli(a->fd, "  IP ToS SIP:             %s\n", ast_tos2str(global_tos_sip));

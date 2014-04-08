@@ -1,0 +1,24 @@
+Edvina AB
+Olle E. Johansson
+
+
+Started: 2014-04-07
+
+
+
+
+
+JUNIPER: SHow TLS settings in "sip show settings" etc
+======================================================
+
+The TLS settings are not visible in "sip show settings" - only the TLS port if it's active.
+Our users deserve more.
+
+Changes
+-------
+- Changed error messages to LOG_ERROR from LOG_WARNING and ast_verbose(0, xxx)
+  Errors are ERRORs and nothing else.
+- Check if file names given actually exists
+  Turning off TLS if it does not exist
+- Added a TLS section of "sip show settings"
+

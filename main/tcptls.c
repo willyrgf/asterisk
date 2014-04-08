@@ -23,6 +23,7 @@
  *
  * \author Luigi Rizzo
  * \author Brett Bryant <brettbryant@gmail.com>
+ * \author Olle E. Johansson, Edvina AB
  */
 
 /*** MODULEINFO
@@ -188,7 +189,7 @@ static void *handle_tcptls_connection(void *data)
 	else if ( (tcptls_session->ssl = SSL_new(tcptls_session->parent->tls_cfg->ssl_ctx)) ) {
 		SSL_set_fd(tcptls_session->ssl, tcptls_session->fd);
 		if ((ret = ssl_setup(tcptls_session->ssl)) <= 0) {
-			ast_verb(2, "Problem setting up ssl connection: %s\n", ERR_error_string(ERR_get_error(), err));
+			ast_log(LOG_ERROR, "Problem setting up ssl connection: %s\n", ERR_error_string(ERR_get_error(), err));
 		} else {
 #if defined(HAVE_FUNOPEN)	/* the BSD interface */
 			tcptls_session->f = funopen(tcptls_session->ssl, ssl_read, ssl_write, NULL, ssl_close);
@@ -208,12 +209,13 @@ static void *handle_tcptls_connection(void *data)
 				long res;
 				peer = SSL_get_peer_certificate(tcptls_session->ssl);
 				if (!peer) {
-					ast_log(LOG_ERROR, "No peer SSL certificate to verify\n");
+					ast_log(LOG_ERROR, "No peer SSL certificate to verify. Closing session\n");
 					ast_tcptls_close_session_file(tcptls_session);
 					ao2_ref(tcptls_session, -1);
 					return NULL;
 				}
 
+				/* how is this verified? In SIP we should check URI and DNS altnames */
 				res = SSL_get_verify_result(tcptls_session->ssl);
 				if (res != X509_V_OK) {
 					ast_log(LOG_ERROR, "Certificate did not verify: %s\n", X509_verify_cert_error_string(res));
@@ -247,7 +249,7 @@ static void *handle_tcptls_connection(void *data)
 							break;
 					}
 					if (!found) {
-						ast_log(LOG_ERROR, "Certificate common name did not match (%s)\n", tcptls_session->parent->hostname);
+						ast_log(LOG_ERROR, "Certificate common name did not match (%s) CN: %s - closing connection\n", tcptls_session->parent->hostname, str);
 						X509_free(peer);
 						ast_tcptls_close_session_file(tcptls_session);
 						ao2_ref(tcptls_session, -1);
@@ -267,7 +269,7 @@ static void *handle_tcptls_connection(void *data)
 		ast_log(LOG_WARNING, "FILE * open failed!\n");
 #ifndef DO_SSL
 		if (tcptls_session->parent->tls_cfg) {
-			ast_log(LOG_WARNING, "Attempted a TLS connection without OpenSSL support.  This will not work!\n");
+			ast_log(LOG_ERROR, "Attempted a TLS connection without OpenSSL support.  This will not work!\n");
 		}
 #endif
 		ao2_ref(tcptls_session, -1);
@@ -305,7 +307,7 @@ void *ast_tcptls_server_root(void *data)
 		}
 		tcptls_session = ao2_alloc(sizeof(*tcptls_session), session_instance_destructor);
 		if (!tcptls_session) {
-			ast_log(LOG_WARNING, "No memory for new session: %s\n", strerror(errno));
+			ast_log(LOG_ERROR, "No memory for new session: %s\n", strerror(errno));
 			if (close(fd)) {
 				ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
 			}
@@ -325,7 +327,7 @@ void *ast_tcptls_server_root(void *data)
 
 		/* This thread is now the only place that controls the single ref to tcptls_session */
 		if (ast_pthread_create_detached_background(&launched, NULL, handle_tcptls_connection, tcptls_session)) {
-			ast_log(LOG_WARNING, "Unable to launch helper thread: %s\n", strerror(errno));
+			ast_log(LOG_ERROR, "Unable to launch helper thread: %s\n", strerror(errno));
 			ast_tcptls_close_session_file(tcptls_session);
 			ao2_ref(tcptls_session, -1);
 		}
@@ -387,7 +389,7 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 		if (SSL_CTX_use_certificate_chain_file(cfg->ssl_ctx, cfg->certfile) == 0) {
 			if (!client) {
 				/* Clients don't need a certificate, but if its setup we can use it */
-				ast_verb(0, "SSL error loading cert file. <%s>", cfg->certfile);
+				ast_log(LOG_ERROR, "SSL error loading cert file. <%s>", cfg->certfile);
 				cfg->enabled = 0;
 				SSL_CTX_free(cfg->ssl_ctx);
 				cfg->ssl_ctx = NULL;
@@ -408,7 +410,7 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 	if (!ast_strlen_zero(cfg->cipher)) {
 		if (SSL_CTX_set_cipher_list(cfg->ssl_ctx, cfg->cipher) == 0 ) {
 			if (!client) {
-				ast_verb(0, "SSL cipher error <%s>", cfg->cipher);
+				ast_log(LOG_ERROR, "SSL cipher error <%s>", cfg->cipher);
 				cfg->enabled = 0;
 				SSL_CTX_free(cfg->ssl_ctx);
 				cfg->ssl_ctx = NULL;
@@ -418,10 +420,10 @@ static int __ssl_setup(struct ast_tls_config *cfg, int client)
 	}
 	if (!ast_strlen_zero(cfg->cafile) || !ast_strlen_zero(cfg->capath)) {
 		if (SSL_CTX_load_verify_locations(cfg->ssl_ctx, S_OR(cfg->cafile, NULL), S_OR(cfg->capath,NULL)) == 0)
-			ast_verb(0, "SSL CA file(%s)/path(%s) error\n", cfg->cafile, cfg->capath);
+			ast_log(LOG_ERROR, "SSL CA file(%s)/path(%s) error\n", cfg->cafile, cfg->capath);
 	}
 
-	ast_verb(0, "SSL certificate ok\n");
+	ast_verb(1, "SSL certificate ok\n");
 	return 1;
 #endif
 }
@@ -451,7 +453,7 @@ struct ast_tcptls_session_instance *ast_tcptls_client_start(struct ast_tcptls_se
 	}
 
 	if (ast_connect(desc->accept_fd, &desc->remote_address)) {
-		ast_log(LOG_ERROR, "Unable to connect %s to %s: %s\n",
+		ast_log(LOG_ERROR, "TLS Unable to connect %s to %s: %s\n",
 			desc->name,
 			ast_sockaddr_stringify(&desc->remote_address),
 			strerror(errno));
@@ -498,7 +500,7 @@ struct ast_tcptls_session_instance *ast_tcptls_client_create(struct ast_tcptls_s
 	desc->accept_fd = socket(ast_sockaddr_is_ipv6(&desc->remote_address) ?
 				 AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (desc->accept_fd < 0) {
-		ast_log(LOG_WARNING, "Unable to allocate socket for %s: %s\n",
+		ast_log(LOG_ERROR, "Unable to allocate socket for %s: %s\n",
 			desc->name, strerror(errno));
 		return NULL;
 	}
@@ -651,22 +653,52 @@ void ast_tcptls_server_stop(struct ast_tcptls_session_args *desc)
 	ast_debug(2, "Stopped server :: %s\n", desc->name);
 }
 
+static int check_file_exists(char *filename)
+{
+	struct stat st;
+	if (ast_strlen_zero(filename)) {
+		return 0;
+	}
+	if ( stat(filename, &st) ) {
+		return 0;
+	}
+	return 1;
+}
+
 int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_args *tls_desc, const char *varname, const char *value)
 {
 	if (!strcasecmp(varname, "tlsenable") || !strcasecmp(varname, "sslenable")) {
 		tls_cfg->enabled = ast_true(value) ? 1 : 0;
 	} else if (!strcasecmp(varname, "tlscertfile") || !strcasecmp(varname, "sslcert") || !strcasecmp(varname, "tlscert")) {
-		ast_free(tls_cfg->certfile);
-		tls_cfg->certfile = ast_strdup(value);
+		if (check_file_exists(value)) {
+			ast_free(tls_cfg->certfile);
+			tls_cfg->certfile = ast_strdup(value);
+		} else {
+			ast_log(LOG_ERROR, "TLS certificate file does not exist (or not readable): %s\n", value);
+			tls_cfg->enabled = 0;
+			return -1;
+		}
 	} else if (!strcasecmp(varname, "tlsprivatekey") || !strcasecmp(varname, "sslprivatekey")) {
-		ast_free(tls_cfg->pvtfile);
-		tls_cfg->pvtfile = ast_strdup(value);
+		if (check_file_exists(value)) {
+			ast_free(tls_cfg->pvtfile);
+			tls_cfg->pvtfile = ast_strdup(value);
+		} else {
+			ast_log(LOG_ERROR, "TLS key file does not exist (or not readable): %s\n", value);
+			tls_cfg->enabled = 0;
+			return -1;
+		}
 	} else if (!strcasecmp(varname, "tlscipher") || !strcasecmp(varname, "sslcipher")) {
 		ast_free(tls_cfg->cipher);
 		tls_cfg->cipher = ast_strdup(value);
 	} else if (!strcasecmp(varname, "tlscafile")) {
-		ast_free(tls_cfg->cafile);
-		tls_cfg->cafile = ast_strdup(value);
+		if (check_file_exists(value)) {
+			ast_free(tls_cfg->cafile);
+			tls_cfg->cafile = ast_strdup(value);
+		} else {
+			ast_log(LOG_ERROR, "TLS CA file does not exist (or not readable): %s\n", value);
+			tls_cfg->enabled = 0;
+			return -1;
+		}
 	} else if (!strcasecmp(varname, "tlscapath") || !strcasecmp(varname, "tlscadir")) {
 		ast_free(tls_cfg->capath);
 		tls_cfg->capath = ast_strdup(value);
@@ -675,8 +707,10 @@ int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_
 	} else if (!strcasecmp(varname, "tlsdontverifyserver")) {
 		ast_set2_flag(&tls_cfg->flags, ast_true(value), AST_SSL_DONT_VERIFY_SERVER);
 	} else if (!strcasecmp(varname, "tlsbindaddr") || !strcasecmp(varname, "sslbindaddr")) {
-		if (ast_parse_arg(value, PARSE_ADDR, &tls_desc->local_address))
-			ast_log(LOG_WARNING, "Invalid %s '%s'\n", varname, value);
+		if (ast_parse_arg(value, PARSE_ADDR, &tls_desc->local_address)) {
+			ast_log(LOG_ERROR, "Invalid %s '%s'\n", varname, value);
+			tls_cfg->enabled = 0;
+		}
 	} else if (!strcasecmp(varname, "tlsclientmethod") || !strcasecmp(varname, "sslclientmethod")) {
 		if (!strcasecmp(value, "tlsv1")) {
 			ast_set_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
@@ -687,6 +721,7 @@ int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
 		} else if (!strcasecmp(value, "sslv2")) {
+			ast_log(LOG_WARNING, "SSL v2 is considered insecure. Please upgrade to TLSv1\n");
 			ast_set_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
