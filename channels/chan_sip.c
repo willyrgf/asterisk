@@ -18898,8 +18898,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		ast_cli(a->fd, "  TLS ciphers:             %s\n", default_tls_cfg.cipher);
 		ast_cli(a->fd, "  TLS verify client:       %s\n", AST_CLI_YESNO(ast_test_flag(&default_tls_cfg.flags, AST_SSL_VERIFY_CLIENT)));
 		ast_cli(a->fd, "  TLS don't verify server: %s\n", AST_CLI_YESNO(ast_test_flag(&default_tls_cfg.flags, AST_SSL_DONT_VERIFY_SERVER)));
-		ast_cli(a->fd, "  TLS version: 		%s\n", ast_test_flag(&default_tls_cfg.flags, AST_SSL_TLSV1_CLIENT) ? "TLSv1" : ( ast_test_flag(&default_tls_cfg.flags, AST_SSL_SSLV2_CLIENT)? "SSLv2" : "SSLv3")));
-default_tls_cfg
+		ast_cli(a->fd, "  TLS version: 		%s\n", ast_test_flag(&default_tls_cfg.flags, AST_SSL_TLSV1_CLIENT) ? "TLSv1" : ( ast_test_flag(&default_tls_cfg.flags, AST_SSL_SSLV2_CLIENT)? "SSLv2" : "SSLv3"));
 	}
 
 	ast_cli(a->fd, "\nNetwork QoS Settings:\n");
