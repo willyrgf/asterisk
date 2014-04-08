@@ -1350,6 +1350,10 @@ static int ast_rtp_write(struct ast_rtp_instance *instance, struct ast_frame *fr
 		ast_debug(1, "Received frame with no data for RTP instance '%p' so dropping frame\n", instance);
 		return 0;
 	}
+	if (frame->frametype == AST_FRAME_CNG) {
+		ast_debug(1, "Receiveed frame with CNG for RTP instance '%p' (just dropping it now)\n", instance);
+		return 0;
+	}
 
 	/* If the packet is not one our RTP stack supports bail out */
 	if (frame->frametype != AST_FRAME_VOICE && frame->frametype != AST_FRAME_VIDEO && frame->frametype != AST_FRAME_TEXT) {

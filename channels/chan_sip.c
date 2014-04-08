@@ -6930,6 +6930,12 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	}
 
 	switch (frame->frametype) {
+	case AST_FRAME_CN:
+		/* We get this frame if silence suppression is active. */
+		ast_rtp_instance_sendcng(dialog->rtp, 64);
+		res = 0;
+		break;
+	
 	case AST_FRAME_VOICE:
 		if (!(frame->subclass.codec & ast->nativeformats)) {
 			char s1[512], s2[512], s3[512];
