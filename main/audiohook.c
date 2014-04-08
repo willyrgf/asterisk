@@ -730,7 +730,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 
 	if (middle_frame == end_frame) {
 		/* Middle frame was modified and became the end frame... let's see if we need to transcode */
-		if (end_frame->frametype == AST_FRAME_AUDIO && end_frame->subclass.codec != start_frame->subclass.codec) {
+		if (end_frame->frametype == AST_FRAME_VOICE && end_frame->subclass.codec != start_frame->subclass.codec) {
 			if (out_translate->format != start_frame->subclass.codec) {
 				if (out_translate->trans_pvt)
 					ast_translator_free_path(out_translate->trans_pvt);

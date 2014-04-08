@@ -7477,7 +7477,6 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	and send CNG (comfort noise generation) requests instead */
 static int activate_silence_detection(struct sip_pvt *dialog)
 {
-	int res = 0;
 	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
 
 	/* Check if we really want silence suppression */
