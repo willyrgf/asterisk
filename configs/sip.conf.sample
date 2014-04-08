@@ -544,6 +544,21 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;rtpkeepalive=<secs>            ; Send keepalives in the RTP stream to keep NAT open
                                 ; (default is off - zero)
 
+;--------------------------- SIP Silence detection/suppression for RTP ------------------------------------
+; The silence detection assigns a software DSP to each channel and converts all audio into
+; signed linear in order to be able to detect silence. This will require a lot of CPU
+; per channel including transcoding. 
+; This is only settable in [general] right now, but should be settable per channel
+;silencedetection = YES		; Enable silence detection - by default turned off.
+;				; settable per device too
+;				; You want to enable comfort noise too
+;silencelevel = 850		; Silence detection noise level - below this is considered silent.
+				; Default = 850
+;silenceperiod = 2		; How many frames of silence should we get before we supress
+				; audio. Consider packetization. A normal ALAW stream has 20 ms audio
+				; per RTP packet. 2 means we will start sending CNG at the third silent
+				; packet, after 40 ms of silence.
+
 ;--------------------------- SIP Session-Timers (RFC 4028)------------------------------------
 ; SIP Session-Timers provide an end-to-end keep-alive mechanism for active SIP sessions.
 ; This mechanism can detect and reclaim SIP channels that do not terminate through normal

@@ -37,6 +37,7 @@ enum ast_audiohook_type {
 	AST_AUDIOHOOK_TYPE_SPY = 0,    /*!< Audiohook wants to receive audio */
 	AST_AUDIOHOOK_TYPE_WHISPER,    /*!< Audiohook wants to provide audio to be mixed with existing audio */
 	AST_AUDIOHOOK_TYPE_MANIPULATE, /*!< Audiohook wants to manipulate the audio */
+	AST_AUDIOHOOK_TYPE_SILDET,     /*!< Audiohook to detect silence. That's all */
 };
 
 enum ast_audiohook_status {
