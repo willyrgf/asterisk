@@ -79,9 +79,6 @@ int ast_audiohook_init(struct ast_audiohook *audiohook, enum ast_audiohook_type 
 	case AST_AUDIOHOOK_TYPE_WHISPER:
 		ast_slinfactory_init(&audiohook->write_factory);
 		break;
-	case AST_AUDIOHOOK_TYPE_SILDET:
-		ast_slinfactory_init(&audiohook->read_factory);	/* We read and forget. */
-		break;
 	default:
 		break;
 	}
@@ -105,9 +102,6 @@ int ast_audiohook_destroy(struct ast_audiohook *audiohook)
 		/* Fall through intentionally */
 	case AST_AUDIOHOOK_TYPE_WHISPER:
 		ast_slinfactory_destroy(&audiohook->write_factory);
-		break;
-	case AST_AUDIOHOOK_TYPE_SILDET:
-		ast_slinfactory_destroy(&audiohook->read_factory);
 		break;
 	default:
 		break;
