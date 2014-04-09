@@ -3,7 +3,7 @@ Olle E. Johansson
 
 
 Started: 2012-09-18
-Updated: 2014-04-07
+Updated: 2014-04-09
 
 
 
@@ -83,12 +83,8 @@ You will now see that Asterisk receives a CN RTP packet, and will activate
 the noise generator on the other channel. This happens many times during 
 the call.
 
-Todo :: comfort noise support
------------------------------
-  - Check how this affects RTP bridge and queue bridge
-  - Add CN support in SDP for outbound calls
-
 Done:
+=====
   - Support in core bridge
   - For inbound streams, generate noise in calls (both inbound and outbound calls)
   - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
