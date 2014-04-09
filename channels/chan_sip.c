@@ -1325,6 +1325,7 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
 static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38);
 static void do_setnat(struct sip_pvt *p);
 static void stop_media_flows(struct sip_pvt *p);
+static int activate_silence_detection(struct sip_pvt *dialog);
 
 /*--- Authentication stuff */
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
@@ -7490,7 +7491,7 @@ static int activate_silence_detection(struct sip_pvt *dialog)
 {
 	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
 
-	if (! dialog->jointnoncodeccapability & AST_RTP_CN) {
+	if (! (dialog->jointnoncodeccapability & AST_RTP_CN)) {
 		ast_debug(4, "SILDET: Channel does not support Comfort Noise on %s\n", dialog->callid);
 		/* If this is a re-invite that turns CN off, deactivate it. */
 		if (dialog->owner) {
@@ -26211,7 +26212,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 				if (ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
 					ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
 				}
-SKREP
+				activate_silence_detection(p);
 			}
 			check_pendings(p);
 		} else if (p->glareinvite == seqno) {
