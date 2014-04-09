@@ -364,7 +364,7 @@ enum ast_control_frame_type {
 	 *
 	 * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
 	 */
-	AST_CONTROL_CNG_END = 32,	/*!< Disable CNG playout in bridge */
+	AST_CONTROL_CNG_END = 34,	/*!< Disable CNG playout in bridge */
 };
 
 enum ast_frame_read_action {
