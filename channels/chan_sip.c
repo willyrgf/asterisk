@@ -274,6 +274,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "sip/include/sip2cause.h"
 #include "asterisk/ccss.h"
 #include "asterisk/xml.h"
+#include "asterisk/silencedetection.h"
 #include "sip/include/dialog.h"
 #include "sip/include/dialplan_functions.h"
 #include "sip/include/rtcp.h"
@@ -1332,6 +1333,7 @@ static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
 static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38);
 static void do_setnat(struct sip_pvt *p);
 static void stop_media_flows(struct sip_pvt *p);
+static int activate_silence_detection(struct sip_pvt *dialog);
 
 /*--- Authentication stuff */
 static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
@@ -4742,6 +4744,10 @@ static int sip_setoption(struct ast_channel *chan, int option, void *data, int d
 		ast_set2_flag(&p->flags[1], *(unsigned int *) data, SIP_PAGE2_USE_SRTP);
 		res = 0;
 		break;
+	case AST_OPTION_CNG_SUPPORT:
+		/* Check if the current dialog has agreed on Comfort Noise support */
+		res = (p->noncodeccapability & AST_RTP_CN);
+		break;
 	default:
 		break;
 	}
@@ -6843,6 +6849,8 @@ static int sip_answer(struct ast_channel *ast)
 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL, oldsdp, TRUE);
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		start_rtcp_events(p, sched);
+		/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
+		activate_silence_detection(p);
 	}
 	sip_pvt_unlock(p);
 	return res;
@@ -6854,7 +6862,20 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 	struct sip_pvt *p = ast->tech_pvt;
 	int res = 0;
 
+	if (frame == &ast_null_frame || frame->frametype == AST_FRAME_NULL) {
+		/* We do not send null frames. Sorry */
+		return 1;
+	}
+
 	switch (frame->frametype) {
+	case AST_FRAME_CNG:
+		/* We get this frame if silence suppression is active. */
+		if (p->rtp) {
+			ast_rtp_instance_sendcng(p->rtp, 64);
+		}
+		res = 0;
+		break;
+	
 	case AST_FRAME_VOICE:
 		if (!(frame->subclass.codec & ast->nativeformats)) {
 			char s1[512], s2[512], s3[512];
@@ -7407,6 +7428,39 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 	return res;
 }
 
+
+/*! \brief Activates a DSP to detect silence, and suppress silent frames
+	and send CNG (comfort noise generation) requests at start of silence instead */
+static int activate_silence_detection(struct sip_pvt *dialog)
+{
+	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
+
+	if (! (dialog->jointnoncodeccapability & AST_RTP_CN)) {
+		ast_debug(4, "SILDET: Channel does not support Comfort Noise on %s\n", dialog->callid);
+		/* If this is a re-invite that turns CN off, deactivate it. */
+		if (dialog->owner) {
+			ast_sildet_deactivate(dialog->owner);
+		}
+		return FALSE;
+	}
+
+
+	/* Check if we really want silence suppression */
+	if (!dialog || !dialog->rtp || !dialog->owner || !ast_test_flag(&dialog->flags[2], SIP_PAGE3_SILENCE_DETECTION)) {
+		ast_debug(3, "SILDET: Channel does not need silence suppression on %s\n", dialog->callid);
+		return FALSE;
+	}
+
+	if(ast_sildet_activate(dialog->owner, dialog->silencelevel, dialog->silenceframes)) {
+
+		/* We now have a call where we have a DSP. The rest of the magic is happening somewhere else in chan_sip. */
+		ast_debug(3, "SILDET: Activated silence suppression on call %s\n", dialog->callid);
+	} else {
+		ast_debug(3, "SILDET: Failed to activate silence detection on call %s\n", dialog->callid);
+	}
+	return TRUE;
+}
+
 /*!
  * \brief Initiate a call in the SIP channel
  *
@@ -7625,6 +7679,7 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 		manager_event(EVENT_FLAG_SYSTEM, "ChannelUpdate",
 			"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
 			tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
+
 
 	return tmp;
 }
@@ -7922,7 +7977,6 @@ static struct ast_frame *sip_read(struct ast_channel *ast)
 		ast_frfree(fr);
 		fr = &ast_null_frame;
 	}
-
 	sip_pvt_unlock(p);
 
 	return fr;
@@ -8189,6 +8243,8 @@ struct sip_pvt *sip_alloc(ast_string_field callid, struct ast_sockaddr *addr,
 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
 	p->capability = sip_cfg.capability;
+	p->silencelevel = sip_cfg.silencelevel;
+	p->silenceframes = sip_cfg.silenceframes;
 	p->allowtransfer = sip_cfg.allowtransfer;
 	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
 	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO)) {
@@ -9686,7 +9742,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		struct ast_str *s2 = ast_str_alloca(SIPBUFSIZE);
 		struct ast_str *s3 = ast_str_alloca(SIPBUFSIZE);
 
-		ast_verbose("Non-codec capabilities (dtmf): us - %s, peer - %s, combined - %s\n",
+		ast_verbose("Non-codec capabilities (dtmf, cn): us - %s, peer - %s, combined - %s\n",
 			    ast_rtp_lookup_mime_multiple2(s1, p->noncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple2(s2, peernoncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple2(s3, newnoncodeccapability, 0, 0));
@@ -18373,7 +18429,6 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  PRACK support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_PRACK)));
 		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
 		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
-		ast_cli(fd, "  Comfort Noise: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)));
 		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 		ast_cli(fd, "  Trust RPID   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_TRUSTRPID)));
 		ast_cli(fd, "  Send RPID    : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_SENDRPID)));
@@ -18416,7 +18471,8 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  Codec Order  : (");
 		print_codec_to_cli(fd, &peer->prefs);
 		ast_cli(fd, ")\n");
-
+		ast_cli(fd, "  Comfort Noise: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)));
+		ast_cli(fd, "  Silence Supp.: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_SILENCE_DETECTION)));
 		ast_cli(fd, "  Auto-Framing : %s\n", AST_CLI_YESNO(peer->autoframing));
 		ast_cli(fd, "  Status       : ");
 		peer_status(peer, status, sizeof(status));
@@ -18494,6 +18550,8 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		astman_append(s, "SIP-Sess-Min: %d\r\n", peer->stimer.st_min_se);
 		astman_append(s, "SIP-RTP-Engine: %s\r\n", peer->engine);
 		astman_append(s, "SIP-Encryption: %s\r\n", ast_test_flag(&peer->flags[1], SIP_PAGE2_USE_SRTP) ? "Y" : "N");
+		astman_append(s, "SIP-SilenceSupp: %s\r\n", ast_test_flag(&peer->flags[2], SIP_PAGE3_SILENCE_DETECTION) ? "Y" : "N");
+		astman_append(s, "SIP-ComfortNoise: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOW_CN)?"Y":"N"));
 
 		/* - is enumerated */
 		astman_append(s, "SIP-DTMFmode: %s\r\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
@@ -19114,6 +19172,10 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  DTMF:                   %s\n", dtmfmode2str(ast_test_flag(&global_flags[0], SIP_DTMF)));
 	ast_cli(a->fd, "  Qualify:                %d\n", default_qualify);
 	ast_cli(a->fd, "  Use ClientCode:         %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_USECLIENTCODE)));
+	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
+	ast_cli(a->fd, "  Silence suppression:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_SILENCE_DETECTION)));
+	ast_cli(a->fd, "  Silence threshold:      %d\n", sip_cfg.silencelevel);
+	ast_cli(a->fd, "  Silence frames:         %d\n", sip_cfg.silenceframes);
 	ast_cli(a->fd, "  Progress inband:        %s\n", (ast_test_flag(&global_flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NEVER) ? "Never" : (AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_PROG_INBAND) != SIP_PROG_INBAND_NO)));
 	ast_cli(a->fd, "  Language:               %s\n", default_language);
 	ast_cli(a->fd, "  MOH Interpret:          %s\n", default_mohinterpret);
@@ -19476,6 +19538,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Non-Codec Capability (DTMF):   %d\n", cur->noncodeccapability);
 			ast_cli(a->fd, "  Their Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->peercapability));
 			ast_cli(a->fd, "  Joint Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->jointcapability));
+			ast_cli(a->fd, "  Non-Codec Capability (DTMF, CN):   %d\n", cur->noncodeccapability);
 			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
 			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
 			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
@@ -19513,6 +19576,9 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Promiscuous Redir:      %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_PROMISCREDIR)));
 			ast_cli(a->fd, "  Route:                  %s\n", cur->route ? cur->route->hop : "N/A");
 			ast_cli(a->fd, "  DTMF Mode:              %s\n", dtmfmode2str(ast_test_flag(&cur->flags[0], SIP_DTMF)));
+			ast_cli(a->fd, "  Silence Detection:      %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_SILENCE_DETECTION)));
+			ast_cli(a->fd, "  Silence level:          %d\n", cur->silencelevel);
+			ast_cli(a->fd, "  Silence frames:         %d\n", cur->silenceframes);
 			ast_cli(a->fd, "  SIP Options:            ");
 			if (cur->sipoptions) {
 				int x;
@@ -21156,6 +21222,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_string_field_set(p, theirtag_early, p->tag);
 			}
 			ast_rtp_instance_activate(p->rtp);
+			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
+			activate_silence_detection(p);
 		} else {
 			/* Alcatel PBXs are known to send 183s with no SDP after sending
 			 * a 100 Trying response. We're just going to treat this sort of thing
@@ -21186,6 +21254,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				}
 			}
 			ast_rtp_instance_activate(p->rtp);
+			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
+			activate_silence_detection(p);
 		} else if (!reinvite) {
 			struct ast_sockaddr remote_address = {{0,}};
 
@@ -24151,6 +24221,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			c_state = AST_STATE_UP;
 		}
 
+
 		switch(c_state) {
 		case AST_STATE_DOWN:
 			ast_debug(2, "%s: New call is still down.... Trying... \n", c->name);
@@ -26474,6 +26545,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 					ast_debug(3, "Requesting SSRC change in %s\n", p->callid);
 					ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
 				}
+				activate_silence_detection(p);
 			}
 			check_pendings(p);
 		} else if (p->glareinvite == seqno) {
@@ -28140,6 +28212,9 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "comfort-noise")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_ALLOW_CN);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOW_CN);
+	} else if (!strcasecmp(v->name, "silencesuppression")) {
+		ast_set_flag(&mask[2], SIP_PAGE3_SILENCE_DETECTION);
+		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_SILENCE_DETECTION);
 	} else
 		res = 0;
 
@@ -29369,6 +29444,8 @@ static int reload_config(enum channelreloadreason reason)
 	ast_copy_string(default_callerid, DEFAULT_CALLERID, sizeof(default_callerid));
 	ast_copy_string(default_mwi_from, DEFAULT_MWI_FROM, sizeof(default_mwi_from));
 	sip_cfg.compactheaders = DEFAULT_COMPACTHEADERS;
+	sip_cfg.silencelevel = DEFAULT_SILENCELEVEL;
+	sip_cfg.silenceframes = DEFAULT_SILENCEFRAMES;
 	global_reg_timeout = DEFAULT_REGISTRATION_TIMEOUT;
 	global_regattempts_max = 0;
 	global_reg_retry_403 = 0;
@@ -29935,6 +30012,18 @@ static int reload_config(enum channelreloadreason reason)
 			}
 		} else if (!strcasecmp(v->name, "use_q850_reason")) {
 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
+		} else if (!strcasecmp(v->name, "silencelevel")) {
+			if (sscanf(v->value, "%30d", &sip_cfg.silencelevel) != 1
+				|| sip_cfg.silencelevel < 1 ) {
+				ast_log(LOG_WARNING, "'%s' is not a valid silencelevel value at line %d.  Using default.\n", v->value, v->lineno);
+				sip_cfg.silencelevel = DEFAULT_SILENCELEVEL;
+			}
+		} else if (!strcasecmp(v->name, "silenceframes")) {
+			if (sscanf(v->value, "%30d", &sip_cfg.silenceframes) != 1
+				|| sip_cfg.silenceframes < 0 || sip_cfg.silenceframes > 150) {
+				ast_log(LOG_WARNING, "'%s' is not a valid silencelevel value at line %d.  Using default.\n", v->value, v->lineno);
+				sip_cfg.silenceframes = DEFAULT_SILENCEFRAMES;
+			}
 		} else if (!strcasecmp(v->name, "maxforwards")) {
 			if (sscanf(v->value, "%30d", &sip_cfg.default_max_forwards) != 1
 				|| sip_cfg.default_max_forwards < 1 || 255 < sip_cfg.default_max_forwards) {

@@ -626,6 +626,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 	struct ast_frame *start_frame = frame, *middle_frame = frame, *end_frame = frame;
 	struct ast_audiohook *audiohook = NULL;
 	int samples = frame->samples;
+	int needsdrop = 0;
 
 	/* ---Part_1. translate start_frame to SLINEAR if necessary. */
 	/* If the frame coming in is not signed linear we have to send it through the in_translate path */
@@ -705,15 +706,25 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 				 * be taken here to exit early. */
 			}
 			ast_audiohook_unlock(audiohook);
+			if (middle_frame->frametype == AST_FRAME_NULL) {
+				/* This frame is going nowhere after this */
+				needsdrop = 1;
+			}
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
 		end_frame = middle_frame;
 	}
 
 	/* ---Part_3: Decide what to do with the end_frame (whether to transcode or not) */
+	if (needsdrop) {
+		/* The frame needs to go away badly */
+		ast_frfree(middle_frame);
+		return &ast_null_frame;
+	}
+
 	if (middle_frame == end_frame) {
 		/* Middle frame was modified and became the end frame... let's see if we need to transcode */
-		if (end_frame->subclass.codec != start_frame->subclass.codec) {
+		if (end_frame->frametype == AST_FRAME_VOICE && end_frame->subclass.codec != start_frame->subclass.codec) {
 			if (out_translate->format != start_frame->subclass.codec) {
 				if (out_translate->trans_pvt)
 					ast_translator_free_path(out_translate->trans_pvt);

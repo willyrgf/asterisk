@@ -563,6 +563,34 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;rtpkeepalive=<secs>            ; Send keepalives in the RTP stream to keep NAT open
                                 ; (default is off - zero)
 
+;--------------------------- SIP Silence detection/suppression for RTP ------------------------------------
+; The silence detection assigns a software DSP to each channel and converts all audio into
+; signed linear in order to be able to detect silence. This will require a lot of CPU
+; per channel including transcoding. 
+;
+; You can decide to enable comfort-noise and disable silencesuppression. In this case, Asterisk
+; will negotitate comfort noise and accept it coming in, but since there is no DSP on the channel
+; Asterisk will never send any CN packet and suppress audio.
+;
+; Enabling silencesuppression and comfort noise will save a lot of bandwidth in your calls. There
+; will only be RTP flows when someone is speaking.
+;
+;silencesuppression = YES	; Enable silence suppression - by default turned off.
+;				; settable per device too
+;				; You want to enable comfort noise too. Default is off.
+;silencelevel = 100		; Silence detection noise level - below this is considered silent.
+				; Default = 100
+;silenceperiod = 10		; How many frames of silence should we get before we supress
+				; audio. Consider packetization. A normal ALAW stream has 20 ms audio
+				; per RTP packet. A value of 2 means we will start sending CNG at the third silent
+				; packet, after 40 ms of silence. Default is 10 frames.
+;comfort-noise=yes		; Enable Comfort Noise generation on RTP streams.
+;				; Default is off
+;				; Available per device too
+;				; Generating comfort noise is a burden to your CPU
+;				; This should not be enabled on low-end devices.
+;				; You should not enable this unless you have a timer.
+
 ;--------------------------- SIP Session-Timers (RFC 4028)------------------------------------
 ; SIP Session-Timers provide an end-to-end keep-alive mechanism for active SIP sessions.
 ; This mechanism can detect and reclaim SIP channels that do not terminate through normal

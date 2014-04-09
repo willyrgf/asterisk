@@ -61,6 +61,8 @@
 
 #define DEFAULT_AUTHLIMIT            100
 #define DEFAULT_AUTHTIMEOUT          30
+#define DEFAULT_SILENCELEVEL	     100
+#define DEFAULT_SILENCEFRAMES	     10   /* Number of frames of silence to let through before we start suppressing it */
 
 /* guard limit must be larger than guard secs */
 /* guard min must be < 1000, and should be >= 250 */
@@ -369,8 +371,8 @@
 #define SIP_PAGE3_INVITE_WAIT_FOR_PRACK (1 << 4)  /*!< D: Wait for PRACK response before sending 200 OK */
 #define SIP_PAGE3_ANSWER_WAIT_FOR_PRACK       (1 << 5)  /*!< D: Send ANSWER when PRACK is received */
 
-  #define SIP_PAGE3_FLAGS_TO_COPY \
-       (SIP_PAGE3_SNOM_AOC | SIP_PAGE3_PRACK | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
+#define SIP_PAGE3_FLAGS_TO_COPY \
+       (SIP_PAGE3_SNOM_AOC | SIP_PAGE3_PRACK | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_SILENCE_DETECTION)
 
 /*@}*/
 
@@ -729,6 +731,8 @@ struct sip_settings {
 	format_t capability;        /*!< Supported codecs */
 	int tcp_enabled;
 	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
+	unsigned int silencelevel;	     /*!< Default silence treshold for silence detection */
+	unsigned int silenceframes;	     /*!< Default silence period - how many frames to wait before suppressing silence */
 };
 
 /*! \brief The SIP socket definition */
@@ -1110,6 +1114,10 @@ struct sip_pvt {
 	uint32_t dialogver;                 /*!< SUBSCRIBE: Version for subscription dialog-info */
 
 	struct ast_dsp *dsp;                /*!< Inband DTMF or Fax CNG tone Detection dsp */
+	unsigned int silencelevel;	    /*!< Silence treshold */
+	unsigned int silenceframes;	    /*!< How many frames to wait for silence before activating silence
+						 support and sending CNG */
+	unsigned int silencecounter;	    /*!< Frame Counter used for silence detection. */
 
 	struct sip_peer *relatedpeer;       /*!< If this dialog is related to a peer, which one
 	                                         Used in peerpoke, mwi subscriptions */

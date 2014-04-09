@@ -1,8 +1,24 @@
 Index: channels/chan_sip.c
 ===================================================================
---- channels/chan_sip.c	(.../branches/1.8)	(revision 383006)
-+++ channels/chan_sip.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -4757,6 +4757,10 @@
+--- channels/chan_sip.c	(.../branches/1.8)	(revision 412028)
++++ channels/chan_sip.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -273,6 +273,7 @@
+ #include "sip/include/sdp_crypto.h"
+ #include "asterisk/ccss.h"
+ #include "asterisk/xml.h"
++#include "asterisk/silencedetection.h"
+ #include "sip/include/dialog.h"
+ #include "sip/include/dialplan_functions.h"
+ 
+@@ -1324,6 +1325,7 @@
+ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int oldsdp, int add_audio, int add_t38);
+ static void do_setnat(struct sip_pvt *p);
+ static void stop_media_flows(struct sip_pvt *p);
++static int activate_silence_detection(struct sip_pvt *dialog);
+ 
+ /*--- Authentication stuff */
+ static int reply_digest(struct sip_pvt *p, struct sip_request *req, char *header, int sipmethod, char *digest, int digest_len);
+@@ -4768,6 +4770,10 @@
  		 * implied else case here
  		 */
  		break;
@@ -13,7 +29,7 @@ Index: channels/chan_sip.c
  	default:
  		break;
  	}
-@@ -5751,6 +5755,10 @@
+@@ -5762,6 +5768,10 @@
  		dialog->noncodeccapability |= AST_RTP_DTMF;
  	else
  		dialog->noncodeccapability &= ~AST_RTP_DTMF;
@@ -24,7 +40,112 @@ Index: channels/chan_sip.c
  	dialog->directmediaha = ast_duplicate_ha_list(peer->directmediaha);
  	if (peer->call_limit)
  		ast_set_flag(&dialog->flags[0], SIP_CALL_LIMIT);
-@@ -9674,7 +9682,7 @@
+@@ -6904,6 +6914,9 @@
+ 		ast_rtp_instance_update_source(p->rtp);
+ 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL, oldsdp, TRUE);
+ 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
++		/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
++		activate_silence_detection(p);
++	
+ 	}
+ 	sip_pvt_unlock(p);
+ 	return res;
+@@ -6915,7 +6928,20 @@
+ 	struct sip_pvt *p = ast->tech_pvt;
+ 	int res = 0;
+ 
++	if (frame == &ast_null_frame || frame->frametype == AST_FRAME_NULL) {
++		/* We do not send null frames. Sorry */
++		return 1;
++	}
++
+ 	switch (frame->frametype) {
++	case AST_FRAME_CNG:
++		/* We get this frame if silence suppression is active. */
++		if (p->rtp) {
++			ast_rtp_instance_sendcng(p->rtp, 64);
++		}
++		res = 0;
++		break;
++	
+ 	case AST_FRAME_VOICE:
+ 		if (!(frame->subclass.codec & ast->nativeformats)) {
+ 			char s1[512], s2[512], s3[512];
+@@ -7458,6 +7484,39 @@
+ 	return res;
+ }
+ 
++
++/*! \brief Activates a DSP to detect silence, and suppress silent frames
++	and send CNG (comfort noise generation) requests at start of silence instead */
++static int activate_silence_detection(struct sip_pvt *dialog)
++{
++	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
++
++	if (! (dialog->jointnoncodeccapability & AST_RTP_CN)) {
++		ast_debug(4, "SILDET: Channel does not support Comfort Noise on %s\n", dialog->callid);
++		/* If this is a re-invite that turns CN off, deactivate it. */
++		if (dialog->owner) {
++			ast_sildet_deactivate(dialog->owner);
++		}
++		return FALSE;
++	}
++
++
++	/* Check if we really want silence suppression */
++	if (!dialog || !dialog->rtp || !dialog->owner || !ast_test_flag(&dialog->flags[2], SIP_PAGE3_SILENCE_DETECTION)) {
++		ast_debug(3, "SILDET: Channel does not need silence suppression on %s\n", dialog->callid);
++		return FALSE;
++	}
++
++	if(ast_sildet_activate(dialog->owner, dialog->silencelevel, dialog->silenceframes)) {
++
++		/* We now have a call where we have a DSP. The rest of the magic is happening somewhere else in chan_sip. */
++		ast_debug(3, "SILDET: Activated silence suppression on call %s\n", dialog->callid);
++	} else {
++		ast_debug(3, "SILDET: Failed to activate silence detection on call %s\n", dialog->callid);
++	}
++	return TRUE;
++}
++
+ /*!
+  * \brief Initiate a call in the SIP channel
+  *
+@@ -7677,6 +7736,7 @@
+ 			"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
+ 			tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
+ 
++
+ 	return tmp;
+ }
+ 
+@@ -7973,7 +8033,6 @@
+ 		ast_frfree(fr);
+ 		fr = &ast_null_frame;
+ 	}
+-
+ 	sip_pvt_unlock(p);
+ 
+ 	return fr;
+@@ -8228,6 +8287,8 @@
+ 	ast_string_field_set(p, mohinterpret, default_mohinterpret);
+ 	ast_string_field_set(p, mohsuggest, default_mohsuggest);
+ 	p->capability = sip_cfg.capability;
++	p->silencelevel = sip_cfg.silencelevel;
++	p->silenceframes = sip_cfg.silenceframes;
+ 	p->allowtransfer = sip_cfg.allowtransfer;
+ 	if ((ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_RFC2833) ||
+ 	    (ast_test_flag(&p->flags[0], SIP_DTMF) == SIP_DTMF_AUTO)) {
+@@ -9717,7 +9778,7 @@
+ 		struct ast_str *s2 = ast_str_alloca(SIPBUFSIZE);
+ 		struct ast_str *s3 = ast_str_alloca(SIPBUFSIZE);
+ 
+-		ast_verbose("Non-codec capabilities (dtmf): us - %s, peer - %s, combined - %s\n",
++		ast_verbose("Non-codec capabilities (dtmf, cn): us - %s, peer - %s, combined - %s\n",
+ 			    ast_rtp_lookup_mime_multiple2(s1, p->noncodeccapability, 0, 0),
+ 			    ast_rtp_lookup_mime_multiple2(s2, peernoncodeccapability, 0, 0),
+ 			    ast_rtp_lookup_mime_multiple2(s3, newnoncodeccapability, 0, 0));
+@@ -9733,7 +9794,7 @@
  		   they are acceptable */
  		p->jointcapability = newjointcapability;                /* Our joint codec profile for this call */
  		p->peercapability = newpeercapability;                  /* The other side's capability in latest offer */
@@ -33,7 +154,7 @@ Index: channels/chan_sip.c
  
  		/* respond with single most preferred joint codec, limiting the other side's choice */
  		if (ast_test_flag(&p->flags[1], SIP_PAGE2_PREFERRED_CODEC)) {
-@@ -11461,6 +11469,7 @@
+@@ -11521,6 +11582,7 @@
  		fmt = ast_codec_pref_getsize(pref, codec);
  	} else /* I don't see how you couldn't have p->rtp, but good to check for and error out if not there like earlier code */
  		return;
@@ -41,7 +162,7 @@ Index: channels/chan_sip.c
  	ast_str_append(m_buf, 0, " %d", rtp_code);
  	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%d\r\n", rtp_code,
  		       ast_rtp_lookup_mime_subtype2(1, codec,
-@@ -11580,7 +11589,7 @@
+@@ -11640,7 +11702,7 @@
  	}
  }
  
@@ -50,7 +171,7 @@ Index: channels/chan_sip.c
  static void add_noncodec_to_sdp(const struct sip_pvt *p, int format,
  				struct ast_str **m_buf, struct ast_str **a_buf,
  				int debug)
-@@ -11946,10 +11955,12 @@
+@@ -12006,10 +12068,12 @@
  				add_tcodec_to_sdp(p, x, &m_text, &a_text, debug, &min_text_packet_size);
  		}
  
@@ -65,7 +186,7 @@ Index: channels/chan_sip.c
  
  			add_noncodec_to_sdp(p, x, &m_audio, &a_audio, debug);
  		}
-@@ -16658,6 +16669,9 @@
+@@ -16806,6 +16870,9 @@
  			p->noncodeccapability |= AST_RTP_DTMF;
  		else
  			p->noncodeccapability &= ~AST_RTP_DTMF;
@@ -75,7 +196,7 @@ Index: channels/chan_sip.c
  		p->jointnoncodeccapability = p->noncodeccapability;
  		p->rtptimeout = peer->rtptimeout;
  		p->rtpholdtimeout = peer->rtpholdtimeout;
-@@ -18106,6 +18120,7 @@
+@@ -18268,6 +18335,7 @@
  		ast_cli(fd, "  User=Phone   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_USEREQPHONE)));
  		ast_cli(fd, "  Video Support: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT) || ast_test_flag(&peer->flags[1], SIP_PAGE2_VIDEOSUPPORT_ALWAYS)));
  		ast_cli(fd, "  Text Support : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_TEXTSUPPORT)));
@@ -83,7 +204,16 @@ Index: channels/chan_sip.c
  		ast_cli(fd, "  Ign SDP ver  : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_IGNORESDPVERSION)));
  		ast_cli(fd, "  Trust RPID   : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_TRUSTRPID)));
  		ast_cli(fd, "  Send RPID    : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_SENDRPID)));
-@@ -18218,6 +18233,7 @@
+@@ -18309,7 +18377,7 @@
+ 		ast_cli(fd, "  Codec Order  : (");
+ 		print_codec_to_cli(fd, &peer->prefs);
+ 		ast_cli(fd, ")\n");
+-
++		ast_cli(fd, "  Silence Det. : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[2], SIP_PAGE3_SILENCE_DETECTION)));
+ 		ast_cli(fd, "  Auto-Framing : %s\n", AST_CLI_YESNO(peer->autoframing));
+ 		ast_cli(fd, "  Status       : ");
+ 		peer_status(peer, status, sizeof(status));
+@@ -18380,6 +18448,7 @@
  		astman_append(s, "SIP-T.38Support: %s\r\n", (ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT)?"Y":"N"));
  		astman_append(s, "SIP-T.38EC: %s\r\n", faxec2str(ast_test_flag(&peer->flags[1], SIP_PAGE2_T38SUPPORT)));
  		astman_append(s, "SIP-T.38MaxDtgrm: %d\r\n", peer->t38_maxdatagram);
@@ -91,15 +221,25 @@ Index: channels/chan_sip.c
  		astman_append(s, "SIP-Sess-Timers: %s\r\n", stmode2str(peer->stimer.st_mode_oper));
  		astman_append(s, "SIP-Sess-Refresh: %s\r\n", strefresherparam2str(peer->stimer.st_ref));
  		astman_append(s, "SIP-Sess-Expires: %d\r\n", peer->stimer.st_max_se);
-@@ -18671,6 +18687,7 @@
- 				"Disabled");
- 	ast_cli(a->fd, "  Videosupport:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
- 	ast_cli(a->fd, "  Textsupport:            %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
+@@ -18991,6 +19060,10 @@
+ 	ast_cli(a->fd, "  DTMF:                   %s\n", dtmfmode2str(ast_test_flag(&global_flags[0], SIP_DTMF)));
+ 	ast_cli(a->fd, "  Qualify:                %d\n", default_qualify);
+ 	ast_cli(a->fd, "  Use ClientCode:         %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_USECLIENTCODE)));
 +	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
- 	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
- 	ast_cli(a->fd, "  AutoCreate Peer:        %s\n", AST_CLI_YESNO(sip_cfg.autocreatepeer));
- 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
-@@ -19193,6 +19210,7 @@
++	ast_cli(a->fd, "  Silence suppression:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_SILENCE_DETECTION)));
++	ast_cli(a->fd, "  Silence threshold:      %d\n", sip_cfg.silencelevel);
++	ast_cli(a->fd, "  Silence frames:         %d\n", sip_cfg.silenceframes);
+ 	ast_cli(a->fd, "  Progress inband:        %s\n", (ast_test_flag(&global_flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NEVER) ? "Never" : (AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_PROG_INBAND) != SIP_PROG_INBAND_NO)));
+ 	ast_cli(a->fd, "  Language:               %s\n", default_language);
+ 	ast_cli(a->fd, "  MOH Interpret:          %s\n", default_mohinterpret);
+@@ -19350,12 +19423,13 @@
+ 			ast_cli(a->fd, "  Call-ID:                %s\n", cur->callid);
+ 			ast_cli(a->fd, "  Owner channel ID:       %s\n", cur->owner ? cur->owner->name : "<none>");
+ 			ast_cli(a->fd, "  Our Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->capability));
+-			ast_cli(a->fd, "  Non-Codec Capability (DTMF):   %d\n", cur->noncodeccapability);
++			ast_cli(a->fd, "  Non-Codec Capability (DTMF, CN):   %d\n", cur->noncodeccapability);
+ 			ast_cli(a->fd, "  Their Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->peercapability));
+ 			ast_cli(a->fd, "  Joint Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->jointcapability));
  			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
  			ast_cli(a->fd, "  T.38 support            %s\n", AST_CLI_YESNO(cur->udptl != NULL));
  			ast_cli(a->fd, "  Video support           %s\n", AST_CLI_YESNO(cur->vrtp != NULL));
@@ -107,20 +247,117 @@ Index: channels/chan_sip.c
  			ast_cli(a->fd, "  MaxCallBR:              %d kbps\n", cur->maxcallbitrate);
  			ast_cli(a->fd, "  Theoretical Address:    %s\n", ast_sockaddr_stringify(&cur->sa));
  			ast_cli(a->fd, "  Received Address:       %s\n", ast_sockaddr_stringify(&cur->recv));
-@@ -27578,6 +27596,8 @@
+@@ -19386,6 +19460,9 @@
+ 			ast_cli(a->fd, "  Promiscuous Redir:      %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[0], SIP_PROMISCREDIR)));
+ 			ast_cli(a->fd, "  Route:                  %s\n", cur->route ? cur->route->hop : "N/A");
+ 			ast_cli(a->fd, "  DTMF Mode:              %s\n", dtmfmode2str(ast_test_flag(&cur->flags[0], SIP_DTMF)));
++			ast_cli(a->fd, "  Silence Detection:      %s\n", AST_CLI_YESNO(ast_test_flag(&cur->flags[2], SIP_PAGE3_SILENCE_DETECTION)));
++			ast_cli(a->fd, "  Silence level:          %d\n", cur->silencelevel);
++			ast_cli(a->fd, "  Silence frames:         %d\n", cur->silenceframes);
+ 			ast_cli(a->fd, "  SIP Options:            ");
+ 			if (cur->sipoptions) {
+ 				int x;
+@@ -20958,6 +21035,8 @@
+ 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
+ 			}
+ 			ast_rtp_instance_activate(p->rtp);
++			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
++			activate_silence_detection(p);
+ 		} else {
+ 			/* Alcatel PBXs are known to send 183s with no SDP after sending
+ 			 * a 100 Trying response. We're just going to treat this sort of thing
+@@ -20988,6 +21067,8 @@
+ 				}
+ 			}
+ 			ast_rtp_instance_activate(p->rtp);
++			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
++			activate_silence_detection(p);
+ 		} else if (!reinvite) {
+ 			struct ast_sockaddr remote_address = {{0,}};
+ 
+@@ -23813,6 +23894,7 @@
+ 			c_state = AST_STATE_UP;
+ 		}
+ 
++
+ 		switch(c_state) {
+ 		case AST_STATE_DOWN:
+ 			ast_debug(2, "%s: New call is still down.... Trying... \n", c->name);
+@@ -26130,6 +26212,7 @@
+ 				if (ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
+ 					ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
+ 				}
++				activate_silence_detection(p);
+ 			}
+ 			check_pendings(p);
+ 		} else if (p->glareinvite == seqno) {
+@@ -27790,6 +27873,12 @@
  	} else if (!strcasecmp(v->name, "buggymwi")) {
  		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
  		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
++ 	} else if (!strcasecmp(v->name, "silencesuppression")) {
++ 		ast_set_flag(&mask[2], SIP_PAGE3_SILENCE_DETECTION);
++ 		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_SILENCE_DETECTION);
 +	} else if (!strcasecmp(v->name, "comfort-noise")) {
++		ast_set_flag(&mask[1], SIP_PAGE2_ALLOW_CN);
 +		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_ALLOW_CN);
  	} else
  		res = 0;
  
+@@ -29012,6 +29101,8 @@
+ 	ast_copy_string(default_callerid, DEFAULT_CALLERID, sizeof(default_callerid));
+ 	ast_copy_string(default_mwi_from, DEFAULT_MWI_FROM, sizeof(default_mwi_from));
+ 	sip_cfg.compactheaders = DEFAULT_COMPACTHEADERS;
++	sip_cfg.silencelevel = DEFAULT_SILENCELEVEL;
++	sip_cfg.silenceframes = DEFAULT_SILENCEFRAMES;
+ 	global_reg_timeout = DEFAULT_REGISTRATION_TIMEOUT;
+ 	global_regattempts_max = 0;
+ 	global_reg_retry_403 = 0;
+@@ -29560,6 +29651,18 @@
+ 			}
+ 		} else if (!strcasecmp(v->name, "use_q850_reason")) {
+ 			ast_set2_flag(&global_flags[1], ast_true(v->value), SIP_PAGE2_Q850_REASON);
++		} else if (!strcasecmp(v->name, "silencelevel")) {
++			if (sscanf(v->value, "%30d", &sip_cfg.silencelevel) != 1
++				|| sip_cfg.silencelevel < 1 ) {
++				ast_log(LOG_WARNING, "'%s' is not a valid silencelevel value at line %d.  Using default.\n", v->value, v->lineno);
++				sip_cfg.silencelevel = DEFAULT_SILENCELEVEL;
++			}
++		} else if (!strcasecmp(v->name, "silenceframes")) {
++			if (sscanf(v->value, "%30d", &sip_cfg.silenceframes) != 1
++				|| sip_cfg.silenceframes < 0 || sip_cfg.silenceframes > 150) {
++				ast_log(LOG_WARNING, "'%s' is not a valid silencelevel value at line %d.  Using default.\n", v->value, v->lineno);
++				sip_cfg.silenceframes = DEFAULT_SILENCEFRAMES;
++			}
+ 		} else if (!strcasecmp(v->name, "maxforwards")) {
+ 			if (sscanf(v->value, "%30d", &sip_cfg.default_max_forwards) != 1
+ 				|| sip_cfg.default_max_forwards < 1 || 255 < sip_cfg.default_max_forwards) {
+Index: channels/chan_iax2.c
+===================================================================
+--- channels/chan_iax2.c	(.../branches/1.8)	(revision 412028)
++++ channels/chan_iax2.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -1329,6 +1329,7 @@
+ 	case AST_CONTROL_T38_PARAMETERS:
+ 	case AST_CONTROL_AOC:
+ 	case AST_CONTROL_INCOMPLETE:
++	case AST_CONTROL_CNG_END:
+ 		is_allowed = -1;
+ 		break;
+ 
 Index: channels/sip/include/sip.h
 ===================================================================
---- channels/sip/include/sip.h	(.../branches/1.8)	(revision 383006)
-+++ channels/sip/include/sip.h	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -347,6 +347,7 @@
+--- channels/sip/include/sip.h	(.../branches/1.8)	(revision 412028)
++++ channels/sip/include/sip.h	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -61,6 +61,8 @@
+ 
+ #define DEFAULT_AUTHLIMIT            100
+ #define DEFAULT_AUTHTIMEOUT          30
++#define DEFAULT_SILENCELEVEL	     100
++#define DEFAULT_SILENCEFRAMES	     10   /* Number of frames of silence to let through before we start suppressing it */
+ 
+ /* guard limit must be larger than guard secs */
+ /* guard min must be < 1000, and should be >= 250 */
+@@ -347,6 +349,7 @@
  #define SIP_PAGE2_VIDEOSUPPORT_ALWAYS       (1 << 27)   /*!< DP: Always set up video, even if endpoints don't support it */
  #define SIP_PAGE2_HAVEPEERCONTEXT           (1 << 28)   /*< Are we associated with a configured peer context? */
  #define SIP_PAGE2_USE_SRTP                  (1 << 29)   /*!< DP: Whether we should offer (only)  SRTP */
@@ -128,7 +365,7 @@ Index: channels/sip/include/sip.h
  
  #define SIP_PAGE2_FLAGS_TO_COPY \
  	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
-@@ -354,7 +355,8 @@
+@@ -354,14 +357,16 @@
  	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
  	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS | SIP_PAGE2_PREFERRED_CODEC | \
  	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP |\
@@ -138,11 +375,40 @@ Index: channels/sip/include/sip.h
  
  
  #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
+ #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
++#define SIP_PAGE3_SILENCE_DETECTION      (1 << 21)  /*!< DPG: Enable silence detection?  */
+ 
+ #define SIP_PAGE3_FLAGS_TO_COPY \
+-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
++	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_SILENCE_DETECTION)
+ 
+ /*@}*/
+ 
+@@ -716,6 +721,8 @@
+ 	format_t capability;        /*!< Supported codecs */
+ 	int tcp_enabled;
+ 	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
++	unsigned int silencelevel;	     /*!< Default silence treshold for silence detection */
++	unsigned int silenceframes;	     /*!< Default silence period - how many frames to wait before suppressing silence */
+ };
+ 
+ /*! \brief The SIP socket definition */
+@@ -1088,6 +1095,10 @@
+ 	uint32_t dialogver;                 /*!< SUBSCRIBE: Version for subscription dialog-info */
+ 
+ 	struct ast_dsp *dsp;                /*!< Inband DTMF or Fax CNG tone Detection dsp */
++	unsigned int silencelevel;	    /*!< Silence treshold */
++	unsigned int silenceframes;	    /*!< How many frames to wait for silence before activating silence
++						 support and sending CNG */
++	unsigned int silencecounter;	    /*!< Frame Counter used for silence detection. */
+ 
+ 	struct sip_peer *relatedpeer;       /*!< If this dialog is related to a peer, which one
+ 	                                         Used in peerpoke, mwi subscriptions */
 Index: funcs/func_frame_trace.c
 ===================================================================
---- funcs/func_frame_trace.c	(.../branches/1.8)	(revision 383006)
-+++ funcs/func_frame_trace.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -321,6 +321,9 @@
+--- funcs/func_frame_trace.c	(.../branches/1.8)	(revision 412028)
++++ funcs/func_frame_trace.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -326,6 +326,9 @@
  		case AST_CONTROL_UPDATE_RTP_PEER:
  			ast_verbose("SubClass: UPDATE_RTP_PEER\n");
  			break;
@@ -152,11 +418,80 @@ Index: funcs/func_frame_trace.c
  		}
  		
  		if (frame->subclass.integer == -1) {
+Index: include/asterisk/silencedetection.h
+===================================================================
+--- include/asterisk/silencedetection.h	(.../branches/1.8)	(revision 0)
++++ include/asterisk/silencedetection.h	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -0,0 +1,49 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2014, Olle E. Johansson
++ *
++ * Olle E. Johansson <oej@edvina.net>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ * \brief Audiohook for silnce detection
++ */
++
++#ifndef _ASTERISK_SILENCEDETECTION_H
++#define _ASTERISK_SILENCEDETECTION_H
++
++#if defined(__cplusplus) || defined(c_plusplus)
++extern "C" {
++#endif
++
++/*! \brief Activation of silence detection 
++	\param chan		The channel
++	\param silencelevel 	Audio treshold for silence
++	\param silenceframes	Number of frames before we react
++
++     \note That this function assumes the channel is set to read signed linear audio
++
++*/
++int ast_sildet_activate(struct ast_channel *chan, unsigned int silencelevel, unsigned int silenceframes);
++
++/*! \brief Deactivation of silence detection 
++	\param chan		The channel
++*/
++int ast_sildet_deactivate(struct ast_channel *chan);
++
++#if defined(__cplusplus) || defined(c_plusplus)
++}
++#endif
++
++#endif /* _ASTERISK_SILENCEDETECTION_H */
+
+Property changes on: include/asterisk/silencedetection.h
+___________________________________________________________________
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
 Index: include/asterisk/channel.h
 ===================================================================
---- include/asterisk/channel.h	(.../branches/1.8)	(revision 383006)
-+++ include/asterisk/channel.h	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -2365,6 +2365,42 @@
+--- include/asterisk/channel.h	(.../branches/1.8)	(revision 412028)
++++ include/asterisk/channel.h	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -2370,6 +2370,42 @@
  void ast_channel_stop_silence_generator(struct ast_channel *chan, struct ast_silence_generator *state);
  
  /*!
@@ -201,8 +536,8 @@ Index: include/asterisk/channel.h
   * \return boolean
 Index: include/asterisk/frame.h
 ===================================================================
---- include/asterisk/frame.h	(.../branches/1.8)	(revision 383006)
-+++ include/asterisk/frame.h	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
+--- include/asterisk/frame.h	(.../branches/1.8)	(revision 412028)
++++ include/asterisk/frame.h	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
 @@ -301,6 +301,8 @@
  #define AST_FORMAT_SPEEX16    (1ULL << 33)
  /*! Raw mu-law data (G.711) */
@@ -212,15 +547,15 @@ Index: include/asterisk/frame.h
  /*! Reserved bit - do not use */
  #define AST_FORMAT_RESERVED   (1ULL << 63)
  
-@@ -336,6 +338,7 @@
- 	AST_CONTROL_END_OF_Q = 29,		/*!< Indicate that this position was the end of the channel queue for a softhangup. */
- 	AST_CONTROL_INCOMPLETE = 30,	/*!< Indication that the extension dialed is incomplete */
- 	AST_CONTROL_UPDATE_RTP_PEER = 31, /*!< Interrupt the bridge and have it update the peer */
-+	AST_CONTROL_CNG_END = 32,	/*!< Disable CNG playout in bridge */
+@@ -362,6 +364,7 @@
+ 	 *
+ 	 * WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING WARNING
+ 	 */
++	AST_CONTROL_CNG_END = 34,	/*!< Disable CNG playout in bridge */
  };
  
  enum ast_frame_read_action {
-@@ -494,6 +497,10 @@
+@@ -524,6 +527,10 @@
  #define AST_OPTION_SECURE_SIGNALING        18
  #define AST_OPTION_SECURE_MEDIA            19
  
@@ -233,9 +568,9 @@ Index: include/asterisk/frame.h
  	int mode;
 Index: main/channel.c
 ===================================================================
---- main/channel.c	(.../branches/1.8)	(revision 383006)
-+++ main/channel.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -4382,6 +4382,7 @@
+--- main/channel.c	(.../branches/1.8)	(revision 412028)
++++ main/channel.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -4425,6 +4425,7 @@
  	case AST_CONTROL_AOC:
  	case AST_CONTROL_END_OF_Q:
  	case AST_CONTROL_UPDATE_RTP_PEER:
@@ -243,7 +578,7 @@ Index: main/channel.c
  		break;
  
  	case AST_CONTROL_INCOMPLETE:
-@@ -4551,6 +4552,7 @@
+@@ -4594,6 +4595,7 @@
  	case AST_CONTROL_SRCUPDATE:
  	case AST_CONTROL_SRCCHANGE:
  	case AST_CONTROL_RADIO_KEY:
@@ -251,7 +586,7 @@ Index: main/channel.c
  	case AST_CONTROL_RADIO_UNKEY:
  	case AST_CONTROL_OPTION:
  	case AST_CONTROL_WINK:
-@@ -7258,6 +7260,12 @@
+@@ -7330,6 +7332,12 @@
  					ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
  				}
  				break;
@@ -264,7 +599,7 @@ Index: main/channel.c
  			case AST_CONTROL_HOLD:
  			case AST_CONTROL_UNHOLD:
  			case AST_CONTROL_VIDUPDATE:
-@@ -7279,6 +7287,21 @@
+@@ -7351,6 +7359,21 @@
  			if (bridge_exit)
  				break;
  		}
@@ -286,7 +621,7 @@ Index: main/channel.c
  		if ((f->frametype == AST_FRAME_VOICE) ||
  		    (f->frametype == AST_FRAME_DTMF_BEGIN) ||
  		    (f->frametype == AST_FRAME_DTMF) ||
-@@ -8279,6 +8302,305 @@
+@@ -8358,6 +8381,305 @@
  }
  
  
@@ -594,9 +929,9 @@ Index: main/channel.c
  {
 Index: main/features.c
 ===================================================================
---- main/features.c	(.../branches/1.8)	(revision 383006)
-+++ main/features.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -4243,6 +4243,12 @@
+--- main/features.c	(.../branches/1.8)	(revision 412028)
++++ main/features.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -4232,6 +4232,12 @@
  				}
  				ast_indicate_data(other, f->subclass.integer, f->data.ptr, f->datalen);
  				break;
@@ -609,7 +944,7 @@ Index: main/features.c
  			case AST_CONTROL_AOC:
  			case AST_CONTROL_HOLD:
  			case AST_CONTROL_UNHOLD:
-@@ -4362,6 +4368,21 @@
+@@ -4351,6 +4357,21 @@
  					ast_debug(1, "Set feature timer to %ld ms\n", config->feature_timer);
  				}
  			}
@@ -631,22 +966,397 @@ Index: main/features.c
  		}
  		if (f)
  			ast_frfree(f);
+Index: main/silencedetection.c
+===================================================================
+--- main/silencedetection.c	(.../branches/1.8)	(revision 0)
++++ main/silencedetection.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -0,0 +1,315 @@
++/*
++ * Asterisk -- An open source telephony toolkit.
++ *
++ * Copyright (C) 2014, Olle E. Johansson
++ *
++ * Olle E. Johansson <oej@edvina.net>
++ *
++ * See http://www.asterisk.org for more information about
++ * the Asterisk project. Please do not directly contact
++ * any of the maintainers of this project for assistance;
++ * the project provides a web site, mailing lists and IRC
++ * channels for your use.
++ *
++ * This program is free software, distributed under the terms of
++ * the GNU General Public License Version 2. See the LICENSE file
++ * at the top of the source tree.
++ */
++
++/*! \file
++ *
++ * \brief Silence Detection and suppression audiohooks
++ *
++ * \author Olle E. Johansson <oej@edvina.net>
++ *
++ *
++ * This is an internal API and have no functions, applications or other cool stuff to expose to the admin.
++ * 
++ * If this audiohook is applied, we listen for silence and when silence has been detected for a certain 
++ * number of frames in a row, we replace the frame with a CNG frame and then (want to) drop frames until
++ * we have audio again. Right now the code just clears the frame.
++ *
++ * \note This code only handles audio streams 
++ * 	For silence in video, check Ingmar Bergman movies on Wikipedia. We have
++ *	no current way to detect video "silence" so we can't optimize that type of movies.
++ */
++
++/*** MODULEINFO
++	<support_level>core</support_level>
++ ***/
++
++#include "asterisk.h"
++
++ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
++
++#include "asterisk/options.h"
++#include "asterisk/logger.h"
++#include "asterisk/channel.h"
++#include "asterisk/config.h"
++#include "asterisk/file.h"
++#include "asterisk/pbx.h"
++#include "asterisk/frame.h"
++#include "asterisk/utils.h"
++#include "asterisk/audiohook.h"
++#include "asterisk/dsp.h"
++#include "asterisk/silencedetection.h"
++
++
++/*! Our own datastore */
++struct silence_detection_info {
++	struct ast_audiohook audiohook;
++	struct ast_dsp *dsp;			/*!< DSP used for silence detection */
++	unsigned int silencelevel;		/*!< Silence treshold */
++	unsigned int silenceframes;		/*!< How many frames to wait for silence before activating silence
++						support and sending CNG */
++	unsigned int silencecounter;		/*!< Frame Counter used for silence detection. */
++	int detect;				/*!< Silence detected */
++	int active;
++};
++
++
++#define TRUE 1
++#define FALSE 0
++
++/*! Datastore destroy audiohook callback */
++static void destroy_callback(void *data)
++{
++	struct silence_detection_info *sildet = data;
++
++	ast_dsp_free(sildet->dsp);
++	sildet->dsp = NULL;
++
++	/* Destroy the audiohook, and destroy ourselves */
++	ast_audiohook_destroy(&sildet->audiohook);
++	ast_free(sildet);
++
++	return;
++}
++
++/*! \brief Static structure for datastore information */
++static const struct ast_datastore_info sildet_datastore = {
++	.type = "sildet",
++	.destroy = destroy_callback
++};
++
++/*! \brief The callback from the audiohook subsystem. We basically get a frame to have fun with 
++	Return TRUE to keep original packet
++	Return FALSE to use our packet
++*/
++static int silence_detection_callback(struct ast_audiohook *audiohook, struct ast_channel *chan, struct ast_frame *frame, enum ast_audiohook_direction direction)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++
++	if (direction != AST_AUDIOHOOK_DIRECTION_WRITE) {
++		return 1;
++	}
++
++	/* If the audiohook is stopping it means the channel is shutting down.... but we let the datastore destroy take care of it */
++	if (audiohook->status == AST_AUDIOHOOK_STATUS_DONE) {
++		ast_debug(7, "Audiohook giving up - STATUS_DONE \n");
++		return 1;
++	}
++
++	ast_channel_lock(chan);
++	/* Grab datastore which contains our mute information */
++	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
++		ast_channel_unlock(chan);
++		ast_debug(2, "Can't find any datastore to use. Bad. \n");
++		return 1;
++	}
++
++	sildet = datastore->data;
++	if (!sildet || !sildet->dsp) {
++		ast_channel_unlock(chan);
++		ast_debug(2, "Can't find any DSP to use. Bad. \n");
++		return 1;
++	}
++
++	/* If this is audio then allow them to increase/decrease the gains */
++	if (frame->frametype == AST_FRAME_VOICE) {
++		int dsptime = 0;
++
++		/* Based on direction of frame grab the gain, and confirm it is applicable */
++		if (direction == AST_AUDIOHOOK_DIRECTION_WRITE) {
++			ast_dsp_silence(sildet->dsp, frame, &dsptime);	/* Checking for silence */
++			if (!dsptime) {
++				if (option_debug && sildet->silencecounter > 0) {
++					ast_debug(8, " ++++ Silence stopped ++++ on chan %s\n", chan->name);
++				}
++				if (sildet->silencecounter > 0) {
++					sildet->silencecounter = 0;		/* No more silence */
++					sildet->detect = 0;		/* No more silence */
++				}
++				ast_debug(9, " ++++ We are not silent on write to %s (dsptime %d)\n", chan->name, dsptime);
++			} else {
++				if (option_debug && sildet->silencecounter == 0) {
++					ast_debug(9, "          ++++ Silence starts here %d ++++ on chan %s dsptime %d\n", sildet->silencecounter, chan->name, dsptime);
++				}
++				if (option_debug && sildet->silencecounter > 0) {
++					ast_debug(9, "          ++++ Silence continues %d ++++ on chan %s dsptime %d\n", sildet->silencecounter, chan->name, dsptime);
++				}
++				sildet->silencecounter++;
++				if (sildet->detect == 1 && sildet->silencecounter > sildet->silenceframes) {
++					ast_frame_clear(frame);		/* Should really be dropped. */
++        				frame->samples = 0;
++					frame->datalen = 0;
++					
++					frame->frametype = AST_FRAME_NULL;
++					ast_channel_unlock(chan);
++					return 0;	/* Return TRUE since we manipulated the frame */
++				}
++			}
++			if (sildet->detect == 0 && sildet->silencecounter > sildet->silenceframes) {
++				ast_debug(8, "++++ Silence suppression should start now ++++ on chan %s\n", chan->name);
++				sildet->detect = 1;
++				ast_frame_clear(frame);
++				frame->frametype = AST_FRAME_CNG;
++        			frame->subclass.integer =  0x7f;
++        			frame->samples = 0;
++				ast_channel_unlock(chan);
++				return 0;	/* Return TRUE since we manipulated the frame */
++			}
++			/* Do not touch the frame yet */
++		}
++	}
++	ast_channel_unlock(chan);
++
++	return 1;
++}
++
++/*! \brief Initialize mute hook on channel, but don't activate it
++	\pre Assumes that the channel is locked
++*/
++static struct ast_datastore *initialize_sildethook(struct ast_channel *chan)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++
++	ast_debug(2, "Initializing new Silence Detection Audiohook \n");
++
++	/* Allocate a new datastore to hold the reference to this sildet_datastore and audiohook information */
++	if (!(datastore = ast_datastore_alloc(&sildet_datastore, NULL))) {
++		return NULL;
++	}
++
++	if (!(sildet = ast_calloc(1, sizeof(*sildet)))) {
++		ast_datastore_free(datastore);
++		return NULL;
++	}
++	if (!(sildet->dsp = ast_dsp_new())) {
++		/* We failed to create a DSP */
++		ast_log(LOG_WARNING, "Unable to create silence detector :(\n");
++		ast_free(sildet);
++		ast_datastore_free(datastore);
++		return NULL;
++	}
++	ast_audiohook_init(&sildet->audiohook, AST_AUDIOHOOK_TYPE_MANIPULATE, "Sildet");
++	sildet->audiohook.manipulate_callback = silence_detection_callback;
++	sildet->active = 1;
++	sildet->silencecounter = 0;
++	sildet->detect = 0;
++	datastore->data = sildet;
++	return datastore;
++}
++
++/*! \brief Add or activate mute audiohook on channel
++	Assumes channel is locked
++*/
++static int sildet_add_audiohook(struct ast_channel *chan, struct silence_detection_info *sildet, struct ast_datastore *datastore)
++{
++	/* Activate the settings */
++	ast_channel_datastore_add(chan, datastore);
++	if (ast_audiohook_attach(chan, &sildet->audiohook)) {
++		ast_log(LOG_ERROR, "Failed to attach audiohook for silence detection on channel %s\n", chan->name);
++		return -1;
++	}
++	ast_debug(2, "Initialized audiohook for silence detection on channel %s\n", chan->name);
++	return 0;
++}
++
++/*! \brief Activation of silence detection */
++int ast_sildet_activate(struct ast_channel *chan, unsigned int silencelevel, unsigned int silenceframes)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++
++	int is_new = 0;
++
++	if (!chan) {
++		ast_log(LOG_WARNING, "No channel was provided.\n" );
++		return -1;
++	}
++	if (silenceframes < 3) {
++		ast_log(LOG_WARNING, "Silenceframes is set very low. Are you sure? Value=%d\n", silenceframes);
++	}
++	ast_debug(4, "----> Setting up silence detection/suppression with silence level %d and silence frames %d for chan %s\n", silencelevel, silenceframes, chan->name);
++
++	ast_channel_lock(chan);
++	ast_debug(4, "----> Looking for silence detection datastore for %s\n", chan->name);
++	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
++		if (!(datastore = initialize_sildethook(chan))) {
++			ast_debug(4, "----> Failed to initialize hook for silence detection for %s\n", chan->name);
++			ast_channel_unlock(chan);
++			return 0;
++		}
++		is_new = 1;
++	}
++
++	/* Configure the silence detection */
++	sildet = datastore->data;
++	if (!sildet) {
++		ast_debug(4, "----> No datastore data for silence detection for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	if (!sildet->dsp) {
++		ast_debug(4, "----> No datastore dsp for silence detection for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	ast_debug(4, "----> Looking for silence detection datastore for %s\n", chan->name);
++	ast_dsp_set_threshold(sildet->dsp, silencelevel);
++	sildet->silencelevel = silencelevel;
++	sildet->silenceframes = silenceframes;
++	sildet->active = 1;
++	sildet->silencecounter = 0;
++	sildet->detect = 0;
++
++	if (is_new) {
++		if (sildet_add_audiohook(chan, sildet, datastore)) {
++			/* Can't add audiohook - already printed error message */
++			ast_datastore_free(datastore);
++			ast_free(sildet);
++		}
++	}
++	ast_channel_unlock(chan);
++
++	return 1;
++}
++
++int ast_sildet_deactivate(struct ast_channel *chan)
++{
++	struct ast_datastore *datastore = NULL;
++	struct silence_detection_info *sildet = NULL;
++	if (!chan) {
++		ast_log(LOG_WARNING, "No channel was provided.\n" );
++		return -1;
++	}
++	ast_channel_lock(chan);
++	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
++		ast_debug(4, "----> No silence detection datastore  for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	sildet = datastore->data;
++	if (!sildet) {
++		ast_debug(4, "----> No datastore data for silence detection for %s\n", chan->name);
++		ast_channel_unlock(chan);
++		return 0;
++	}
++	sildet->active = 0;
++	ast_audiohook_detach(&sildet->audiohook);
++	ast_channel_unlock(chan);
++	return 1;
++}
+
+Property changes on: main/silencedetection.c
+___________________________________________________________________
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
 Index: main/frame.c
 ===================================================================
---- main/frame.c	(.../branches/1.8)	(revision 383006)
-+++ main/frame.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -126,6 +126,7 @@
+--- main/frame.c	(.../branches/1.8)	(revision 412028)
++++ main/frame.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -126,6 +126,8 @@
  	{ AST_FORMAT_SIREN14, "siren14", 32000, "ITU G.722.1 Annex C, (Siren14, licensed from Polycom)", 120, 20, 80, 20, 20 },	/*!< Binary commercial distribution */
  	{ AST_FORMAT_TESTLAW, "testlaw", 8000, "G.711 test-law", 80, 10, 150, 10, 20 },                        /*!< codec_ulaw.c */
  	{ AST_FORMAT_G719, "g719", 48000, "ITU G.719", 160, 20, 80, 20, 20 },
 +	{ AST_FORMAT_CN, "cn", 8000, "Comfort Noise"},
++	/* We will need cn in 16000, 8000, 32000 and 48000 hertz too. */
  };
  
  struct ast_frame ast_null_frame = { AST_FRAME_NULL, };
+Index: main/audiohook.c
+===================================================================
+--- main/audiohook.c	(.../branches/1.8)	(revision 412028)
++++ main/audiohook.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -626,6 +626,7 @@
+ 	struct ast_frame *start_frame = frame, *middle_frame = frame, *end_frame = frame;
+ 	struct ast_audiohook *audiohook = NULL;
+ 	int samples = frame->samples;
++	int needsdrop = 0;
+ 
+ 	/* ---Part_1. translate start_frame to SLINEAR if necessary. */
+ 	/* If the frame coming in is not signed linear we have to send it through the in_translate path */
+@@ -705,15 +706,25 @@
+ 				 * be taken here to exit early. */
+ 			}
+ 			ast_audiohook_unlock(audiohook);
++			if (middle_frame->frametype == AST_FRAME_NULL) {
++				/* This frame is going nowhere after this */
++				needsdrop = 1;
++			}
+ 		}
+ 		AST_LIST_TRAVERSE_SAFE_END;
+ 		end_frame = middle_frame;
+ 	}
+ 
+ 	/* ---Part_3: Decide what to do with the end_frame (whether to transcode or not) */
++	if (needsdrop) {
++		/* The frame needs to go away badly */
++		ast_frfree(middle_frame);
++		return &ast_null_frame;
++	}
++
+ 	if (middle_frame == end_frame) {
+ 		/* Middle frame was modified and became the end frame... let's see if we need to transcode */
+-		if (end_frame->subclass.codec != start_frame->subclass.codec) {
++		if (end_frame->frametype == AST_FRAME_VOICE && end_frame->subclass.codec != start_frame->subclass.codec) {
+ 			if (out_translate->format != start_frame->subclass.codec) {
+ 				if (out_translate->trans_pvt)
+ 					ast_translator_free_path(out_translate->trans_pvt);
 Index: main/rtp_engine.c
 ===================================================================
---- main/rtp_engine.c	(.../branches/1.8)	(revision 383006)
-+++ main/rtp_engine.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
+--- main/rtp_engine.c	(.../branches/1.8)	(revision 412028)
++++ main/rtp_engine.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
 @@ -162,7 +162,7 @@
  	[16] = {1, AST_FORMAT_ADPCM}, /* 11.025 kHz */
  	[17] = {1, AST_FORMAT_ADPCM}, /* 22.050 kHz */
@@ -658,26 +1368,47 @@ Index: main/rtp_engine.c
  	[34] = {1, AST_FORMAT_H263},
 Index: configs/sip.conf.sample
 ===================================================================
---- configs/sip.conf.sample	(.../branches/1.8)	(revision 383006)
-+++ configs/sip.conf.sample	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -300,6 +300,13 @@
- ;allow=ulaw                     ; Allow codecs in order of preference
- ;allow=ilbc                     ; see https://wiki.asterisk.org/wiki/display/AST/RTP+Packetization
- 				; for framing options
-+
-+;comfort-noise=yes		; Enable Comfort Noise generation on RTP streams
+--- configs/sip.conf.sample	(.../branches/1.8)	(revision 412028)
++++ configs/sip.conf.sample	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -538,6 +538,34 @@
+ ;rtpkeepalive=<secs>            ; Send keepalives in the RTP stream to keep NAT open
+                                 ; (default is off - zero)
+ 
++;--------------------------- SIP Silence detection/suppression for RTP ------------------------------------
++; The silence detection assigns a software DSP to each channel and converts all audio into
++; signed linear in order to be able to detect silence. This will require a lot of CPU
++; per channel including transcoding. 
++;
++; You can decide to enable comfort-noise and disable silencesuppression. In this case, Asterisk
++; will negotitate comfort noise and accept it coming in, but since there is no DSP on the channel
++; Asterisk will never send any CN packet and suppress audio.
++;
++; Enabling silencesuppression and comfort noise will save a lot of bandwidth in your calls. There
++; will only be RTP flows when someone is speaking.
++;
++;silencesuppression = YES	; Enable silence suppression - by default turned off.
++;				; settable per device too
++;				; You want to enable comfort noise too. Default is off.
++;silencelevel = 100		; Silence detection noise level - below this is considered silent.
++				; Default = 100
++;silenceperiod = 10		; How many frames of silence should we get before we supress
++				; audio. Consider packetization. A normal ALAW stream has 20 ms audio
++				; per RTP packet. A value of 2 means we will start sending CNG at the third silent
++				; packet, after 40 ms of silence. Default is 10 frames.
++;comfort-noise=yes		; Enable Comfort Noise generation on RTP streams.
++;				; Default is off
 +;				; Available per device too
 +;				; Generating comfort noise is a burden to your CPU
 +;				; This should not be enabled on low-end devices.
-+;				; You should not enable this unless you have internal
-+;				; timing support enabled in asterisk.conf
- ;
- ; This option specifies a preference for which music on hold class this channel
- ; should listen to when put on hold if the music class has not been set on the
++;				; You should not enable this unless you have a timer.
++
+ ;--------------------------- SIP Session-Timers (RFC 4028)------------------------------------
+ ; SIP Session-Timers provide an end-to-end keep-alive mechanism for active SIP sessions.
+ ; This mechanism can detect and reclaim SIP channels that do not terminate through normal
 Index: res/res_noise.c
 ===================================================================
 --- res/res_noise.c	(.../branches/1.8)	(revision 0)
-+++ res/res_noise.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
++++ res/res_noise.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
 @@ -0,0 +1,164 @@
 +/*
 + * Asterisk -- An open source telephony toolkit.
@@ -844,7 +1575,7 @@ Index: res/res_noise.c
 +                .unload = unload_module,
 +               );
 
-Egenskapsändringar för: res/res_noise.c
+Property changes on: res/res_noise.c
 ___________________________________________________________________
 Added: svn:mime-type
 ## -0,0 +1 ##
@@ -860,9 +1591,9 @@ Added: svn:eol-style
 \ No newline at end of property
 Index: res/res_rtp_asterisk.c
 ===================================================================
---- res/res_rtp_asterisk.c	(.../branches/1.8)	(revision 383006)
-+++ res/res_rtp_asterisk.c	(.../team/oej/roibos-cng-support-1.8)	(revision 383006)
-@@ -113,6 +113,7 @@
+--- res/res_rtp_asterisk.c	(.../branches/1.8)	(revision 412028)
++++ res/res_rtp_asterisk.c	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -114,6 +114,7 @@
  #define FLAG_NAT_INACTIVE_NOWARN        (1 << 1)
  #define FLAG_NEED_MARKER_BIT            (1 << 3)
  #define FLAG_DTMF_COMPENSATE            (1 << 4)
@@ -870,7 +1601,18 @@ Index: res/res_rtp_asterisk.c
  
  /*! \brief RTP session description */
  struct ast_rtp {
-@@ -1738,17 +1739,8 @@
+@@ -1349,6 +1350,10 @@
+ 		ast_debug(1, "Received frame with no data for RTP instance '%p' so dropping frame\n", instance);
+ 		return 0;
+ 	}
++	if (frame->frametype == AST_FRAME_CNG) {
++		ast_debug(1, "Receiveed frame with CNG for RTP instance '%p' (just dropping it now)\n", instance);
++		return 0;
++	}
+ 
+ 	/* If the packet is not one our RTP stack supports bail out */
+ 	if (frame->frametype != AST_FRAME_VOICE && frame->frametype != AST_FRAME_VIDEO && frame->frametype != AST_FRAME_TEXT) {
+@@ -1753,17 +1758,8 @@
  	/* Convert comfort noise into audio with various codecs.  Unfortunately this doesn't
  	   totally help us out becuase we don't have an engine to keep it going and we are not
  	   guaranteed to have it every 20ms or anything */
@@ -889,7 +1631,7 @@ Index: res/res_rtp_asterisk.c
  	}
  
  	/* Must have at least one byte */
-@@ -1765,10 +1757,22 @@
+@@ -1780,10 +1776,22 @@
  		rtp->f.datalen = 0;
  	}
  	rtp->f.frametype = AST_FRAME_CNG;
@@ -902,7 +1644,7 @@ Index: res/res_rtp_asterisk.c
  
 +	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 +		ast_set_flag(rtp, FLAG_CN_ACTIVE);
-+		ast_debug(0, "###### ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
++		ast_debug(2, "ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
 +		/* Start the generator on the other end. */
 +	
 +	} else {
@@ -912,14 +1654,14 @@ Index: res/res_rtp_asterisk.c
  	return &rtp->f;
  }
  
-@@ -2345,6 +2349,15 @@
+@@ -2368,6 +2376,15 @@
  	/* If the payload is not actually an Asterisk one but a special one pass it off to the respective handler */
  	if (!payload.asterisk_format) {
  		struct ast_frame *f = NULL;
 +		if (payload.code != AST_RTP_CN && ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 +			/* Insert a control frame to indicate that we need to shut down Comfort Noise generators, if active */
 +			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
-+			ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
++			ast_debug(2, "DEACTIVATING Comfort Noise \n");
 +			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
 +			f = ast_frdup(&cngoff);
 +			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
@@ -928,14 +1670,14 @@ Index: res/res_rtp_asterisk.c
  		if (payload.code == AST_RTP_DTMF) {
  			/* process_dtmf_rfc2833 may need to return multiple frames. We do this
  			 * by passing the pointer to the frame list to it so that the method
-@@ -2372,6 +2385,15 @@
+@@ -2395,6 +2412,15 @@
  		}
  		return &ast_null_frame;
  	}
 +	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 +		struct ast_frame *f = NULL;
 +		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
-+		ast_debug(0, "####### DEACTIVATING Comfort Noise \n");
++		ast_debug(2, "DEACTIVATING Comfort Noise \n");
 +		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
 +		f = ast_frdup(&cngoff);
 +		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
@@ -944,3 +1686,188 @@ Index: res/res_rtp_asterisk.c
  
  	rtp->lastrxformat = rtp->f.subclass.codec = payload.code;
  	rtp->f.frametype = (rtp->f.subclass.codec & AST_FORMAT_AUDIO_MASK) ? AST_FRAME_VOICE : (rtp->f.subclass.codec & AST_FORMAT_VIDEO_MASK) ? AST_FRAME_VIDEO : AST_FRAME_TEXT;
+Index: README.roibos-cng.txt
+===================================================================
+--- README.roibos-cng.txt	(.../branches/1.8)	(revision 0)
++++ README.roibos-cng.txt	(.../team/oej/roibos-cng-support-1.8)	(revision 412028)
+@@ -0,0 +1,165 @@
++Edvina AB
++Olle E. Johansson
++
++
++Started: 2012-09-18
++Updated: 2014-04-07
++
++
++
++
++
++Silence Suppression and Comfort Noise support in Asterisk 1.8
++=============================================================
++
++Comfort Noise in SIP/RTP is 
++- negotiated in the SDP as a codec
++- starts activated by a silence in the media stream
++- the sender stops sending media, sends a single CNG RTP packet that indicates
++  a noise level
++- the receiver activated a Comfort Noise Generator in the call until media 
++  reappears from the sender
++
++A requirement for using this is that it is included as a codec with payload
++13 (or dynamic) in the SDP
++
++Asterisk Architecture
++=====================
++In a bridged call, where one end is SIP with CNG enabled, the RTP system
++will get an incoming CNG frame with a noise level. This will be sent
++over the bridge to the bridged channel.
++
++If that channel is SIP with CNG enabled for the call, the RTP system
++will send out a CNG frame.  This is to enable forwarding a CNG frame 
++across to another SIP device which now gets the responsibility to play out 
++the noise.
++
++It that channel is a type that doesn't support CNG or SIP with CNG
++disabled, then Asterisk needs to generate noise in the bridged
++channel - not the SIP channel that received the CNG frame. 
++
++Current state:
++==============
++
++* RTP Channel
++-------------
++
++- Asterisk RTP (res_rtp_asterisk.c) will read CNG packets and produce a warning. 
++  These will be forwarded to the core.
++- CNG packets will be sent only as RTP keepalives
++
++* SIP Channel
++-------------
++- The SIP channel will negotiate any CNG support if offered and
++  offer CNG if configured. SIP.conf setting:
++	;comfort-noise=yes              ; Enable Comfort Noise generation on RTP streams
++	;                               ; Available per device too
++
++* Core
++------
++- If a generator is active and CNG is received, Asterisk moves to timer based
++  generation of outbound packets
++- Comfort noise generator added to core
++- Comfort noise generator will be used when CNG frame is received, until the RTP
++  channel signals that CNG will end.
++
++Detecting Silence
++=================
++The current silence detector in Asterisk only supports signed linear audio.
++This means that for a g.729 call we have to transcode to signed linear, listen 
++for audio and in some cases, but not all, transcode back.
++
++Later we have to
++- Add silence detection to the codec modules so they can signal silence
++  in an incoming stream to the core
++
++Debugging
++=========
++Place a call between one phone that supports CN (I've used a SNOM 820) and a
++phone that lacks support for it (or has it disabled for testing). 
++- Turn on RTP debug and SIP debug.
++- Set core debug to 3.
++You will now see that Asterisk receives a CN RTP packet, and will activate
++the noise generator on the other channel. This happens many times during 
++the call.
++
++Todo :: comfort noise support
++-----------------------------
++  - Check how this affects RTP bridge and queue bridge
++  - Add CN support in SDP for outbound calls
++
++Done:
++  - Support in core bridge
++  - For inbound streams, generate noise in calls (both inbound and outbound calls)
++  - Added res_noise.c from cmantunes from https://issues.asterisk.org/jira/browse/ASTERISK-5263
++    This includes a noise generator
++  - Add SIP negotiation in SDP - done
++  - Support CN codec on incoming INVITEs - done
++  - Silence detection and suppression added for SIP calls
++
++References
++----------
++
++- RFC 3389 http://tools.ietf.org/html/rfc3389
++- Appendix II to Recommendation G.711 (02/2000) - A comfort noise
++        payload definition for ITU-T G.711 use in packet-based
++        multimedia communication systems.
++
++
++Terms
++-----
++- DTX Discontinues Transmission capability
++- VAD Voice Activity Detection
++- CN Comfort Noise , http://en.wikipedia.org/wiki/Comfort_noise
++- CNG Comfort Noise Generator
++- Silence Suppression: http://en.wikipedia.org/wiki/Silence_suppression
++
++RTP Framing (RFC 3389 section 4)
++--------------------------------
++The RTP header for the comfort noise packet SHOULD be constructed as
++   if the comfort noise were an independent codec.  Thus, the RTP
++   timestamp designates the beginning of the comfort noise period.
++
++At the beginning of
++   an inactive voice segment (silence period), a CN packet is
++   transmitted in the same RTP stream and indicated by the CN payload
++   type.  The CN packet update rate is left implementation specific. For
++   example, the CN packet may be sent periodically or only when there is
++   a significant change in the background noise characteristics.  The
++   CNG algorithm at the receiver uses the information in the CN payload
++   to update its noise generation model and then produce an appropriate
++   amount of comfort noise.
++
++Noise Level (RFC 3389 Section 3.1)
++----------------------------------
++The magnitude of the noise level is packed into the least significant
++   bits of the noise-level byte with the most significant bit unused and
++   always set to 0 as shown below in Figure 1.  The least significant
++   bit of the noise level magnitude is packed into the least significant
++   bit of the byte.
++
++   The noise level is expressed in -dBov, with values from 0 to 127
++   representing 0 to -127 dBov.  dBov is the level relative to the
++   overload of the system.  (Note: Representation relative to the
++   overload point of a system is particularly useful for digital
++   implementations, since one does not need to know the relative
++   calibration of the analog circuitry.)  For example, in the case of a
++   u-law system, the reference would be a square wave with values +/-
++   8031, and this square wave represents 0dBov.  This translates into
++   6.18dBm0.
++
++-----------------
++Various notes:
++=============
++From file:
++
++The logic for determining if a native bridge can be performed or not lives in ast_channel_bridge in channel.c - there is an if statement with many conditions that have to be met before doing it. You can extend that and add another which is "if the CN support on channel A is the same as channel B then allow native bridge"
++
++Question: If I run RTP bridge (not the p2p or remote) can we still operate
++on timer? If not, I have to disable RTP bridging totally. If we rely on incoming
++packets (which will not happen) to send out, CN will not work.
++
++Yes, you can still operate on timer. The RTP bridge still has all the normal bridging logic in it. That's how music on hold and such works.
++
++Brian West in ASTERISK-140 2004-04-24:
++"This is the one thing that keeps asterisk out of the big boy toy box.... lets get it going boys."
+
+Property changes on: README.roibos-cng.txt
+___________________________________________________________________
+Added: svn:mime-type
+## -0,0 +1 ##
++text/plain
+\ No newline at end of property
+Added: svn:keywords
+## -0,0 +1 ##
++Author Date Id Revision
+\ No newline at end of property
+Added: svn:eol-style
+## -0,0 +1 ##
++native
+\ No newline at end of property

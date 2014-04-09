@@ -1329,6 +1329,7 @@ static int iax2_is_control_frame_allowed(int subtype)
 	case AST_CONTROL_T38_PARAMETERS:
 	case AST_CONTROL_AOC:
 	case AST_CONTROL_INCOMPLETE:
+	case AST_CONTROL_CNG_END:
 		is_allowed = -1;
 		break;
 

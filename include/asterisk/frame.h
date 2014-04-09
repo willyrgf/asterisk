@@ -531,6 +531,10 @@ enum ast_control_transfer {
     if not enabled a noise generator will kick in  */
 #define AST_OPTION_CNG_SUPPORT            20
 
+/*! Support of CNG transmission,
+    if not enabled a noise generator will kick in  */
+#define AST_OPTION_CNG_SUPPORT            20
+
 struct oprmode {
 	struct ast_channel *peer;
 	int mode;

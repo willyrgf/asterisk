@@ -22,6 +22,7 @@
  * \brief Supports RTP and RTCP with Symmetric RTP support for NAT traversal.
  *
  * \author Mark Spencer <markster@digium.com>
+ * \author Olle E. Johansson <oej@edvina.net>
  *
  * \note RTP is defined in RFC 3550.
  *
@@ -1481,6 +1482,10 @@ static int ast_rtp_write(struct ast_rtp_instance *instance, struct ast_frame *fr
 		ast_debug(1, "Received frame with no data for RTP instance '%p' so dropping frame\n", instance);
 		return 0;
 	}
+	if (frame->frametype == AST_FRAME_CNG) {
+		ast_debug(1, "Receiveed frame with CNG for RTP instance '%p' (just dropping it now)\n", instance);
+		return 0;
+	}
 
 	/* If the packet is not one our RTP stack supports bail out */
 	if (frame->frametype != AST_FRAME_VOICE && frame->frametype != AST_FRAME_VIDEO && frame->frametype != AST_FRAME_TEXT) {
@@ -1916,10 +1921,6 @@ static struct ast_frame *process_cn_rfc3389(struct ast_rtp_instance *instance, u
 	if(!ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
 		ast_set_flag(rtp, FLAG_CN_ACTIVE);
 		ast_debug(2, "ACTIVATING Comfort Noise on channel Level - %d\n", rtp->f.subclass.integer);
-		/* Start the generator on the other end. */
-	
-	} else {
-		/* Check if the level is the same. If not, reactivate. */
 	}
 
 	return &rtp->f;
@@ -2518,6 +2519,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	if (res < hdrlen) {
 		ast_log(LOG_WARNING, "RTP Read too short (%d expecting %d)\n", res, hdrlen);
 		return &ast_null_frame;
+	}
+	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		struct ast_frame *f = NULL;
+		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+		ast_debug(2, "DEACTIVATING Comfort Noise \n");
+		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+		f = ast_frdup(&cngoff);
+		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+		f = NULL;
 	}
 
 	/* Get fields and verify this is an RTP packet */
