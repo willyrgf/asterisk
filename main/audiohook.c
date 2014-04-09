@@ -712,7 +712,7 @@ static struct ast_frame *audio_audiohook_write_list(struct ast_channel *chan, st
 				 * be taken here to exit early. */
 			}
 			ast_audiohook_unlock(audiohook);
-			if (middle_frame->frametype == AST_FRAME_DROP) {
+			if (middle_frame->frametype == AST_FRAME_NULL) {
 				/* This frame is going nowhere after this */
 				needsdrop = 1;
 			}

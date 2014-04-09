@@ -60,9 +60,9 @@ struct silence_detection_info {
 	struct ast_audiohook audiohook;
 	struct ast_dsp *dsp;			/*!< DSP used for silence detection */
 	unsigned int silencelevel;		/*!< Silence treshold */
-        unsigned int silenceframes;		/*!< How many frames to wait for silence before activating silence
-							support and sending CNG */
-        unsigned int silencecounter;		/*!< Frame Counter used for silence detection. */
+	unsigned int silenceframes;		/*!< How many frames to wait for silence before activating silence
+						support and sending CNG */
+	unsigned int silencecounter;		/*!< Frame Counter used for silence detection. */
 	int detect;				/*!< Silence detected */
 	int active;
 };
@@ -155,7 +155,7 @@ static int silence_detection_callback(struct ast_audiohook *audiohook, struct as
         				frame->samples = 0;
 					frame->datalen = 0;
 					
-					frame->frametype = AST_FRAME_DROP;
+					frame->frametype = AST_FRAME_NULL;
 					ast_channel_unlock(chan);
 					return 0;	/* Return TRUE since we manipulated the frame */
 				}

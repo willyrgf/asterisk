@@ -1836,7 +1836,6 @@ int ast_is_deferrable_frame(const struct ast_frame *frame)
 	case AST_FRAME_IAX:
 	case AST_FRAME_CNG:
 	case AST_FRAME_MODEM:
-	case AST_FRAME_DROP:
 		return 0;
 	}
 	return 0;
@@ -3059,7 +3058,6 @@ int __ast_answer(struct ast_channel *chan, unsigned int delay, int cdr_answer)
 				case AST_FRAME_IAX:
 				case AST_FRAME_NULL:
 				case AST_FRAME_CNG:
-				case AST_FRAME_DROP:
 					break;
 				}
 

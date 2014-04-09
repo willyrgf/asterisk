@@ -357,9 +357,6 @@ static void print_frame(struct ast_frame *frame)
 	case AST_FRAME_MODEM:
 		ast_verbose("FrameType: MODEM\n");
 		break;
-	case AST_FRAME_DROP:
-		ast_verbose("FrameType: DROP\n");
-		break;
 	case AST_FRAME_DTMF_BEGIN:
 		ast_verbose("FrameType: DTMF BEGIN\n");
 		ast_verbose("Digit: %d\n", frame->subclass.integer);

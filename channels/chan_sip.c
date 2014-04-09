@@ -7481,8 +7481,8 @@ static int sip_indicate(struct ast_channel *ast, int condition, const void *data
 }
 
 
-/*! \brief Activates a DSP to detect silence, something we can use to suppress silent RTP packets
-	and send CNG (comfort noise generation) requests instead */
+/*! \brief Activates a DSP to detect silence, and suppress silent frames
+	and send CNG (comfort noise generation) requests at start of silence instead */
 static int activate_silence_detection(struct sip_pvt *dialog)
 {
 	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
@@ -7497,14 +7497,6 @@ static int activate_silence_detection(struct sip_pvt *dialog)
 
 		/* We now have a call where we have a DSP. The rest of the magic is happening somewhere else in chan_sip. */
 		ast_debug(3, "SILDET: Activated silence suppression on call %s\n", dialog->callid);
-#ifdef ISTHISNEEDED
-		if ((res = ast_set_read_format(dialog->owner, AST_FORMAT_SLINEAR)) < 0) {
-			/* Put channel in the right codec mode: SLINEAR */
-			ast_log(LOG_WARNING, "Unable to set channel to linear mode, giving up\n");
-			ast_sildet_deactivate(dialog->owner);
-			return FALSE;
-		}
-#endif
 	} else {
 		ast_debug(3, "SILDET: Failed to activate silence detection on call %s\n", dialog->callid);
 	}
@@ -7730,7 +7722,10 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 			"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
 			tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
 
-	activate_silence_detection(i);
+KSLÖKJAÖLFKJLÖKJ
+	if( SKREP ) {
+		activate_silence_detection(i);
+	}
 
 	return tmp;
 }
@@ -18897,7 +18892,6 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 				"Disabled");
 	ast_cli(a->fd, "  Videosupport:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_VIDEOSUPPORT)));
 	ast_cli(a->fd, "  Textsupport:            %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_TEXTSUPPORT)));
-	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
 	ast_cli(a->fd, "  Ignore SDP sess. ver.:  %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_IGNORESDPVERSION)));
 	ast_cli(a->fd, "  AutoCreate Peer:        %s\n", AST_CLI_YESNO(sip_cfg.autocreatepeer));
 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
@@ -19056,9 +19050,10 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  DTMF:                   %s\n", dtmfmode2str(ast_test_flag(&global_flags[0], SIP_DTMF)));
 	ast_cli(a->fd, "  Qualify:                %d\n", default_qualify);
 	ast_cli(a->fd, "  Use ClientCode:         %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_USECLIENTCODE)));
-	ast_cli(a->fd, "  Silence detection:      %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_SILENCE_DETECTION)));
-	ast_cli(a->fd, "  Silence level: 	  %d\n", sip_cfg.silencelevel);
-	ast_cli(a->fd, "  Silence frames: 	  %d\n", sip_cfg.silenceframes);
+	ast_cli(a->fd, "  Comfort Noise:          %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOW_CN)));
+	ast_cli(a->fd, "  Silence suppression:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[2], SIP_PAGE3_SILENCE_DETECTION)));
+	ast_cli(a->fd, "  Silence threshold:      %d\n", sip_cfg.silencelevel);
+	ast_cli(a->fd, "  Silence frames:         %d\n", sip_cfg.silenceframes);
 	ast_cli(a->fd, "  Progress inband:        %s\n", (ast_test_flag(&global_flags[0], SIP_PROG_INBAND) == SIP_PROG_INBAND_NEVER) ? "Never" : (AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_PROG_INBAND) != SIP_PROG_INBAND_NO)));
 	ast_cli(a->fd, "  Language:               %s\n", default_language);
 	ast_cli(a->fd, "  MOH Interpret:          %s\n", default_mohinterpret);
@@ -27862,7 +27857,7 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "buggymwi")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
- 	} else if (!strcasecmp(v->name, "silencedetection")) {
+ 	} else if (!strcasecmp(v->name, "silencesuppression")) {
  		ast_set_flag(&mask[2], SIP_PAGE3_SILENCE_DETECTION);
  		ast_set2_flag(&flags[2], ast_true(v->value), SIP_PAGE3_SILENCE_DETECTION);
 	} else if (!strcasecmp(v->name, "comfort-noise")) {

@@ -127,6 +127,7 @@ static const struct ast_format_list AST_FORMAT_LIST[] = {
 	{ AST_FORMAT_TESTLAW, "testlaw", 8000, "G.711 test-law", 80, 10, 150, 10, 20 },                        /*!< codec_ulaw.c */
 	{ AST_FORMAT_G719, "g719", 48000, "ITU G.719", 160, 20, 80, 20, 20 },
 	{ AST_FORMAT_CN, "cn", 8000, "Comfort Noise"},
+	/* We will need cn in 16000, 8000, 32000 and 48000 hertz too. */
 };
 
 struct ast_frame ast_null_frame = { AST_FRAME_NULL, };

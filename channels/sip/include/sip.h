@@ -62,7 +62,7 @@
 #define DEFAULT_AUTHLIMIT            100
 #define DEFAULT_AUTHTIMEOUT          30
 #define DEFAULT_SILENCELEVEL	     100
-#define DEFAULT_SILENCEFRAMES	     7   /* Number of frames of silence to let through before we start suppressing it */
+#define DEFAULT_SILENCEFRAMES	     10   /* Number of frames of silence to let through before we start suppressing it */
 
 /* guard limit must be larger than guard secs */
 /* guard min must be < 1000, and should be >= 250 */

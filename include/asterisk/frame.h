@@ -124,8 +124,6 @@ enum ast_frame_type {
 	AST_FRAME_MODEM,	
 	/*! DTMF begin event, subclass is the digit */
 	AST_FRAME_DTMF_BEGIN,
-	/*! A frame that needs to be killed, dropped or just silently ignored */
-	AST_FRAME_DROP,
 };
 #define AST_FRAME_DTMF AST_FRAME_DTMF_END
 
