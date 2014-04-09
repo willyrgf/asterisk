@@ -6913,6 +6913,9 @@ static int sip_answer(struct ast_channel *ast)
 		ast_rtp_instance_update_source(p->rtp);
 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL, oldsdp, TRUE);
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
+		/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
+		activate_silence_detection(p);
+	
 	}
 	sip_pvt_unlock(p);
 	return res;
@@ -7487,6 +7490,16 @@ static int activate_silence_detection(struct sip_pvt *dialog)
 {
 	ast_debug(3, "SILDET: Checking if we need silence detection on %s\n", dialog->callid);
 
+	if (! dialog->jointnoncodeccapability & AST_RTP_CN) {
+		ast_debug(4, "SILDET: Channel does not support Comfort Noise on %s\n", dialog->callid);
+		/* If this is a re-invite that turns CN off, deactivate it. */
+		if (dialog->owner) {
+			ast_sildet_deactivate(dialog->owner);
+		}
+		return FALSE;
+	}
+
+
 	/* Check if we really want silence suppression */
 	if (!dialog || !dialog->rtp || !dialog->owner || !ast_test_flag(&dialog->flags[2], SIP_PAGE3_SILENCE_DETECTION)) {
 		ast_debug(3, "SILDET: Channel does not need silence suppression on %s\n", dialog->callid);
@@ -7722,10 +7735,6 @@ static struct ast_channel *sip_new(struct sip_pvt *i, int state, const char *tit
 			"Channel: %s\r\nUniqueid: %s\r\nChanneltype: %s\r\nSIPcallid: %s\r\nSIPfullcontact: %s\r\n",
 			tmp->name, tmp->uniqueid, "SIP", i->callid, i->fullcontact);
 
-KSLÖKJAÖLFKJLÖKJ
-	if( SKREP ) {
-		activate_silence_detection(i);
-	}
 
 	return tmp;
 }
@@ -9768,7 +9777,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 		struct ast_str *s2 = ast_str_alloca(SIPBUFSIZE);
 		struct ast_str *s3 = ast_str_alloca(SIPBUFSIZE);
 
-		ast_verbose("Non-codec capabilities (dtmf): us - %s, peer - %s, combined - %s\n",
+		ast_verbose("Non-codec capabilities (dtmf, cn): us - %s, peer - %s, combined - %s\n",
 			    ast_rtp_lookup_mime_multiple2(s1, p->noncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple2(s2, peernoncodeccapability, 0, 0),
 			    ast_rtp_lookup_mime_multiple2(s3, newnoncodeccapability, 0, 0));
@@ -19413,7 +19422,7 @@ static char *sip_show_channel(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 			ast_cli(a->fd, "  Call-ID:                %s\n", cur->callid);
 			ast_cli(a->fd, "  Owner channel ID:       %s\n", cur->owner ? cur->owner->name : "<none>");
 			ast_cli(a->fd, "  Our Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->capability));
-			ast_cli(a->fd, "  Non-Codec Capability (DTMF):   %d\n", cur->noncodeccapability);
+			ast_cli(a->fd, "  Non-Codec Capability (DTMF, CN):   %d\n", cur->noncodeccapability);
 			ast_cli(a->fd, "  Their Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->peercapability));
 			ast_cli(a->fd, "  Joint Codec Capability:   %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->jointcapability));
 			ast_cli(a->fd, "  Format:                 %s\n", ast_getformatname_multiple(formatbuf, sizeof(formatbuf), cur->owner ? cur->owner->nativeformats : 0) );
@@ -21025,6 +21034,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				ast_queue_control(p->owner, AST_CONTROL_PROGRESS);
 			}
 			ast_rtp_instance_activate(p->rtp);
+			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
+			activate_silence_detection(p);
 		} else {
 			/* Alcatel PBXs are known to send 183s with no SDP after sending
 			 * a 100 Trying response. We're just going to treat this sort of thing
@@ -21055,6 +21066,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 				}
 			}
 			ast_rtp_instance_activate(p->rtp);
+			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
+			activate_silence_detection(p);
 		} else if (!reinvite) {
 			struct ast_sockaddr remote_address = {{0,}};
 
@@ -23880,6 +23893,7 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 			c_state = AST_STATE_UP;
 		}
 
+
 		switch(c_state) {
 		case AST_STATE_DOWN:
 			ast_debug(2, "%s: New call is still down.... Trying... \n", c->name);
@@ -26197,6 +26211,7 @@ static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct as
 				if (ast_test_flag(&p->flags[0], SIP_DIRECT_MEDIA)) {
 					ast_queue_control(p->owner, AST_CONTROL_SRCCHANGE);
 				}
+SKREP
 			}
 			check_pendings(p);
 		} else if (p->glareinvite == seqno) {
