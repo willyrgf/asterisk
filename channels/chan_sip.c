@@ -10025,7 +10025,7 @@ static int process_sdp_o(const char *o, struct sip_pvt *p)
 			ast_log(LOG_WARNING, "Call %s responded to our T.38 reinvite without changing SDP version; 'ignoresdpversion' should be set for this peer.\n", p->callid);
 		} else {
 			p->session_modify = FALSE;
-			ast_debug(2, "Call %s responded to our reinvite without changing SDP version; ignoring SDP.\n", p->callid);
+			ast_debug(2, "Call %s responded to our (re)invite without changing SDP version; ignoring SDP.\n", p->callid);
 			return FALSE;
 		}
 	}
@@ -19037,6 +19037,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  URI user is phone no:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_USEREQPHONE)));
 	ast_cli(a->fd, "  Always auth rejects:    %s\n", AST_CLI_YESNO(sip_cfg.alwaysauthreject));
 	ast_cli(a->fd, "  Direct RTP setup:       %s\n", AST_CLI_YESNO(sip_cfg.directrtpsetup));
+	ast_cli(a->fd, "  Direct Media:           %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_DIRECT_MEDIA)));
 	ast_cli(a->fd, "  User Agent:             %s\n", global_useragent);
 	ast_cli(a->fd, "  SDP Session Name:       %s\n", ast_strlen_zero(global_sdpsession) ? "-" : global_sdpsession);
 	ast_cli(a->fd, "  SDP Owner Name:         %s\n", ast_strlen_zero(global_sdpowner) ? "-" : global_sdpowner);
