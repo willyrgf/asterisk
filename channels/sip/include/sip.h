@@ -370,6 +370,7 @@
 #define SIP_PAGE3_100REL                      (1 << 3)  /*!< D: If PRACK is active for a specific dialog */
 #define SIP_PAGE3_INVITE_WAIT_FOR_PRACK (1 << 4)  /*!< D: Wait for PRACK response before sending 200 OK */
 #define SIP_PAGE3_ANSWER_WAIT_FOR_PRACK       (1 << 5)  /*!< D: Send ANSWER when PRACK is received */
+#define SIP_PAGE3_SILENCE_DETECTION      (1 << 21)  /*!< DPG: Enable silence detection?  */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
        (SIP_PAGE3_SNOM_AOC | SIP_PAGE3_PRACK | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_SILENCE_DETECTION)

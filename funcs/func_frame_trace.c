@@ -329,9 +329,6 @@ static void print_frame(struct ast_frame *frame)
 		case AST_CONTROL_CNG_END:
 			ast_verbose("SubClass: CNG_END");
 			break;
-		case AST_CONTROL_CNG_END:
-			ast_verbose("SubClass: CNG_END");
-			break;
 		}
 		
 		if (frame->subclass.integer == -1) {
