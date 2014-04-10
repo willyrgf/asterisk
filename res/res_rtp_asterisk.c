@@ -206,6 +206,8 @@ struct ast_rtp {
 	struct io_context *io;
 	void *data;
 	struct ast_rtcp *rtcp;
+	unsigned int rtcpport;		/*!< temporary storage for a=rtcp */
+
 	struct ast_rtp *bridged;        /*!< Who we are Packet bridged to */
 
 	enum strict_rtp_state strict_rtp_state; /*!< Current state that strict RTP protection is in */
@@ -2984,7 +2986,10 @@ static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct
 	if (rtp->rtcp) {
 		ast_debug(1, "Setting RTCP address on RTP instance '%p'\n", instance);
 		ast_sockaddr_copy(&rtp->rtcp->them, addr);
-		if (!ast_sockaddr_isnull(addr)) {
+		if (rtp->rtcpport) {
+			/* Port was set with a=rtcp in sdp */
+			ast_sockaddr_set_port(&rtp->rtcp->them, rtp->rtcpport);
+		} if (!ast_sockaddr_isnull(addr)) {
 			ast_sockaddr_set_port(&rtp->rtcp->them,
 					      ast_sockaddr_port(addr) + 1);
 		}
@@ -3003,6 +3008,11 @@ static void ast_rtp_remote_address_set(struct ast_rtp_instance *instance, struct
 static void ast_rtp_remote_rtcp_port_set(struct ast_rtp_instance *instance, unsigned int port)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	if (!rtp->rtcp) {
+		/* We have no rtcp active yet. */
+		rtp->rtcpport = port;
+		return;
+	}
 	if (!ast_sockaddr_isnull(&rtp->rtcp->them)) {
 		ast_sockaddr_set_port(&rtp->rtcp->them, port);
 		ast_debug(1, "Setting RTCP port on RTP instance '%p' to %d\n", instance, port);
