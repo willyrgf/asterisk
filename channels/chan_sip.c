@@ -21229,9 +21229,21 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			/* Alcatel PBXs are known to send 183s with no SDP after sending
 			 * a 100 Trying response. We're just going to treat this sort of thing
 			 * the same as we would treat a 180 Ringing
+			 *
+ 			 * Lync sends 183 w sdp using PRACK the first time. AFter that, 183
+			 * without SDP. We need to keep the media stream open and not send
+			 * ringing in that case.
 			 */
-			if (!req->ignore && p->owner) {
-				ast_queue_control(p->owner, AST_CONTROL_RINGING);
+			struct ast_sockaddr remote_address = {{0,}};
+			/* If we have a remote IP for RTP, we already have a SDP and we 
+			   are fine. */
+			ast_rtp_instance_get_remote_address(p->rtp, &remote_address);
+			if (ast_sockaddr_isnull(&remote_address) || (!ast_strlen_zero(p->theirprovtag) && strcmp(p->theirtag, p->theirprovtag))) {
+				/* We got a 183 without SDP without having a previous SDP. Now, send ringing */
+				if (!req->ignore && p->owner) {
+
+					ast_queue_control(p->owner, AST_CONTROL_RINGING);
+				}
 			}
 		}
 		check_pendings(p);
