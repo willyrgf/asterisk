@@ -6864,7 +6864,7 @@ static int sip_write(struct ast_channel *ast, struct ast_frame *frame)
 
 	if (frame == &ast_null_frame || frame->frametype == AST_FRAME_NULL) {
 		/* We do not send null frames. Sorry */
-		return 1;
+		return 0;
 	}
 
 	switch (frame->frametype) {
