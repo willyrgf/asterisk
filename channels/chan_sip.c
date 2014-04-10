@@ -21224,7 +21224,7 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			}
 			ast_rtp_instance_activate(p->rtp);
 			/* If we've agreed on CN for this channel, try activating silence detection and suppression on it */
-			activate_silence_detection(p);
+			//activate_silence_detection(p);
 		} else {
 			/* Alcatel PBXs are known to send 183s with no SDP after sending
 			 * a 100 Trying response. We're just going to treat this sort of thing
