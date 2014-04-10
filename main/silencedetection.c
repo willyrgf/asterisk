@@ -102,13 +102,13 @@ static int silence_detection_callback(struct ast_audiohook *audiohook, struct as
 	struct silence_detection_info *sildet = NULL;
 
 	if (direction != AST_AUDIOHOOK_DIRECTION_WRITE) {
-		return 1;
+		return 0;
 	}
 
 	/* If the audiohook is stopping it means the channel is shutting down.... but we let the datastore destroy take care of it */
 	if (audiohook->status == AST_AUDIOHOOK_STATUS_DONE) {
 		ast_debug(7, "Audiohook giving up - STATUS_DONE \n");
-		return 1;
+		return 0;
 	}
 
 	ast_channel_lock(chan);
@@ -116,14 +116,14 @@ static int silence_detection_callback(struct ast_audiohook *audiohook, struct as
 	if (!(datastore = ast_channel_datastore_find(chan, &sildet_datastore, NULL))) {
 		ast_channel_unlock(chan);
 		ast_debug(2, "Can't find any datastore to use. Bad. \n");
-		return 1;
+		return 0;
 	}
 
 	sildet = datastore->data;
 	if (!sildet || !sildet->dsp) {
 		ast_channel_unlock(chan);
 		ast_debug(2, "Can't find any DSP to use. Bad. \n");
-		return 1;
+		return 0;
 	}
 
 	/* If this is audio then allow them to increase/decrease the gains */
@@ -175,7 +175,7 @@ static int silence_detection_callback(struct ast_audiohook *audiohook, struct as
 	}
 	ast_channel_unlock(chan);
 
-	return 1;
+	return 0;
 }
 
 /*! \brief Initialize mute hook on channel, but don't activate it
