@@ -17,6 +17,12 @@
  * at the top of the source tree.
  */
 
+/*! \todo
+ * - Get the Openssl version number from autoconfig
+ * 0x1000100fL and higher support TLS v 1.1
+ * 0x1000105fL and higher support TLS v 1.2
+ */
+
 /*!
  * \file
  * \brief Code to support TCP and TLS server/client
@@ -665,6 +671,16 @@ static int check_file_exists(char *filename)
 	return 1;
 }
 
+int ast_ssl_get_cipher(struct ast_tls_config *cfg, char *buf, size_t buflen)
+{
+	char *tls_info;
+	if (!SSL_get_current_cipher(cfg->ssl_ctx)) {
+		return 0; 	/* False */
+	}
+	tls_info = SSL_CIPHER_description(SSL_get_current_cipher(cfg->ssl), buf, buflen);
+	return 1;
+}
+
 int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_args *tls_desc, const char *varname, const char *value)
 {
 	if (!strcasecmp(varname, "tlsenable") || !strcasecmp(varname, "sslenable")) {
@@ -714,16 +730,32 @@ int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_
 	} else if (!strcasecmp(varname, "tlsclientmethod") || !strcasecmp(varname, "sslclientmethod")) {
 		if (!strcasecmp(value, "tlsv1")) {
 			ast_set_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV11_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV12_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
+		} else if (!strcasecmp(value, "tlsv11")) {
+			ast_set_flag(&tls_cfg->flags, AST_SSL_TLSV11_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
+		} else if (!strcasecmp(value, "tlsv12")) {
+			ast_set_flag(&tls_cfg->flags, AST_SSL_TLSV12_CLIENT);
+			ast_set_flag(&tls_cfg->flags, AST_SSL_TLSV11_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV12_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
 		} else if (!strcasecmp(value, "sslv3")) {
 			ast_set_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV11_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV12_CLIENT);
 		} else if (!strcasecmp(value, "sslv2")) {
 			ast_log(LOG_WARNING, "SSL v2 is considered insecure. Please upgrade to TLSv1\n");
 			ast_set_flag(&tls_cfg->flags, AST_SSL_SSLV2_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV1_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV11_CLIENT);
+			ast_clear_flag(&tls_cfg->flags, AST_SSL_TLSV12_CLIENT);
 			ast_clear_flag(&tls_cfg->flags, AST_SSL_SSLV3_CLIENT);
 		}
 	} else {
@@ -731,4 +763,10 @@ int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_
 	}
 
 	return 0;
+}
+
+
+char *tls_library_version( void )
+{
+	return OPENSSL_VERSION_TEXT;
 }

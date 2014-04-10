@@ -493,6 +493,11 @@ static char *handle_show_settings(struct ast_cli_entry *e, int cmd, struct ast_c
 	ast_cli(a->fd, "  Web Manager (AMI/HTTP):      %s\n", check_webmanager_enabled() ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Call data records:           %s\n", check_cdr_enabled() ? "Enabled" : "Disabled");
 	ast_cli(a->fd, "  Realtime Architecture (ARA): %s\n", ast_realtime_enabled() ? "Enabled" : "Disabled");
+#ifdef DO_SSL
+	ast_cli(a->fd, "  TLS support:                 %s\n", tls_library_version());
+#else
+	ast_cli(a->fd, "  TLS support:                 No\n");
+#endif
 
 	/*! \todo we could check musiconhold, voicemail, smdi, adsi, queues  */
 

@@ -58,6 +58,7 @@
 #ifdef DO_SSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
+#include <openssl/opensslv.h>
 #else
 /* declare dummy types so we can define a pointer to them */
 typedef struct {} SSL;
@@ -79,7 +80,11 @@ enum ast_ssl_flags {
 	/*! Use SSLv3 for outgoing client connections */
 	AST_SSL_SSLV3_CLIENT = (1 << 4),
 	/*! Use TLSv1 for outgoing client connections */
-	AST_SSL_TLSV1_CLIENT = (1 << 5)
+	AST_SSL_TLSV1_CLIENT = (1 << 5),
+	/*! Use TLSv1.1 for outgoing client connections */
+	AST_SSL_TLSV11_CLIENT = (1 << 6),
+	/*! Use TLSv1.2 for outgoing client connections */
+	AST_SSL_TLSV12_CLIENT = (1 << 7),
 };
 
 struct ast_tls_config {
@@ -216,9 +221,25 @@ int ast_ssl_setup(struct ast_tls_config *cfg);
 void ast_ssl_teardown(struct ast_tls_config *cfg);
 
 /*!
+ * \brief get current ciphers for a session
+ */
+int ast_ssl_get_session_cipher(ast_tcptls_session_instance, char *buf, size_t buflen);
+
+/*!
+ * \brief get current ciphers for a server socket
+ */
+int ast_ssl_get_server_cipher(ast_tcptls_session_instance, char *buf, size_t buflen);
+
+/*!
  * \brief Used to parse conf files containing tls/ssl options.
  */
 int ast_tls_read_conf(struct ast_tls_config *tls_cfg, struct ast_tcptls_session_args *tls_desc, const char *varname, const char *value);
+
+/*
+ * \brief Get the TLS/SSL library name and version
+ */
+char *tls_library_version( void );
+
 
 HOOK_T ast_tcptls_server_read(struct ast_tcptls_session_instance *ser, void *buf, size_t count);
 HOOK_T ast_tcptls_server_write(struct ast_tcptls_session_instance *ser, const void *buf, size_t count);
