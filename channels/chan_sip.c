@@ -18969,6 +18969,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
  	ast_cli(a->fd, "  Timer B:                %d\n", global_timer_b);
 	ast_cli(a->fd, "  No premature media:     %s\n", AST_CLI_YESNO(global_prematuremediafilter));
 	ast_cli(a->fd, "  Max forwards:           %d\n", sip_cfg.default_max_forwards);
+	ast_cli(a->fd, "  Force unreachable 5xx:  %d\n", AST_CLI_YESNO(sip_cfg.force_unreachable);
 
 	ast_cli(a->fd, "\nDefault Settings:\n");
 	ast_cli(a->fd, "-----------------\n");
@@ -21649,7 +21650,11 @@ static void handle_response_peerpoke(struct sip_pvt *p, int resp, struct sip_req
 	 * of the expressions.
 	 */
 	was_reachable = peer->lastms > 0 && peer->lastms <= peer->maxms;
-	is_reachable = pingtime <= peer->maxms;
+	if (sip_cfg.force_unreachable && resp >= 500 && resp < 600) {
+		is_reachable = FALSE;
+	} else {
+		is_reachable = pingtime <= peer->maxms;
+	}
 	statechanged = peer->lastms == 0 /* yes, unknown before */
 		|| was_reachable != is_reachable;
 
@@ -29034,6 +29039,7 @@ static int reload_config(enum channelreloadreason reason)
 	ast_copy_string(sip_cfg.default_context, DEFAULT_CONTEXT, sizeof(sip_cfg.default_context));
 	sip_cfg.default_subscribecontext[0] = '\0';
 	sip_cfg.default_max_forwards = DEFAULT_MAX_FORWARDS;
+	sip_cfg.force_unreachable = DEFAULT_FORCE_UNREACHABLE;
 	default_language[0] = '\0';
 	default_fromdomain[0] = '\0';
 	default_fromdomainport = 0;
@@ -29493,6 +29499,8 @@ static int reload_config(enum channelreloadreason reason)
 				default_maxcallbitrate = DEFAULT_MAX_CALL_BITRATE;
 		} else if (!strcasecmp(v->name, "matchexternaddrlocally") || !strcasecmp(v->name, "matchexterniplocally")) {
 			sip_cfg.matchexternaddrlocally = ast_true(v->value);
+		} else if (!strcasecmp(v->name, "forceunreachable") {
+			sip_cfg.force_unreachable = ast_true(v->value);
 		} else if (!strcasecmp(v->name, "session-timers")) {
 			int i = (int) str2stmode(v->value);
 			if (i < 0) {

@@ -58,6 +58,7 @@
 #define DEFAULT_MWI_EXPIRY           3600
 #define DEFAULT_REGISTRATION_TIMEOUT 20
 #define DEFAULT_MAX_FORWARDS         70
+#define DEFAULT_FORCE_UNREACHABLE	FALSE
 
 #define DEFAULT_AUTHLIMIT            100
 #define DEFAULT_AUTHTIMEOUT          30
@@ -716,6 +717,7 @@ struct sip_settings {
 	format_t capability;        /*!< Supported codecs */
 	int tcp_enabled;
 	int default_max_forwards;    /*!< Default max forwards (SIP Anti-loop) */
+	int force_unreachable;		/*!< Force unreachable on 5xx response to SIP OPTIONS message */
 };
 
 /*! \brief The SIP socket definition */
