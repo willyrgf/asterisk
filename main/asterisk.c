@@ -3895,6 +3895,8 @@ int main(int argc, char *argv[])
 	register_config_cli();
 	read_config_maps();
 
+	astobj2_init();
+
 	if (ast_opt_console) {
 		if (el_hist == NULL || el == NULL)
 			ast_el_initialize();
@@ -3969,8 +3971,6 @@ int main(int argc, char *argv[])
 	}
 
 	threadstorage_init();
-
-	astobj2_init();
 
 	ast_autoservice_init();
 
