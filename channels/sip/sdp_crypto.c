@@ -382,7 +382,7 @@ int sdp_crypto_offer(struct sdp_crypto *p)
 		ast_free(p->a_crypto);
 	}
 
-	if (ast_asprintf(&p->a_crypto, "a=crypto:%s %s inline:%s|2^31|1:1\r\n",
+	if (ast_asprintf(&p->a_crypto, "a=crypto:%s %s inline:%s|2^31\r\n",
 			 p->tag ? p->tag : "1", p->suite, p->local_key64) == -1) {
 			ast_log(LOG_ERROR, "Could not allocate memory for crypto line\n");
 		return -1;
