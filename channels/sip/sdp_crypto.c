@@ -295,9 +295,9 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 					mki = strsep(&info, "|");
 				}
 				/* At this point we do not support multiple keys, sorry */
-				if (mki != NULL && *mki != '1') {
+				//if (mki /!= NULL && *mki != '1') {
 				//If there's an MKI, give up.
-				//if (mki != NULL) {
+				if (mki != NULL) {
 					ast_log(LOG_ERROR, "Crypto mki handling not implemented. MKI = %s \n", mki);
 					continue;
 				}
