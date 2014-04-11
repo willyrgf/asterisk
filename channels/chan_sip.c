@@ -6832,8 +6832,7 @@ static int sip_answer(struct ast_channel *ast)
 
 		ast_setstate(ast, AST_STATE_UP);
 		ast_debug(1, "SIP answering channel: %s\n", ast->name);
-		/* Why are we changing source here? What's the reason? */
-		/*ast_rtp_instance_update_source(p->rtp); */
+		ast_rtp_instance_update_source(p->rtp); 
 		res = transmit_response_with_sdp(p, "200 OK", &p->initreq, XMIT_CRITICAL, oldsdp, TRUE);
 		ast_set_flag(&p->flags[1], SIP_PAGE2_DIALOG_ESTABLISHED);
 		start_rtcp_events(p, sched);
