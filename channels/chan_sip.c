@@ -7154,10 +7154,11 @@ static int sip_hangup(struct ast_channel *ast)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		ast_clear_flag(&p->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Really hang up next time */
 		if (p->owner) {
-			ast_channel_tech_pvt_set(p->owner, dialog_unref(ast_channel_tech_pvt(p->owner), "unref p->owner->tech_pvt"));
 			sip_pvt_lock(p);
+			oldowner = p->owner;
 			sip_set_owner(p, NULL); /* Owner will be gone after we return, so take it away */
 			sip_pvt_unlock(p);
+			ast_channel_tech_pvt_set(oldowner, dialog_unref(ast_channel_tech_pvt(oldowner), "unref oldowner->tech_pvt"));
 		}
 		ast_module_unref(ast_module_info->self);
 		return 0;
@@ -7193,7 +7194,7 @@ static int sip_hangup(struct ast_channel *ast)
 	disable_dsp_detect(p);
 
 	sip_set_owner(p, NULL);
-	ast_channel_tech_pvt_set(ast, dialog_unref(ast_channel_tech_pvt(ast), "unref ast->tech_pvt"));
+	ast_channel_tech_pvt_set(ast, NULL);
 
 	ast_module_unref(ast_module_info->self);
 	/* Do not destroy this pvt until we have timeout or
@@ -7247,40 +7248,29 @@ static int sip_hangup(struct ast_channel *ast)
 			}
 
 			if (!p->pendinginvite) {
-				RAII_VAR(struct ast_channel *, bridge, ast_channel_bridge_peer(oldowner), ast_channel_cleanup);
-				char quality_buf[AST_MAX_USER_FIELD], *quality;
-
-				/* We need to get the lock on bridge because ast_rtp_instance_set_stats_vars will attempt
-				 * to lock the bridge. This may get hairy...
-				 */
-				while (bridge && ast_channel_trylock(bridge)) {
-					sip_pvt_unlock(p);
-					do {
-						CHANNEL_DEADLOCK_AVOIDANCE(oldowner);
-					} while (sip_pvt_trylock(p));
-				}
-
-				if (p->rtp || p->vrtp || p->trtp) {
-					ast_channel_stage_snapshot(oldowner);
-				}
+				char *quality;
+				char quality_buf[AST_MAX_USER_FIELD];
 
 				if (p->rtp) {
-					ast_rtp_instance_set_stats_vars(oldowner, p->rtp);
-				}
+					struct ast_rtp_instance *p_rtp;
 
-				if (bridge) {
-					struct sip_pvt *q = ast_channel_tech_pvt(bridge);
-
-					if (IS_SIP_TECH(ast_channel_tech(bridge)) && q && q->rtp) {
-						ast_rtp_instance_set_stats_vars(bridge, q->rtp);
-					}
-					ast_channel_unlock(bridge);
+					p_rtp = p->rtp;
+					ao2_ref(p_rtp, +1);
+					ast_channel_unlock(oldowner);
+					sip_pvt_unlock(p);
+					ast_rtp_instance_set_stats_vars(oldowner, p_rtp);
+					ao2_ref(p_rtp, -1);
+					ast_channel_lock(oldowner);
+					sip_pvt_lock(p);
 				}
 
 				/*
 				 * The channel variables are set below just to get the AMI
 				 * VarSet event because the channel is being hungup.
 				 */
+				if (p->rtp || p->vrtp || p->trtp) {
+					ast_channel_stage_snapshot(oldowner);
+				}
 				if (p->rtp && (quality = ast_rtp_instance_get_quality(p->rtp, AST_RTP_INSTANCE_STAT_FIELD_QUALITY, quality_buf, sizeof(quality_buf)))) {
 					if (p->do_history) {
 						append_history(p, "RTCPaudio", "Quality:%s", quality);
@@ -7331,6 +7321,7 @@ static int sip_hangup(struct ast_channel *ast)
 		pvt_set_needdestroy(p, "hangup");
 	}
 	sip_pvt_unlock(p);
+	dialog_unref(p, "unref ast->tech_pvt");
 	return 0;
 }
 
@@ -26441,10 +26432,6 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		}
 	}
 
-	if ((p->rtp || p->vrtp || p->trtp) && p->owner) {
-		ast_channel_stage_snapshot(p->owner);
-	}
-
 	/* Get RTCP quality before end of call */
 	if (p->rtp) {
 		if (p->do_history) {
@@ -26465,9 +26452,13 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		if (p->owner) {
 			RAII_VAR(struct ast_channel *, owner_relock, NULL, ast_channel_cleanup);
 			RAII_VAR(struct ast_channel *, owner_ref, NULL, ast_channel_cleanup);
+			struct ast_rtp_instance *p_rtp;
 
 			/* Grab a reference to p->owner to prevent it from going away */
 			owner_ref = ast_channel_ref(p->owner);
+
+			p_rtp = p->rtp;
+			ao2_ref(p_rtp, +1);
 
 			/* Established locking order here is bridge, channel, pvt
 			 * and the bridge and channel will be locked during
@@ -26475,12 +26466,35 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 			ast_channel_unlock(owner_ref);
 			sip_pvt_unlock(p);
 
-			ast_rtp_instance_set_stats_vars(owner_ref, p->rtp);
-			if (peer_channel && IS_SIP_TECH(ast_channel_tech(peer_channel))) {
-				struct sip_pvt *q = ast_channel_tech_pvt(peer_channel);
-				if (q && q->rtp) {
-					ast_rtp_instance_set_stats_vars(peer_channel, q->rtp);
+			ast_rtp_instance_set_stats_vars(owner_ref, p_rtp);
+			ao2_ref(p_rtp, -1);
+
+			if (peer_channel) {
+				ast_channel_lock(peer_channel);
+				if (IS_SIP_TECH(ast_channel_tech(peer_channel))) {
+					struct sip_pvt *peer_pvt;
+
+					peer_pvt = ast_channel_tech_pvt(peer_channel);
+					if (peer_pvt) {
+						ao2_ref(peer_pvt, +1);
+						sip_pvt_lock(peer_pvt);
+						if (peer_pvt->rtp) {
+							struct ast_rtp_instance *peer_rtp;
+
+							peer_rtp = peer_pvt->rtp;
+							ao2_ref(peer_rtp, +1);
+							ast_channel_unlock(peer_channel);
+							sip_pvt_unlock(peer_pvt);
+							ast_rtp_instance_set_stats_vars(peer_channel, peer_rtp);
+							ao2_ref(peer_rtp, -1);
+							ast_channel_lock(peer_channel);
+							sip_pvt_lock(peer_pvt);
+						}
+						sip_pvt_unlock(peer_pvt);
+						ao2_ref(peer_pvt, -1);
+					}
 				}
+				ast_channel_unlock(peer_channel);
 			}
 
 			owner_relock = sip_pvt_lock_full(p);
@@ -26507,10 +26521,6 @@ static int handle_request_bye(struct sip_pvt *p, struct sip_request *req)
 		if (p->owner) {
 			pbx_builtin_setvar_helper(p->owner, "RTPTEXTQOS", quality);
 		}
-	}
-
-	if ((p->rtp || p->vrtp || p->trtp) && p->owner) {
-		ast_channel_stage_snapshot_done(p->owner);
 	}
 
 	stop_media_flows(p); /* Immediately stop RTP, VRTP and UDPTL as applicable */
@@ -28259,12 +28269,12 @@ static int handle_request_do(struct sip_request *req, struct ast_sockaddr *addr)
 		ast_channel_unref(owner_chan_ref);
 	}
 	sip_pvt_unlock(p);
-	ao2_t_ref(p, -1, "throw away dialog ptr from find_call at end of routine"); /* p is gone after the return */
 	ast_mutex_unlock(&netlock);
 
 	if (p->logger_callid) {
 		ast_callid_threadassoc_remove();
 	}
+	ao2_t_ref(p, -1, "throw away dialog ptr from find_call at end of routine"); /* p is gone after the return */
 
 	return 1;
 }
