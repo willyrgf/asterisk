@@ -7075,10 +7075,11 @@ static int sip_hangup(struct ast_channel *ast)
 		sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
 		ast_clear_flag(&p->flags[0], SIP_DEFER_BYE_ON_TRANSFER);	/* Really hang up next time */
 		if (p->owner) {
-			ast_channel_tech_pvt_set(p->owner, dialog_unref(ast_channel_tech_pvt(p->owner), "unref p->owner->tech_pvt"));
 			sip_pvt_lock(p);
+			oldowner = p->owner;
 			p->owner = NULL;  /* Owner will be gone after we return, so take it away */
 			sip_pvt_unlock(p);
+			ast_channel_tech_pvt_set(oldowner, dialog_unref(ast_channel_tech_pvt(oldowner), "unref oldowner->tech_pvt"));
 		}
 		ast_module_unref(ast_module_info->self);
 		return 0;
@@ -7114,7 +7115,7 @@ static int sip_hangup(struct ast_channel *ast)
 	disable_dsp_detect(p);
 
 	p->owner = NULL;
-	ast_channel_tech_pvt_set(ast, dialog_unref(ast_channel_tech_pvt(ast), "unref ast->tech_pvt"));
+	ast_channel_tech_pvt_set(ast, NULL);
 
 	ast_module_unref(ast_module_info->self);
 	/* Do not destroy this pvt until we have timeout or
@@ -7246,6 +7247,7 @@ static int sip_hangup(struct ast_channel *ast)
 		pvt_set_needdestroy(p, "hangup");
 	}
 	sip_pvt_unlock(p);
+	dialog_unref(p, "unref ast->tech_pvt");
 	return 0;
 }
 
@@ -12561,6 +12563,7 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 	const char *privacy = NULL;
 	const char *screen = NULL;
 	struct ast_party_id connected_id;
+	const char *anonymous_string = "\"Anonymous\" <sip:anonymous@anonymous.invalid>";
 
 	if (!ast_test_flag(&p->flags[0], SIP_SENDRPID)) {
 		return 0;
@@ -12585,11 +12588,12 @@ static int add_rpid(struct sip_request *req, struct sip_pvt *p)
 	lid_num = ast_uri_encode(lid_num, tmp2, sizeof(tmp2), ast_uri_sip_user);
 
 	if (ast_test_flag(&p->flags[0], SIP_SENDRPID_PAI)) {
-		ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>", lid_name, lid_num, fromdomain);
-		add_header(req, "P-Asserted-Identity", ast_str_buffer(tmp));
 		if ((lid_pres & AST_PRES_RESTRICTION) != AST_PRES_ALLOWED) {
-			add_header(req, "Privacy", "id");
+			ast_str_set(&tmp, -1, "%s", anonymous_string);
+		} else {
+			ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>", lid_name, lid_num, fromdomain);
 		}
+		add_header(req, "P-Asserted-Identity", ast_str_buffer(tmp));
 	} else {
 		ast_str_set(&tmp, -1, "\"%s\" <sip:%s@%s>;party=%s", lid_name, lid_num, fromdomain, p->outgoing_call ? "calling" : "called");
 
@@ -28848,12 +28852,12 @@ static int handle_request_do(struct sip_request *req, struct ast_sockaddr *addr)
 		ast_channel_unref(owner_chan_ref);
 	}
 	sip_pvt_unlock(p);
-	ao2_t_ref(p, -1, "throw away dialog ptr from find_call at end of routine"); /* p is gone after the return */
 	ast_mutex_unlock(&netlock);
 
 	if (p->logger_callid) {
 		ast_callid_threadassoc_remove();
 	}
+	ao2_t_ref(p, -1, "throw away dialog ptr from find_call at end of routine"); /* p is gone after the return */
 
 	return 1;
 }
