@@ -236,7 +236,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			<parameter name="Conference" required="true" />
-			<parameter name="Channel" required="true" />
+			<parameter name="Channel" required="true" >
+				<para>If this parameter is not a complete channel name, the first channel with this prefix will be used.</para>
+				<para>If this parameter is "all", all channels will be kicked from the conference.</para>
+			</parameter>
 		</syntax>
 		<description>
 		</description>
@@ -2245,6 +2248,11 @@ static char *complete_confbridge_participant(const char *conference_name, const 
 		return NULL;
 	}
 
+	if (!state) {
+		return ast_strdup("all");
+	}
+	state--;
+
 	{
 		SCOPED_AO2LOCK(bridge_lock, conference);
 		AST_LIST_TRAVERSE(&conference->active_list, user, list) {
@@ -2273,7 +2281,7 @@ static char *handle_cli_confbridge_kick(struct ast_cli_entry *e, int cmd, struct
 		e->command = "confbridge kick";
 		e->usage =
 			"Usage: confbridge kick <conference> <channel>\n"
-			"       Kicks a channel out of the conference bridge.\n";
+			"       Kicks a channel out of the conference bridge (all to kick everyone).\n";
 		return NULL;
 	case CLI_GENERATE:
 		if (a->pos == 2) {
@@ -2945,7 +2953,7 @@ static int action_confbridgekick(struct mansession *s, const struct message *m)
 	ao2_ref(conference, -1);
 
 	if (found) {
-		astman_send_ack(s, m, "User kicked");
+		astman_send_ack(s, m, !strcmp("all", channel) ? "All participants kicked" : "User kicked");
 	} else {
 		astman_send_error(s, m, "No Channel by that name found in Conference.");
 	}
