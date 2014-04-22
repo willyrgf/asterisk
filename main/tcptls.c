@@ -91,7 +91,12 @@ static int ssl_close(void *cookie)
 		 * way resources can be saved, as the process can already terminate or serve another connection).
 		 */
 		if ((ret = SSL_shutdown(cookie)) < 0) {
-			ast_log(LOG_ERROR, "SSL_shutdown() failed: %d\n", SSL_get_error(cookie, ret));
+			int error = SSL_get_error(cookie, ret);
+				ast_log(LOG_ERROR, "SSL_shutdown() failed: I/O Error\n");
+			if (error == SSL_ERROR_SYSCALL) {
+			} else {
+				ast_log(LOG_ERROR, "SSL_shutdown() failed: %d\n", error);
+			}
 		}
 
 		if (!((SSL*)cookie)->server) {
