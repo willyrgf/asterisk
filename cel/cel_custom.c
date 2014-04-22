@@ -64,7 +64,7 @@ struct cel_config {
 	AST_RWLIST_ENTRY(cel_config) list;
 };
 
-static struct ast_event_sub *event_sub = NULL;
+#define CUSTOM_BACKEND_NAME "CEL Custom CSV Logging"
 
 static AST_RWLIST_HEAD_STATIC(sinks, cel_config);
 
@@ -82,6 +82,7 @@ static int load_config(void)
 	struct ast_config *cfg;
 	struct ast_variable *var;
 	struct ast_flags config_flags = { 0 };
+	int mappings = 0;
 	int res = 0;
 
 	cfg = ast_config_load(CONFIG, config_flags);
@@ -90,7 +91,10 @@ static int load_config(void)
 		return -1;
 	}
 
-	var = ast_variable_browse(cfg, "mappings");
+	if (!(var = ast_variable_browse(cfg, "mappings"))) {
+		ast_log(LOG_NOTICE, "No mappings found in " CONFIG ". Not logging CEL to custom CSVs.\n");
+	}
+
 	while (var) {
 		if (!ast_strlen_zero(var->name) && !ast_strlen_zero(var->value)) {
 			struct cel_config *sink = ast_calloc_with_stringfields(1, struct cel_config, 1024);
@@ -105,6 +109,8 @@ static int load_config(void)
 			ast_string_field_build(sink, filename, "%s/%s/%s", ast_config_AST_LOG_DIR, name, var->name);
 			ast_mutex_init(&sink->lock);
 
+			ast_verb(3, "Added CEL CSV mapping for '%s'.\n", sink->filename);
+			mappings += 1;
 			AST_RWLIST_INSERT_TAIL(&sinks, sink, list);
 		} else {
 			ast_log(LOG_NOTICE, "Mapping must have both a filename and a format at line %d\n", var->lineno);
@@ -113,10 +119,12 @@ static int load_config(void)
 	}
 	ast_config_destroy(cfg);
 
+	ast_verb(1, "Added CEL CSV mapping for %d files.\n", mappings);
+
 	return res;
 }
 
-static void custom_log(const struct ast_event *event, void *userdata)
+static void custom_log(struct ast_event *event)
 {
 	struct ast_channel *dummy;
 	struct ast_str *str;
@@ -167,19 +175,15 @@ static void custom_log(const struct ast_event *event, void *userdata)
 
 static int unload_module(void)
 {
-	if (event_sub) {
-		event_sub = ast_event_unsubscribe(event_sub);
-	}
 
 	if (AST_RWLIST_WRLOCK(&sinks)) {
-		event_sub = ast_event_subscribe(AST_EVENT_CEL, custom_log, "CEL Custom CSV Logging",
-			NULL, AST_EVENT_IE_END);
 		ast_log(LOG_ERROR, "Unable to lock sink list.  Unload failed.\n");
 		return -1;
 	}
 
 	free_config();
 	AST_RWLIST_UNLOCK(&sinks);
+	ast_cel_backend_unregister(CUSTOM_BACKEND_NAME);
 	return 0;
 }
 
@@ -193,8 +197,9 @@ static enum ast_module_load_result load_module(void)
 	load_config();
 	AST_RWLIST_UNLOCK(&sinks);
 
-	event_sub = ast_event_subscribe(AST_EVENT_CEL, custom_log, "CEL Custom CSV Logging",
-		NULL, AST_EVENT_IE_END);
+	if (ast_cel_backend_register(CUSTOM_BACKEND_NAME, custom_log)) {
+		return AST_MODULE_LOAD_FAILURE;
+	}
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

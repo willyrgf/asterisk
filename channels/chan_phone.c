@@ -159,7 +159,7 @@ static struct phone_pvt {
 static char cid_num[AST_MAX_EXTENSION];
 static char cid_name[AST_MAX_EXTENSION];
 
-static struct ast_channel *phone_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
+static struct ast_channel *phone_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause);
 static int phone_digit_begin(struct ast_channel *ast, char digit);
 static int phone_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
 static int phone_call(struct ast_channel *ast, const char *dest, int timeout);
@@ -855,13 +855,14 @@ static int phone_write(struct ast_channel *ast, struct ast_frame *frame)
 	return 0;
 }
 
-static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *cntx, const char *linkedid)
+static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *cntx, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *tmp;
 	struct phone_codec_data queried_codec;
 	struct ast_format tmpfmt;
-	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, "", i->ext, i->context, linkedid, 0, "Phone/%s", i->dev + 5);
+	tmp = ast_channel_alloc(1, state, i->cid_num, i->cid_name, "", i->ext, i->context, assignedids, requestor, 0, "Phone/%s", i->dev + 5);
 	if (tmp) {
+		ast_channel_lock(tmp);
 		ast_channel_tech_set(tmp, cur_tech);
 		ast_channel_set_fd(tmp, 0, i->fd);
 		/* XXX Switching formats silently causes kernel panics XXX */
@@ -901,6 +902,7 @@ static struct ast_channel *phone_new(struct phone_pvt *i, int state, char *cntx,
 
 		i->owner = tmp;
 		ast_module_ref(ast_module_info->self);
+		ast_channel_unlock(tmp);
 		if (state != AST_STATE_DOWN) {
 			if (state == AST_STATE_RING) {
 				ioctl(ast_channel_fd(tmp, 0), PHONE_RINGBACK);
@@ -952,14 +954,14 @@ static void phone_check_exception(struct phone_pvt *i)
 			     !phonee.bits.dtmf_ready) &&
 			    ast_exists_extension(NULL, i->context, i->ext, 1, i->cid_num)) {
 				/* It's a valid extension in its context, get moving! */
-				phone_new(i, AST_STATE_RING, i->context, NULL);
+				phone_new(i, AST_STATE_RING, i->context, NULL, NULL);
 				/* No need to restart monitor, we are the monitor */
 			} else if (!ast_canmatch_extension(NULL, i->context, i->ext, 1, i->cid_num)) {
 				/* There is nothing in the specified extension that can match anymore.
 				   Try the default */
 				if (ast_exists_extension(NULL, "default", i->ext, 1, i->cid_num)) {
 					/* Check the default, too... */
-					phone_new(i, AST_STATE_RING, "default", NULL);
+					phone_new(i, AST_STATE_RING, "default", NULL, NULL);
 					/* XXX This should probably be justified better XXX */
 				}  else if (!ast_canmatch_extension(NULL, "default", i->ext, 1, i->cid_num)) {
 					/* It's not a valid extension, give a busy signal */
@@ -977,7 +979,7 @@ static void phone_check_exception(struct phone_pvt *i)
 		offhook = ioctl(i->fd, PHONE_HOOKSTATE);
 		if (offhook) {
 			if (i->mode == MODE_IMMEDIATE) {
-				phone_new(i, AST_STATE_RING, i->context, NULL);
+				phone_new(i, AST_STATE_RING, i->context, NULL, NULL);
 			} else if (i->mode == MODE_DIALTONE) {
 				ast_module_ref(ast_module_info->self);
 				/* Reset the extension */
@@ -1013,7 +1015,7 @@ static void phone_check_exception(struct phone_pvt *i)
 	}
 	if (phonee.bits.pstn_ring) {
 		ast_verbose("Unit is ringing\n");
-		phone_new(i, AST_STATE_RING, i->context, NULL);
+		phone_new(i, AST_STATE_RING, i->context, NULL, NULL);
 	}
 	if (phonee.bits.caller_id)
 		ast_verbose("We have caller ID\n");
@@ -1241,7 +1243,7 @@ static struct phone_pvt *mkif(const char *iface, int mode, int txgain, int rxgai
 	return tmp;
 }
 
-static struct ast_channel *phone_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *phone_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct phone_pvt *p;
 	struct ast_channel *tmp = NULL;
@@ -1259,7 +1261,7 @@ static struct ast_channel *phone_request(const char *type, struct ast_format_cap
     		if (strncmp(name, p->dev + 5, length) == 0 &&
     		    !isalnum(name[length])) {
     		    if (!p->owner) {
-                     tmp = phone_new(p, AST_STATE_DOWN, p->context, requestor ? ast_channel_linkedid(requestor) : NULL);
+                     tmp = phone_new(p, AST_STATE_DOWN, p->context, assignedids, requestor);
                      break;
                 } else
                      *cause = AST_CAUSE_BUSY;
@@ -1376,7 +1378,7 @@ static int load_module(void)
 	struct ast_flags config_flags = { 0 };
 	struct ast_format tmpfmt;
 
-	if (!(phone_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(phone_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(phone_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_G723_1, 0));
@@ -1384,11 +1386,11 @@ static int load_module(void)
 	ast_format_cap_add(phone_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_ULAW, 0));
 	ast_format_cap_add(phone_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_G729A, 0));
 
-	if (!(prefcap = ast_format_cap_alloc())) {
+	if (!(prefcap = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_copy(prefcap, phone_tech.capabilities);
-	if (!(phone_tech_fxs.capabilities = ast_format_cap_alloc())) {
+	if (!(phone_tech_fxs.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 

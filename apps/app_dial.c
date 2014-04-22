@@ -55,20 +55,19 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #include "asterisk/causes.h"
 #include "asterisk/rtp_engine.h"
-#include "asterisk/cdr.h"
 #include "asterisk/manager.h"
 #include "asterisk/privacy.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/global_datastores.h"
 #include "asterisk/dsp.h"
-#include "asterisk/cel.h"
 #include "asterisk/aoc.h"
 #include "asterisk/ccss.h"
 #include "asterisk/indications.h"
 #include "asterisk/framehook.h"
 #include "asterisk/dial.h"
 #include "asterisk/stasis_channels.h"
-#include "asterisk/bridging.h"
+#include "asterisk/bridge_after.h"
+#include "asterisk/features_config.h"
 
 /*** DOCUMENTATION
 	<application name="Dial" language="en_US">
@@ -202,7 +201,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<argument name="exten" required="false" />
 					<argument name="priority" required="true" />
 					<para>If the call is answered, transfer the calling party to
-					the specified <replaceable>priority</replaceable> and the called party to the specified 
+					the specified <replaceable>priority</replaceable> and the called party to the specified
 					<replaceable>priority</replaceable> plus one.</para>
 					<note>
 						<para>You cannot use any additional action post answer options in conjunction with this option.</para>
@@ -291,7 +290,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<argument name="arg" multiple="true">
 						<para>Macro arguments</para>
 					</argument>
-					<para>Execute the specified <replaceable>macro</replaceable> for the <emphasis>called</emphasis> channel 
+					<para>Execute the specified <replaceable>macro</replaceable> for the <emphasis>called</emphasis> channel
 					before connecting to the calling channel. Arguments can be specified to the Macro
 					using <literal>^</literal> as a delimiter. The macro can set the variable
 					<variable>MACRO_RESULT</variable> to specify the following actions after the macro is
@@ -333,7 +332,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>With <replaceable>delete</replaceable> set to <literal>1</literal>, the introduction will
 						always be deleted.</para>
 					</argument>
-					<para>This option is a modifier for the call screening/privacy mode. (See the 
+					<para>This option is a modifier for the call screening/privacy mode. (See the
 					<literal>p</literal> and <literal>P</literal> options.) It specifies
 					that no introductions are to be saved in the <directory>priv-callerintros</directory>
 					directory.</para>
@@ -354,7 +353,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<argument name="mode">
 						<para>With <replaceable>mode</replaceable> either not specified or set to <literal>1</literal>,
 						the originator hanging up will cause the phone to ring back immediately.</para>
-						<para>With <replaceable>mode</replaceable> set to <literal>2</literal>, when the operator 
+						<para>With <replaceable>mode</replaceable> set to <literal>2</literal>, when the operator
 						flashes the trunk, it will ring their phone back.</para>
 					</argument>
 					<para>Enables <emphasis>operator services</emphasis> mode.  This option only
@@ -378,9 +377,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<para>Default: Indicate ringing to the calling party, even if the called party isn't actually ringing. Pass no audio to the calling
 					party until the called channel has answered.</para>
 					<argument name="tone" required="false">
-						<para>Indicate progress to calling party. Send audio 'tone' from indications.conf</para>
+						<para>Indicate progress to calling party. Send audio 'tone' from the indications.conf tonezone currently in use.</para>
 					</argument>
 				</option>
+                                <option name="R">
+                                        <para>Default: Indicate ringing to the calling party, even if the called party isn't actually ringing. 
+					Allow interruption of the ringback if early media is received on the channel.</para>
+                                </option>
 				<option name="S">
 					<argument name="x" required="true" />
 					<para>Hang up the call <replaceable>x</replaceable> seconds <emphasis>after</emphasis> the called party has
@@ -612,6 +615,7 @@ enum {
 #define OPT_CALLER_ANSWER    (1LLU << 40)
 #define OPT_PREDIAL_CALLEE   (1LLU << 41)
 #define OPT_PREDIAL_CALLER   (1LLU << 42)
+#define OPT_RING_WITH_EARLY_MEDIA (1LLU << 43)
 
 enum {
 	OPT_ARG_ANNOUNCE = 0,
@@ -634,7 +638,7 @@ enum {
 	OPT_ARG_PREDIAL_CALLEE,
 	OPT_ARG_PREDIAL_CALLER,
 	/* note: this entry _MUST_ be the last one in the enum */
-	OPT_ARG_ARRAY_SIZE,
+	OPT_ARG_ARRAY_SIZE
 };
 
 AST_APP_OPTIONS(dial_exec_options, BEGIN_OPTIONS
@@ -667,6 +671,7 @@ AST_APP_OPTIONS(dial_exec_options, BEGIN_OPTIONS
 	AST_APP_OPTION('p', OPT_SCREENING),
 	AST_APP_OPTION_ARG('P', OPT_PRIVACY, OPT_ARG_PRIVACY),
 	AST_APP_OPTION_ARG('r', OPT_RINGBACK, OPT_ARG_RINGBACK),
+	AST_APP_OPTION('R', OPT_RING_WITH_EARLY_MEDIA),
 	AST_APP_OPTION_ARG('S', OPT_DURATION_STOP, OPT_ARG_DURATION_STOP),
 	AST_APP_OPTION_ARG('s', OPT_FORCE_CID_TAG, OPT_ARG_FORCE_CID_TAG),
 	AST_APP_OPTION('t', OPT_CALLEE_TRANSFER),
@@ -752,36 +757,20 @@ struct cause_args {
 
 static void handle_cause(int cause, struct cause_args *num)
 {
-	struct ast_cdr *cdr = ast_channel_cdr(num->chan);
-
 	switch(cause) {
 	case AST_CAUSE_BUSY:
-		if (cdr)
-			ast_cdr_busy(cdr);
 		num->busy++;
 		break;
-
 	case AST_CAUSE_CONGESTION:
-		if (cdr)
-			ast_cdr_failed(cdr);
 		num->congestion++;
 		break;
-
 	case AST_CAUSE_NO_ROUTE_DESTINATION:
 	case AST_CAUSE_UNREGISTERED:
-		if (cdr)
-			ast_cdr_failed(cdr);
 		num->nochan++;
 		break;
-
 	case AST_CAUSE_NO_ANSWER:
-		if (cdr) {
-			ast_cdr_noanswer(cdr);
-		}
-		break;
 	case AST_CAUSE_NORMAL_CLEARING:
 		break;
-
 	default:
 		num->nochan++;
 		break;
@@ -875,8 +864,6 @@ static void do_forward(struct chanlist *o, struct cause_args *num,
 		ast_clear_flag64(o, OPT_IGNORE_CONNECTEDLINE);
 	}
 
-	ast_cel_report_event(in, AST_CEL_FORWARD, NULL, ast_channel_call_forward(c), NULL);
-
 	/* Before processing channel, go ahead and check for forwarding */
 	ast_verb(3, "Now forwarding %s to '%s/%s' (thanks to %s)\n", ast_channel_name(in), tech, stuff, ast_channel_name(c));
 	/* If we have been told to ignore forwards, just set this channel to null and continue processing extensions normally */
@@ -886,10 +873,10 @@ static void do_forward(struct chanlist *o, struct cause_args *num,
 		cause = AST_CAUSE_BUSY;
 	} else {
 		/* Setup parameters */
-		c = o->chan = ast_request(tech, ast_channel_nativeformats(in), in, stuff, &cause);
+		c = o->chan = ast_request(tech, ast_channel_nativeformats(in), NULL, in, stuff, &cause);
 		if (c) {
 			if (single && !caller_entertained) {
-				ast_channel_make_compatible(o->chan, in);
+				ast_channel_make_compatible(in, o->chan);
 			}
 			ast_channel_lock_both(in, o->chan);
 			ast_channel_inherit_variables(in, o->chan);
@@ -973,7 +960,7 @@ static void do_forward(struct chanlist *o, struct cause_args *num,
 
 		ast_channel_appl_set(c, "AppDial");
 		ast_channel_data_set(c, "(Outgoing Line)");
-		ast_publish_channel_state(c);
+		ast_channel_publish_snapshot(c);
 
 		ast_channel_unlock(in);
 		if (single && !ast_test_flag64(o, OPT_IGNORE_CONNECTEDLINE)) {
@@ -1014,15 +1001,9 @@ static void do_forward(struct chanlist *o, struct cause_args *num,
 			c = o->chan = NULL;
 			num->nochan++;
 		} else {
-			ast_channel_lock_both(c, in);
 			ast_channel_publish_dial(in, c, stuff, NULL);
-			ast_channel_unlock(in);
-			ast_channel_unlock(c);
-
-			ast_channel_lock_both(original, in);
-			ast_channel_publish_dial(in, original, NULL, "CANCEL");
-			ast_channel_unlock(in);
-			ast_channel_unlock(original);
+			ast_channel_publish_dial_forward(in, original, c, NULL, "CANCEL",
+				ast_channel_call_forward(original));
 
 			/* Hangup the original channel now, in case we needed it */
 			ast_hangup(original);
@@ -1074,7 +1055,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 	int caller_entertained = outgoing
 		&& ast_test_flag64(outgoing, OPT_MUSICBACK | OPT_RINGBACK);
 	struct ast_party_connected_line connected_caller;
-	struct ast_str *featurecode = ast_str_alloca(FEATURE_MAX_LEN + 1);
+	struct ast_str *featurecode = ast_str_alloca(AST_FEATURE_MAX_LEN + 1);
 	int cc_recall_core_id;
 	int is_cc_recall;
 	int cc_frame_received = 0;
@@ -1088,14 +1069,13 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 			ast_deactivate_generator(in);
 			/* If we are calling a single channel, and not providing ringback or music, */
 			/* then, make them compatible for in-band tone purpose */
-			if (ast_channel_make_compatible(outgoing->chan, in) < 0) {
-				/* If these channels can not be made compatible, 
+			if (ast_channel_make_compatible(in, outgoing->chan) < 0) {
+				/* If these channels can not be made compatible,
 				 * there is no point in continuing.  The bridge
 				 * will just fail if it gets that far.
 				 */
 				*to = -1;
 				strcpy(pa->status, "CONGESTION");
-				ast_cdr_failed(ast_channel_cdr(in));
 				ast_channel_publish_dial(in, outgoing->chan, NULL, pa->status);
 				return NULL;
 			}
@@ -1298,12 +1278,11 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 							}
 						}
 						peer = c;
-						ast_channel_publish_dial(in, peer, NULL, "ANSWER");
+						/* Inform everyone else that they've been canceled.
+						 * The dial end event for the peer will be sent out after
+						 * other Dial options have been handled.
+						 */
 						publish_dial_end_event(in, out_chans, peer, "CANCEL");
-						if (ast_channel_cdr(peer)) {
-							ast_channel_cdr(peer)->answer = ast_tvnow();
-							ast_channel_cdr(peer)->disposition = AST_CDR_ANSWERED;
-						}
 						ast_copy_flags64(peerflags, o,
 							OPT_CALLEE_TRANSFER | OPT_CALLER_TRANSFER |
 							OPT_CALLEE_HANGUP | OPT_CALLER_HANGUP |
@@ -1325,7 +1304,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				case AST_CONTROL_BUSY:
 					ast_verb(3, "%s is busy\n", ast_channel_name(c));
 					ast_channel_hangupcause_set(in, ast_channel_hangupcause(c));
-					ast_channel_publish_dial(in, c, NULL, ast_hangup_cause_to_dial_status(ast_channel_hangupcause(c)));
+					ast_channel_publish_dial(in, c, NULL, "BUSY");
 					ast_hangup(c);
 					c = o->chan = NULL;
 					ast_clear_flag64(o, DIAL_STILLGOING);
@@ -1334,7 +1313,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				case AST_CONTROL_CONGESTION:
 					ast_verb(3, "%s is circuit-busy\n", ast_channel_name(c));
 					ast_channel_hangupcause_set(in, ast_channel_hangupcause(c));
-					ast_channel_publish_dial(in, c, NULL, ast_hangup_cause_to_dial_status(ast_channel_hangupcause(c)));
+					ast_channel_publish_dial(in, c, NULL, "CONGESTION");
 					ast_hangup(c);
 					c = o->chan = NULL;
 					ast_clear_flag64(o, DIAL_STILLGOING);
@@ -1541,7 +1520,6 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				/* Got hung up */
 				*to = -1;
 				strcpy(pa->status, "CANCEL");
-				ast_cdr_noanswer(ast_channel_cdr(in));
 				publish_dial_end_event(in, out_chans, NULL, pa->status);
 				if (f) {
 					if (f->data.uint32) {
@@ -1564,7 +1542,6 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					if (onedigit_goto(in, context, (char) f->subclass.integer, 1)) {
 						ast_verb(3, "User hit %c to disconnect call.\n", f->subclass.integer);
 						*to = 0;
-						ast_cdr_noanswer(ast_channel_cdr(in));
 						*result = f->subclass.integer;
 						strcpy(pa->status, "CANCEL");
 						publish_dial_end_event(in, out_chans, NULL, pa->status);
@@ -1583,7 +1560,6 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 					ast_verb(3, "User requested call disconnect.\n");
 					*to = 0;
 					strcpy(pa->status, "CANCEL");
-					ast_cdr_noanswer(ast_channel_cdr(in));
 					publish_dial_end_event(in, out_chans, NULL, pa->status);
 					ast_frfree(f);
 					if (is_cc_recall) {
@@ -1678,12 +1654,9 @@ skip_frame:;
 		}
 	}
 
-	if (!*to) {
+	if (!*to || ast_check_hangup(in)) {
 		ast_verb(3, "Nobody picked up in %d ms\n", orig);
 		publish_dial_end_event(in, out_chans, NULL, "NOANSWER");
-	}
-	if (!*to || ast_check_hangup(in)) {
-		ast_cdr_noanswer(ast_channel_cdr(in));
 	}
 
 #ifdef HAVE_EPOLL
@@ -1701,22 +1674,31 @@ skip_frame:;
 
 static int detect_disconnect(struct ast_channel *chan, char code, struct ast_str **featurecode)
 {
-	struct ast_flags features = { AST_FEATURE_DISCONNECT }; /* only concerned with disconnect feature */
-	struct ast_call_feature feature = { 0, };
+	char disconnect_code[AST_FEATURE_MAX_LEN];
 	int res;
 
 	ast_str_append(featurecode, 1, "%c", code);
 
-	res = ast_feature_detect(chan, &features, ast_str_buffer(*featurecode), &feature);
-
-	if (res != AST_FEATURE_RETURN_STOREDIGITS) {
+	res = ast_get_builtin_feature(chan, "disconnect", disconnect_code, sizeof(disconnect_code));
+	if (res) {
 		ast_str_reset(*featurecode);
-	}
-	if (feature.feature_mask & AST_FEATURE_DISCONNECT) {
-		return 1;
+		return 0;
 	}
 
-	return 0;
+	if (strlen(disconnect_code) > ast_str_strlen(*featurecode)) {
+		/* Could be a partial match, anyway */
+		if (strncmp(disconnect_code, ast_str_buffer(*featurecode), ast_str_strlen(*featurecode))) {
+			ast_str_reset(*featurecode);
+		}
+		return 0;
+	}
+
+	if (strcmp(disconnect_code, ast_str_buffer(*featurecode))) {
+		ast_str_reset(*featurecode);
+		return 0;
+	}
+
+	return 1;
 }
 
 /* returns true if there is a valid privacy reply */
@@ -1752,7 +1734,7 @@ static int do_privacy(struct ast_channel *chan, struct ast_channel *peer,
 		ast_channel_musicclass_set(chan, opt_args[OPT_ARG_MUSICBACK]);
 		ast_moh_start(chan, opt_args[OPT_ARG_MUSICBACK], NULL);
 		ast_channel_musicclass_set(chan, original_moh);
-	} else if (ast_test_flag64(opts, OPT_RINGBACK)) {
+	} else if (ast_test_flag64(opts, OPT_RINGBACK) || ast_test_flag64(opts, OPT_RING_WITH_EARLY_MEDIA)) {
 		ast_indicate(chan, AST_CONTROL_RINGING);
 		pa->sentringing++;
 	}
@@ -1785,7 +1767,7 @@ static int do_privacy(struct ast_channel *chan, struct ast_channel *peer,
 
 		/*! \page DialPrivacy Dial Privacy scripts
 		 * \par priv-callee-options script:
-		 * \li Dial 1 if you wish this caller to reach you directly in the future, 
+		 * \li Dial 1 if you wish this caller to reach you directly in the future,
 		 * 	and immediately connect to their incoming call.
 		 * \li Dial 2 if you wish to send this caller to voicemail now and forevermore.
 		 * \li Dial 3 to send this caller to the torture menus, now and forevermore.
@@ -1807,7 +1789,7 @@ static int do_privacy(struct ast_channel *chan, struct ast_channel *peer,
 
 	if (ast_test_flag64(opts, OPT_MUSICBACK)) {
 		ast_moh_stop(chan);
-	} else if (ast_test_flag64(opts, OPT_RINGBACK)) {
+	} else if (ast_test_flag64(opts, OPT_RINGBACK) || ast_test_flag64(opts, OPT_RING_WITH_EARLY_MEDIA)) {
 		ast_indicate(chan, -1);
 		pa->sentringing = 0;
 	}
@@ -1911,7 +1893,7 @@ static int setup_privacy_args(struct privacy_args *pa,
 	} else if (ast_test_flag64(opts, OPT_SCREEN_NOCALLERID) && strncmp(pa->privcid, "NOCALLERID", 10) == 0) {
 		ast_verb(3, "CallerID blank; N option set; Screening should happen; dbval is %d\n", pa->privdb_val);
 	}
-	
+
 	if (pa->privdb_val == AST_PRIVACY_DENY) {
 		ast_verb(3, "Privacy DB reports PRIVACY_DENY for this callerid. Dial reports unavailable\n");
 		ast_copy_string(pa->status, "NOANSWER", sizeof(pa->status));
@@ -1975,22 +1957,15 @@ static void end_bridge_callback(void *data)
 	time_t end;
 	struct ast_channel *chan = data;
 
-	if (!ast_channel_cdr(chan)) {
-		return;
-	}
-
 	time(&end);
 
 	ast_channel_lock(chan);
-	if (ast_channel_cdr(chan)->answer.tv_sec) {
-		snprintf(buf, sizeof(buf), "%ld", (long) end - ast_channel_cdr(chan)->answer.tv_sec);
-		pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", buf);
-	}
-
-	if (ast_channel_cdr(chan)->start.tv_sec) {
-		snprintf(buf, sizeof(buf), "%ld", (long) end - ast_channel_cdr(chan)->start.tv_sec);
-		pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
-	}
+	ast_channel_stage_snapshot(chan);
+	snprintf(buf, sizeof(buf), "%d", ast_channel_get_up_time(chan));
+	pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", buf);
+	snprintf(buf, sizeof(buf), "%d", ast_channel_get_duration(chan));
+	pbx_builtin_setvar_helper(chan, "DIALEDTIME", buf);
+	ast_channel_stage_snapshot_done(chan);
 	ast_channel_unlock(chan);
 }
 
@@ -2050,14 +2025,14 @@ static void setup_peer_after_bridge_goto(struct ast_channel *chan, struct ast_ch
 		ast_channel_lock(chan);
 		context = ast_strdupa(ast_channel_context(chan));
 		ast_channel_unlock(chan);
-		ast_after_bridge_set_h(peer, context);
+		ast_bridge_set_after_h(peer, context);
 	} else if (ast_test_flag64(opts, OPT_CALLEE_GO_ON)) {
 		ast_channel_lock(chan);
 		context = ast_strdupa(ast_channel_context(chan));
 		extension = ast_strdupa(ast_channel_exten(chan));
 		priority = ast_channel_priority(chan);
 		ast_channel_unlock(chan);
-		ast_after_bridge_set_go_on(peer, context, extension, priority,
+		ast_bridge_set_after_go_on(peer, context, extension, priority,
 			opt_args[OPT_ARG_CALLEE_GO_ON]);
 	}
 }
@@ -2125,11 +2100,15 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	struct ast_party_caller caller;
 
 	/* Reset all DIAL variables back to blank, to prevent confusion (in case we don't reset all of them). */
+	ast_channel_lock(chan);
+	ast_channel_stage_snapshot(chan);
 	pbx_builtin_setvar_helper(chan, "DIALSTATUS", "");
 	pbx_builtin_setvar_helper(chan, "DIALEDPEERNUMBER", "");
 	pbx_builtin_setvar_helper(chan, "DIALEDPEERNAME", "");
 	pbx_builtin_setvar_helper(chan, "ANSWEREDTIME", "");
 	pbx_builtin_setvar_helper(chan, "DIALEDTIME", "");
+	ast_channel_stage_snapshot_done(chan);
+	ast_channel_unlock(chan);
 
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "Dial requires an argument (technology/resource)\n");
@@ -2284,8 +2263,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		ast_channel_unlock(chan);
 	}
 
-	if (ast_test_flag64(&opts, OPT_RESETCDR) && ast_channel_cdr(chan))
-		ast_cdr_reset(ast_channel_cdr(chan), NULL);
+	if (ast_test_flag64(&opts, OPT_RESETCDR)) {
+		ast_cdr_reset(ast_channel_name(chan), 0);
+	}
 	if (ast_test_flag64(&opts, OPT_PRIVACY) && ast_strlen_zero(opt_args[OPT_ARG_PRIVACY]))
 		opt_args[OPT_ARG_PRIVACY] = ast_strdupa(ast_channel_exten(chan));
 
@@ -2369,7 +2349,8 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				OPT_CALLEE_MONITOR | OPT_CALLER_MONITOR |
 				OPT_CALLEE_PARK | OPT_CALLER_PARK |
 				OPT_CALLEE_MIXMONITOR | OPT_CALLER_MIXMONITOR |
-				OPT_RINGBACK | OPT_MUSICBACK | OPT_FORCECLID | OPT_IGNORE_CONNECTEDLINE);
+				OPT_RINGBACK | OPT_MUSICBACK | OPT_FORCECLID | OPT_IGNORE_CONNECTEDLINE |
+				OPT_RING_WITH_EARLY_MEDIA);
 			ast_set2_flag64(tmp, args.url, DIAL_NOFORWARDHTML);
 		}
 
@@ -2441,7 +2422,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			AST_LIST_UNLOCK(dialed_interfaces);
 		}
 
-		tc = ast_request(tmp->tech, ast_channel_nativeformats(chan), chan, tmp->number, &cause);
+		tc = ast_request(tmp->tech, ast_channel_nativeformats(chan), NULL, chan, tmp->number, &cause);
 		if (!tc) {
 			/* If we can't, just go on to the next call */
 			ast_log(LOG_WARNING, "Unable to create channel of type '%s' (cause %d - %s)\n",
@@ -2459,27 +2440,32 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			chanlist_free(tmp);
 			continue;
 		}
+
+		ast_channel_lock(tc);
+		ast_channel_stage_snapshot(tc);
+		ast_channel_unlock(tc);
+
 		ast_channel_get_device_name(tc, device_name, sizeof(device_name));
 		if (!ignore_cc) {
 			ast_cc_extension_monitor_add_dialstring(chan, tmp->interface, device_name);
 		}
-		pbx_builtin_setvar_helper(tc, "DIALEDPEERNUMBER", tmp->number);
 
 		ast_channel_lock_both(tc, chan);
+		pbx_builtin_setvar_helper(tc, "DIALEDPEERNUMBER", tmp->number);
 
 		/* Setup outgoing SDP to match incoming one */
 		if (!AST_LIST_FIRST(&out_chans) && !rest && CAN_EARLY_BRIDGE(peerflags, chan, tc)) {
 			/* We are on the only destination. */
 			ast_rtp_instance_early_bridge_make_compatible(tc, chan);
 		}
-		
+
 		/* Inherit specially named variables from parent channel */
 		ast_channel_inherit_variables(chan, tc);
 		ast_channel_datastore_inherit(chan, tc);
 
 		ast_channel_appl_set(tc, "AppDial");
 		ast_channel_data_set(tc, "(Outgoing Line)");
-		ast_publish_channel_state(tc);
+		ast_channel_publish_snapshot(tc);
 
 		memset(ast_channel_whentohangup(tc), 0, sizeof(*ast_channel_whentohangup(tc)));
 
@@ -2568,6 +2554,8 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		else
 			ast_channel_exten_set(tc, ast_channel_exten(chan));
 
+		ast_channel_stage_snapshot_done(tc);
+
 		ast_channel_unlock(tc);
 		ast_channel_unlock(chan);
 
@@ -2609,10 +2597,6 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&out_chans, tmp, node) {
 		res = ast_call(tmp->chan, tmp->number, 0); /* Place the call, but don't wait on the answer */
 		ast_channel_lock(chan);
-
-		/* Save the info in cdr's that we called them */
-		if (ast_channel_cdr(chan))
-			ast_cdr_setdestchan(ast_channel_cdr(chan), ast_channel_name(tmp->chan));
 
 		/* check the results of ast_call */
 		if (res) {
@@ -2677,7 +2661,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				ast_moh_start(chan, NULL, NULL);
 			}
 			ast_indicate(chan, AST_CONTROL_PROGRESS);
-		} else if (ast_test_flag64(outgoing, OPT_RINGBACK)) {
+		} else if (ast_test_flag64(outgoing, OPT_RINGBACK) || ast_test_flag64(outgoing, OPT_RING_WITH_EARLY_MEDIA)) {
 			if (!ast_strlen_zero(opt_args[OPT_ARG_RINGBACK])) {
 				if (dial_handle_playtones(chan, opt_args[OPT_ARG_RINGBACK])){
 					ast_indicate(chan, AST_CONTROL_RINGING);
@@ -2722,19 +2706,16 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_answer(chan);
 
 		strcpy(pa.status, "ANSWER");
+		ast_channel_stage_snapshot(chan);
 		pbx_builtin_setvar_helper(chan, "DIALSTATUS", pa.status);
 		/* Ah ha!  Someone answered within the desired timeframe.  Of course after this
 		   we will always return with -1 so that it is hung up properly after the
 		   conversation.  */
 		hanguptree(&out_chans, peer, 1);
 		/* If appropriate, log that we have a destination channel and set the answer time */
-		if (ast_channel_cdr(chan)) {
-			ast_cdr_setdestchan(ast_channel_cdr(chan), ast_channel_name(peer));
-			ast_cdr_setanswer(ast_channel_cdr(chan), ast_channel_cdr(peer)->answer);
-		}
 		if (ast_channel_name(peer))
 			pbx_builtin_setvar_helper(chan, "DIALEDPEERNAME", ast_channel_name(peer));
-		
+
 		ast_channel_lock(peer);
 		number = pbx_builtin_getvar_helper(peer, "DIALEDPEERNUMBER");
 		if (ast_strlen_zero(number)) {
@@ -2743,7 +2724,10 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			number = ast_strdupa(number);
 		}
 		ast_channel_unlock(peer);
+		ast_channel_lock(chan);
 		pbx_builtin_setvar_helper(chan, "DIALEDPEERNUMBER", number);
+		ast_channel_stage_snapshot_done(chan);
+		ast_channel_unlock(chan);
 
 		if (!ast_strlen_zero(args.url) && ast_channel_supports_html(peer) ) {
 			ast_debug(1, "app_dial: sendurl=%s.\n", args.url);
@@ -2751,6 +2735,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		}
 		if ( (ast_test_flag64(&opts, OPT_PRIVACY) || ast_test_flag64(&opts, OPT_SCREENING)) && pa.privdb_val == AST_PRIVACY_UNKNOWN) {
 			if (do_privacy(chan, peer, &opts, opt_args, &pa)) {
+				ast_channel_publish_dial(chan, peer, NULL, pa.status);
 				res = 0;
 				goto out;
 			}
@@ -2826,17 +2811,21 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		}
 
 		if (chan && peer && ast_test_flag64(&opts, OPT_GOTO) && !ast_strlen_zero(opt_args[OPT_ARG_GOTO])) {
-			/* chan and peer are going into the PBX, they both
-			 * should probably get CDR records. */
-			ast_clear_flag(ast_channel_cdr(chan), AST_CDR_FLAG_DIALED);
-			ast_clear_flag(ast_channel_cdr(peer), AST_CDR_FLAG_DIALED);
+			/* chan and peer are going into the PBX; as such neither are considered
+			 * outgoing channels any longer */
+			ast_clear_flag(ast_channel_flags(chan), AST_FLAG_OUTGOING);
 
 			ast_replace_subargument_delimiter(opt_args[OPT_ARG_GOTO]);
 			ast_parseable_goto(chan, opt_args[OPT_ARG_GOTO]);
 			/* peer goes to the same context and extension as chan, so just copy info from chan*/
+			ast_channel_lock(peer);
+			ast_channel_stage_snapshot(peer);
+			ast_clear_flag(ast_channel_flags(peer), AST_FLAG_OUTGOING);
 			ast_channel_context_set(peer, ast_channel_context(chan));
 			ast_channel_exten_set(peer, ast_channel_exten(chan));
 			ast_channel_priority_set(peer, ast_channel_priority(chan) + 2);
+			ast_channel_stage_snapshot_done(peer);
+			ast_channel_unlock(peer);
 			if (ast_pbx_start(peer)) {
 				ast_autoservice_chan_hangup_peer(chan, peer);
 			}
@@ -2844,6 +2833,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			if (continue_exec)
 				*continue_exec = 1;
 			res = 0;
+			ast_channel_publish_dial(chan, peer, NULL, "ANSWER");
 			goto done;
 		}
 
@@ -2856,7 +2846,6 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			ast_channel_exten_set(peer, ast_channel_exten(chan));
 			ast_channel_unlock(peer);
 			ast_channel_unlock(chan);
-
 			ast_replace_subargument_delimiter(opt_args[OPT_ARG_CALLEE_MACRO]);
 			res = ast_app_exec_macro(chan, peer, opt_args[OPT_ARG_CALLEE_MACRO]);
 
@@ -2892,10 +2881,12 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 					/* perform a transfer to a new extension */
 					if (strchr(macro_transfer_dest, '^')) { /* context^exten^priority*/
 						ast_replace_subargument_delimiter(macro_transfer_dest);
-						if (!ast_parseable_goto(chan, macro_transfer_dest))
-							ast_set_flag64(peerflags, OPT_GO_ON);
+					}
+					if (!ast_parseable_goto(chan, macro_transfer_dest)) {
+						ast_set_flag64(peerflags, OPT_GO_ON);
 					}
 				}
+				ast_channel_publish_dial(chan, peer, NULL, macro_result);
 			} else {
 				ast_channel_unlock(peer);
 			}
@@ -2973,10 +2964,12 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 					/* perform a transfer to a new extension */
 					if (strchr(gosub_transfer_dest, '^')) { /* context^exten^priority*/
 						ast_replace_subargument_delimiter(gosub_transfer_dest);
-						if (!ast_parseable_goto(chan, gosub_transfer_dest))
-							ast_set_flag64(peerflags, OPT_GO_ON);
+					}
+					if (!ast_parseable_goto(chan, gosub_transfer_dest)) {
+						ast_set_flag64(peerflags, OPT_GO_ON);
 					}
 				}
+				ast_channel_publish_dial(chan, peer, NULL, gosub_result);
 			} else {
 				ast_channel_unlock(peer);
 				ast_channel_unlock(chan);
@@ -2984,9 +2977,17 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 		}
 
 		if (!res) {
+
+			/* None of the Dial options changed our status; inform
+			 * everyone that this channel answered
+			 */
+			ast_channel_publish_dial(chan, peer, NULL, "ANSWER");
+
 			if (!ast_tvzero(calldurationlimit)) {
 				struct timeval whentohangup = ast_tvadd(ast_tvnow(), calldurationlimit);
+				ast_channel_lock(peer);
 				ast_channel_whentohangup_set(peer, &whentohangup);
+				ast_channel_unlock(peer);
 			}
 			if (!ast_strlen_zero(dtmfcalled)) {
 				ast_verb(3, "Sending DTMF '%s' to the called party.\n", dtmfcalled);
@@ -3003,7 +3004,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 				ast_channel_hangupcause_set(chan, ast_channel_hangupcause(peer));
 			}
 			setup_peer_after_bridge_goto(chan, peer, &opts, opt_args);
-			if (ast_after_bridge_goto_setup(peer)
+			if (ast_bridge_setup_after_goto(peer)
 				|| ast_pbx_start(peer)) {
 				ast_autoservice_chan_hangup_peer(chan, peer);
 			}
@@ -3033,7 +3034,7 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 			config.end_bridge_callback = end_bridge_callback;
 			config.end_bridge_callback_data = chan;
 			config.end_bridge_callback_data_fixup = end_bridge_callback_data_fixup;
-			
+
 			if (moh) {
 				moh = 0;
 				ast_moh_stop(chan);
@@ -3060,7 +3061,6 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 
 				ast_channel_setoption(chan, AST_OPTION_OPRMODE, &oprmode, sizeof(oprmode), 0);
 			}
-/* BUGBUG bridge needs to set hangup cause on chan when peer breaks the bridge. */
 			setup_peer_after_bridge_goto(chan, peer, &opts, opt_args);
 			res = ast_bridge_call(chan, peer, &config);
 		}

@@ -38,7 +38,6 @@
 static void join_unmarked(struct confbridge_user *user);
 static void join_marked(struct confbridge_user *user);
 static void leave_waitmarked(struct confbridge_user *user);
-static void transition_to_inactive(struct confbridge_user *user);
 
 struct confbridge_state STATE_INACTIVE = {
 	.name = "INACTIVE",
@@ -46,7 +45,6 @@ struct confbridge_state STATE_INACTIVE = {
 	.join_waitmarked = conf_default_join_waitmarked,
 	.join_marked = join_marked,
 	.leave_waitmarked = leave_waitmarked,
-	.entry = transition_to_inactive,
 };
 struct confbridge_state *CONF_STATE_INACTIVE = &STATE_INACTIVE;
 
@@ -61,20 +59,15 @@ static void join_unmarked(struct confbridge_user *user)
 static void join_marked(struct confbridge_user *user)
 {
 	conf_add_user_marked(user->conference, user);
-	conf_handle_second_active(user->conference);
+	conf_update_user_mute(user);
 
 	conf_change_state(user, CONF_STATE_MULTI_MARKED);
 }
 
 static void leave_waitmarked(struct confbridge_user *user)
 {
-	conf_remove_user_waiting(user->conference, user);
+	conf_default_leave_waitmarked(user);
 	if (user->conference->waitingusers == 0) {
 		conf_change_state(user, CONF_STATE_EMPTY);
 	}
-}
-
-static void transition_to_inactive(struct confbridge_user *user)
-{
-	return;
 }

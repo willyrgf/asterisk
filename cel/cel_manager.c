@@ -57,12 +57,12 @@ static int enablecel;
 /*! \brief show_user_def is off by default */
 #define CEL_SHOW_USERDEF_DEFAULT	0
 
+#define MANAGER_BACKEND_NAME "Manager Event Logging"
+
 /*! TRUE if we should set the EventName header to USER_DEFINED on user events. */
 static unsigned char cel_show_user_def;
 
-static struct ast_event_sub *event_sub;
-
-static void manager_log(const struct ast_event *event, void *userdata)
+static void manager_log(struct ast_event *event)
 {
 	struct ast_tm timeresult;
 	char start_time[80] = "";
@@ -129,7 +129,7 @@ static void manager_log(const struct ast_event *event, void *userdata)
 		record.application_name,
 		record.application_data,
 		start_time,
-		ast_cel_get_ama_flag_name(record.amaflag),
+		ast_channel_amaflags2string(record.amaflag),
 		record.unique_id,
 		record.linked_id,
 		record.user_field,
@@ -153,7 +153,12 @@ static int load_config(int reload)
 		return 0;
 	}
 
-	if (!cfg) {
+	if (cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_WARNING, "Configuration file '%s' is invalid. CEL manager Module not activated.\n",
+			CONF_FILE);
+		enablecel = 0;
+		return -1;
+	} else if (!cfg) {
 		ast_log(LOG_WARNING, "Failed to load configuration file. CEL manager Module not activated.\n");
 		enablecel = 0;
 		return -1;
@@ -180,12 +185,9 @@ static int load_config(int reload)
 
 	cel_show_user_def = new_cel_show_user_def;
 	if (enablecel && !newenablecel) {
-		if (event_sub) {
-			event_sub = ast_event_unsubscribe(event_sub);
-		}
+		ast_cel_backend_unregister(MANAGER_BACKEND_NAME);
 	} else if (!enablecel && newenablecel) {
-		event_sub = ast_event_subscribe(AST_EVENT_CEL, manager_log, "Manager Event Logging", NULL, AST_EVENT_IE_END);
-		if (!event_sub) {
+		if (ast_cel_backend_register(MANAGER_BACKEND_NAME, manager_log)) {
 			ast_log(LOG_ERROR, "Unable to register Asterisk Call Manager CEL handling\n");
 		}
 	}
@@ -196,9 +198,7 @@ static int load_config(int reload)
 
 static int unload_module(void)
 {
-	if (event_sub) {
-		event_sub = ast_event_unsubscribe(event_sub);
-	}
+	ast_cel_backend_unregister(MANAGER_BACKEND_NAME);
 	return 0;
 }
 

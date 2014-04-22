@@ -67,7 +67,7 @@ struct nbs_pvt {
 	struct ast_module_user *u;		/*! for holding a reference to this module */
 };
 
-static struct ast_channel *nbs_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
+static struct ast_channel *nbs_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause);
 static int nbs_call(struct ast_channel *ast, const char *dest, int timeout);
 static int nbs_hangup(struct ast_channel *ast);
 static struct ast_frame *nbs_xread(struct ast_channel *ast);
@@ -218,10 +218,10 @@ static int nbs_xwrite(struct ast_channel *ast, struct ast_frame *frame)
 	return 0;
 }
 
-static struct ast_channel *nbs_new(struct nbs_pvt *i, int state, const char *linkedid)
+static struct ast_channel *nbs_new(struct nbs_pvt *i, int state, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *tmp;
-	tmp = ast_channel_alloc(1, state, 0, 0, "", "s", context, linkedid, 0, "NBS/%s", i->stream);
+	tmp = ast_channel_alloc(1, state, 0, 0, "", "s", context, assignedids, requestor, 0, "NBS/%s", i->stream);
 	if (tmp) {
 		ast_channel_tech_set(tmp, &nbs_tech);
 		ast_channel_set_fd(tmp, 0, nbs_fd(i->nbs));
@@ -239,6 +239,7 @@ static struct ast_channel *nbs_new(struct nbs_pvt *i, int state, const char *lin
 		ast_channel_language_set(tmp, "");
 		i->owner = tmp;
 		i->u = ast_module_user_add(tmp);
+		ast_channel_unlock(tmp);
 		if (state != AST_STATE_DOWN) {
 			if (ast_pbx_start(tmp)) {
 				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(tmp));
@@ -251,7 +252,7 @@ static struct ast_channel *nbs_new(struct nbs_pvt *i, int state, const char *lin
 }
 
 
-static struct ast_channel *nbs_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *nbs_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct nbs_pvt *p;
 	struct ast_channel *tmp = NULL;
@@ -263,7 +264,7 @@ static struct ast_channel *nbs_request(const char *type, struct ast_format_cap *
 	}
 	p = nbs_alloc(data);
 	if (p) {
-		tmp = nbs_new(p, AST_STATE_DOWN, requestor ? ast_channel_linkedid(requestor) : NULL);
+		tmp = nbs_new(p, AST_STATE_DOWN, assignedids, requestor);
 		if (!tmp)
 			nbs_destroy(p);
 	}
@@ -281,7 +282,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	ast_format_set(&prefformat, AST_FORMAT_SLINEAR, 0);
-	if (!(nbs_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(nbs_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_format_cap_add(nbs_tech.capabilities, &prefformat);

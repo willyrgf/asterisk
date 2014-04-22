@@ -16,296 +16,167 @@
 === UPGRADE-1.4.txt -- Upgrade info for 1.2 to 1.4
 === UPGRADE-1.6.txt -- Upgrade info for 1.4 to 1.6
 === UPGRADE-1.8.txt -- Upgrade info for 1.6 to 1.8
-=== UPGRADE-10.txt -- Upgrade info for 1.8 to 10
-=== UPGRADE-11.txt -- Upgrade info for 10 to 11
-===
+=== UPGRADE-10.txt  -- Upgrade info for 1.8 to 10
+=== UPGRADE-11.txt  -- Upgrade info for 10 to 11
+=== UPGRADE-12.txt  -- Upgrade info for 11 to 12
 ===========================================================
 
+From 12 to 13:
+
+ - The asterisk command line -I option and the asterisk.conf internal_timing
+   option are removed and always enabled if any timing module is loaded.
+
+ - The per console verbose level feature as previously implemented caused a
+   large performance penalty.  The fix required some minor incompatibilities
+   if the new rasterisk is used to connect to an earlier version.  If the new
+   rasterisk connects to an older Asterisk version then the root console verbose
+   level is always affected by the "core set verbose" command of the remote
+   console even though it may appear to only affect the current console.  If
+   an older version of rasterisk connects to the new version then the
+   "core set verbose" command will have no effect.
+
+ARI:
+ - The ARI version has been changed from 1.0.0 to 1.1.0. This is to reflect
+   the backwards compatible changes listed below.
+
+ - Added a new ARI resource 'mailboxes' which allows the creation and
+   modification of mailboxes managed by external MWI. Modules res_mwi_external
+   and res_stasis_mailbox must be enabled to use this resource.
+
+ - Added new events for externally initiated transfers. The event
+   BridgeBlindTransfer is now raised when a channel initiates a blind transfer
+   of a bridge in the ARI controlled application to the dialplan; the
+   BridgeAttendedTransfer event is raised when a channel initiates an
+   attended transfer of a bridge in the ARI controlled application to the
+   dialplan.
+
+ - Channel variables may now be specified as a body parameter to the
+   POST /channels operation. The 'variables' key in the JSON is interpreted
+   as a sequence of key/value pairs that will be added to the created channel
+   as channel variables. Other parameters in the JSON body are treated as
+   query parameters of the same name.
+
+ - A bug fix in bridge creation has caused a behavioural change in how
+   subscriptions are created for bridges. A bridge created through ARI, does
+   not, by itself, have a subscription created for any particular Stasis
+   application. When a channel in a Stasis application joins a bridge, an
+   implicit event subscription is created for that bridge as well. Previously,
+   when a channel left such a bridge, the subscription was leaked; this allowed
+   for later bridge events to continue to be pushed to the subscribed
+   applications. That leak has been fixed; as a result, bridge events that were
+   delivered after a channel left the bridge are no longer delivered. An
+   application must subscribe to a bridge through the applications resource if
+   it wishes to receive all events related to a bridge.
 
 AMI:
- - The SIP SIPqualifypeer action now sends a response indicating it will qualify
-   a peer once a peer has been found to qualify.  Once the qualify has been
-   completed it will now issue a SIPqualifypeerdone event.
- - Version 1.4 - The details of what happens to a channel when a masquerade
-   happens (transfers, parking, etc) have changed.
-   - The Masquerade event now includes the Uniqueid's of the clone and original
-     channels.
-   - Channels no longer swap Uniqueid's as a result of the masquerade.
-   - Instead of a shell game of renames, there's now a single rename, appending
-     <ZOMBIE> to the name of the original channel.
+ - The AMI version has been changed from 2.0.0 to 2.1.0. This is to reflect
+   the backwards compatible changes listed below.
 
-CEL:
- - The Uniqueid field for a channel is now a stable identifier, and will not
-   change due to transfers, parking, etc.
+ - The DialStatus field in the DialEnd event can now have additional values.
+   This includes ABORT, CONTINUE, and GOTO.
 
-Queues:
- - Queue logging for PAUSEALL/UNPAUSEALL now only occurs if the interface this is
-   performed on is a member of at least one queue.
- - Queue strategy rrmemory now has a predictable order similar to strategy
-   rrordered. Members will be called in the order that they are added to the
-   queue.
- - CDR behavior in app_queue has been modified slightly.  The CDR record will
-   now only record a disposition of BUSY if all Queue members were actually
-   busy on a call or some Queue members were busy or paused.  Previously, any
-   Queue member being paused would result in a disposition of BUSY.
- - Removed the queues.conf check_state_unknown option.  It is no longer
-   necessary.
+ - The res_mwi_external_ami module can, if loaded, provide additional AMI
+   actions and events that convey MWI state within Asterisk. This includes
+   the MWIGet, MWIUpdate, and MWIDelete actions, as well as the MWIGet and
+   MWIGetComplete events that occur in response to an MWIGet action.
 
-Dial:
- - Now recognizes 'W' to pause sending DTMF for one second in addition to
-   the previously existing 'w' that paused sending DTMF for half a second.
+ - AMI now contains a new class authorization, 'security'. This is used with
+   the following new events: FailedACL, InvalidAccountID, SessionLimit,
+   MemoryLimit, LoadAverageLimit, RequestNotAllowed, AuthMethodNotAllowed,
+   RequestBadFormat, SuccessfulAuth, UnexpectedAddress, ChallengeResponseFailed,
+   InvalidPassword, ChallengeSent, and InvalidTransport.
 
-ExternalIVR:
- - Now recognizes 'W' to pause sending DTMF for one second in addition to
-   the previously existing 'w' that paused sending DTMF for half a second.
+ - Bridge related events now have two additional fields: BridgeName and
+   BridgeCreator. BridgeName is a descriptive name for the bridge;
+   BridgeCreator is the name of the entity that created the bridge. This
+   affects the following events: ConfbridgeStart, ConfbridgeEnd,
+   ConfbridgeJoin, ConfbridgeLeave, ConfbridgeRecord, ConfbridgeStopRecord,
+   ConfbridgeMute, ConfbridgeUnmute, ConfbridgeTalking, BlindTransfer,
+   AttendedTransfer, BridgeCreate, BridgeDestroy, BridgeEnter, BridgeLeave
 
-SendDTMF:
- - Now recognizes 'W' to pause sending DTMF for one second in addition to
-   the previously existing 'w' that paused sending DTMF for half a second.
+CDRs:
+ - The "endbeforehexten" setting now defaults to "yes", instead of "no".
+   When set to "no", yhis setting will cause a new CDR to be generated when a
+   channel enters into hangup logic (either the 'h' extension or a hangup
+   handler subroutine). In general, this is not the preferred default: this
+   causes extra CDRs to be generated for a channel in many common dialplans.
 
-chan_dahdi:
- - Analog port dialing and deferred DTMF dialing for PRI now distinguishes
-   between 'w' and 'W'.  The 'w' pauses dialing for half a second.  The 'W'
-   pauses dialing for one second.
- - The default for inband_on_proceeding has changed to no.
+CLI commands:
+ - "core show settings" now lists the current console verbosity in addition
+   to the root console verbosity.
 
-chan_local:
- - The /b option is removed.
+ - "core set verbose" has not been able to support the by module verbose
+   logging levels since verbose logging levels were made per console.  That
+   syntax is now removed and a silence option added in its place.
 
-Dialplan:
- - All channel and global variable names are evaluated in a case-sensitive manner.
-   In previous versions of Asterisk, variables created and evaluated in the
-   dialplan were evaluated case-insensitively, but built-in variables and variable
-   evaluation done internally within Asterisk was done case-sensitively.
- - Asterisk has always had code to ignore dash '-' characters that are not
-   part of a character set in the dialplan extensions.  The code now
-   consistently ignores these characters when matching dialplan extensions.
- - BRIDGE_FEATURES channel variable is now casesensitive for feature letter codes.
-   Uppercase variants apply them to the calling party while lowercase variants
-   apply them to the called party.
+ConfBridge:
+- The sound_place_into_conference sound used in Confbridge is now deprecated
+  and is no longer functional since it has been broken since its inception
+  and the fix involved using a different method to achieve the same goal. The
+  new method to achieve this functionality is by using sound_begin to play
+  a sound to the conference when waitmarked users are moved into the conference.
 
-Features:
- - The features.conf [applicationmap] <FeatureName>  ActivatedBy option is
-   no longer honored.  The feature is activated by which channel
-   DYNAMIC_FEATURES includes the feature is on.  Use predial to set different
-   values of DYNAMIC_FEATURES on the channels
-
-Parking:
- - The arguments for the Park, ParkedCall, and ParkAndAnnounce applications have
-   been modified significantly. See the application documents for specific details.
-   Also parking lot configuration is now done in res_parking.conf instead of
-   features.conf
-
-From 10 to 11:
-
-Voicemail:
- - All voicemails now have a "msg_id" which uniquely identifies a message. For
-   users of filesystem and IMAP storage of voicemail, this should be transparent.
-   For users of ODBC, you will need to add a "msg_id" column to your voice mail
-   messages table. This should be a string capable of holding at least 32 characters.
-   All messages created in old Asterisk installations will have a msg_id added to
-   them when required. This operation should be transparent as well.
-
-Parking:
- - The comebacktoorigin setting must now be set per parking lot. The setting in
-   the general section will not be applied automatically to each parking lot.
- - The BLINDTRANSFER channel variable is deleted from a channel when it is
-   bridged to prevent subtle bugs in the parking feature.  The channel
-   variable is used by Asterisk internally for the Park application to work
-   properly.  If you were using it for your own purposes, copy it to your
-   own channel variable before the channel is bridged.
-
-res_ais:
- - Users of res_ais in versions of Asterisk prior to Asterisk 11 must change
-   to use the res_corosync module, instead.  OpenAIS is deprecated, but
-   Corosync is still actively developed and maintained.  Corosync came out of
-   the OpenAIS project.
-
-Dialplan Functions:
- - MAILBOX_EXISTS has been deprecated. Use VM_INFO with the 'exists' parameter
-   instead.
- - Macro has been deprecated in favor of GoSub.  For redirecting and connected
-   line purposes use the following variables instead of their macro equivalents:
-   REDIRECTING_SEND_SUB, REDIRECTING_SEND_SUB_ARGS,
-   CONNECTED_LINE_SEND_SUB, CONNECTED_LINE_SEND_SUB_ARGS.
- - The REDIRECTING function now supports the redirecting original party id
-   and reason.
- - The HANGUPCAUSE and HANGUPCAUSE_KEYS functions have been introduced to
-   provide a replacement for the SIP_CAUSE hash. The HangupCauseClear
-   application has also been introduced to remove this data from the channel
-   when necessary.
-
-
-func_enum:
- - ENUM query functions now return a count of -1 on lookup error to
-   differentiate between a failed query and a successful query with 0 results
-   matching the specified type.
-
-CDR:
- - cdr_adaptive_odbc now supports specifying a schema so that Asterisk can
-   connect to databases that use schemas.
 
 Configuration Files:
- - Files listed below have been updated to be more consistent with how Asterisk
-   parses configuration files.  This makes configuration files more consistent
-   with what is expected across modules.
+ - The 'verbose' setting in logger.conf still takes an optional argument,
+   specifying the verbosity level for each logging destination.  However,
+   the default is now to once again follow the current root console level.
+   As a result, using the AMI Command action with "core set verbose" could
+   again set the root console verbose level and affect the verbose level
+   logged.
 
-   - cdr.conf: [general] and [csv] sections
-   - dnsmgr.conf
-   - dsp.conf
+ - The manager.conf 'eventfilter' now takes an "extended" regular expression
+   instead of a "basic" one.
 
- - The 'verbose' setting in logger.conf now takes an optional argument,
-   specifying the verbosity level for each logging destination.  The default,
-   if not otherwise specified, is a verbosity of 3.
+ODBC:
+- The compatibility setting, allow_empty_string_in_nontext, has been removed.
+  Empty column values will be stored as empty strings during realtime updates.
 
-AMI:
-  - DBDelTree now correctly returns an error when 0 rows are deleted just as
-    the DBDel action does.
-  - The IAX2 PeerStatus event now sends a 'Port' header.  In Asterisk 10, this was
-    erroneously being sent as a 'Post' header.
+Realtime Configuration:
+ - WARNING: The database migration script that adds the 'extensions' table for
+   realtime had to be modified due to an error when installing for MySQL.  The
+   'extensions' table's 'id' column was changed to be a primary key.  This could
+   potentially cause a migration problem.  If so, it may be necessary to
+   manually alter the affected table/column to bring it back in line with the
+   migration scripts.
 
-CCSS:
- - Macro is deprecated. Use cc_callback_sub instead of cc_callback_macro
-   in channel configurations.
+ - New columns have been added to realtime tables for 'support_path' on
+   ps_registrations and ps_aors and for 'path' on ps_contacts for the new
+   SIP Path support in chan_pjsip.
 
-app_meetme:
-  - The 'c' option (announce user count) will now work even if the 'q' (quiet)
-    option is enabled.
+ - The following new tables have been added for pjsip realtime: 'ps_systems',
+   'ps_globals', 'ps_tranports', 'ps_registrations'.
 
-app_followme:
- - Answered outgoing calls no longer get cut off when the next step is started.
-   You now have until the last step times out to decide if you want to accept
-   the call or not before being disconnected.
+ - The following columns were added to the 'ps_aors' realtime table:
+   'maximum_expiration', 'outbound_proxy', and 'support_path'.
 
-chan_gtalk:
- - chan_gtalk has been deprecated in favor of the chan_motif channel driver. It is recommended
-   that users switch to using it as it is a core supported module.
+ - The following columns were added to the 'ps_contacts' realtime table:
+   'outbound_proxy', 'user_agent', and 'path'.
 
-chan_jingle:
- - chan_jingle has been deprecated in favor of the chan_motif channel driver. It is recommended
-   that users switch to using it as it is a core supported module.
+ - New columns have been added to the ps_endpoints realtime table for the
+   'media_address', 'redirect_method' and 'set_var' options.  Also the
+   'mwi_fromuser' column was renamed to 'mwi_from_user'. A new column
+   'message_context' was added to let users configure how MESSAGE requests are
+   routed to the dialplan.
 
-SIP
-===
- - A new option "tonezone" for setting default tonezone for the channel driver
-   or individual devices
- - A new manager event, "SessionTimeout" has been added and is triggered when
-   a call is terminated due to RTP stream inactivity or SIP session timer
-   expiration.
- - SIP_CAUSE is now deprecated.  It has been modified to use the same
-   mechanism as the HANGUPCAUSE function.  Behavior should not change, but
-   performance should be vastly improved.  The HANGUPCAUSE function should now
-   be used instead of SIP_CAUSE. Because of this, the storesipcause option in
-   sip.conf is also deprecated.
- - The sip paramater for Originating Line Information (oli, isup-oli, and
-   ss7-oli) is now parsed out of the From header and copied into the channel's
-   ANI2 information field.  This is readable from the CALLERID(ani2) dialplan
-   function.
- - ICE support has been added and is enabled by default. Some endpoints may have
-   problems with the ICE candidates within the SDP. If this is the case ICE support
-   can be disabled globally or on a per-endpoint basis using the icesupport
-   configuration option. Symptoms of this include one way media or no media flow.
+ - A new column was added to the 'ps_globals' realtime table for the 'debug'
+   option.
 
-chan_unistim
- - Due to massive update in chan_unistim phone keys functions and on-screen
-   information changed.
+ - PJSIP endpoint columns 'tos_audio' and 'tos_video' have been changed from
+   yes/no enumerators to string values. 'cos_audio' and 'cos_video' have been
+   changed from yes/no enumerators to integer values. PJSIP transport column
+   'tos' has been changed from a yes/no enumerator to a string value. 'cos' has
+   been changed from a yes/no enumerator to an integer value.
 
-users.conf:
- - A defined user with hasvoicemail=yes now finally uses a Gosub to stdexten
-   as documented in extensions.conf.sample since v1.6.0 instead of a Macro as
-   documented in v1.4.  Set the asterisk.conf stdexten=macro parameter to
-   invoke the stdexten the old way.
+ - The 'queues' and 'queue_members' realtime tables have been added to the
+   config Alembic scripts.
 
-res_jabber
- - This module has been deprecated in favor of the res_xmpp module. The res_xmpp
-   module is backwards compatible with the res_jabber configuration file, dialplan
-   functions, and AMI actions. The old CLI commands can also be made available using
-   the res_clialiases template for Asterisk 11.
+ - A new set of Alembic scripts has been added for CDR tables. This will create
+   a 'cdr' table with the default schema that Asterisk expects.
 
-From 1.8 to 10:
-
-cel_pgsql:
- - This module now expects an 'extra' column in the database for data added
-   using the CELGenUserEvent() application.
-
-ConfBridge
- - ConfBridge's dialplan arguments have changed and are not
-   backwards compatible.
-
-File Interpreters
- - The format interpreter formats/format_sln16.c for the file extension
-   '.sln16' has been removed. The '.sln16' file interpreter now exists
-   in the formats/format_sln.c module along with new support for sln12,
-   sln24, sln32, sln44, sln48, sln96, and sln192 file extensions.
-
-HTTP:
- - A bindaddr must be specified in order for the HTTP server
-   to run. Previous versions would default to 0.0.0.0 if no
-   bindaddr was specified.
-
-Gtalk:
- - The default value for 'context' and 'parkinglots' in gtalk.conf has
-   been changed to 'default', previously they were empty.
-
-chan_dahdi:
- - The mohinterpret=passthrough setting is deprecated in favor of
-   moh_signaling=notify.
-
-pbx_lua:
- - Execution no longer continues after applications that do dialplan jumps
-   (such as app.goto).  Now when an application such as app.goto() is called,
-   control is returned back to the pbx engine and the current extension
-   function stops executing.
- - the autoservice now defaults to being on by default
- - autoservice_start() and autoservice_start() no longer return a value.
-
-Queue:
- - Mark QUEUE_MEMBER_PENALTY Deprecated it never worked for realtime members
- - QUEUE_MEMBER is now R/W supporting setting paused, ignorebusy and penalty.
-
-Asterisk Database:
- - The internal Asterisk database has been switched from Berkeley DB 1.86 to
-   SQLite 3. An existing Berkeley astdb file can be converted with the astdb2sqlite3
-   utility in the UTILS section of menuselect. If an existing astdb is found and no
-   astdb.sqlite3 exists, astdb2sqlite3 will be compiled automatically. Asterisk will
-   convert an existing astdb to the SQLite3 version automatically at runtime. If
-   moving back from Asterisk 10 to Asterisk 1.8, the astdb2bdb utility can be used
-   to create a Berkeley DB copy of the SQLite3 astdb that Asterisk 10 uses.
-
-Manager:
- - The AMI protocol version was incremented to 1.2 as a result of changing two
-   instances of the Unlink event to Bridge events. This change was documented
-   as part of the AMI 1.1 update, but two Unlink events were inadvertently left
-   unchanged.
-
-Module Support Level
- - All modules in the addons, apps, bridge, cdr, cel, channels, codecs,
-   formats, funcs, pbx, and res have been updated to include MODULEINFO data
-   that includes <support_level> tags with a value of core, extended, or deprecated.
-   More information is available on the Asterisk wiki at
-   https://wiki.asterisk.org/wiki/display/AST/Asterisk+Module+Support+States
-
-   Deprecated modules are now marked to not build by default and must be explicitly
-   enabled in menuselect.
-
-chan_sip:
- - Setting of HASH(SIP_CAUSE,<slave-channel-name>) on channels is now disabled
-   by default. It can be enabled using the 'storesipcause' option. This feature
-   has a significant performance penalty.
- - In order to improve compliance with RFC 3261, SIP usernames are now properly
-   escaped when encoding reserved characters. Prior to this change, the use of
-   these characters in certain SIP settings affecting usernames could cause
-   injections of these characters in their raw form into SIP headers which could
-   in turn cause all sorts of nasty behaviors. All characters that are not
-   alphanumeric or are not contained in the the following lists specified by
-   RFC 3261 section 25.1 will be escaped as %XX when encoding a SIP username:
-    * mark: "-" / "_" / "." / "!" / "~" / "*" / "'" / "(" / ")"
-    * user-unreserved: "&" / "=" / "+" / "$" / "," / ";" / "?" / "/"
-
-UDPTL:
- - The default UDPTL port range in udptl.conf.sample differed from the defaults
-   in the source. If you didn't have a config file, you got 4500 to 4599. Now the
-   default is 4000 to 4999.
+Utilities:
+ - The refcounter program has been removed in favor of the refcounter.py script
+   in contrib/scripts.
 
 ===========================================================
 ===========================================================

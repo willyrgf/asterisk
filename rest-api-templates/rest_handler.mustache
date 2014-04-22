@@ -1,4 +1,4 @@
-{{! -*- C -*-
+{{!
  * Asterisk -- An open source telephony toolkit.
  *
  * Copyright (C) 2013, Digium, Inc.
@@ -17,7 +17,7 @@
 }}
 {{!
  * Recursive partial template to render a rest_handler. Used in
- * res_stasis_http_resource.c.mustache.
+ * res_ari_resource.c.mustache.
 }}
 {{#children}}
 {{> rest_handler}}
@@ -30,7 +30,9 @@ static struct stasis_rest_handlers {{full_name}} = {
 {{/is_wildcard}}
 	.callbacks = {
 {{#operations}}
-		[{{c_http_method}}] = stasis_http_{{c_nickname}}_cb,
+{{#is_req}}
+		[{{c_http_method}}] = ast_ari_{{c_name}}_{{c_nickname}}_cb,
+{{/is_req}}
 {{/operations}}
 	},
 	.num_children = {{num_children}},

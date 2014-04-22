@@ -53,7 +53,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #ifdef __linux
 #include <linux/soundcard.h>
-#elif defined(__FreeBSD__) || defined(__CYGWIN__) || defined(__GLIBC__)
+#elif defined(__FreeBSD__) || defined(__CYGWIN__) || defined(__GLIBC__) || defined(__sun)
 #include <sys/soundcard.h>
 #else
 #include <soundcard.h>
@@ -68,6 +68,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/causes.h"
 #include "asterisk/musiconhold.h"
 #include "asterisk/app.h"
+#include "asterisk/bridge.h"
 
 #include "console_video.h"
 
@@ -333,7 +334,7 @@ static struct chan_oss_pvt oss_default = {
 
 static int setformat(struct chan_oss_pvt *o, int mode);
 
-static struct ast_channel *oss_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor,
+static struct ast_channel *oss_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor,
 									   const char *data, int *cause);
 static int oss_digit_begin(struct ast_channel *c, char digit);
 static int oss_digit_end(struct ast_channel *c, char digit, unsigned int duration);
@@ -791,11 +792,11 @@ static int oss_indicate(struct ast_channel *c, int cond, const void *data, size_
 /*!
  * \brief allocate a new channel.
  */
-static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx, int state, const char *linkedid)
+static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx, int state, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *c;
 
-	c = ast_channel_alloc(1, state, o->cid_num, o->cid_name, "", ext, ctx, linkedid, 0, "Console/%s", o->device + 5);
+	c = ast_channel_alloc(1, state, o->cid_num, o->cid_name, "", ext, ctx, assignedids, requestor, 0, "Console/%s", o->device + 5);
 	if (c == NULL)
 		return NULL;
 	ast_channel_tech_set(c, &oss_tech);
@@ -828,6 +829,7 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 	o->owner = c;
 	ast_module_ref(ast_module_info->self);
 	ast_jb_configure(c, &global_jbconf);
+	ast_channel_unlock(c);
 	if (state != AST_STATE_DOWN) {
 		if (ast_pbx_start(c)) {
 			ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(c));
@@ -840,7 +842,7 @@ static struct ast_channel *oss_new(struct chan_oss_pvt *o, char *ext, char *ctx,
 	return c;
 }
 
-static struct ast_channel *oss_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *oss_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_channel *c;
 	struct chan_oss_pvt *o;
@@ -870,7 +872,7 @@ static struct ast_channel *oss_request(const char *type, struct ast_format_cap *
 		*cause = AST_CAUSE_BUSY;
 		return NULL;
 	}
-	c = oss_new(o, NULL, NULL, AST_STATE_DOWN, requestor ? ast_channel_linkedid(requestor) : NULL);
+	c = oss_new(o, NULL, NULL, AST_STATE_DOWN, assignedids, requestor);
 	if (c == NULL) {
 		ast_log(LOG_WARNING, "Unable to create new OSS channel\n");
 		return NULL;
@@ -1129,7 +1131,7 @@ static char *console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 		myc = o->ctx;
 	if (ast_exists_extension(NULL, myc, mye, 1, NULL)) {
 		o->hookstate = 1;
-		oss_new(o, mye, myc, AST_STATE_RINGING, NULL);
+		oss_new(o, mye, myc, AST_STATE_RINGING, NULL, NULL);
 	} else
 		ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
 	if (s)
@@ -1173,7 +1175,6 @@ static char *console_mute(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 static char *console_transfer(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	struct chan_oss_pvt *o = find_desc(oss_active);
-	struct ast_channel *b = NULL;
 	char *tmp, *ext, *ctx;
 
 	switch (cmd) {
@@ -1192,24 +1193,19 @@ static char *console_transfer(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 		return CLI_SHOWUSAGE;
 	if (o == NULL)
 		return CLI_FAILURE;
-	if (o->owner == NULL || (b = ast_bridged_channel(o->owner)) == NULL) {
+	if (o->owner == NULL || !ast_channel_is_bridged(o->owner)) {
 		ast_cli(a->fd, "There is no call to transfer\n");
 		return CLI_SUCCESS;
 	}
 
 	tmp = ast_ext_ctx(a->argv[2], &ext, &ctx);
-	if (ctx == NULL)			/* supply default context if needed */
+	if (ctx == NULL) {			/* supply default context if needed */
 		ctx = ast_strdupa(ast_channel_context(o->owner));
-	if (!ast_exists_extension(b, ctx, ext, 1,
-		S_COR(ast_channel_caller(b)->id.number.valid, ast_channel_caller(b)->id.number.str, NULL))) {
-		ast_cli(a->fd, "No such extension exists\n");
-	} else {
-		ast_cli(a->fd, "Whee, transferring %s to %s@%s.\n", ast_channel_name(b), ext, ctx);
-		if (ast_async_goto(b, ctx, ext, 1))
-			ast_cli(a->fd, "Failed to transfer :(\n");
 	}
-	if (tmp)
-		ast_free(tmp);
+	if (ast_bridge_transfer_blind(1, o->owner, ext, ctx, NULL, NULL) != AST_BRIDGE_TRANSFER_SUCCESS) {
+		ast_log(LOG_WARNING, "Unable to transfer call from channel %s\n", ast_channel_name(o->owner));
+	}
+	ast_free(tmp);
 	return CLI_SUCCESS;
 }
 
@@ -1483,7 +1479,7 @@ static int load_module(void)
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
-	if (!(oss_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(oss_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_format_cap_add(oss_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));

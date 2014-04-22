@@ -42,6 +42,7 @@
 #include "asterisk/musiconhold.h"
 #include "asterisk/cli.h"
 #include "asterisk/transcap.h"
+#include "asterisk/stasis_channels.h"
 
 #include "sig_ss7.h"
 #if defined(LIBSS7_ABI_COMPATIBILITY)
@@ -257,12 +258,15 @@ static void sig_ss7_loopback(struct sig_ss7_chan *p, int enable)
 	}
 }
 
-static struct ast_channel *sig_ss7_new_ast_channel(struct sig_ss7_chan *p, int state, int ulaw, int transfercapability, char *exten, const struct ast_channel *requestor)
+static struct ast_channel *sig_ss7_new_ast_channel(struct sig_ss7_chan *p, int state,
+	int ulaw, int transfercapability, char *exten,
+	const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *ast;
 
 	if (sig_ss7_callbacks.new_ast_channel) {
-		ast = sig_ss7_callbacks.new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
+		ast = sig_ss7_callbacks.new_ast_channel(p->chan_pvt, state, ulaw, exten,
+			assignedids, requestor);
 	} else {
 		return NULL;
 	}
@@ -411,6 +415,7 @@ static void ss7_queue_pvt_cause_data(struct ast_channel *owner, const char *caus
 	int datalen = sizeof(*cause_code) + strlen(cause);
 
 	cause_code = ast_alloca(datalen);
+	memset(cause_code, 0, datalen);
 	cause_code->ast_cause = ast_cause;
 	ast_copy_string(cause_code->chan_name, ast_channel_name(owner), AST_CHANNEL_NAME);
 	ast_copy_string(cause_code->code, cause, datalen + 1 - sizeof(*cause_code));
@@ -602,7 +607,7 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	 */
 	ast_mutex_unlock(&linkset->lock);
 	sig_ss7_unlock_private(p);
-	c = sig_ss7_new_ast_channel(p, AST_STATE_RING, law, 0, p->exten, NULL);
+	c = sig_ss7_new_ast_channel(p, AST_STATE_RING, law, 0, p->exten, NULL, NULL);
 	if (!c) {
 		ast_log(LOG_WARNING, "Unable to start PBX on CIC %d\n", p->cic);
 		ast_mutex_lock(&linkset->lock);
@@ -619,6 +624,8 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 	sig_ss7_lock_private(p);
 
 	sig_ss7_set_echocanceller(p, 1);
+
+	ast_channel_stage_snapshot(c);
 
 	/*
 	 * It is reasonably safe to set the following
@@ -698,6 +705,8 @@ static void ss7_start_call(struct sig_ss7_chan *p, struct sig_ss7_linkset *links
 		/* Clear this after we set it */
 		p->generic_name[0] = 0;
 	}
+
+	ast_channel_stage_snapshot_done(c);
 
 	sig_ss7_unlock_private(p);
 	ast_channel_unlock(c);
@@ -787,7 +796,9 @@ void *ss7_linkset(void *data)
 	ss7_event *e = NULL;
 	struct sig_ss7_chan *p;
 	struct pollfd pollers[SIG_SS7_NUM_DCHANS];
-	int nextms = 0;
+	int nextms;
+
+#define SS7_MAX_POLL	60000	/* Maximum poll time in ms. */
 
 	pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 
@@ -812,6 +823,11 @@ void *ss7_linkset(void *data)
 			}
 			nextms = tv.tv_sec * 1000;
 			nextms += tv.tv_usec / 1000;
+			if (SS7_MAX_POLL < nextms) {
+				nextms = SS7_MAX_POLL;
+			}
+		} else {
+			nextms = SS7_MAX_POLL;
 		}
 
 		for (i = 0; i < linkset->numsigchans; i++) {
@@ -1876,7 +1892,9 @@ int sig_ss7_indicate(struct sig_ss7_chan *p, struct ast_channel *chan, int condi
  * \retval ast_channel on success.
  * \retval NULL on error.
  */
-struct ast_channel *sig_ss7_request(struct sig_ss7_chan *p, enum sig_ss7_law law, const struct ast_channel *requestor, int transfercapability)
+struct ast_channel *sig_ss7_request(struct sig_ss7_chan *p, enum sig_ss7_law law,
+	const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor,
+	int transfercapability)
 {
 	struct ast_channel *ast;
 
@@ -1888,7 +1906,8 @@ struct ast_channel *sig_ss7_request(struct sig_ss7_chan *p, enum sig_ss7_law law
 	}
 
 	sig_ss7_set_outgoing(p, 1);
-	ast = sig_ss7_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);
+	ast = sig_ss7_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability,
+		p->exten, assignedids, requestor);
 	if (!ast) {
 		sig_ss7_set_outgoing(p, 0);
 

@@ -41,7 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/channel.h"
 #include "asterisk/app.h"
 #include "asterisk/translate.h"
-#include "asterisk/bridging.h"
+#include "asterisk/bridge.h"
 
 /*** DOCUMENTATION
 	<application name="DumpChan" language="en_US">
@@ -50,7 +50,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<parameter name="level">
-				<para>Minimun verbose level</para>
+				<para>Minimum verbose level</para>
 			</parameter>
 		</syntax>
 		<description>
@@ -70,7 +70,6 @@ static const char app[] = "DumpChan";
 
 static int serialize_showchan(struct ast_channel *c, char *buf, size_t size)
 {
-	struct timeval now;
 	long elapsed_seconds = 0;
 	int hour = 0, min = 0, sec = 0;
 	char nf[256];
@@ -80,21 +79,19 @@ static int serialize_showchan(struct ast_channel *c, char *buf, size_t size)
 	struct ast_str *read_transpath = ast_str_alloca(256);
 	struct ast_bridge *bridge;
 
-	now = ast_tvnow();
 	memset(buf, 0, size);
 	if (!c)
 		return 0;
 
-	if (ast_channel_cdr(c)) {
-		elapsed_seconds = now.tv_sec - ast_channel_cdr(c)->start.tv_sec;
-		hour = elapsed_seconds / 3600;
-		min = (elapsed_seconds % 3600) / 60;
-		sec = elapsed_seconds % 60;
-	}
+	elapsed_seconds = ast_channel_get_duration(c);
+	hour = elapsed_seconds / 3600;
+	min = (elapsed_seconds % 3600) / 60;
+	sec = elapsed_seconds % 60;
 
 	ast_channel_lock(c);
 	bridge = ast_channel_get_bridge(c);
 	ast_channel_unlock(c);
+
 	snprintf(buf,size,
 		"Name=               %s\n"
 		"Type=               %s\n"
@@ -142,10 +139,10 @@ static int serialize_showchan(struct ast_channel *c, char *buf, size_t size)
 		S_OR(ast_channel_dialed(c)->number.str, "(N/A)"),
 		S_COR(ast_channel_redirecting(c)->from.number.valid, ast_channel_redirecting(c)->from.number.str, "(N/A)"),
 		ast_channel_parkinglot(c),
-		ast_channel_language(c),	
+		ast_channel_language(c),
 		ast_state2str(ast_channel_state(c)),
 		ast_channel_state(c),
-		ast_channel_rings(c), 
+		ast_channel_rings(c),
 		ast_getformatname_multiple(nf, sizeof(nf), ast_channel_nativeformats(c)),
 		ast_getformatname(ast_channel_writeformat(c)),
 		ast_getformatname(ast_channel_readformat(c)),
@@ -186,10 +183,10 @@ static int dumpchan_exec(struct ast_channel *chan, const char *data)
 	if (!ast_strlen_zero(data))
 		level = atoi(data);
 
-	if (option_verbose >= level) {
+	if (VERBOSITY_ATLEAST(level)) {
 		serialize_showchan(chan, info, sizeof(info));
 		pbx_builtin_serialize_variables(chan, &vars);
-		ast_verbose("\n"
+		ast_verb(level, "\n"
 			"Dumping Info For Channel: %s:\n"
 			"%s\n"
 			"Info:\n"

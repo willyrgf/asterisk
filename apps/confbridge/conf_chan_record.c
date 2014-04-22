@@ -32,7 +32,7 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
+#include "asterisk/bridge.h"
 #include "include/confbridge.h"
 
 /* ------------------------------------------------------------------- */
@@ -53,19 +53,20 @@ static int rec_write(struct ast_channel *ast, struct ast_frame *f)
 	return 0;
 }
 
-static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *rec_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_channel *chan;
 	struct ast_format format;
 	const char *conf_name = data;
 
-	chan = ast_channel_alloc(1, AST_STATE_UP, NULL, NULL, NULL, NULL, NULL, NULL, 0,
+	chan = ast_channel_alloc(1, AST_STATE_UP, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0,
 		"CBRec/conf-%s-uid-%d",
 		conf_name, (int) ast_random());
 	if (!chan) {
 		return NULL;
 	}
 	if (ast_channel_add_bridge_role(chan, "recorder")) {
+		ast_channel_unlock(chan);
 		ast_channel_release(chan);
 		return NULL;
 	}
@@ -76,6 +77,7 @@ static struct ast_channel *rec_request(const char *type, struct ast_format_cap *
 	ast_format_copy(ast_channel_rawwriteformat(chan), &format);
 	ast_format_copy(ast_channel_readformat(chan), &format);
 	ast_format_copy(ast_channel_rawreadformat(chan), &format);
+	ast_channel_unlock(chan);
 	return chan;
 }
 
@@ -86,6 +88,7 @@ static struct ast_channel_tech record_tech = {
 	.call = rec_call,
 	.read = rec_read,
 	.write = rec_write,
+	.properties = AST_CHAN_TP_INTERNAL,
 };
 
 struct ast_channel_tech *conf_record_get_tech(void)

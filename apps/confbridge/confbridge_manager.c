@@ -28,10 +28,10 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
+#include "asterisk/bridge.h"
 #include "asterisk/stasis.h"
 #include "asterisk/stasis_channels.h"
-#include "asterisk/stasis_bridging.h"
+#include "asterisk/stasis_bridges.h"
 #include "asterisk/manager.h"
 #include "asterisk/stasis_message_router.h"
 #include "include/confbridge.h"
@@ -44,7 +44,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeEnd</ref>
@@ -59,7 +59,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeStart</ref>
@@ -74,8 +74,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
+				<channel_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeLeave</ref>
@@ -90,8 +90,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
+				<channel_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeJoin</ref>
@@ -106,7 +106,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeStopRecord</ref>
@@ -121,7 +121,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeRecord</ref>
@@ -136,8 +136,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
+				<channel_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeUnmute</ref>
@@ -152,8 +152,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
+				<channel_snapshot/>
 			</syntax>
 			<see-also>
 				<ref type="managerEvent">ConfbridgeMute</ref>
@@ -161,7 +161,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			</see-also>
 		</managerEventInstance>
 	</managerEvent>
-
 	<managerEvent language="en_US" name="ConfbridgeTalking">
 		<managerEventInstance class="EVENT_FLAG_CALL">
 			<synopsis>Raised when a confbridge participant unmutes.</synopsis>
@@ -169,8 +168,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<parameter name="Conference">
 					<para>The name of the Confbridge conference.</para>
 				</parameter>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='BridgeCreate']/managerEventInstance/syntax/parameter)" />
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<bridge_snapshot/>
+				<channel_snapshot/>
 				<parameter name="TalkingStatus">
 					<enumlist>
 						<enum name="on"/>
@@ -188,24 +187,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static struct stasis_message_router *bridge_state_router;
 static struct stasis_message_router *channel_state_router;
 
-static void append_event_header(struct ast_str **fields_string,
-					const char *header, const char *value)
-{
-	struct ast_str *working_str = *fields_string;
-
-	if (!working_str) {
-		working_str = ast_str_create(128);
-		if (!working_str) {
-			return;
-		}
-		*fields_string = working_str;
-	}
-
-	ast_str_append(&working_str, 0,
-		"%s: %s\r\n",
-		header, value);
-}
-
 static void confbridge_publish_manager_event(
 	struct stasis_message *message,
 	const char *event,
@@ -213,13 +194,16 @@ static void confbridge_publish_manager_event(
 {
 	struct ast_bridge_blob *blob = stasis_message_data(message);
 	const char *conference_name;
-	RAII_VAR(struct ast_str *, bridge_text,
-		ast_manager_build_bridge_state_string(blob->bridge, ""),
-		ast_free);
+	RAII_VAR(struct ast_str *, bridge_text, NULL, ast_free);
 	RAII_VAR(struct ast_str *, channel_text, NULL, ast_free);
 
 	ast_assert(blob != NULL);
 	ast_assert(event != NULL);
+
+	bridge_text = ast_manager_build_bridge_state_string(blob->bridge);
+	if (!bridge_text) {
+		return;
+	}
 
 	conference_name = ast_json_string_get(ast_json_object_get(blob->blob, "conference"));
 	ast_assert(conference_name != NULL);
@@ -240,63 +224,54 @@ static void confbridge_publish_manager_event(
 }
 
 static void confbridge_start_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeStart", NULL);
 }
 
 static void confbridge_end_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeEnd", NULL);
 }
 
 static void confbridge_leave_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeLeave", NULL);
 }
 
 static void confbridge_join_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeJoin", NULL);
 }
 
 static void confbridge_start_record_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeRecord", NULL);
 }
 
 static void confbridge_stop_record_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeStopRecord", NULL);
 }
 
 static void confbridge_mute_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeMute", NULL);
 }
 
 static void confbridge_unmute_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	confbridge_publish_manager_event(message, "ConfbridgeUnmute", NULL);
 }
 
 static void confbridge_talking_cb(void *data, struct stasis_subscription *sub,
-	struct stasis_topic *topic,
 	struct stasis_message *message)
 {
 	RAII_VAR(struct ast_str *, extra_text, NULL, ast_free);
@@ -306,7 +281,7 @@ static void confbridge_talking_cb(void *data, struct stasis_subscription *sub,
 		return;
 	}
 
-	append_event_header(&extra_text, "TalkingStatus", talking_status);
+	ast_str_append_event_header(&extra_text, "TalkingStatus", talking_status);
 	if (!extra_text) {
 		return;
 	}
@@ -359,7 +334,7 @@ int manager_confbridge_init(void)
 	STASIS_MESSAGE_TYPE_INIT(confbridge_talking_type);
 
 	bridge_state_router = stasis_message_router_create(
-		stasis_caching_get_topic(ast_bridge_topic_all_cached()));
+		ast_bridge_topic_all_cached());
 
 	if (!bridge_state_router) {
 		return -1;
@@ -430,7 +405,7 @@ int manager_confbridge_init(void)
 	}
 
 	channel_state_router = stasis_message_router_create(
-		stasis_caching_get_topic(ast_channel_topic_all_cached()));
+		ast_channel_topic_all_cached());
 
 	if (!channel_state_router) {
 		manager_confbridge_shutdown();

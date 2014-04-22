@@ -41,6 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/config.h"
 #include "asterisk/lock.h"
 #include "asterisk/threadstorage.h"
+#include "asterisk/netsock2.h"
 
 #include "include/iax2.h"
 #include "include/parser.h"
@@ -83,13 +84,23 @@ static void (*errorf)(const char *str) = internalerror;
 
 static void dump_addr(char *output, int maxlen, void *value, int len)
 {
-	struct sockaddr_in sin;
-	if (len == (int)sizeof(sin)) {
-		memcpy(&sin, value, len);
-		snprintf(output, maxlen, "IPV4 %s:%d", ast_inet_ntoa(sin.sin_addr), ntohs(sin.sin_port));
+	struct ast_sockaddr addr;
+
+	if (len == (int)sizeof(struct sockaddr_in)) {
+		addr.ss.ss_family = AF_INET;
+	} else if (len == (int) sizeof(struct sockaddr_in6)) {
+		addr.ss.ss_family = AF_INET6;
 	} else {
 		ast_copy_string(output, "Invalid Address", maxlen);
+		return;
 	}
+
+	memcpy(&addr, value, len);
+	addr.len = len;
+
+	snprintf(output, maxlen, "%s %s",
+				ast_sockaddr_is_ipv4(&addr) || ast_sockaddr_is_ipv4_mapped(&addr) ? "IPV4" : "IPV6",
+				ast_sockaddr_stringify(&addr));
 }
 
 static void dump_string_hex(char *output, int maxlen, void *value, int len)
@@ -172,12 +183,23 @@ static void dump_datetime(char *output, int maxlen, void *value, int len)
 
 static void dump_ipaddr(char *output, int maxlen, void *value, int len)
 {
-	struct sockaddr_in sin;
-	if (len == (int)sizeof(unsigned int)) {
-		memcpy(&sin.sin_addr, value, len);
-		snprintf(output, maxlen, "%s", ast_inet_ntoa(sin.sin_addr));
-	} else
+	struct ast_sockaddr addr;
+	char *str_addr;
+
+	if (len == (int)sizeof(struct sockaddr_in)) {
+		addr.ss.ss_family = AF_INET;
+	} else if (len == (int)sizeof(struct sockaddr_in6)) {
+		addr.ss.ss_family = AF_INET6;
+	} else {
 		ast_copy_string(output, "Invalid IPADDR", maxlen);
+		return;
+	}
+
+	memcpy(&addr, value, len);
+	addr.len = len;
+
+	str_addr = ast_sockaddr_stringify(&addr);
+	ast_copy_string(output, str_addr, maxlen);
 }
 
 
@@ -239,11 +261,12 @@ static void dump_prov(char *output, int maxlen, void *value, int len)
 	dump_prov_ies(output, maxlen, value, len);
 }
 
-static struct iax2_ie {
+struct iax2_ie {
 	int ie;
 	char *name;
 	void (*dump)(char *output, int maxlen, void *value, int len);
-} infoelts[] = {
+};
+static struct iax2_ie infoelts[] = {
 	{ IAX_IE_CALLED_NUMBER, "CALLED NUMBER", dump_string },
 	{ IAX_IE_CALLING_NUMBER, "CALLING NUMBER", dump_string },
 	{ IAX_IE_CALLING_ANI, "ANI", dump_string },
@@ -392,6 +415,7 @@ static void dump_ies(unsigned char *iedata, int len)
 	int found;
 	char interp[1024];
 	char tmp[1024];
+
 	if (len < 2)
 		return;
 	while(len > 2) {
@@ -562,7 +586,7 @@ void iax_frame_subclass2str(enum iax_frame_subclass subclass, char *str, size_t 
 	ast_copy_string(str, cmd, len);
 }
 
-void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, struct sockaddr_in *sin, int datalen)
+void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, struct ast_sockaddr *addr, int datalen)
 {
 	const char *framelist[] = {
 		"(0?)",
@@ -604,6 +628,16 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		"TXFER  ",
 		"CNLINE ",
 		"REDIR  ",
+		"T38PARM",
+		"CC ERR!",/* This must never go across an IAX link. */
+		"SRCCHG ",
+		"READACT",
+		"AOC    ",
+		"ENDOFQ ",
+		"INCOMPL",
+		"MCID   ",
+		"UPDRTPP",
+		"PCAUSEC",
 	};
 	struct ast_iax2_full_hdr *fh;
 	char retries[20];
@@ -665,19 +699,22 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		snprintf(subclass2, sizeof(subclass2), "%d", fh->csub);
 		subclass = subclass2;
 	}
-	snprintf(tmp, sizeof(tmp), 
-		 "%s-Frame Retry[%s] -- OSeqno: %3.3d ISeqno: %3.3d Type: %s Subclass: %s\n",
+
+	snprintf(tmp, sizeof(tmp),
+		"%s-Frame Retry[%s] -- OSeqno: %3.3d ISeqno: %3.3d Type: %s Subclass: %s\n",
 		 dir,
 		 retries, fh->oseqno, fh->iseqno, class, subclass);
 	outputf(tmp);
-	snprintf(tmp, sizeof(tmp), 
-		 "   Timestamp: %05lums  SCall: %5.5d  DCall: %5.5d [%s:%d]\n",
-		 (unsigned long)ntohl(fh->ts),
-		 ntohs(fh->scallno) & ~IAX_FLAG_FULL, ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS,
-		 ast_inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+	snprintf(tmp, sizeof(tmp), "   Timestamp: %05lums  SCall: %5.5d  DCall: %5.5d %s\n",
+			(unsigned long)ntohl(fh->ts),
+			ntohs(fh->scallno) & ~IAX_FLAG_FULL,
+			ntohs(fh->dcallno) & ~IAX_FLAG_RETRANS,
+			ast_sockaddr_stringify(addr));
+
 	outputf(tmp);
 	if (fh->type == AST_FRAME_IAX)
 		dump_ies(fh->iedata, datalen);
+
 }
 
 int iax_ie_append_raw(struct iax_ie_data *ied, unsigned char ie, const void *data, int datalen)
@@ -695,9 +732,9 @@ int iax_ie_append_raw(struct iax_ie_data *ied, unsigned char ie, const void *dat
 	return 0;
 }
 
-int iax_ie_append_addr(struct iax_ie_data *ied, unsigned char ie, const struct sockaddr_in *sin)
+int iax_ie_append_addr(struct iax_ie_data *ied, unsigned char ie, const struct ast_sockaddr *addr)
 {
-	return iax_ie_append_raw(ied, ie, sin, (int)sizeof(struct sockaddr_in));
+	return iax_ie_append_raw(ied, ie, addr, addr->len);
 }
 
 int iax_ie_append_versioned_uint64(struct iax_ie_data *ied, unsigned char ie, unsigned char version, uint64_t value)
@@ -892,7 +929,8 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 			ies->rsa_result = (char *)data + 2;
 			break;
 		case IAX_IE_APPARENT_ADDR:
-			ies->apparent_addr = ((struct sockaddr_in *)(data + 2));
+			memcpy(&ies->apparent_addr , (struct ast_sockaddr *) (data + 2), len);
+			ies->apparent_addr.len = len;
 			break;
 		case IAX_IE_REFRESH:
 			if (len != (int)sizeof(unsigned short)) {

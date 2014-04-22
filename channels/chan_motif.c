@@ -76,6 +76,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/astobj.h"
 #include "asterisk/abstract_jb.h"
 #include "asterisk/xmpp.h"
+#include "asterisk/stasis_channels.h"
 
 /*** DOCUMENTATION
 	<configInfo name="chan_motif" language="en_US">
@@ -332,7 +333,7 @@ static AO2_GLOBAL_OBJ_STATIC(globals);
 static struct ast_sched_context *sched; /*!< Scheduling context for RTCP */
 
 /* \brief Asterisk core interaction functions */
-static struct ast_channel *jingle_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
+static struct ast_channel *jingle_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause);
 static int jingle_sendtext(struct ast_channel *ast, const char *text);
 static int jingle_digit_begin(struct ast_channel *ast, char digit);
 static int jingle_digit_end(struct ast_channel *ast, char digit, unsigned int duration);
@@ -518,7 +519,7 @@ static void *jingle_endpoint_alloc(const char *cat)
 
 	ast_string_field_set(endpoint, name, cat);
 
-	endpoint->cap = ast_format_cap_alloc_nolock();
+	endpoint->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	endpoint->transport = JINGLE_TRANSPORT_ICE_UDP;
 
 	return endpoint;
@@ -656,6 +657,18 @@ static struct ast_rtp_glue jingle_rtp_glue = {
 	.update_peer = jingle_set_rtp_peer,
 };
 
+/*! \brief Set the channel owner on the \ref jingle_session object and related objects */
+static void jingle_set_owner(struct jingle_session *session, struct ast_channel *chan)
+{
+	session->owner = chan;
+	if (session->rtp) {
+		ast_rtp_instance_set_channel_id(session->rtp, session->owner ? ast_channel_uniqueid(session->owner) : "");
+	}
+	if (session->vrtp) {
+		ast_rtp_instance_set_channel_id(session->vrtp, session->owner ? ast_channel_uniqueid(session->owner) : "");
+	}
+}
+
 /*! \brief Internal helper function which enables video support on a sesson if possible */
 static void jingle_enable_video(struct jingle_session *session)
 {
@@ -679,7 +692,7 @@ static void jingle_enable_video(struct jingle_session *session)
 	}
 
 	ast_rtp_instance_set_prop(session->vrtp, AST_RTP_PROPERTY_RTCP, 1);
-
+	ast_rtp_instance_set_channel_id(session->vrtp, ast_channel_uniqueid(session->owner));
 	ast_channel_set_fd(session->owner, 2, ast_rtp_instance_fd(session->vrtp, 0));
 	ast_channel_set_fd(session->owner, 3, ast_rtp_instance_fd(session->vrtp, 1));
 	ast_rtp_codecs_packetization_set(ast_rtp_instance_get_codecs(session->vrtp), session->vrtp, &session->prefs);
@@ -728,9 +741,9 @@ static struct jingle_session *jingle_alloc(struct jingle_endpoint *endpoint, con
 	session->connection = endpoint->connection;
 	session->transport = endpoint->transport;
 
-	if (!(session->cap = ast_format_cap_alloc_nolock()) ||
-	    !(session->jointcap = ast_format_cap_alloc_nolock()) ||
-	    !(session->peercap = ast_format_cap_alloc_nolock()) ||
+	if (!(session->cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
+	    !(session->jointcap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
+	    !(session->peercap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK)) ||
 	    !session->callid) {
 		ao2_ref(session, -1);
 		return NULL;
@@ -759,7 +772,7 @@ static struct jingle_session *jingle_alloc(struct jingle_endpoint *endpoint, con
 }
 
 /*! \brief Function called to create a new Jingle Asterisk channel */
-static struct ast_channel *jingle_new(struct jingle_endpoint *endpoint, struct jingle_session *session, int state, const char *title, const char *linkedid, const char *cid_name)
+static struct ast_channel *jingle_new(struct jingle_endpoint *endpoint, struct jingle_session *session, int state, const char *title, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *cid_name)
 {
 	struct ast_channel *chan;
 	const char *str = S_OR(title, session->remote);
@@ -769,13 +782,15 @@ static struct ast_channel *jingle_new(struct jingle_endpoint *endpoint, struct j
 		return NULL;
 	}
 
-	if (!(chan = ast_channel_alloc(1, state, S_OR(title, ""), S_OR(cid_name, ""), "", "", "", linkedid, 0, "Motif/%s-%04lx", str, ast_random() & 0xffff))) {
+	if (!(chan = ast_channel_alloc(1, state, S_OR(title, ""), S_OR(cid_name, ""), "", "", "", assignedids, requestor, 0, "Motif/%s-%04lx", str, ast_random() & 0xffff))) {
 		return NULL;
 	}
 
+	ast_channel_stage_snapshot(chan);
+
 	ast_channel_tech_set(chan, &jingle_tech);
 	ast_channel_tech_pvt_set(chan, session);
-	session->owner = chan;
+	jingle_set_owner(session, chan);
 
 	ast_channel_callid_set(chan, session->callid);
 
@@ -835,6 +850,9 @@ static struct ast_channel *jingle_new(struct jingle_endpoint *endpoint, struct j
 	ast_channel_priority_set(chan, 1);
 
 	ao2_unlock(endpoint);
+
+	ast_channel_stage_snapshot_done(chan);
+	ast_channel_unlock(chan);
 
 	return chan;
 }
@@ -1712,7 +1730,7 @@ static int jingle_fixup(struct ast_channel *oldchan, struct ast_channel *newchan
 
 	ao2_lock(session);
 
-	session->owner = newchan;
+	jingle_set_owner(session, newchan);
 
 	ao2_unlock(session);
 
@@ -1862,7 +1880,7 @@ static int jingle_hangup(struct ast_channel *ast)
 	}
 
 	ast_channel_tech_pvt_set(ast, NULL);
-	session->owner = NULL;
+	jingle_set_owner(session, NULL);
 
 	ao2_unlink(session->state->sessions, session);
 	ao2_ref(session->state, -1);
@@ -1874,7 +1892,7 @@ static int jingle_hangup(struct ast_channel *ast)
 }
 
 /*! \brief Function called by core to create a new outgoing Jingle session */
-static struct ast_channel *jingle_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *jingle_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	RAII_VAR(struct jingle_config *, cfg, ao2_global_obj_ref(globals), ao2_cleanup);
 	RAII_VAR(struct jingle_endpoint *, endpoint, NULL, ao2_cleanup);
@@ -1975,7 +1993,7 @@ static struct ast_channel *jingle_request(const char *type, struct ast_format_ca
 		/* Note that for Google-V1 and Google-V2 we don't stop built-in ICE support, this will happen in jingle_new */
 	}
 
-	if (!(chan = jingle_new(endpoint, session, AST_STATE_DOWN, target, requestor ? ast_channel_linkedid(requestor) : NULL, NULL))) {
+	if (!(chan = jingle_new(endpoint, session, AST_STATE_DOWN, target, assignedids, requestor, NULL))) {
 		ast_log(LOG_ERROR, "Unable to create Jingle channel on endpoint '%s'\n", args.name);
 		*cause = AST_CAUSE_SWITCH_CONGESTION;
 		ao2_ref(session, -1);
@@ -2387,7 +2405,7 @@ static void jingle_action_session_initiate(struct jingle_endpoint *endpoint, str
 	}
 
 	/* Create a new Asterisk channel using the above local session */
-	if (!(chan = jingle_new(endpoint, session, AST_STATE_DOWN, pak->from->user, NULL, pak->from->full))) {
+	if (!(chan = jingle_new(endpoint, session, AST_STATE_DOWN, pak->from->user, NULL, NULL, pak->from->full))) {
 		ao2_ref(session, -1);
 		jingle_send_error_response(endpoint->connection, pak, "cancel", "service-unavailable xmlns='urn:ietf:params:xml:ns:xmpp-stanzas'", NULL);
 		return;
@@ -2395,7 +2413,9 @@ static void jingle_action_session_initiate(struct jingle_endpoint *endpoint, str
 
 	ao2_link(endpoint->state->sessions, session);
 
+	ast_channel_lock(chan);
 	ast_setstate(chan, AST_STATE_RING);
+	ast_channel_unlock(chan);
 	res = ast_pbx_start(chan);
 
 	switch (res) {
@@ -2520,7 +2540,8 @@ static void jingle_action_session_terminate(struct jingle_endpoint *endpoint, st
 
 		/* Size of the string making up the cause code is "Motif " + text */
 		data_size += 6 + strlen(iks_name(text));
-		cause_code = ast_malloc(data_size);
+		cause_code = ast_alloca(data_size);
+		memset(cause_code, 0, data_size);
 
 		/* Get the appropriate cause code mapping for this reason */
 		for (i = 0; i < ARRAY_LEN(jingle_reason_mappings); i++) {
@@ -2534,15 +2555,14 @@ static void jingle_action_session_terminate(struct jingle_endpoint *endpoint, st
 		snprintf(cause_code->code, data_size - sizeof(*cause_code) + 1, "Motif %s", iks_name(text));
 	} else {
 		/* No technology specific information is available */
-		cause_code = ast_malloc(data_size);
+		cause_code = ast_alloca(data_size);
+		memset(cause_code, 0, data_size);
 	}
 
 	ast_copy_string(cause_code->chan_name, ast_channel_name(chan), AST_CHANNEL_NAME);
 	cause_code->ast_cause = cause;
 	ast_queue_control_data(chan, AST_CONTROL_PVT_CAUSE_CODE, cause_code, data_size);
 	ast_channel_hangupcause_hash_set(chan, cause_code, data_size);
-
-	ast_free(cause_code);
 
 	ast_debug(3, "Hanging up channel '%s' due to session terminate message with cause '%d'\n", ast_channel_name(chan), cause);
 	ast_queue_hangup_with_cause(chan, cause);
@@ -2690,7 +2710,7 @@ static int custom_transport_handler(const struct aco_option *opt, struct ast_var
  */
 static int load_module(void)
 {
-	if (!(jingle_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(jingle_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
@@ -2711,9 +2731,9 @@ static int load_module(void)
 	aco_option_register_custom(&cfg_info, "connection", ACO_EXACT, endpoint_options, NULL, custom_connection_handler, 0);
 	aco_option_register_custom(&cfg_info, "transport", ACO_EXACT, endpoint_options, NULL, custom_transport_handler, 0);
 	aco_option_register(&cfg_info, "maxicecandidates", ACO_EXACT, endpoint_options, DEFAULT_MAX_ICE_CANDIDATES, OPT_UINT_T, PARSE_DEFAULT,
-			    FLDSET(struct jingle_endpoint, maxicecandidates));
+			    FLDSET(struct jingle_endpoint, maxicecandidates), DEFAULT_MAX_ICE_CANDIDATES);
 	aco_option_register(&cfg_info, "maxpayloads", ACO_EXACT, endpoint_options, DEFAULT_MAX_PAYLOADS, OPT_UINT_T, PARSE_DEFAULT,
-			    FLDSET(struct jingle_endpoint, maxpayloads));
+			    FLDSET(struct jingle_endpoint, maxpayloads), DEFAULT_MAX_PAYLOADS);
 
 	ast_format_cap_add_all_by_type(jingle_tech.capabilities, AST_FORMAT_TYPE_AUDIO);
 
@@ -2764,6 +2784,8 @@ static int reload(void)
 static int unload_module(void)
 {
 	ast_channel_unregister(&jingle_tech);
+	ast_format_cap_destroy(jingle_tech.capabilities);
+	jingle_tech.capabilities = NULL;
 	ast_rtp_glue_unregister(&jingle_rtp_glue);
 	ast_sched_context_destroy(sched);
 	aco_info_destroy(&cfg_info);

@@ -26,6 +26,68 @@
 /*** MODULEINFO
 	<support_level>core</support_level>
  ***/
+/*** DOCUMENTATION
+	<managerEvent language="en_US" name="MCID">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Published when a malicious call ID request arrives.</synopsis>
+			<syntax>
+				<channel_snapshot/>
+				<parameter name="MCallerIDNumValid">
+				</parameter>
+				<parameter name="MCallerIDNum">
+				</parameter>
+				<parameter name="MCallerIDton">
+				</parameter>
+				<parameter name="MCallerIDNumPlan">
+				</parameter>
+				<parameter name="MCallerIDNumPres">
+				</parameter>
+				<parameter name="MCallerIDNameValid">
+				</parameter>
+				<parameter name="MCallerIDName">
+				</parameter>
+				<parameter name="MCallerIDNameCharSet">
+				</parameter>
+				<parameter name="MCallerIDNamePres">
+				</parameter>
+				<parameter name="MCallerIDSubaddr">
+				</parameter>
+				<parameter name="MCallerIDSubaddrType">
+				</parameter>
+				<parameter name="MCallerIDSubaddrOdd">
+				</parameter>
+				<parameter name="MCallerIDPres">
+				</parameter>
+				<parameter name="MConnectedIDNumValid">
+				</parameter>
+				<parameter name="MConnectedIDNum">
+				</parameter>
+				<parameter name="MConnectedIDton">
+				</parameter>
+				<parameter name="MConnectedIDNumPlan">
+				</parameter>
+				<parameter name="MConnectedIDNumPres">
+				</parameter>
+				<parameter name="MConnectedIDNameValid">
+				</parameter>
+				<parameter name="MConnectedIDName">
+				</parameter>
+				<parameter name="MConnectedIDNameCharSet">
+				</parameter>
+				<parameter name="MConnectedIDNamePres">
+				</parameter>
+				<parameter name="MConnectedIDSubaddr">
+				</parameter>
+				<parameter name="MConnectedIDSubaddrType">
+				</parameter>
+				<parameter name="MConnectedIDSubaddrOdd">
+				</parameter>
+				<parameter name="MConnectedIDPres">
+				</parameter>
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
+ ***/
 
 #include "asterisk.h"
 
@@ -50,6 +112,8 @@
 #include "asterisk/transcap.h"
 #include "asterisk/features.h"
 #include "asterisk/aoc.h"
+#include "asterisk/bridge.h"
+#include "asterisk/stasis_channels.h"
 
 #include "sig_pri.h"
 #ifndef PRI_EVENT_FACILITY
@@ -665,12 +729,7 @@ static int ast_to_pri_char_set(enum AST_PARTY_CHAR_SET ast_char_set)
  */
 static void sig_pri_set_subaddress(struct ast_party_subaddress *ast_subaddress, const struct pri_party_subaddress *pri_subaddress)
 {
-	char *cnum, *ptr;
-	int x, len;
-
-	if (ast_subaddress->str) {
-		ast_free(ast_subaddress->str);
-	}
+	ast_free(ast_subaddress->str);
 	if (pri_subaddress->length <= 0) {
 		ast_party_subaddress_init(ast_subaddress);
 		return;
@@ -680,8 +739,14 @@ static void sig_pri_set_subaddress(struct ast_party_subaddress *ast_subaddress, 
 		/* NSAP */
 		ast_subaddress->str = ast_strdup((char *) pri_subaddress->data);
 	} else {
+		char *cnum;
+		char *ptr;
+		int x;
+		int len;
+
 		/* User Specified */
-		if (!(cnum = ast_malloc(2 * pri_subaddress->length + 1))) {
+		cnum = ast_malloc(2 * pri_subaddress->length + 1);
+		if (!cnum) {
 			ast_party_subaddress_init(ast_subaddress);
 			return;
 		}
@@ -963,12 +1028,14 @@ static int sig_pri_play_tone(struct sig_pri_chan *p, enum sig_pri_tone tone)
 	}
 }
 
-static struct ast_channel *sig_pri_new_ast_channel(struct sig_pri_chan *p, int state, int ulaw, int transfercapability, char *exten, const struct ast_channel *requestor)
+static struct ast_channel *sig_pri_new_ast_channel(struct sig_pri_chan *p, int state,
+	int ulaw, int transfercapability, char *exten,
+	const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *c;
 
 	if (sig_pri_callbacks.new_ast_channel) {
-		c = sig_pri_callbacks.new_ast_channel(p->chan_pvt, state, ulaw, exten, requestor);
+		c = sig_pri_callbacks.new_ast_channel(p->chan_pvt, state, ulaw, exten, assignedids, requestor);
 	} else {
 		return NULL;
 	}
@@ -1033,14 +1100,17 @@ static void sig_pri_ami_channel_event(struct sig_pri_chan *p)
 	}
 }
 
-struct ast_channel *sig_pri_request(struct sig_pri_chan *p, enum sig_pri_law law, const struct ast_channel *requestor, int transfercapability)
+struct ast_channel *sig_pri_request(struct sig_pri_chan *p, enum sig_pri_law law,
+	const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor,
+	int transfercapability)
 {
 	struct ast_channel *ast;
 
 	ast_debug(1, "%s %d\n", __FUNCTION__, p->channel);
 
 	sig_pri_set_outgoing(p, 1);
-	ast = sig_pri_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability, p->exten, requestor);
+	ast = sig_pri_new_ast_channel(p, AST_STATE_RESERVED, law, transfercapability,
+		p->exten, assignedids, requestor);
 	if (!ast) {
 		sig_pri_set_outgoing(p, 0);
 	}
@@ -1340,6 +1410,7 @@ static void pri_queue_pvt_cause_data(struct sig_pri_span *pri, int chanpos, cons
 	if (chan) {
 		int datalen = sizeof(*cause_code) + strlen(cause);
 		cause_code = ast_alloca(datalen);
+		memset(cause_code, 0, datalen);
 		cause_code->ast_cause = ast_cause;
 		ast_copy_string(cause_code->chan_name, ast_channel_name(chan), AST_CHANNEL_NAME);
 		ast_copy_string(cause_code->code, cause, datalen + 1 - sizeof(*cause_code));
@@ -1587,6 +1658,10 @@ static int pri_fixup_principle(struct sig_pri_span *pri, int principle, q931_cal
 		strcpy(new_chan->moh_suggested, old_chan->moh_suggested);
 		new_chan->moh_state = old_chan->moh_state;
 		old_chan->moh_state = SIG_PRI_MOH_STATE_IDLE;
+#if defined(HAVE_PRI_TRANSFER)
+		new_chan->xfer_data = old_chan->xfer_data;
+		old_chan->xfer_data = NULL;
+#endif	/* defined(HAVE_PRI_TRANSFER) */
 
 #if defined(HAVE_PRI_AOC_EVENTS)
 		new_chan->aoc_s_request_invoke_id = old_chan->aoc_s_request_invoke_id;
@@ -2091,7 +2166,9 @@ static void *pri_ss_thread(void *data)
 #endif	/* defined(ISSUE_16789) */
 
 		sig_pri_set_echocanceller(p, 1);
+		ast_channel_lock(chan);
 		ast_setstate(chan, AST_STATE_RING);
+		ast_channel_unlock(chan);
 		res = ast_pbx_run(chan);
 		if (res) {
 			ast_log(LOG_WARNING, "PBX exited non-zero!\n");
@@ -2265,9 +2342,74 @@ static int sig_pri_msn_match(const char *msn_patterns, const char *exten)
 }
 
 #if defined(HAVE_PRI_MCID)
+static void party_number_json_to_ami(struct ast_str **msg, const char *prefix, struct ast_json *number)
+{
+	const char *num_txt, *pres_txt;
+	int plan, pres;
+	if (!number) {
+		ast_str_append(msg, 0,
+			"%sNumValid: 0\r\n"
+			"%sNum: \r\n"
+			"%ston: 0\r\n",
+			prefix, prefix, prefix);
+		return;
+	}
+
+	num_txt = ast_json_string_get(ast_json_object_get(number, "number"));
+	plan = ast_json_integer_get(ast_json_object_get(number, "plan"));
+	pres = ast_json_integer_get(ast_json_object_get(number, "presentation"));
+	pres_txt = ast_json_string_get(ast_json_object_get(number, "presentation_txt"));
+
+	ast_str_append(msg, 0, "%sNumValid: 1\r\n", prefix);
+	ast_str_append(msg, 0, "%sNum: %s\r\n", prefix, num_txt);
+	ast_str_append(msg, 0, "%ston: %d\r\n", prefix, plan);
+	ast_str_append(msg, 0, "%sNumPlan: %d\r\n", prefix, plan);
+	ast_str_append(msg, 0, "%sNumPres: %d (%s)\r\n", prefix, pres, pres_txt);
+}
+
+static void party_name_json_to_ami(struct ast_str **msg, const char *prefix, struct ast_json *name)
+{
+	const char *name_txt, *pres_txt, *charset;
+	int pres;
+	if (!name) {
+		ast_str_append(msg, 0,
+			"%sNameValid: 0\r\n"
+			"%sName: \r\n",
+			prefix, prefix);
+		return;
+	}
+
+	name_txt = ast_json_string_get(ast_json_object_get(name, "name"));
+	charset = ast_json_string_get(ast_json_object_get(name, "character_set"));
+	pres = ast_json_integer_get(ast_json_object_get(name, "presentation"));
+	pres_txt = ast_json_string_get(ast_json_object_get(name, "presentation_txt"));
+
+	ast_str_append(msg, 0, "%sNameValid: 1\r\n", prefix);
+	ast_str_append(msg, 0, "%sName: %s\r\n", prefix, name_txt);
+	ast_str_append(msg, 0, "%sNameCharSet: %s\r\n", prefix, charset);
+	ast_str_append(msg, 0, "%sNamePres: %d (%s)\r\n", prefix, pres, pres_txt);
+}
+
+static void party_subaddress_json_to_ami(struct ast_str **msg, const char *prefix, struct ast_json *subaddress)
+{
+	const char *subaddress_txt, *type_txt;
+	int odd;
+	if (!subaddress) {
+		return;
+	}
+
+	subaddress_txt = ast_json_string_get(ast_json_object_get(subaddress, "subaddress"));
+	type_txt = ast_json_string_get(ast_json_object_get(subaddress, "type"));
+	odd = ast_json_is_true(ast_json_object_get(subaddress, "odd")) ? 1 : 0;
+
+	ast_str_append(msg, 0, "%sSubaddr: %s\r\n", prefix, subaddress_txt);
+	ast_str_append(msg, 0, "%sSubaddrType: %s\r\n", prefix, type_txt);
+	ast_str_append(msg, 0, "%sSubaddrOdd: %d\r\n", prefix, odd);
+}
+
 /*!
  * \internal
- * \brief Append the given party id to the event string.
+ * \brief Append the given JSON party id to the event string.
  * \since 1.8
  *
  * \param msg Event message string being built.
@@ -2276,58 +2418,72 @@ static int sig_pri_msn_match(const char *msn_patterns, const char *exten)
  *
  * \return Nothing
  */
-static void sig_pri_event_party_id(struct ast_str **msg, const char *prefix, struct ast_party_id *party)
+static void party_json_to_ami(struct ast_str **msg, const char *prefix, struct ast_json *party)
 {
-	int pres;
+	struct ast_json *presentation = ast_json_object_get(party, "presentation");
+	struct ast_json *presentation_txt = ast_json_object_get(party, "presentation_txt");
+	struct ast_json *name = ast_json_object_get(party, "name");
+	struct ast_json *number = ast_json_object_get(party, "number");
+	struct ast_json *subaddress = ast_json_object_get(party, "subaddress");
 
 	/* Combined party presentation */
-	pres = ast_party_id_presentation(party);
-	ast_str_append(msg, 0, "%sPres: %d (%s)\r\n", prefix, pres,
-		ast_describe_caller_presentation(pres));
+	ast_str_append(msg, 0, "%sPres: %d (%s)\r\n", prefix,
+		(uint32_t)ast_json_integer_get(presentation),
+		ast_json_string_get(presentation_txt));
 
 	/* Party number */
-	ast_str_append(msg, 0, "%sNumValid: %d\r\n", prefix,
-		(unsigned) party->number.valid);
-	ast_str_append(msg, 0, "%sNum: %s\r\n", prefix,
-		S_COR(party->number.valid, party->number.str, ""));
-	ast_str_append(msg, 0, "%ston: %d\r\n", prefix, party->number.plan);
-	if (party->number.valid) {
-		ast_str_append(msg, 0, "%sNumPlan: %d\r\n", prefix, party->number.plan);
-		ast_str_append(msg, 0, "%sNumPres: %d (%s)\r\n", prefix,
-			party->number.presentation,
-			ast_describe_caller_presentation(party->number.presentation));
-	}
+	party_number_json_to_ami(msg, prefix, number);
 
 	/* Party name */
-	ast_str_append(msg, 0, "%sNameValid: %d\r\n", prefix,
-		(unsigned) party->name.valid);
-	ast_str_append(msg, 0, "%sName: %s\r\n", prefix,
-		S_COR(party->name.valid, party->name.str, ""));
-	if (party->name.valid) {
-		ast_str_append(msg, 0, "%sNameCharSet: %s\r\n", prefix,
-			ast_party_name_charset_describe(party->name.char_set));
-		ast_str_append(msg, 0, "%sNamePres: %d (%s)\r\n", prefix,
-			party->name.presentation,
-			ast_describe_caller_presentation(party->name.presentation));
-	}
+	party_name_json_to_ami(msg, prefix, name);
 
-#if defined(HAVE_PRI_SUBADDR)
 	/* Party subaddress */
-	if (party->subaddress.valid) {
-		static const char subaddress[] = "Subaddr";
-
-		ast_str_append(msg, 0, "%s%s: %s\r\n", prefix, subaddress,
-			S_OR(party->subaddress.str, ""));
-		ast_str_append(msg, 0, "%s%sType: %d\r\n", prefix, subaddress,
-			party->subaddress.type);
-		ast_str_append(msg, 0, "%s%sOdd: %d\r\n", prefix, subaddress,
-			party->subaddress.odd_even_indicator);
-	}
-#endif	/* defined(HAVE_PRI_SUBADDR) */
+	party_subaddress_json_to_ami(msg, prefix, subaddress);
 }
-#endif	/* defined(HAVE_PRI_MCID) */
 
-#if defined(HAVE_PRI_MCID)
+static struct ast_manager_event_blob *mcid_to_ami(struct stasis_message *msg)
+{
+	RAII_VAR(struct ast_str *, channel_string, NULL, ast_free);
+	RAII_VAR(struct ast_str *, party_string, ast_str_create(256), ast_free);
+	struct ast_channel_blob *obj = stasis_message_data(msg);
+
+	if (obj->snapshot) {
+		channel_string = ast_manager_build_channel_state_string(obj->snapshot);
+		if (!channel_string) {
+			return NULL;
+		}
+	}
+
+	party_json_to_ami(&party_string, "MCallerID", ast_json_object_get(obj->blob, "caller"));
+	party_json_to_ami(&party_string, "MConnectedID", ast_json_object_get(obj->blob, "connected"));
+
+	return ast_manager_event_blob_create(EVENT_FLAG_CALL, "MCID",
+		"%s"
+		"%s",
+		S_COR(obj->snapshot, ast_str_buffer(channel_string), ""), ast_str_buffer(party_string));
+}
+
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(mcid_type,
+	.to_ami = mcid_to_ami,
+	);
+
+static void send_mcid(struct ast_channel *chan, struct ast_party_id *caller, struct ast_party_id *connected)
+{
+	RAII_VAR(struct ast_json *, blob, NULL, ast_json_unref);
+
+	ast_assert(caller != NULL);
+	ast_assert(connected != NULL);
+
+	blob = ast_json_pack("{s: o, s: o}",
+		"caller", ast_json_party_id(caller),
+		"connected", ast_json_party_id(connected));
+	if (!blob) {
+		return;
+	}
+
+	ast_channel_publish_blob(chan, mcid_type(), blob);
+}
+
 /*!
  * \internal
  * \brief Handle the MCID event.
@@ -2345,15 +2501,12 @@ static void sig_pri_event_party_id(struct ast_str **msg, const char *prefix, str
  */
 static void sig_pri_mcid_event(struct sig_pri_span *pri, const struct pri_subcmd_mcid_req *mcid, struct ast_channel *owner)
 {
-	struct ast_channel *chans[1];
-	struct ast_str *msg;
-	struct ast_party_id party;
+	struct ast_party_id caller_party;
+	struct ast_party_id connected_party;
 
-	msg = ast_str_create(4096);
-	if (!msg) {
-		return;
-	}
-
+	/* Always use libpri's called party information. */
+	ast_party_id_init(&connected_party);
+	sig_pri_party_id_convert(&connected_party, &mcid->answerer, pri);
 	if (owner) {
 		/*
 		 * The owner channel is present.
@@ -2361,31 +2514,18 @@ static void sig_pri_mcid_event(struct sig_pri_span *pri, const struct pri_subcmd
 		 */
 		ast_queue_control(owner, AST_CONTROL_MCID);
 
-		ast_str_append(&msg, 0, "Channel: %s\r\n", ast_channel_name(owner));
-		ast_str_append(&msg, 0, "UniqueID: %s\r\n", ast_channel_uniqueid(owner));
-
-		sig_pri_event_party_id(&msg, "CallerID", &ast_channel_connected(owner)->id);
+		send_mcid(owner, &ast_channel_connected(owner)->id, &connected_party);
 	} else {
 		/*
 		 * Since we no longer have an owner channel,
 		 * we have to use the caller information supplied by libpri.
 		 */
-		ast_party_id_init(&party);
-		sig_pri_party_id_convert(&party, &mcid->originator, pri);
-		sig_pri_event_party_id(&msg, "CallerID", &party);
-		ast_party_id_free(&party);
+		ast_party_id_init(&caller_party);
+		sig_pri_party_id_convert(&caller_party, &mcid->originator, pri);
+		send_mcid(owner, &caller_party, &connected_party);
+		ast_party_id_free(&caller_party);
 	}
-
-	/* Always use libpri's called party information. */
-	ast_party_id_init(&party);
-	sig_pri_party_id_convert(&party, &mcid->answerer, pri);
-	sig_pri_event_party_id(&msg, "ConnectedID", &party);
-	ast_party_id_free(&party);
-
-	chans[0] = owner;
-	ast_manager_event_multichan(EVENT_FLAG_CALL, "MCID", owner ? 1 : 0, chans, "%s",
-		ast_str_buffer(msg));
-	ast_free(msg);
+	ast_party_id_free(&connected_party);
 }
 #endif	/* defined(HAVE_PRI_MCID) */
 
@@ -2396,6 +2536,8 @@ struct xfer_rsp_data {
 	q931_call *call;
 	/*! Invocation ID to use when sending a reply to the transfer request. */
 	int invoke_id;
+	/*! TRUE if the transfer response has been made. */
+	int responded;
 };
 #endif	/* defined(HAVE_PRI_TRANSFER) */
 
@@ -2405,31 +2547,23 @@ struct xfer_rsp_data {
  * \brief Send the transfer success/fail response message.
  * \since 1.8
  *
- * \param data Callback user data pointer
+ * \param rsp Transfer response data.
  * \param is_successful TRUE if the transfer was successful.
+ *
+ * \note Assumes the rsp->pri->lock is already obtained.
  *
  * \return Nothing
  */
-static void sig_pri_transfer_rsp(void *data, int is_successful)
+static void sig_pri_transfer_rsp(struct xfer_rsp_data *rsp, int is_successful)
 {
-	struct xfer_rsp_data *rsp = data;
+	if (rsp->responded) {
+		return;
+	}
+	rsp->responded = 1;
 
 	pri_transfer_rsp(rsp->pri->pri, rsp->call, rsp->invoke_id, is_successful);
 }
 #endif	/* defined(HAVE_PRI_TRANSFER) */
-
-#if defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER)
-/*!
- * \brief Protocol callback to indicate if transfer will happen.
- * \since 1.8
- *
- * \param data Callback user data pointer
- * \param is_successful TRUE if the transfer will happen.
- *
- * \return Nothing
- */
-typedef void (*xfer_rsp_callback)(void *data, int is_successful);
-#endif	/* defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER) */
 
 #if defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER)
 /*!
@@ -2442,15 +2576,14 @@ typedef void (*xfer_rsp_callback)(void *data, int is_successful);
  * \param call_1_held TRUE if call_1_pri is on hold.
  * \param call_2_pri Second call involved in the transfer. (target; usually active/ringing)
  * \param call_2_held TRUE if call_2_pri is on hold.
- * \param rsp_callback Protocol callback to indicate if transfer will happen. NULL if not used.
- * \param data Callback user data pointer
+ * \param xfer_data Transfer response data if non-NULL.
  *
  * \note Assumes the pri->lock is already obtained.
  *
  * \retval 0 on success.
  * \retval -1 on error.
  */
-static int sig_pri_attempt_transfer(struct sig_pri_span *pri, q931_call *call_1_pri, int call_1_held, q931_call *call_2_pri, int call_2_held, xfer_rsp_callback rsp_callback, void *data)
+static int sig_pri_attempt_transfer(struct sig_pri_span *pri, q931_call *call_1_pri, int call_1_held, q931_call *call_2_pri, int call_2_held, struct xfer_rsp_data *xfer_data)
 {
 	struct attempt_xfer_call {
 		q931_call *pri;
@@ -2459,10 +2592,9 @@ static int sig_pri_attempt_transfer(struct sig_pri_span *pri, q931_call *call_1_
 		int chanpos;
 	};
 	int retval;
-	struct ast_channel *transferee;
+	enum ast_transfer_result xfer_res;
 	struct attempt_xfer_call *call_1;
 	struct attempt_xfer_call *call_2;
-	struct attempt_xfer_call *swap_call;
 	struct attempt_xfer_call c1;
 	struct attempt_xfer_call c2;
 
@@ -2478,118 +2610,104 @@ static int sig_pri_attempt_transfer(struct sig_pri_span *pri, q931_call *call_1_
 	call_2->chanpos = pri_find_principle_by_call(pri, call_2->pri);
 	if (call_1->chanpos < 0 || call_2->chanpos < 0) {
 		/* Calls not found in span control. */
-		if (rsp_callback) {
+#if defined(HAVE_PRI_TRANSFER)
+		if (xfer_data) {
 			/* Transfer failed. */
-			rsp_callback(data, 0);
+			sig_pri_transfer_rsp(xfer_data, 0);
 		}
+#endif	/* defined(HAVE_PRI_TRANSFER) */
 		return -1;
 	}
 
-	/* Attempt to make transferee and target consistent. */
-	if (!call_1->held && call_2->held) {
-		/*
-		 * Swap call_1 and call_2 to make call_1 the transferee(held call)
-		 * and call_2 the target(active call).
-		 */
-		swap_call = call_1;
-		call_1 = call_2;
-		call_2 = swap_call;
-	}
-
-	/* Deadlock avoidance is attempted. */
+	/* Get call_1 owner. */
 	sig_pri_lock_private(pri->pvts[call_1->chanpos]);
 	sig_pri_lock_owner(pri, call_1->chanpos);
+	call_1->ast = pri->pvts[call_1->chanpos]->owner;
+	if (call_1->ast) {
+		ast_channel_ref(call_1->ast);
+		ast_channel_unlock(call_1->ast);
+	}
+	sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
+
+	/* Get call_2 owner. */
 	sig_pri_lock_private(pri->pvts[call_2->chanpos]);
 	sig_pri_lock_owner(pri, call_2->chanpos);
-
-	call_1->ast = pri->pvts[call_1->chanpos]->owner;
 	call_2->ast = pri->pvts[call_2->chanpos]->owner;
+	if (call_2->ast) {
+		ast_channel_ref(call_2->ast);
+		ast_channel_unlock(call_2->ast);
+	}
+	sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
+
 	if (!call_1->ast || !call_2->ast) {
 		/* At least one owner is not present. */
 		if (call_1->ast) {
-			ast_channel_unlock(call_1->ast);
+			ast_channel_unref(call_1->ast);
 		}
 		if (call_2->ast) {
-			ast_channel_unlock(call_2->ast);
+			ast_channel_unref(call_2->ast);
 		}
-		sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
-		sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
-		if (rsp_callback) {
+#if defined(HAVE_PRI_TRANSFER)
+		if (xfer_data) {
 			/* Transfer failed. */
-			rsp_callback(data, 0);
+			sig_pri_transfer_rsp(xfer_data, 0);
 		}
+#endif	/* defined(HAVE_PRI_TRANSFER) */
 		return -1;
 	}
 
-	for (;;) {
-		transferee = ast_bridged_channel(call_1->ast);
-		if (transferee) {
-			break;
-		}
+	ast_verb(3, "TRANSFERRING %s to %s\n",
+		ast_channel_name(call_1->ast), ast_channel_name(call_2->ast));
 
-		/* Try masquerading the other way. */
-		swap_call = call_1;
-		call_1 = call_2;
-		call_2 = swap_call;
-
-		transferee = ast_bridged_channel(call_1->ast);
-		if (transferee) {
-			break;
-		}
-
-		/* Could not transfer.  Neither call is bridged. */
-		ast_channel_unlock(call_1->ast);
-		ast_channel_unlock(call_2->ast);
-		sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
-		sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
-
-		if (rsp_callback) {
-			/* Transfer failed. */
-			rsp_callback(data, 0);
-		}
-		return -1;
-	}
-
-	ast_verb(3, "TRANSFERRING %s to %s\n", ast_channel_name(call_1->ast), ast_channel_name(call_2->ast));
-
-	/*
-	 * Setup transfer masquerade.
-	 *
-	 * Note:  There is an extremely nasty deadlock avoidance issue
-	 * with ast_channel_transfer_masquerade().  Deadlock may be possible if
-	 * the channels involved are proxies (chan_agent channels) and
-	 * it is called with locks.  Unfortunately, there is no simple
-	 * or even merely difficult way to guarantee deadlock avoidance
-	 * and still be able to send an ECT success response without the
-	 * possibility of the bridged channel hanging up on us.
-	 */
-	ast_mutex_unlock(&pri->lock);
-	retval = ast_channel_transfer_masquerade(
-		call_2->ast,
-		ast_channel_connected(call_2->ast),
-		call_2->held,
-		transferee,
-		ast_channel_connected(call_1->ast),
-		call_1->held);
-
-	/* Reacquire the pri->lock to hold off completion of the transfer masquerade. */
-	ast_mutex_lock(&pri->lock);
-
-	ast_channel_unlock(call_1->ast);
-	ast_channel_unlock(call_2->ast);
-	sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
-	sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
-
-	if (rsp_callback) {
+#if defined(HAVE_PRI_TRANSFER)
+	if (xfer_data) {
 		/*
-		 * Report transfer status.
-		 *
-		 * Must do the callback before the masquerade completes to ensure
-		 * that the protocol message goes out before the call leg is
-		 * disconnected.
+		 * Add traps on the transferer channels in case threading causes
+		 * them to hangup before ast_bridge_transfer_attended() returns
+		 * and we can get the pri->lock back.
 		 */
-		rsp_callback(data, retval ? 0 : 1);
+		sig_pri_lock_private(pri->pvts[call_1->chanpos]);
+		pri->pvts[call_1->chanpos]->xfer_data = xfer_data;
+		sig_pri_unlock_private(pri->pvts[call_1->chanpos]);
+		sig_pri_lock_private(pri->pvts[call_2->chanpos]);
+		pri->pvts[call_2->chanpos]->xfer_data = xfer_data;
+		sig_pri_unlock_private(pri->pvts[call_2->chanpos]);
 	}
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+
+	ast_mutex_unlock(&pri->lock);
+	xfer_res = ast_bridge_transfer_attended(call_1->ast, call_2->ast);
+	ast_mutex_lock(&pri->lock);
+	retval = (xfer_res != AST_BRIDGE_TRANSFER_SUCCESS) ? -1 : 0;
+
+#if defined(HAVE_PRI_TRANSFER)
+	if (xfer_data) {
+		int rsp_chanpos;
+
+		/*
+		 * Remove the transferrer channel traps.
+		 *
+		 * We must refind chanpos because we released pri->lock.
+		 */
+		rsp_chanpos = pri_find_principle_by_call(pri, call_1->pri);
+		if (0 <= rsp_chanpos) {
+			sig_pri_lock_private(pri->pvts[rsp_chanpos]);
+			pri->pvts[rsp_chanpos]->xfer_data = NULL;
+			sig_pri_unlock_private(pri->pvts[rsp_chanpos]);
+		}
+		rsp_chanpos = pri_find_principle_by_call(pri, call_2->pri);
+		if (0 <= rsp_chanpos) {
+			sig_pri_lock_private(pri->pvts[rsp_chanpos]);
+			pri->pvts[rsp_chanpos]->xfer_data = NULL;
+			sig_pri_unlock_private(pri->pvts[rsp_chanpos]);
+		}
+
+		/* Report transfer status. */
+		sig_pri_transfer_rsp(xfer_data, retval ? 0 : 1);
+	}
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+	ast_channel_unref(call_1->ast);
+	ast_channel_unref(call_2->ast);
 	return retval;
 }
 #endif	/* defined(HAVE_PRI_CALL_HOLD) || defined(HAVE_PRI_TRANSFER) */
@@ -4256,14 +4374,11 @@ static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int ev
 
 				pri->pvts[chanpos]->cid_subaddr[0] = '\0';
 #if defined(HAVE_PRI_SUBADDR)
-				if (ast_connected.id.subaddress.valid) {
-					ast_party_subaddress_set(&ast_channel_caller(owner)->id.subaddress,
-						&ast_connected.id.subaddress);
-					if (ast_connected.id.subaddress.str) {
-						ast_copy_string(pri->pvts[chanpos]->cid_subaddr,
-							ast_connected.id.subaddress.str,
-							sizeof(pri->pvts[chanpos]->cid_subaddr));
-					}
+				if (ast_connected.id.subaddress.str) {
+					ast_copy_string(pri->pvts[chanpos]->cid_subaddr,
+						ast_connected.id.subaddress.str,
+						sizeof(pri->pvts[chanpos]->cid_subaddr));
+					caller_id_update = 1;
 				}
 #endif	/* defined(HAVE_PRI_SUBADDR) */
 				if (caller_id_update) {
@@ -4277,12 +4392,13 @@ static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int ev
 					ast_caller.id = ast_connected.id;
 					ast_caller.ani = ast_connected.id;
 					ast_channel_set_caller_event(owner, &ast_caller, NULL);
-				}
 
-				/* Update the connected line information on the other channel */
-				if (event_id != PRI_EVENT_RING) {
-					/* This connected_line update was not from a SETUP message. */
-					ast_channel_queue_connected_line_update(owner, &ast_connected, NULL);
+					/* Update the connected line information on the other channel */
+					if (event_id != PRI_EVENT_RING) {
+						/* This connected_line update was not from a SETUP message. */
+						ast_channel_queue_connected_line_update(owner, &ast_connected,
+							NULL);
+					}
 				}
 
 				ast_party_connected_line_free(&ast_connected);
@@ -4457,10 +4573,11 @@ static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int ev
 			xfer_rsp.pri = pri;
 			xfer_rsp.call = call_rsp;
 			xfer_rsp.invoke_id = subcmd->u.transfer.invoke_id;
+			xfer_rsp.responded = 0;
 			sig_pri_attempt_transfer(pri,
 				subcmd->u.transfer.call_1, subcmd->u.transfer.is_call_1_held,
 				subcmd->u.transfer.call_2, subcmd->u.transfer.is_call_2_held,
-				sig_pri_transfer_rsp, &xfer_rsp);
+				&xfer_rsp);
 			sig_pri_lock_private(pri->pvts[chanpos]);
 			break;
 #endif	/* defined(HAVE_PRI_TRANSFER) */
@@ -4682,7 +4799,7 @@ static const char *sig_pri_moh_event_str(enum sig_pri_moh_event event)
  * \since 10.0
  *
  * \param pvt Channel private control structure.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4726,7 +4843,7 @@ static enum sig_pri_moh_state sig_pri_moh_retrieve_call(struct sig_pri_chan *pvt
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4790,7 +4907,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_idle(struct ast_channel *chan, str
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4830,7 +4947,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_notify(struct ast_channel *chan, s
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4867,7 +4984,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_moh(struct ast_channel *chan, stru
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4912,7 +5029,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_hold_req(struct ast_channel *chan,
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4953,7 +5070,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_pend_unhold(struct ast_channel *ch
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -4995,7 +5112,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_hold(struct ast_channel *chan, str
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -5037,7 +5154,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_retrieve_req(struct ast_channel *c
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -5115,7 +5232,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_pend_hold(struct ast_channel *chan
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -5155,7 +5272,7 @@ static enum sig_pri_moh_state sig_pri_moh_fsm_retrieve_fail(struct ast_channel *
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -5188,7 +5305,7 @@ static const sig_pri_moh_fsm_state sig_pri_moh_fsm[SIG_PRI_MOH_STATE_NUM] = {
  * \param chan Channel to post event to (Usually pvt->owner)
  * \param pvt Channel private control structure.
  * \param event MOH event to process.
- * 
+ *
  * \note Assumes the pvt->pri->lock is already obtained.
  * \note Assumes the sig_pri_lock_private(pvt) is already obtained.
  *
@@ -5747,7 +5864,7 @@ static void *pri_dchannel(void *vpri)
 					 */
 					sig_pri_lock_private(pri->pvts[nextidle]);
 					sig_pri_unlock_private(pri->pvts[nextidle]);
-					idle = sig_pri_request(pri->pvts[nextidle], AST_FORMAT_ULAW, NULL, 0);
+					idle = sig_pri_request(pri->pvts[nextidle], AST_FORMAT_ULAW, NULL, NULL, 0);
 					ast_mutex_lock(&pri->lock);
 					if (idle) {
 						pri->pvts[nextidle]->isidlecall = 1;
@@ -6358,10 +6475,11 @@ static void *pri_dchannel(void *vpri)
 						ast_mutex_unlock(&pri->lock);
 						c = sig_pri_new_ast_channel(pri->pvts[chanpos],
 							AST_STATE_RESERVED, law, e->ring.ctype,
-							pri->pvts[chanpos]->exten, NULL);
+							pri->pvts[chanpos]->exten, NULL, NULL);
 						ast_mutex_lock(&pri->lock);
 						sig_pri_lock_private(pri->pvts[chanpos]);
 						if (c) {
+							ast_channel_stage_snapshot(c);
 #if defined(HAVE_PRI_SUBADDR)
 							if (e->ring.calling.subaddress.valid) {
 								/* Set Calling Subaddress */
@@ -6446,6 +6564,7 @@ static void *pri_dchannel(void *vpri)
 									PVT_TO_CHANNEL(pri->pvts[chanpos]), 1);
 #endif
 							}
+							ast_channel_stage_snapshot_done(c);
 						}
 						if (c && !ast_pthread_create_detached(&threadid, NULL, pri_ss_thread, pri->pvts[chanpos])) {
 							ast_verb(3, "Accepting overlap call from '%s' to '%s' on channel %d/%d, span %d\n",
@@ -6479,7 +6598,7 @@ static void *pri_dchannel(void *vpri)
 						ast_mutex_unlock(&pri->lock);
 						c = sig_pri_new_ast_channel(pri->pvts[chanpos],
 							AST_STATE_RING, law, e->ring.ctype,
-							pri->pvts[chanpos]->exten, NULL);
+							pri->pvts[chanpos]->exten, NULL, NULL);
 						ast_mutex_lock(&pri->lock);
 						sig_pri_lock_private(pri->pvts[chanpos]);
 						if (c) {
@@ -6491,6 +6610,7 @@ static void *pri_dchannel(void *vpri)
 							 * will do anything with the channel we have just
 							 * created.
 							 */
+							ast_channel_stage_snapshot(c);
 #if defined(HAVE_PRI_SUBADDR)
 							if (e->ring.calling.subaddress.valid) {
 								/* Set Calling Subaddress */
@@ -6559,6 +6679,8 @@ static void *pri_dchannel(void *vpri)
 
 							sig_pri_handle_subcmds(pri, chanpos, e->e, e->ring.subcmds,
 								e->ring.call);
+
+							ast_channel_stage_snapshot_done(c);
 						}
 						if (c && !ast_pbx_start(c)) {
 							ast_verb(3, "Accepting call from '%s' to '%s' on channel %d/%d, span %d\n",
@@ -7114,7 +7236,7 @@ static void *pri_dchannel(void *vpri)
 					/* We are to transfer the call instead of simply hanging up. */
 					sig_pri_unlock_private(pri->pvts[chanpos]);
 					if (!sig_pri_attempt_transfer(pri, e->hangup.call_held, 1,
-						e->hangup.call_active, 0, NULL, NULL)) {
+						e->hangup.call_active, 0, NULL)) {
 						break;
 					}
 					sig_pri_lock_private(pri->pvts[chanpos]);
@@ -7182,7 +7304,7 @@ static void *pri_dchannel(void *vpri)
 #if defined(HAVE_PRI_AOC_EVENTS)
 						if (!pri->pvts[chanpos]->holding_aoce
 							&& pri->aoce_delayhangup
-							&& ast_bridged_channel(pri->pvts[chanpos]->owner)) {
+							&& ast_channel_is_bridged(pri->pvts[chanpos]->owner)) {
 							sig_pri_send_aoce_termination_request(pri, chanpos,
 								pri_get_timer(pri->pri, PRI_TIMER_T305) / 2);
 						} else if (detect_aoc_e_subcmd(e->hangup.subcmds)) {
@@ -7595,6 +7717,20 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 		}
 #endif	/* defined(SUPPORT_USERUSER) */
 
+#if defined(HAVE_PRI_TRANSFER)
+		if (p->xfer_data) {
+			/*
+			 * The transferrer call leg is disconnecting.  It must mean that
+			 * the transfer was successful and the core is disconnecting the
+			 * call legs involved.
+			 *
+			 * The transfer protocol response message must go out before the
+			 * call leg is disconnected.
+			 */
+			sig_pri_transfer_rsp(p->xfer_data, 1);
+		}
+#endif	/* defined(HAVE_PRI_TRANSFER) */
+
 #if defined(HAVE_PRI_AOC_EVENTS)
 		if (p->holding_aoce) {
 			pri_aoc_e_send(p->pri->pri, p->call, &p->aoc_e);
@@ -7623,6 +7759,9 @@ int sig_pri_hangup(struct sig_pri_chan *p, struct ast_channel *ast)
 			pri_hangup(p->pri->pri, p->call, icause);
 		}
 	}
+#if defined(HAVE_PRI_TRANSFER)
+	p->xfer_data = NULL;
+#endif	/* defined(HAVE_PRI_TRANSFER) */
 #if defined(HAVE_PRI_AOC_EVENTS)
 	p->aoc_s_request_invoke_id_valid = 0;
 	p->holding_aoce = 0;
@@ -8712,25 +8851,25 @@ void sig_pri_dial_complete(struct sig_pri_chan *pvt, struct ast_channel *ast)
  *
  * \param pri PRI span control structure.
  * \param vm_number Voicemail controlling number (NULL if not present).
- * \param mbox_number Mailbox number
- * \param mbox_context Mailbox context
+ * \param vm_box Voicemail mailbox number
+ * \param mbox_id Mailbox id
  * \param num_messages Number of messages waiting.
  *
  * \return Nothing
  */
-static void sig_pri_send_mwi_indication(struct sig_pri_span *pri, const char *vm_number, const char *mbox_number, const char *mbox_context, int num_messages)
+static void sig_pri_send_mwi_indication(struct sig_pri_span *pri, const char *vm_number, const char *vm_box, const char *mbox_id, int num_messages)
 {
 	struct pri_party_id voicemail;
 	struct pri_party_id mailbox;
 
-	ast_debug(1, "Send MWI indication for %s@%s vm_number:%s num_messages:%d\n",
-		mbox_number, mbox_context, S_OR(vm_number, "<not-present>"), num_messages);
+	ast_debug(1, "Send MWI indication for %s(%s) vm_number:%s num_messages:%d\n",
+		vm_box, mbox_id, S_OR(vm_number, "<not-present>"), num_messages);
 
 	memset(&mailbox, 0, sizeof(mailbox));
 	mailbox.number.valid = 1;
 	mailbox.number.presentation = PRES_ALLOWED_USER_NUMBER_NOT_SCREENED;
 	mailbox.number.plan = (PRI_TON_UNKNOWN << 4) | PRI_NPI_UNKNOWN;
-	ast_copy_string(mailbox.number.str, mbox_number, sizeof(mailbox.number.str));
+	ast_copy_string(mailbox.number.str, vm_box, sizeof(mailbox.number.str));
 
 	memset(&voicemail, 0, sizeof(voicemail));
 	voicemail.number.valid = 1;
@@ -8757,17 +8896,16 @@ static void sig_pri_send_mwi_indication(struct sig_pri_span *pri, const char *vm
  * \brief MWI subscription event callback.
  * \since 1.8
  *
- * \param event the event being passed to the subscriber
- * \param userdata the data provider in the call to ast_event_subscribe()
+ * \param userdata the data provider in the call to stasis_subscribe()
+ * \param sub the subscription to which the message was delivered for this callback
+ * \param topic the topic on which the message was published
+ * \param msg the message being passed to the subscriber
  *
  * \return Nothing
  */
-static void sig_pri_mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void sig_pri_mwi_event_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	struct sig_pri_span *pri = userdata;
-	const char *mbox_context;
-	const char *mbox_number;
-	int num_messages;
 	int idx;
 	struct ast_mwi_state *mwi_state;
 
@@ -8777,26 +8915,16 @@ static void sig_pri_mwi_event_cb(void *userdata, struct stasis_subscription *sub
 
 	mwi_state = stasis_message_data(msg);
 
-	mbox_number = mwi_state->mailbox;
-	if (ast_strlen_zero(mbox_number)) {
-		return;
-	}
-	mbox_context = mwi_state->context;
-	if (ast_strlen_zero(mbox_context)) {
-		return;
-	}
-	num_messages = mwi_state->new_msgs;
-
 	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
 		if (!pri->mbox[idx].sub) {
 			/* Mailbox slot is empty */
 			continue;
 		}
-		if (!strcmp(pri->mbox[idx].number, mbox_number)
-			&& !strcmp(pri->mbox[idx].context, mbox_context)) {
+
+		if (!strcmp(pri->mbox[idx].uniqueid, mwi_state->uniqueid)) {
 			/* Found the mailbox. */
-			sig_pri_send_mwi_indication(pri, pri->mbox[idx].vm_number, mbox_number,
-				mbox_context, num_messages);
+			sig_pri_send_mwi_indication(pri, pri->mbox[idx].vm_number,
+				pri->mbox[idx].vm_box, pri->mbox[idx].uniqueid, mwi_state->new_msgs);
 			break;
 		}
 	}
@@ -8816,7 +8944,6 @@ static void sig_pri_mwi_event_cb(void *userdata, struct stasis_subscription *sub
 static void sig_pri_mwi_cache_update(struct sig_pri_span *pri)
 {
 	int idx;
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 	struct ast_mwi_state *mwi_state;
 
 	for (idx = 0; idx < ARRAY_LEN(pri->mbox); ++idx) {
@@ -8826,18 +8953,16 @@ static void sig_pri_mwi_cache_update(struct sig_pri_span *pri)
 			continue;
 		}
 
-		ast_str_reset(uniqueid);
-		ast_str_set(&uniqueid, 0, "%s@%s", pri->mbox[idx].number, pri->mbox[idx].context);
-
-		msg = stasis_cache_get(ast_mwi_topic_cached(), ast_mwi_state_type(), ast_str_buffer(uniqueid));
+		msg = stasis_cache_get(ast_mwi_state_cache(), ast_mwi_state_type(),
+			pri->mbox[idx].uniqueid);
 		if (!msg) {
 			/* No cached event for this mailbox. */
 			continue;
 		}
 
 		mwi_state = stasis_message_data(msg);
-		sig_pri_send_mwi_indication(pri, pri->mbox[idx].vm_number, pri->mbox[idx].number,
-			pri->mbox[idx].context, mwi_state->new_msgs);
+		sig_pri_send_mwi_indication(pri, pri->mbox[idx].vm_number, pri->mbox[idx].vm_box,
+			pri->mbox[idx].uniqueid, mwi_state->new_msgs);
 	}
 }
 #endif	/* defined(HAVE_PRI_MWI) */
@@ -8922,8 +9047,6 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
 #if defined(HAVE_PRI_MWI)
 	char *saveptr;
 	char *prev_vm_number;
-	struct ast_str *mwi_description = ast_str_alloca(64);
-	struct ast_str *uniqueid = ast_str_alloca(AST_MAX_MAILBOX_UNIQUEID);
 #endif	/* defined(HAVE_PRI_MWI) */
 
 #if defined(HAVE_PRI_MWI)
@@ -8963,58 +9086,61 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
 	}
 
 	/*
+	 * Split the mwi_vm_boxes configuration string into the mbox[].vm_box:
+	 * vm_box{,vm_box}
+	 */
+	saveptr = pri->mwi_vm_boxes;
+	for (i = 0; i < ARRAY_LEN(pri->mbox); ++i) {
+		char *vm_box;
+
+		vm_box = strsep(&saveptr, ",");
+		if (vm_box) {
+			vm_box = ast_strip(vm_box);
+			if (ast_strlen_zero(vm_box)) {
+				vm_box = NULL;
+			}
+		}
+		pri->mbox[i].vm_box = vm_box;
+	}
+
+	/*
 	 * Split the mwi_mailboxes configuration string into the mbox[]:
-	 * mailbox_number[@context]{,mailbox_number[@context]}
+	 * vm_mailbox{,vm_mailbox}
 	 */
 	saveptr = pri->mwi_mailboxes;
 	for (i = 0; i < ARRAY_LEN(pri->mbox); ++i) {
-		char *mbox_number;
-		char *mbox_context;
+		char *mbox_id;
 		struct stasis_topic *mailbox_specific_topic;
 
-		mbox_number = strsep(&saveptr, ",");
-		if (!mbox_number) {
-			/* No more defined mailboxes. */
-			break;
+		mbox_id = strsep(&saveptr, ",");
+		if (mbox_id) {
+			mbox_id = ast_strip(mbox_id);
+			if (ast_strlen_zero(mbox_id)) {
+				mbox_id = NULL;
+			}
 		}
-		/* Split the mailbox_number and context */
-		mbox_context = strchr(mbox_number, '@');
-		if (mbox_context) {
-			*mbox_context++ = '\0';
-			mbox_context = ast_strip(mbox_context);
-		}
-		mbox_number = ast_strip(mbox_number);
-		if (ast_strlen_zero(mbox_number)) {
-			/* There is no mailbox number.  Skip it. */
+		pri->mbox[i].uniqueid = mbox_id;
+		if (!pri->mbox[i].vm_box || !mbox_id) {
+			/* The mailbox position is disabled. */
+			ast_debug(1, "%s span %d MWI position %d disabled.  vm_box:%s mbox_id:%s.\n",
+				sig_pri_cc_type_name, pri->span, i,
+				pri->mbox[i].vm_box ?: "<missing>",
+				mbox_id ?: "<missing>");
 			continue;
 		}
-		if (ast_strlen_zero(mbox_context)) {
-			/* There was no context so use the default. */
-			mbox_context = "default";
-		}
 
-		/* Fill the mbox[] element. */
-		pri->mbox[i].number = mbox_number;
-		pri->mbox[i].context = mbox_context;
-
-		ast_str_reset(uniqueid);
-		ast_str_set(&uniqueid, 0, "%s@%s", mbox_number, mbox_context);
-
-		ast_str_set(&mwi_description, -1, "%s span %d[%d] MWI mailbox %s@%s",
-			sig_pri_cc_type_name, pri->span, i, mbox_number, mbox_context);
-
-		mailbox_specific_topic = ast_mwi_topic(ast_str_buffer(uniqueid));
+		mailbox_specific_topic = ast_mwi_topic(mbox_id);
 		if (mailbox_specific_topic) {
 			pri->mbox[i].sub = stasis_subscribe(mailbox_specific_topic, sig_pri_mwi_event_cb, pri);
 		}
 		if (!pri->mbox[i].sub) {
-			ast_log(LOG_ERROR, "%s span %d could not subscribe to MWI events for %s@%s.",
-				sig_pri_cc_type_name, pri->span, mbox_number, mbox_context);
+			ast_log(LOG_ERROR, "%s span %d could not subscribe to MWI events for %s(%s).\n",
+				sig_pri_cc_type_name, pri->span, pri->mbox[i].vm_box, mbox_id);
 		}
 #if defined(HAVE_PRI_MWI_V2)
 		if (ast_strlen_zero(pri->mbox[i].vm_number)) {
-			ast_log(LOG_WARNING, "%s span %d MWI voicemail number for %s@%s is empty.\n",
-				sig_pri_cc_type_name, pri->span, mbox_number, mbox_context);
+			ast_log(LOG_WARNING, "%s span %d MWI voicemail number for %s(%s) is empty.\n",
+				sig_pri_cc_type_name, pri->span, pri->mbox[i].vm_box, mbox_id);
 		}
 #endif	/* defined(HAVE_PRI_MWI_V2) */
 	}
@@ -9143,7 +9269,7 @@ int sig_pri_start_pri(struct sig_pri_span *pri)
  *
  * \param p Channel private pointer.
  * \param noalarm Non-zero if not in alarm mode.
- * 
+ *
  * \note Assumes the sig_pri_lock_private(p) is already obtained.
  *
  * \return Nothing
@@ -9301,7 +9427,7 @@ void sig_pri_cli_show_span(int fd, int *dchannels, struct sig_pri_span *pri)
 			info_str = pri_dump_info_str(pri->pri);
 			if (info_str) {
 				ast_cli(fd, "%s", info_str);
-				free(info_str);
+				ast_std_free(info_str);
 			}
 #else
 			pri_dump_info(pri->pri);
@@ -10002,6 +10128,12 @@ void sig_pri_cc_monitor_destructor(void *monitor_pvt)
  */
 int sig_pri_load(const char *cc_type_name)
 {
+#if defined(HAVE_PRI_MCID)
+	if (STASIS_MESSAGE_TYPE_INIT(mcid_type)) {
+		return -1;
+	}
+#endif	/* defined(HAVE_PRI_MCID) */
+
 #if defined(HAVE_PRI_CCSS)
 	sig_pri_cc_type_name = cc_type_name;
 	sig_pri_cc_monitors = ao2_container_alloc(37, sig_pri_cc_monitor_instance_hash_fn,
@@ -10027,6 +10159,10 @@ void sig_pri_unload(void)
 		sig_pri_cc_monitors = NULL;
 	}
 #endif	/* defined(HAVE_PRI_CCSS) */
+
+#if defined(HAVE_PRI_MCID)
+	STASIS_MESSAGE_TYPE_CLEANUP(mcid_type);
+#endif	/* defined(HAVE_PRI_MCID) */
 }
 
 #endif /* HAVE_PRI */

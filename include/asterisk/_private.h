@@ -8,7 +8,7 @@
  *
  * \brief
  * Prototypes for public functions only of internal interest,
- * 
+ *
  */
 
 
@@ -25,11 +25,10 @@ int astdb_init(void);			/*!< Provided by db.c */
 void ast_channels_init(void);		/*!< Provided by channel.c */
 void ast_builtins_init(void);		/*!< Provided by cli.c */
 int ast_cli_perms_init(int reload);	/*!< Provided by cli.c */
-int dnsmgr_init(void);			/*!< Provided by dnsmgr.c */ 
+int dnsmgr_init(void);			/*!< Provided by dnsmgr.c */
 void dnsmgr_start_refresh(void);	/*!< Provided by dnsmgr.c */
 int dnsmgr_reload(void);		/*!< Provided by dnsmgr.c */
 void threadstorage_init(void);		/*!< Provided by threadstorage.c */
-int ast_event_init(void);		/*!< Provided by event.c */
 int ast_device_state_engine_init(void);	/*!< Provided by devicestate.c */
 int astobj2_init(void);			/*!< Provided by astobj2.c */
 int ast_file_init(void);		/*!< Provided by file.c */
@@ -109,9 +108,9 @@ enum ast_module_reload_result ast_module_reload(const char *name);
  */
 void ast_process_pending_reloads(void);
 
-/*! \brief Load XML documentation. Provided by xmldoc.c 
+/*! \brief Load XML documentation. Provided by xmldoc.c
  *  \retval 1 on error.
- *  \retval 0 on success. 
+ *  \retval 0 on success.
  */
 int ast_xmldoc_load_documentation(void);
 
@@ -134,4 +133,21 @@ int ast_format_list_init(void);
 
 /*! \brief initializes the rtp engine arrays */
 int ast_rtp_engine_init(void);
+
+/*!
+ * \brief initializes the rtp engine arrays
+ * \since 12.0.0
+ */
+int ast_parking_stasis_init(void);
+
+/*! \brief initialize the sounds index */
+int ast_sounds_index_init(void);
+
+/*!
+ * \brief Endpoint support initialization.
+ * \return 0 on success.
+ * \return Non-zero on error.
+ */
+int ast_endpoint_init(void);
+
 #endif /* _ASTERISK__PRIVATE_H */

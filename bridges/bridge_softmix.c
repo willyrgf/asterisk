@@ -45,8 +45,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
-#include "asterisk/bridging_technology.h"
+#include "asterisk/bridge.h"
+#include "asterisk/bridge_technology.h"
 #include "asterisk/frame.h"
 #include "asterisk/options.h"
 #include "asterisk/logger.h"
@@ -119,6 +119,14 @@ struct softmix_channel {
 
 struct softmix_bridge_data {
 	struct ast_timer *timer;
+	/*!
+	 * \brief Bridge pointer passed to the softmix mixing thread.
+	 *
+	 * \note Does not need a reference because the bridge will
+	 * always exist while the mixing thread exists even if the
+	 * bridge is no longer actively using the softmix technology.
+	 */
+	struct ast_bridge *bridge;
 	/*! Lock for signaling the mixing thread. */
 	ast_mutex_t lock;
 	/*! Condition, used if we need to wake up the mixing thread. */
@@ -378,11 +386,12 @@ static void softmix_bridge_unsuspend(struct ast_bridge *bridge, struct ast_bridg
  *
  * \param bridge_channel Which channel source is changing.
  *
- * \return Nothing
+ * \retval 0 on success.
+ * \retval -1 on error.
  */
-static void softmix_src_change(struct ast_bridge_channel *bridge_channel)
+static int softmix_src_change(struct ast_bridge_channel *bridge_channel)
 {
-	ast_bridge_channel_queue_control_data(bridge_channel, AST_CONTROL_SRCCHANGE, NULL, 0);
+	return ast_bridge_channel_queue_control_data(bridge_channel, AST_CONTROL_SRCCHANGE, NULL, 0);
 }
 
 /*! \brief Function called when a channel is joined into the bridge */
@@ -444,29 +453,6 @@ static void softmix_bridge_leave(struct ast_bridge *bridge, struct ast_bridge_ch
 	ast_free(sc);
 }
 
-/*!
- * \internal
- * \brief Pass the given frame to everyone else.
- * \since 12.0.0
- *
- * \param bridge What bridge to distribute frame.
- * \param bridge_channel Channel to optionally not pass frame to. (NULL to pass to everyone)
- * \param frame Frame to pass.
- *
- * \return Nothing
- */
-static void softmix_pass_everyone_else(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
-{
-	struct ast_bridge_channel *cur;
-
-	AST_LIST_TRAVERSE(&bridge->channels, cur, entry) {
-		if (cur == bridge_channel) {
-			continue;
-		}
-		ast_bridge_channel_queue_frame(cur, frame);
-	}
-}
-
 static void softmix_pass_video_top_priority(struct ast_bridge *bridge, struct ast_frame *frame)
 {
 	struct ast_bridge_channel *cur;
@@ -499,14 +485,14 @@ static void softmix_bridge_write_video(struct ast_bridge *bridge, struct ast_bri
 	int video_src_priority;
 
 	/* Determine if the video frame should be distributed or not */
-	switch (bridge->video_mode.mode) {
+	switch (bridge->softmix.video_mode.mode) {
 	case AST_BRIDGE_VIDEO_MODE_NONE:
 		break;
 	case AST_BRIDGE_VIDEO_MODE_SINGLE_SRC:
 		video_src_priority = ast_bridge_is_video_src(bridge, bridge_channel->chan);
 		if (video_src_priority == 1) {
 			/* Pass to me and everyone else. */
-			softmix_pass_everyone_else(bridge, NULL, frame);
+			ast_bridge_queue_everyone_else(bridge, NULL, frame);
 		}
 		break;
 	case AST_BRIDGE_VIDEO_MODE_TALKER_SRC:
@@ -521,7 +507,7 @@ static void softmix_bridge_write_video(struct ast_bridge *bridge, struct ast_bri
 			int num_src = ast_bridge_number_video_src(bridge);
 			int echo = num_src > 1 ? 0 : 1;
 
-			softmix_pass_everyone_else(bridge, echo ? NULL : bridge_channel, frame);
+			ast_bridge_queue_everyone_else(bridge, echo ? NULL : bridge_channel, frame);
 		} else if (video_src_priority == 2) {
 			softmix_pass_video_top_priority(bridge, frame);
 		}
@@ -555,7 +541,7 @@ static void softmix_bridge_write_voice(struct ast_bridge *bridge, struct ast_bri
 	ast_mutex_lock(&sc->lock);
 	ast_dsp_silence_with_energy(sc->dsp, frame, &totalsilence, &cur_energy);
 
-	if (bridge->video_mode.mode == AST_BRIDGE_VIDEO_MODE_TALKER_SRC) {
+	if (bridge->softmix.video_mode.mode == AST_BRIDGE_VIDEO_MODE_TALKER_SRC) {
 		int cur_slot = sc->video_talker.energy_history_cur_slot;
 
 		sc->video_talker.energy_accum -= sc->video_talker.energy_history[cur_slot];
@@ -598,7 +584,7 @@ static void softmix_bridge_write_voice(struct ast_bridge *bridge, struct ast_bri
 	ast_mutex_unlock(&sc->lock);
 
 	if (update_talking != -1) {
-		ast_bridge_notify_talking(bridge_channel, update_talking);
+		ast_bridge_channel_notify_talking(bridge_channel, update_talking);
 	}
 }
 
@@ -611,12 +597,16 @@ static void softmix_bridge_write_voice(struct ast_bridge *bridge, struct ast_bri
  * \param bridge_channel Which channel is writing the frame.
  * \param frame What is being written.
  *
- * \return Nothing
+ * \retval 0 Frame accepted into the bridge.
+ * \retval -1 Frame needs to be deferred.
  */
-static void softmix_bridge_write_control(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
+static int softmix_bridge_write_control(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-/* BUGBUG need to look at channel roles to determine what to do with control frame. */
-	/*! \todo BUGBUG softmix_bridge_write_control() not written */
+	/*
+	 * XXX Softmix needs to use channel roles to determine what to
+	 * do with control frames.
+	 */
+	return 0;
 }
 
 /*!
@@ -628,8 +618,8 @@ static void softmix_bridge_write_control(struct ast_bridge *bridge, struct ast_b
  * \param bridge_channel Which channel is writing the frame.
  * \param frame What is being written.
  *
- * \retval 0 on success
- * \retval -1 on failure
+ * \retval 0 Frame accepted into the bridge.
+ * \retval -1 Frame needs to be deferred.
  *
  * \note On entry, bridge is already locked.
  */
@@ -637,30 +627,46 @@ static int softmix_bridge_write(struct ast_bridge *bridge, struct ast_bridge_cha
 {
 	int res = 0;
 
-	if (!bridge->tech_pvt || !bridge_channel->tech_pvt) {
-		return -1;
+	if (!bridge->tech_pvt || (bridge_channel && !bridge_channel->tech_pvt)) {
+		/* "Accept" the frame and discard it. */
+		return 0;
 	}
 
+	/*
+	 * XXX Softmix needs to use channel roles to determine who gets
+	 * what frame.  Possible roles: announcer, recorder, agent,
+	 * supervisor.
+	 */
 	switch (frame->frametype) {
+	case AST_FRAME_NULL:
+		/* "Accept" the frame and discard it. */
+		break;
 	case AST_FRAME_DTMF_BEGIN:
 	case AST_FRAME_DTMF_END:
-		softmix_pass_everyone_else(bridge, bridge_channel, frame);
+		res = ast_bridge_queue_everyone_else(bridge, bridge_channel, frame);
 		break;
 	case AST_FRAME_VOICE:
-		softmix_bridge_write_voice(bridge, bridge_channel, frame);
+		if (bridge_channel) {
+			softmix_bridge_write_voice(bridge, bridge_channel, frame);
+		}
 		break;
 	case AST_FRAME_VIDEO:
-		softmix_bridge_write_video(bridge, bridge_channel, frame);
+		if (bridge_channel) {
+			softmix_bridge_write_video(bridge, bridge_channel, frame);
+		}
 		break;
 	case AST_FRAME_CONTROL:
-		softmix_bridge_write_control(bridge, bridge_channel, frame);
+		res = softmix_bridge_write_control(bridge, bridge_channel, frame);
 		break;
 	case AST_FRAME_BRIDGE_ACTION:
-		softmix_pass_everyone_else(bridge, bridge_channel, frame);
+		res = ast_bridge_queue_everyone_else(bridge, bridge_channel, frame);
 		break;
+	case AST_FRAME_BRIDGE_ACTION_SYNC:
+		ast_log(LOG_ERROR, "Synchronous bridge action written to a softmix bridge.\n");
+		ast_assert(0);
 	default:
 		ast_debug(3, "Frame type %d unsupported\n", frame->frametype);
-		res = -1;
+		/* "Accept" the frame and discard it. */
 		break;
 	}
 
@@ -832,6 +838,10 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 		goto softmix_cleanup;
 	}
 
+	/*
+	 * XXX Softmix needs to use channel roles to determine who gets
+	 * what audio mixed.
+	 */
 	while (!softmix_data->stop && bridge->num_active) {
 		struct ast_bridge_channel *bridge_channel;
 		int timeout = -1;
@@ -844,7 +854,9 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 			 * all the memcpys used during this process depend on this assumption.  Rather
 			 * than checking this over and over again through out the code, this single
 			 * verification is done on each iteration. */
-			ast_log(LOG_WARNING, "Conference mixing error, requested mixing length greater than mixing buffer.\n");
+			ast_log(LOG_WARNING,
+				"Bridge %s: Conference mixing error, requested mixing length greater than mixing buffer.\n",
+				bridge->uniqueid);
 			goto softmix_cleanup;
 		}
 
@@ -861,7 +873,7 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 		/* These variables help determine if a rate change is required */
 		if (!stat_iteration_counter) {
 			memset(&stats, 0, sizeof(stats));
-			stats.locked_rate = bridge->internal_sample_rate;
+			stats.locked_rate = bridge->softmix.internal_sample_rate;
 		}
 
 		/* If the sample rate has changed, update the translator helper */
@@ -944,15 +956,17 @@ static int softmix_mixing_loop(struct ast_bridge *bridge)
 		/* Wait for the timing source to tell us to wake up and get things done */
 		ast_waitfor_n_fd(&timingfd, 1, &timeout, NULL);
 		if (ast_timer_ack(timer, 1) < 0) {
-			ast_log(LOG_ERROR, "Failed to acknowledge timer in softmix bridge.\n");
+			ast_log(LOG_ERROR, "Bridge %s: Failed to acknowledge timer in softmix.\n",
+				bridge->uniqueid);
 			ast_bridge_lock(bridge);
 			goto softmix_cleanup;
 		}
 		ast_bridge_lock(bridge);
 
 		/* make sure to detect mixing interval changes if they occur. */
-		if (bridge->internal_mixing_interval && (bridge->internal_mixing_interval != softmix_data->internal_mixing_interval)) {
-			softmix_data->internal_mixing_interval = bridge->internal_mixing_interval;
+		if (bridge->softmix.internal_mixing_interval
+			&& (bridge->softmix.internal_mixing_interval != softmix_data->internal_mixing_interval)) {
+			softmix_data->internal_mixing_interval = bridge->softmix.internal_mixing_interval;
 			ast_timer_set_rate(timer, (1000 / softmix_data->internal_mixing_interval));
 			update_all_rates = 1; /* if the interval changes, the rates must be adjusted as well just to be notified new interval.*/
 		}
@@ -977,8 +991,8 @@ softmix_cleanup:
  */
 static void *softmix_mixing_thread(void *data)
 {
-	struct ast_bridge *bridge = data;
-	struct softmix_bridge_data *softmix_data;
+	struct softmix_bridge_data *softmix_data = data;
+	struct ast_bridge *bridge = softmix_data->bridge;
 
 	ast_bridge_lock(bridge);
 	if (bridge->callid) {
@@ -987,7 +1001,6 @@ static void *softmix_mixing_thread(void *data)
 
 	ast_debug(1, "Bridge %s: starting mixing thread\n", bridge->uniqueid);
 
-	softmix_data = bridge->tech_pvt;
 	while (!softmix_data->stop) {
 		if (!bridge->num_active) {
 			/* Wait for something to happen to the bridge. */
@@ -1026,6 +1039,7 @@ static void softmix_bridge_data_destroy(struct softmix_bridge_data *softmix_data
 		softmix_data->timer = NULL;
 	}
 	ast_mutex_destroy(&softmix_data->lock);
+	ast_cond_destroy(&softmix_data->cond);
 	ast_free(softmix_data);
 }
 
@@ -1038,9 +1052,12 @@ static int softmix_bridge_create(struct ast_bridge *bridge)
 	if (!softmix_data) {
 		return -1;
 	}
+	softmix_data->bridge = bridge;
 	ast_mutex_init(&softmix_data->lock);
+	ast_cond_init(&softmix_data->cond, NULL);
 	softmix_data->timer = ast_timer_open();
 	if (!softmix_data->timer) {
+		ast_log(AST_LOG_WARNING, "Failed to open timer for softmix bridge\n");
 		softmix_bridge_data_destroy(softmix_data);
 		return -1;
 	}
@@ -1051,7 +1068,8 @@ static int softmix_bridge_create(struct ast_bridge *bridge)
 	bridge->tech_pvt = softmix_data;
 
 	/* Start the mixing thread. */
-	if (ast_pthread_create(&softmix_data->thread, NULL, softmix_mixing_thread, bridge)) {
+	if (ast_pthread_create(&softmix_data->thread, NULL, softmix_mixing_thread,
+		softmix_data)) {
 		softmix_data->thread = AST_PTHREADT_NULL;
 		softmix_bridge_data_destroy(softmix_data);
 		bridge->tech_pvt = NULL;
@@ -1059,6 +1077,29 @@ static int softmix_bridge_create(struct ast_bridge *bridge)
 	}
 
 	return 0;
+}
+
+/*!
+ * \internal
+ * \brief Request the softmix mixing thread stop.
+ * \since 12.0.0
+ *
+ * \param bridge Which bridge is being stopped.
+ *
+ * \return Nothing
+ */
+static void softmix_bridge_stop(struct ast_bridge *bridge)
+{
+	struct softmix_bridge_data *softmix_data;
+
+	softmix_data = bridge->tech_pvt;
+	if (!softmix_data) {
+		return;
+	}
+
+	ast_mutex_lock(&softmix_data->lock);
+	softmix_data->stop = 1;
+	ast_mutex_unlock(&softmix_data->lock);
 }
 
 /*! \brief Function called when a bridge is destroyed */
@@ -1080,7 +1121,7 @@ static void softmix_bridge_destroy(struct ast_bridge *bridge)
 	softmix_data->thread = AST_PTHREADT_NULL;
 	ast_mutex_unlock(&softmix_data->lock);
 	if (thread != AST_PTHREADT_NULL) {
-		ast_debug(1, "Waiting for mixing thread to die.\n");
+		ast_debug(1, "Bridge %s: Waiting for mixing thread to die.\n", bridge->uniqueid);
 		pthread_join(thread, NULL);
 	}
 
@@ -1093,6 +1134,7 @@ static struct ast_bridge_technology softmix_bridge = {
 	.capabilities = AST_BRIDGE_CAPABILITY_MULTIMIX,
 	.preference = AST_BRIDGE_PREFERENCE_BASE_MULTIMIX,
 	.create = softmix_bridge_create,
+	.stop = softmix_bridge_stop,
 	.destroy = softmix_bridge_destroy,
 	.join = softmix_bridge_join,
 	.leave = softmix_bridge_leave,
@@ -1109,7 +1151,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	struct ast_format tmp;
-	if (!(softmix_bridge.format_capabilities = ast_format_cap_alloc())) {
+	if (!(softmix_bridge.format_capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(softmix_bridge.format_capabilities, ast_format_set(&tmp, AST_FORMAT_SLINEAR, 0));

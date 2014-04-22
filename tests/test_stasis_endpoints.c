@@ -45,14 +45,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 static const char *test_category = "/stasis/endpoints/";
 
-static void safe_channel_hangup(struct ast_channel *chan)
-{
-	if (!chan) {
-		return;
-	}
-	ast_hangup(chan);
-}
-
 /*! \brief Message matcher looking for cache update messages */
 static int cache_update(struct stasis_message *msg, const void *data) {
 	struct stasis_cache_update *update;
@@ -79,7 +71,7 @@ static int cache_update(struct stasis_message *msg, const void *data) {
 AST_TEST_DEFINE(state_changes)
 {
 	RAII_VAR(struct ast_endpoint *, uut, NULL, ast_endpoint_shutdown);
-	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_hangup);
+	RAII_VAR(struct ast_channel *, chan, NULL, ast_hangup);
 	RAII_VAR(struct stasis_message_sink *, sink, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_subscription *, sub, NULL, stasis_unsubscribe);
 	struct stasis_message *msg;
@@ -135,7 +127,7 @@ AST_TEST_DEFINE(state_changes)
 AST_TEST_DEFINE(cache_clear)
 {
 	RAII_VAR(struct ast_endpoint *, uut, NULL, ast_endpoint_shutdown);
-	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_hangup);
+	RAII_VAR(struct ast_channel *, chan, NULL, ast_hangup);
 	RAII_VAR(struct stasis_message_sink *, sink, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_subscription *, sub, NULL, stasis_unsubscribe);
 	struct stasis_message *msg;
@@ -160,7 +152,7 @@ AST_TEST_DEFINE(cache_clear)
 	ast_test_validate(test, NULL != sink);
 
 	sub = stasis_subscribe(
-		stasis_caching_get_topic(ast_endpoint_topic_all_cached()),
+		ast_endpoint_topic_all_cached(),
 		stasis_message_sink_cb(), sink);
 	ast_test_validate(test, NULL != sub);
 
@@ -211,7 +203,7 @@ AST_TEST_DEFINE(cache_clear)
 AST_TEST_DEFINE(channel_messages)
 {
 	RAII_VAR(struct ast_endpoint *, uut, NULL, ast_endpoint_shutdown);
-	RAII_VAR(struct ast_channel *, chan, NULL, safe_channel_hangup);
+	RAII_VAR(struct ast_channel *, chan, NULL, ast_hangup);
 	RAII_VAR(struct stasis_message_sink *, sink, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_subscription *, sub, NULL, stasis_unsubscribe);
 	struct stasis_message *msg;
@@ -242,7 +234,7 @@ AST_TEST_DEFINE(channel_messages)
 	ast_test_validate(test, NULL != sub);
 
 	chan = ast_channel_alloc(0, AST_STATE_DOWN, "100", __func__, "100",
-		"100", "default", NULL, 0, "TEST/test_res");
+		"100", "default", NULL, NULL, 0, "TEST/test_res");
 	ast_test_validate(test, NULL != chan);
 
 	ast_endpoint_add_channel(uut, chan);
@@ -261,7 +253,7 @@ AST_TEST_DEFINE(channel_messages)
 	actual_snapshot = stasis_message_data(msg);
 	ast_test_validate(test, 1 == actual_snapshot->num_channels);
 
-	safe_channel_hangup(chan);
+	ast_hangup(chan);
 	chan = NULL;
 
 	actual_count = stasis_message_sink_wait_for_count(sink, 5,
@@ -272,11 +264,14 @@ AST_TEST_DEFINE(channel_messages)
 	type = stasis_message_type(msg);
 	ast_test_validate(test, ast_channel_snapshot_type() == type);
 
+	/* The ordering of the cache clear and endpoint snapshot are
+	 * unspecified */
 	msg = sink->messages[3];
-	type = stasis_message_type(msg);
-	ast_test_validate(test, stasis_cache_clear_type() == type);
+	if (stasis_message_type(msg) == stasis_cache_clear_type()) {
+		/* Okay; the next message should be the endpoint snapshot */
+		msg = sink->messages[4];
+	}
 
-	msg = sink->messages[4];
 	type = stasis_message_type(msg);
 	ast_test_validate(test, ast_endpoint_snapshot_type() == type);
 	actual_snapshot = stasis_message_data(msg);
@@ -301,8 +296,7 @@ static int load_module(void)
 	return AST_MODULE_LOAD_SUCCESS;
 }
 
-AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT,
-	"Endpoint stasis-related testing",
+AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_DEFAULT, "Endpoint stasis-related testing",
 	.load = load_module,
 	.unload = unload_module,
 	.nonoptreq = "res_stasis_test",

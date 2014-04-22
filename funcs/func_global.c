@@ -87,7 +87,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<managerEventInstance class="EVENT_FLAG_DIALPLAN">
 			<synopsis>Raised when a variable is shared between channels.</synopsis>
 			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='Newchannel']/managerEventInstance/syntax/parameter)" />
+				<channel_snapshot/>
 				<parameter name="Variable">
 					<para>The SHARED variable being set.</para>
 					<note><para>The variable name will always be enclosed with
@@ -173,6 +173,9 @@ static int shared_read(struct ast_channel *chan, const char *cmd, char *data, ch
 			return -1;
 		}
 		chan = c_ref;
+	} else if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
 	}
 
 	ast_channel_lock(chan);
@@ -233,6 +236,9 @@ static int shared_write(struct ast_channel *chan, const char *cmd, char *data, c
 			return -1;
 		}
 		chan = c_ref;
+	} else if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
 	}
 
 	len = 9 + strlen(args.var); /* SHARED() + var */
@@ -282,11 +288,12 @@ static int shared_write(struct ast_channel *chan, const char *cmd, char *data, c
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 
-	var = ast_var_assign(args.var, S_OR(value, ""));
-	AST_LIST_INSERT_HEAD(varshead, var, entries);
+	if ((var = ast_var_assign(args.var, S_OR(value, "")))) {
+		AST_LIST_INSERT_HEAD(varshead, var, entries);
 
-	sprintf(shared_buffer, "SHARED(%s)", args.var);
-	ast_channel_publish_varset(chan, shared_buffer, value);
+		sprintf(shared_buffer, "SHARED(%s)", args.var);
+		ast_channel_publish_varset(chan, shared_buffer, value);
+	}
 
 	ast_channel_unlock(chan);
 

@@ -38,7 +38,6 @@
 static void join_unmarked(struct confbridge_user *user);
 static void join_marked(struct confbridge_user *user);
 static void leave_unmarked(struct confbridge_user *user);
-void transition_to_multi(struct confbridge_user *user);
 
 struct confbridge_state STATE_MULTI = {
 	.name = "MULTI",
@@ -47,18 +46,19 @@ struct confbridge_state STATE_MULTI = {
 	.join_marked = join_marked,
 	.leave_unmarked = leave_unmarked,
 	.leave_waitmarked = conf_default_leave_waitmarked,
-	.entry = transition_to_multi,
 };
 struct confbridge_state *CONF_STATE_MULTI = &STATE_MULTI;
 
 static void join_unmarked(struct confbridge_user *user)
 {
 	conf_add_user_active(user->conference, user);
+	conf_update_user_mute(user);
 }
 
 static void join_marked(struct confbridge_user *user)
 {
 	conf_add_user_marked(user->conference, user);
+	conf_update_user_mute(user);
 
 	conf_change_state(user, CONF_STATE_MULTI_MARKED);
 }
@@ -69,9 +69,4 @@ static void leave_unmarked(struct confbridge_user *user)
 	if (user->conference->activeusers == 1) {
 		conf_change_state(user, CONF_STATE_SINGLE);
 	}
-}
-
-void transition_to_multi(struct confbridge_user *user)
-{
-	return;
 }

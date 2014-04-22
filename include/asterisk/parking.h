@@ -25,7 +25,15 @@
 
 #include "asterisk/stringfields.h"
 
+/*!
+ * \brief The default parking application that Asterisk expects.
+ */
 #define PARK_APPLICATION "Park"
+
+/*!
+ * \brief The default parking lot
+ */
+#define DEFAULT_PARKINGLOT "default"
 
 /*!
  * \brief Defines the type of parked call message being published
@@ -37,6 +45,7 @@ enum ast_parked_call_event_type {
 	PARKED_CALL_GIVEUP,
 	PARKED_CALL_UNPARKED,
 	PARKED_CALL_FAILED,
+	PARKED_CALL_SWAP,
 };
 
 /*!
@@ -45,16 +54,18 @@ enum ast_parked_call_event_type {
  */
 struct ast_parked_call_payload {
 	struct ast_channel_snapshot *parkee;             /*!< Snapshot of the channel that is parked */
-	struct ast_channel_snapshot *parker;             /*!< Snapshot of the channel that parked the call */
-	struct ast_channel_snapshot *retriever;          /*!< Snapshot of the channel that retrieved the call */
+	struct ast_channel_snapshot *retriever;          /*!< Snapshot of the channel that retrieved the call (may be NULL) */
 	enum ast_parked_call_event_type event_type;      /*!< Reason for issuing the parked call message */
 	long unsigned int timeout;                       /*!< Time remaining before the call times out (seconds ) */
 	long unsigned int duration;                      /*!< How long the parkee has been parked (seconds) */
 	unsigned int parkingspace;                       /*!< Which Parking Space the parkee occupies */
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(parkinglot);                /*!< Name of the parking lot used to park the parkee */
+		AST_STRING_FIELD(parker_dial_string);          /*!< The device string used for call control on parking timeout */
 	);
 };
+
+struct ast_exten;
 
 /*!
  * \brief Constructor for parked_call_payload objects
@@ -62,7 +73,7 @@ struct ast_parked_call_payload {
  *
  * \param event_type What kind of parked call event is happening
  * \param parkee_snapshot channel snapshot of the parkee
- * \param parker_snapshot channel snapshot of the parker
+ * \param parker_dial_string dialstring used when the call times out
  * \param retriever_snapshot channel snapshot of the retriever (NULL allowed)
  * \param parkinglot name of the parking lot where the parked call is parked
  * \param parkingspace what numerical parking space the parked call is parked in
@@ -73,21 +84,13 @@ struct ast_parked_call_payload {
  * \retval reference to a newly created parked call payload
  */
 struct ast_parked_call_payload *ast_parked_call_payload_create(enum ast_parked_call_event_type event_type,
-		struct ast_channel_snapshot *parkee_snapshot, struct ast_channel_snapshot *parker_snapshot,
+		struct ast_channel_snapshot *parkee_snapshot, const char *parker_dial_string,
 		struct ast_channel_snapshot *retriever_snapshot, const char *parkinglot,
 		unsigned int parkingspace, unsigned long int timeout, unsigned long int duration);
 
-/*!
- * \brief initialize parking stasis types
- * \since 12
+/*! \addtogroup StasisTopicsAndMessages
+ * @{
  */
-void ast_parking_stasis_init(void);
-
-/*!
- * \brief disable parking stasis types
- * \since 12
- */
-void ast_parking_stasis_disable(void);
 
 /*!
  * \brief accessor for the parking stasis topic
@@ -107,78 +110,172 @@ struct stasis_topic *ast_parking_topic(void);
  */
 struct stasis_message_type *ast_parked_call_type(void);
 
+/*! @} */
+
+#define PARKING_MODULE_VERSION 1
+
+struct ast_module_info;
+
 /*!
- * \brief invoke an installable park callback to asynchronously park a bridge_channel in a bridge
- * \since 12
- *
- * \param bridge_channel the bridge channel that initiated parking
- * \parkee_uuid channel id of the channel being parked
- * \parker_uuid channel id of the channel that initiated parking
- * \param app_data string of application data that might be applied to parking
+ * \brief A function table providing parking functionality to the \ref AstBridging
+ * Bridging API and other consumers
  */
-void ast_bridge_channel_park(struct ast_bridge_channel *bridge_channel,
-	const char *parkee_uuid,
-	const char *parker_uuid,
-	const char *app_data);
+struct ast_parking_bridge_feature_fn_table {
 
-typedef int (*ast_park_blind_xfer_fn)(struct ast_bridge *bridge, struct ast_bridge_channel *parker,
-	struct ast_exten *park_exten);
+	/*!
+	 * \brief The version of this function table. If the ABI for this table
+	 * changes, the module version (/ref PARKING_MODULE_VERSION) should be
+	 * incremented.
+	 */
+	unsigned int module_version;
+
+	/*!
+	 * \brief The name of the module that provides this parking functionality
+	 */
+	const char *module_name;
+
+	/*!
+	 * \brief Determine if the context/exten is a "parking" extension
+	 *
+	 * \retval 0 if the extension is not a parking extension
+	 * \retval 1 if the extension is a parking extension
+	 */
+	int (* parking_is_exten_park)(const char *context, const char *exten);
+
+	/*!
+	 * \brief Park the bridge and/or callers that this channel is in
+	 *
+	 * \param parker The bridge_channel parking the bridge
+	 * \param exten Optional. The extension the channel or bridge was parked at if the
+	 * call succeeds.
+	 * \param length Optional. If \c exten is specified, the size of the buffer.
+	 *
+	 * \note This is safe to be called outside of the \ref AstBridging Bridging API.
+	 *
+	 * \retval 0 on success
+	 * \retval non-zero on error
+	 */
+	int (* parking_park_call)(struct ast_bridge_channel *parker, char *exten, size_t length);
+
+	/*!
+	 * \brief Perform a blind transfer to a parking extension.
+	 *
+	 * \param parker The \ref bridge_channel object that is initiating the parking
+	 * \param context The context to blind transfer to
+	 * \param exten The extension to blind transfer to
+	 *
+	 * \note If the bridge \ref parker is in has more than one other occupant, the entire
+	 * bridge will be parked using a Local channel
+	 *
+	 * \note This is safe to be called outside of the \ref AstBridging Bridging API.
+	 *
+	 * \retval 0 on success
+	 * \retval non-zero on error
+	 */
+	int (* parking_blind_transfer_park)(struct ast_bridge_channel *parker, const char *context, const char *exten);
+
+	/*!
+	 * \brief Perform a direct park on a channel in a bridge.
+	 *
+	 * \param parkee The channel in the bridge to be parked.
+	 * \param parkee_uuid The UUID of the channel being packed.
+	 * \param parker_uuid The UUID of the channel performing the park.
+	 * \param app_data Data to pass to the Park application
+	 *
+	 * \note This must be called within the context of the \ref AstBridging Bridging API.
+	 * External entities should not call this method directly, but should instead use
+	 * the direct call parking method or the blind transfer method.
+	 *
+	 * \retval 0 on success
+	 * \retval non-zero on error
+	 */
+	int (* parking_park_bridge_channel)(struct ast_bridge_channel *parkee, const char *parkee_uuid, const char *parker_uuid, const char *app_data);
+
+	/*! \brief The module info for the module registering this parking provider */
+	const struct ast_module_info *module_info;
+};
 
 /*!
- * \brief install a callback for handling blind transfers to a parking extension
- * \since 12
+ * \brief Determine if the context/exten is a "parking" extension
  *
- * \param parking_func Function to use for transfers to 'Park' applications
+ * \retval 0 if the extension is not a parking extension
+ * \retval 1 if the extension is a parking extension
  */
-void ast_install_park_blind_xfer_func(ast_park_blind_xfer_fn park_blind_xfer_func);
+int ast_parking_is_exten_park(const char *context, const char *exten);
 
 /*!
- * \brief uninstall a callback for handling blind transfers to a parking extension
- * \since 12
- */
-void ast_uninstall_park_blind_xfer_func(void);
-
-/*!
- * \brief use the installed park blind xfer func
- * \since 12
+ * \brief Park the bridge and/or callers that this channel is in
  *
- * \param bridge Bridge being transferred from
- * \param bridge_channel Bridge channel initiating the transfer
- * \param app_data arguments to the park application
+ * \param parker The bridge_channel parking the bridge
+ * \param exten Optional. The extension the channel or bridge was parked at if the
+ * call succeeds.
+ * \param length Optional. If \c exten is specified, the size of the buffer.
+ *
+ * \note This is safe to be called outside of the \ref AstBridging Bridging API.
  *
  * \retval 0 on success
- * \retval -1 on failure
+ * \retval non-zero on error
  */
-int ast_park_blind_xfer(struct ast_bridge *bridge, struct ast_bridge_channel *parker,
-		struct ast_exten *park_exten);
-
-typedef void (*ast_bridge_channel_park_fn)(struct ast_bridge_channel *parkee, const char *parkee_uuid,
-	const char *parker_uuid, const char *app_data);
+int ast_parking_park_call(struct ast_bridge_channel *parker, char *exten, size_t length);
 
 /*!
- * \brief Install a function for ast_bridge_channel_park
- * \since 12
+ * \brief Perform a blind transfer to a parking extension.
  *
- * \param bridge_channel_park_func function callback to use for ast_bridge_channel_park
+ * \param parker The \ref bridge_channel object that is initiating the parking
+ * \param context The context to blind transfer to
+ * \param exten The extension to blind transfer to
+ *
+ * \note If the bridge \ref parker is in has more than one other occupant, the entire
+ * bridge will be parked using a Local channel
+ *
+ * \note This is safe to be called outside of the \ref AstBridging Bridging API.
+ *
+ * \retval 0 on success
+ * \retval non-zero on error
  */
-void ast_install_bridge_channel_park_func(ast_bridge_channel_park_fn bridge_channel_park_func);
+int ast_parking_blind_transfer_park(struct ast_bridge_channel *parker, const char *context, const char *exten);
 
 /*!
- * \brief Uninstall the ast_bridge_channel_park function callback
- * \since 12
+ * \brief Perform a direct park on a channel in a bridge.
+ *
+ * \param parkee The channel in the bridge to be parked.
+ * \param parkee_uuid The UUID of the channel being packed.
+ * \param parker_uuid The UUID of the channel performing the park.
+ * \param app_data Data to pass to the Park application
+ *
+ * \note This must be called within the context of the \ref AstBridging Bridging API.
+ * External entities should not call this method directly, but should instead use
+ * the direct call parking method or the blind transfer method.
+ *
+ * \retval 0 on success
+ * \retval non-zero on error
  */
-void ast_uninstall_bridge_channel_park_func(void);
-
+int ast_parking_park_bridge_channel(struct ast_bridge_channel *parkee, const char *parkee_uuid, const char *parker_uuid, const char *app_data);
 
 /*!
- * \brief Determines whether a certain extension is a park application extension or not.
- * \since 12
+ * \brief Register a parking provider
  *
- * \param exten_str string representation of the extension sought
- * \param chan channel the extension is sought for
- * \param context context the extension is sought from
+ * \param fn_table The \ref ast_parking_bridge_feature_fn_table to register
  *
- * \retval pointer to the extension if the extension is a park extension
- * \retval NULL if the extension was not a park extension
+ * \retval 0 on success
+ * \retval -1 on error
  */
-struct ast_exten *ast_get_parking_exten(const char *exten_str, struct ast_channel *chan, const char *context);
+int ast_parking_register_bridge_features(struct ast_parking_bridge_feature_fn_table *fn_table);
+
+/*!
+ * \brief Unregister the current parking provider
+ *
+ * \param The module name of the provider to unregister
+ *
+ * \retval 0 if the parking provider \c module_name was unregsistered
+ * \retval -1 on error
+ */
+int ast_parking_unregister_bridge_features(const char *module_name);
+
+/*!
+ * \brief Check whether a parking provider is registered
+ *
+ * \retval 0 if there is no parking provider regsistered
+ * \retval 1 if there is a parking provider regsistered
+ */
+int ast_parking_provider_registered(void);

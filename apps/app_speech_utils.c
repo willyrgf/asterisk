@@ -27,6 +27,7 @@
 
 /*** MODULEINFO
 	<support_level>core</support_level>
+	<depend>res_speech</depend>
  ***/
 
 #include "asterisk.h"
@@ -284,7 +285,11 @@ static struct ast_speech *find_speech(struct ast_channel *chan)
 {
 	struct ast_speech *speech = NULL;
 	struct ast_datastore *datastore = NULL;
-	
+
+	if (!chan) {
+		return NULL;
+	}
+
 	datastore = ast_channel_datastore_find(chan, &speech_datastore, NULL);
 	if (datastore == NULL) {
 		return NULL;

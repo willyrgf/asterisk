@@ -41,8 +41,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
-#include "asterisk/bridging_technology.h"
+#include "asterisk/bridge.h"
+#include "asterisk/bridge_technology.h"
 #include "asterisk/frame.h"
 
 static int simple_bridge_join(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel)
@@ -50,36 +50,20 @@ static int simple_bridge_join(struct ast_bridge *bridge, struct ast_bridge_chann
 	struct ast_channel *c0 = AST_LIST_FIRST(&bridge->channels)->chan;
 	struct ast_channel *c1 = AST_LIST_LAST(&bridge->channels)->chan;
 
-	/* If this is the first channel we can't make it compatible... unless we make it compatible with itself O.o */
-	if (AST_LIST_FIRST(&bridge->channels) == AST_LIST_LAST(&bridge->channels)) {
+	/*
+	 * If this is the first channel we can't make it compatible...
+	 * unless we make it compatible with itself.  O.o
+	 */
+	if (c0 == c1) {
 		return 0;
 	}
 
-	/* See if we need to make these compatible */
-	if ((ast_format_cmp(ast_channel_writeformat(c0), ast_channel_readformat(c1)) == AST_FORMAT_CMP_EQUAL) &&
-		(ast_format_cmp(ast_channel_readformat(c0), ast_channel_writeformat(c1)) == AST_FORMAT_CMP_EQUAL) &&
-		(ast_format_cap_identical(ast_channel_nativeformats(c0), ast_channel_nativeformats(c1)))) {
-		return 0;
-	}
-
-	/* BOOM! We do. */
 	return ast_channel_make_compatible(c0, c1);
 }
 
 static int simple_bridge_write(struct ast_bridge *bridge, struct ast_bridge_channel *bridge_channel, struct ast_frame *frame)
 {
-	struct ast_bridge_channel *other;
-
-	/* Find the channel we actually want to write to */
-	other = ast_bridge_channel_peer(bridge_channel);
-	if (!other) {
-		return -1;
-	}
-
-	/* The bridging core takes care of freeing the passed in frame. */
-	ast_bridge_channel_queue_frame(other, frame);
-
-	return 0;
+	return ast_bridge_queue_everyone_else(bridge, bridge_channel, frame);
 }
 
 static struct ast_bridge_technology simple_bridge = {
@@ -98,7 +82,7 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (!(simple_bridge.format_capabilities = ast_format_cap_alloc())) {
+	if (!(simple_bridge.format_capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add_all_by_type(simple_bridge.format_capabilities, AST_FORMAT_TYPE_AUDIO);

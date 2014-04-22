@@ -73,6 +73,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/paths.h"
 #include "asterisk/data.h"
 #include "asterisk/test.h"
+#include "asterisk/stasis.h"
+#include "asterisk/stasis_channels.h"
+#include "asterisk/stasis_message_router.h"
+#include "asterisk/json.h"
 
 #include "enter.h"
 #include "leave.h"
@@ -553,6 +557,88 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				MeetmeListRoomsComplete.</para>
 		</description>
 	</manager>
+	<managerEvent language="en_US" name="MeetmeJoin">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a user joins a MeetMe conference.</synopsis>
+			<syntax>
+				<parameter name="Meetme">
+					<para>The identifier for the MeetMe conference.</para>
+				</parameter>
+				<parameter name="Usernum">
+					<para>The identifier of the MeetMe user who joined.</para>
+				</parameter>
+				<channel_snapshot/>
+			</syntax>
+			<see-also>
+				<ref type="managerEvent">MeetmeLeave</ref>
+				<ref type="application">MeetMe</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="MeetmeLeave">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a user leaves a MeetMe conference.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
+				<channel_snapshot/>
+				<parameter name="Duration">
+					<para>The length of time in seconds that the Meetme user was in the conference.</para>
+				</parameter>
+			</syntax>
+			<see-also>
+				<ref type="managerEvent">MeetmeJoin</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="MeetmeEnd">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a MeetMe conference ends.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
+			</syntax>
+			<see-also>
+				<ref type="managerEvent">MeetmeJoin</ref>
+			</see-also>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="MeetmeTalkRequest">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a MeetMe user has started talking.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
+				<channel_snapshot/>
+				<parameter name="Duration">
+					<para>The length of time in seconds that the Meetme user has been in the conference at the time of this event.</para>
+				</parameter>
+				<parameter name="Status">
+					<enumlist>
+						<enum name="on"/>
+						<enum name="off"/>
+					</enumlist>
+				</parameter>
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="MeetmeTalking">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a MeetMe user begins or ends talking.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
+				<channel_snapshot/>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeTalkRequest']/managerEventInstance/syntax/parameter)" />
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
+	<managerEvent language="en_US" name="MeetmeMute">
+		<managerEventInstance class="EVENT_FLAG_CALL">
+			<synopsis>Raised when a MeetMe user is muted or unmuted.</synopsis>
+			<syntax>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter)" />
+				<channel_snapshot/>
+				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeTalkRequest']/managerEventInstance/syntax/parameter)" />
+			</syntax>
+		</managerEventInstance>
+	</managerEvent>
  ***/
 
 #define CONFIG_FILE_NAME	"meetme.conf"
@@ -664,9 +750,9 @@ enum {
 #define CONFFLAG_INTROMSG           (1ULL << 32) /*!< If set play an intro announcement at start of conference */
 #define CONFFLAG_INTROUSER_VMREC    (1ULL << 33)
 /*! If there's only one person left in a conference when someone leaves, kill the conference */
-#define CONFFLAG_KILL_LAST_MAN_STANDING ((uint64_t)1 << 34)
+#define CONFFLAG_KILL_LAST_MAN_STANDING (1ULL << 34)
 /*! If set, don't enable a denoiser for the channel */
-#define CONFFLAG_DONT_DENOISE       (1ULL << 33)
+#define CONFFLAG_DONT_DENOISE       (1ULL << 35)
 
 enum {
 	OPT_ARG_WAITMARKED = 0,
@@ -875,17 +961,26 @@ struct sla_station {
 	/*! This option uses the values in the sla_hold_access enum and sets the
 	 * access control type for hold on this station. */
 	unsigned int hold_access:1;
-	/*! Use count for inside sla_station_exec */
-	unsigned int ref_count;
+	/*! Mark used during reload processing */
+	unsigned int mark:1;
 };
 
+/*!
+ * \brief A reference to a station
+ *
+ * This struct looks near useless at first glance.  However, its existence
+ * in the list of stations in sla_trunk means that this station references
+ * that trunk.  We use the mark to keep track of whether it needs to be
+ * removed from the sla_trunk's list of stations during a reload.
+ */
 struct sla_station_ref {
 	AST_LIST_ENTRY(sla_station_ref) entry;
 	struct sla_station *station;
+	/*! Mark used during reload processing */
+	unsigned int mark:1;
 };
 
 struct sla_trunk {
-	AST_RWLIST_ENTRY(sla_trunk) entry;
 	AST_DECLARE_STRING_FIELDS(
 		AST_STRING_FIELD(name);
 		AST_STRING_FIELD(device);
@@ -909,10 +1004,16 @@ struct sla_trunk {
 	/*! Whether this trunk is currently on hold, meaning that once a station
 	 *  connects to it, the trunk channel needs to have UNHOLD indicated to it. */
 	unsigned int on_hold:1;
-	/*! Use count for inside sla_trunk_exec */
-	unsigned int ref_count;
+	/*! Mark used during reload processing */
+	unsigned int mark:1;
 };
 
+/*!
+ * \brief A station's reference to a trunk
+ *
+ * An sla_station keeps a list of trunk_refs.  This holds metadata about the
+ * stations usage of the trunk.
+ */
 struct sla_trunk_ref {
 	AST_LIST_ENTRY(sla_trunk_ref) entry;
 	struct sla_trunk *trunk;
@@ -926,10 +1027,12 @@ struct sla_trunk_ref {
 	 *  station.  This takes higher priority than a ring delay set at
 	 *  the station level. */
 	unsigned int ring_delay;
+	/*! Mark used during reload processing */
+	unsigned int mark:1;
 };
 
-static AST_RWLIST_HEAD_STATIC(sla_stations, sla_station);
-static AST_RWLIST_HEAD_STATIC(sla_trunks, sla_trunk);
+static struct ao2_container *sla_stations;
+static struct ao2_container *sla_trunks;
 
 static const char sla_registrar[] = "SLA";
 
@@ -941,10 +1044,6 @@ enum sla_event_type {
 	SLA_EVENT_DIAL_STATE,
 	/*! The state of a ringing trunk has changed */
 	SLA_EVENT_RINGING_TRUNK,
-	/*! A reload of configuration has been requested */
-	SLA_EVENT_RELOAD,
-	/*! Poke the SLA thread so it can check if it can perform a reload */
-	SLA_EVENT_CHECK_RELOAD,
 };
 
 struct sla_event {
@@ -1000,8 +1099,6 @@ static struct {
 	/*! Attempt to handle CallerID, even though it is known not to work
 	 *  properly in some situations. */
 	unsigned int attempt_callerid:1;
-	/*! A reload has been requested */
-	unsigned int reload:1;
 } sla = {
 	.thread = AST_PTHREADT_NULL,
 };
@@ -1031,6 +1128,267 @@ static const char gain_map[] = {
 	15,
 };
 
+/* Routes the various meetme message types to the meetme stasis callback function to turn them into events */
+static struct stasis_message_router *meetme_event_message_router;
+
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_join_type);
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_leave_type);
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_end_type);
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_mute_type);
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_talking_type);
+STASIS_MESSAGE_TYPE_DEFN_LOCAL(meetme_talk_request_type);
+
+static void meetme_stasis_cb(void *data, struct stasis_subscription *sub,
+	struct stasis_message *message);
+
+static void meetme_stasis_cleanup(void)
+{
+	if (meetme_event_message_router) {
+		stasis_message_router_unsubscribe(meetme_event_message_router);
+		meetme_event_message_router = NULL;
+	}
+
+	STASIS_MESSAGE_TYPE_CLEANUP(meetme_join_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(meetme_leave_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(meetme_end_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(meetme_mute_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(meetme_talking_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(meetme_talk_request_type);
+}
+
+static int meetme_stasis_init(void)
+{
+
+	STASIS_MESSAGE_TYPE_INIT(meetme_join_type);
+	STASIS_MESSAGE_TYPE_INIT(meetme_leave_type);
+	STASIS_MESSAGE_TYPE_INIT(meetme_end_type);
+	STASIS_MESSAGE_TYPE_INIT(meetme_mute_type);
+	STASIS_MESSAGE_TYPE_INIT(meetme_talking_type);
+	STASIS_MESSAGE_TYPE_INIT(meetme_talk_request_type);
+
+	meetme_event_message_router = stasis_message_router_create(
+		ast_channel_topic_all_cached());
+
+	if (!meetme_event_message_router) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	if (stasis_message_router_add(meetme_event_message_router,
+			meetme_join_type(),
+			meetme_stasis_cb,
+			NULL)) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	if (stasis_message_router_add(meetme_event_message_router,
+			meetme_leave_type(),
+			meetme_stasis_cb,
+			NULL)) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	if (stasis_message_router_add(meetme_event_message_router,
+			meetme_end_type(),
+			meetme_stasis_cb,
+			NULL)) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	if (stasis_message_router_add(meetme_event_message_router,
+			meetme_mute_type(),
+			meetme_stasis_cb,
+			NULL)) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	if (stasis_message_router_add(meetme_event_message_router,
+			meetme_talking_type(),
+			meetme_stasis_cb,
+			NULL)) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	if (stasis_message_router_add(meetme_event_message_router,
+			meetme_talk_request_type(),
+			meetme_stasis_cb,
+			NULL)) {
+		meetme_stasis_cleanup();
+		return -1;
+	}
+
+	return 0;
+}
+
+static void meetme_stasis_cb(void *data, struct stasis_subscription *sub,
+	struct stasis_message *message)
+{
+	struct ast_channel_blob *channel_blob = stasis_message_data(message);
+	struct stasis_message_type *message_type;
+	const char *event;
+	const char *conference_num;
+	const char *status;
+	struct ast_json *json_cur;
+	RAII_VAR(struct ast_str *, channel_text, NULL, ast_free);
+	RAII_VAR(struct ast_str *, extra_text, NULL, ast_free);
+
+	if (!channel_blob) {
+		ast_assert(0);
+		return;
+	}
+
+	message_type = stasis_message_type(message);
+
+	if (!message_type) {
+		ast_assert(0);
+		return;
+	}
+
+	if (message_type == meetme_join_type()) {
+		event = "MeetmeJoin";
+	} else if (message_type == meetme_leave_type()) {
+		event = "MeetmeLeave";
+	} else if (message_type == meetme_end_type()) {
+		event = "MeetmeEnd";
+	} else if (message_type == meetme_mute_type()) {
+		event = "MeetmeMute";
+	} else if (message_type == meetme_talking_type()) {
+		event = "MeetmeTalking";
+	} else if (message_type == meetme_talk_request_type()) {
+		event = "MeetmeTalkRequest";
+	} else {
+		ast_assert(0);
+		return;
+	}
+
+	if (!event) {
+		ast_assert(0);
+		return;
+	}
+
+	conference_num = ast_json_string_get(ast_json_object_get(channel_blob->blob, "Meetme"));
+	if (!conference_num) {
+		ast_assert(0);
+		return;
+	}
+
+	status = ast_json_string_get(ast_json_object_get(channel_blob->blob, "status"));
+	if (status) {
+		ast_str_append_event_header(&extra_text, "Status", status);
+	}
+
+	if (channel_blob->snapshot) {
+		channel_text = ast_manager_build_channel_state_string(channel_blob->snapshot);
+	}
+
+	if ((json_cur = ast_json_object_get(channel_blob->blob, "user"))) {
+		int user_number = ast_json_integer_get(json_cur);
+		RAII_VAR(struct ast_str *, user_prop_str, ast_str_create(32), ast_free);
+		if (!user_prop_str) {
+			return;
+		}
+
+		ast_str_set(&user_prop_str, 0, "%d", user_number);
+		ast_str_append_event_header(&extra_text, "User", ast_str_buffer(user_prop_str));
+
+		if ((json_cur = ast_json_object_get(channel_blob->blob, "duration"))) {
+			int duration = ast_json_integer_get(json_cur);
+			ast_str_set(&user_prop_str, 0, "%d", duration);
+			ast_str_append_event_header(&extra_text, "Duration", ast_str_buffer(user_prop_str));
+		}
+
+		json_cur = NULL;
+	}
+
+	manager_event(EVENT_FLAG_CALL, event,
+		"Meetme: %s\r\n"
+		"%s"
+		"%s",
+		conference_num,
+		channel_text ? ast_str_buffer(channel_text) : "",
+		extra_text ? ast_str_buffer(extra_text) : "");
+}
+
+/*!
+ * \internal
+ * \brief Build a json object from a status value for inclusion in json extras for meetme_stasis_generate_msg
+ * \since 12.0.0
+ *
+ * \param on if true, then status is on. Otherwise status is off
+ * \retval NULL on failure to allocate the JSON blob.
+ * \retval pointer to the JSON blob if successful.
+ */
+static struct ast_json *status_to_json(int on)
+{
+	struct ast_json *json_object = ast_json_pack("{s: s}",
+		"status", on ? "on" : "off");
+
+	return json_object;
+}
+
+/*!
+ * \internal
+ * \brief Generate a stasis message associated with a meetme event
+ * \since 12.0.0
+ *
+ * \param meetme_confere The conference responsible for generating this message
+ * \param chan The channel involved in the message (NULL allowed)
+ * \param user The conference user involved in the message (NULL allowed)
+ * \param message_type the type the stasis message being generated
+ * \param extras Additional json fields desired for inclusion
+ */
+static void meetme_stasis_generate_msg(struct ast_conference *meetme_conference, struct ast_channel *chan,
+	struct ast_conf_user *user, struct stasis_message_type *message_type, struct ast_json *extras)
+{
+	RAII_VAR(struct stasis_message *, msg, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_json *, json_object, NULL, ast_json_unref);
+
+	json_object = ast_json_pack("{s: s}",
+		"Meetme", meetme_conference->confno);
+
+	if (!json_object) {
+		return;
+	}
+
+	if (extras) {
+		ast_json_object_update(json_object, extras);
+	}
+
+	if (user) {
+		struct timeval now = ast_tvnow();
+		long duration = (long)(now.tv_sec - user->jointime);
+		struct ast_json *json_user;
+		struct ast_json *json_user_duration;
+
+		json_user = ast_json_integer_create(user->user_no);
+		if (!json_user || ast_json_object_set(json_object, "user", json_user)) {
+			return;
+		}
+
+		if (duration > 0) {
+			json_user_duration = ast_json_integer_create(duration);
+			if (!json_user_duration
+				|| ast_json_object_set(json_object, "duration", json_user_duration)) {
+				return;
+			}
+		}
+	}
+
+	ast_channel_lock(chan);
+	msg = ast_channel_blob_create(chan, message_type, json_object);
+	ast_channel_unlock(chan);
+
+	if (!msg) {
+		return;
+	}
+
+	stasis_publish(ast_channel_topic(chan), msg);
+}
 
 static int admin_exec(struct ast_channel *chan, const char *data);
 static void *recordthread(void *args);
@@ -1250,7 +1608,7 @@ static struct ast_conference *build_conf(const char *confno, const char *pin,
 	struct ast_conference *cnf;
 	struct dahdi_confinfo dahdic = { 0, };
 	int confno_int = 0;
-	struct ast_format_cap *cap_slin = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap_slin = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	struct ast_format tmp_fmt;
 
 	AST_LIST_LOCK(&confs);
@@ -1309,7 +1667,7 @@ static struct ast_conference *build_conf(const char *confno, const char *pin,
 	cnf->dahdiconf = dahdic.confno;
 
 	/* Setup a new channel for playback of audio files */
-	cnf->chan = ast_request("DAHDI", cap_slin, chan, "pseudo", NULL);
+	cnf->chan = ast_request("DAHDI", cap_slin, NULL, chan, "pseudo", NULL);
 	if (cnf->chan) {
 		ast_set_read_format_by_id(cnf->chan, AST_FORMAT_SLINEAR);
 		ast_set_write_format_by_id(cnf->chan, AST_FORMAT_SLINEAR);
@@ -1767,7 +2125,8 @@ static const char *sla_hold_str(unsigned int hold_access)
 
 static char *sla_show_trunks(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	const struct sla_trunk *trunk;
+	struct ao2_iterator i;
+	struct sla_trunk *trunk;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -1785,12 +2144,17 @@ static char *sla_show_trunks(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 	            "=== Configured SLA Trunks ===================================\n"
 	            "=============================================================\n"
 	            "===\n");
-	AST_RWLIST_RDLOCK(&sla_trunks);
-	AST_RWLIST_TRAVERSE(&sla_trunks, trunk, entry) {
+	i = ao2_iterator_init(sla_trunks, 0);
+	for (; (trunk = ao2_iterator_next(&i)); ao2_ref(trunk, -1)) {
 		struct sla_station_ref *station_ref;
 		char ring_timeout[16] = "(none)";
-		if (trunk->ring_timeout)
+
+		ao2_lock(trunk);
+
+		if (trunk->ring_timeout) {
 			snprintf(ring_timeout, sizeof(ring_timeout), "%u Seconds", trunk->ring_timeout);
+		}
+
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n"
 		            "=== Trunk Name:       %s\n"
 		            "=== ==> Device:       %s\n"
@@ -1804,13 +2168,16 @@ static char *sla_show_trunks(struct ast_cli_entry *e, int cmd, struct ast_cli_ar
 		            ring_timeout,
 		            trunk->barge_disabled ? "No" : "Yes",
 		            sla_hold_str(trunk->hold_access));
-		AST_RWLIST_RDLOCK(&sla_stations);
-		AST_LIST_TRAVERSE(&trunk->stations, station_ref, entry)
+
+		AST_LIST_TRAVERSE(&trunk->stations, station_ref, entry) {
 			ast_cli(a->fd, "===    ==> Station name: %s\n", station_ref->station->name);
-		AST_RWLIST_UNLOCK(&sla_stations);
+		}
+
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n===\n");
+
+		ao2_unlock(trunk);
 	}
-	AST_RWLIST_UNLOCK(&sla_trunks);
+	ao2_iterator_destroy(&i);
 	ast_cli(a->fd, "=============================================================\n\n");
 
 	return CLI_SUCCESS;
@@ -1832,7 +2199,8 @@ static const char *trunkstate2str(enum sla_trunk_state state)
 
 static char *sla_show_stations(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
-	const struct sla_station *station;
+	struct ao2_iterator i;
+	struct sla_station *station;
 
 	switch (cmd) {
 	case CLI_INIT:
@@ -1850,11 +2218,14 @@ static char *sla_show_stations(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	            "=== Configured SLA Stations =================================\n"
 	            "=============================================================\n"
 	            "===\n");
-	AST_RWLIST_RDLOCK(&sla_stations);
-	AST_RWLIST_TRAVERSE(&sla_stations, station, entry) {
+	i = ao2_iterator_init(sla_stations, 0);
+	for (; (station = ao2_iterator_next(&i)); ao2_ref(station, -1)) {
 		struct sla_trunk_ref *trunk_ref;
 		char ring_timeout[16] = "(none)";
 		char ring_delay[16] = "(none)";
+
+		ao2_lock(station);
+
 		if (station->ring_timeout) {
 			snprintf(ring_timeout, sizeof(ring_timeout), 
 				"%u", station->ring_timeout);
@@ -1875,7 +2246,6 @@ static char *sla_show_stations(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		            S_OR(station->autocontext, "(none)"), 
 		            ring_timeout, ring_delay,
 		            sla_hold_str(station->hold_access));
-		AST_RWLIST_RDLOCK(&sla_trunks);
 		AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
 			if (trunk_ref->ring_timeout) {
 				snprintf(ring_timeout, sizeof(ring_timeout),
@@ -1895,11 +2265,12 @@ static char *sla_show_stations(struct ast_cli_entry *e, int cmd, struct ast_cli_
 			            trunkstate2str(trunk_ref->state),
 			            ring_timeout, ring_delay);
 		}
-		AST_RWLIST_UNLOCK(&sla_trunks);
 		ast_cli(a->fd, "=== ---------------------------------------------------------\n"
 		            "===\n");
+
+		ao2_unlock(station);
 	}
-	AST_RWLIST_UNLOCK(&sla_stations);
+	ao2_iterator_destroy(&i);
 	ast_cli(a->fd, "============================================================\n"
 	            "\n");
 
@@ -1951,20 +2322,10 @@ static int conf_free(struct ast_conference *conf)
 {
 	int x;
 	struct announce_listitem *item;
-	
+
 	AST_LIST_REMOVE(&confs, conf, list);
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a MeetMe conference ends.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
-			</syntax>
-			<see-also>
-				<ref type="managerEvent">MeetmeJoin</ref>
-			</see-also>
-		</managerEventInstance>
-	***/
-	manager_event(EVENT_FLAG_CALL, "MeetmeEnd", "Meetme: %s\r\n", conf->confno);
+
+	meetme_stasis_generate_msg(conf, NULL, NULL, meetme_end_type(), NULL);
 
 	if (conf->recording == MEETME_RECORD_ACTIVE) {
 		conf->recording = MEETME_RECORD_TERMINATE;
@@ -2004,10 +2365,8 @@ static int conf_free(struct ast_conference *conf)
 
 	if (conf->origframe)
 		ast_frfree(conf->origframe);
-	if (conf->lchan)
-		ast_hangup(conf->lchan);
-	if (conf->chan)
-		ast_hangup(conf->chan);
+	ast_hangup(conf->lchan);
+	ast_hangup(conf->chan);
 	if (conf->fd >= 0)
 		close(conf->fd);
 	if (conf->recordingfilename) {
@@ -2053,11 +2412,16 @@ static void sla_queue_event_full(enum sla_event_type type,
 	struct sla_event *event;
 
 	if (sla.thread == AST_PTHREADT_NULL) {
+		ao2_ref(station, -1);
+		ao2_ref(trunk_ref, -1);
 		return;
 	}
 
-	if (!(event = ast_calloc(1, sizeof(*event))))
+	if (!(event = ast_calloc(1, sizeof(*event)))) {
+		ao2_ref(station, -1);
+		ao2_ref(trunk_ref, -1);
 		return;
+	}
 
 	event->type = type;
 	event->trunk_ref = trunk_ref;
@@ -2091,6 +2455,7 @@ static void sla_queue_event_conf(enum sla_event_type type, struct ast_channel *c
 	struct sla_station *station;
 	struct sla_trunk_ref *trunk_ref = NULL;
 	char *trunk_name;
+	struct ao2_iterator i;
 
 	trunk_name = ast_strdupa(conf->confno);
 	strsep(&trunk_name, "_");
@@ -2099,16 +2464,23 @@ static void sla_queue_event_conf(enum sla_event_type type, struct ast_channel *c
 		return;
 	}
 
-	AST_RWLIST_RDLOCK(&sla_stations);
-	AST_RWLIST_TRAVERSE(&sla_stations, station, entry) {
+	i = ao2_iterator_init(sla_stations, 0);
+	while ((station = ao2_iterator_next(&i))) {
+		ao2_lock(station);
 		AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
-			if (trunk_ref->chan == chan && !strcmp(trunk_ref->trunk->name, trunk_name))
+			if (trunk_ref->chan == chan && !strcmp(trunk_ref->trunk->name, trunk_name)) {
+				ao2_ref(trunk_ref, 1);
 				break;
+			}
 		}
-		if (trunk_ref)
+		ao2_unlock(station);
+		if (trunk_ref) {
+			/* station reference given to sla_queue_event_full() */
 			break;
+		}
+		ao2_ref(station, -1);
 	}
-	AST_RWLIST_UNLOCK(&sla_stations);
+	ao2_iterator_destroy(&i);
 
 	if (!trunk_ref) {
 		ast_debug(1, "Trunk not found for event!\n");
@@ -2298,30 +2670,8 @@ static int can_write(struct ast_channel *chan, struct ast_flags64 *confflags)
 
 static void send_talking_event(struct ast_channel *chan, struct ast_conference *conf, struct ast_conf_user *user, int talking)
 {
-	/*** DOCUMENTATION
-		<managerEventInstance>
-			<synopsis>Raised when a MeetMe user begins or ends talking.</synopsis>
-			<syntax>
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
-				<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Usernum'])" />
-				<parameter name="Status">
-					<enumlist>
-						<enum name="on"/>
-						<enum name="off"/>
-					</enumlist>
-				</parameter>
-			</syntax>
-		</managerEventInstance>
-	***/
-	ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeTalking",
-		"Channel: %s\r\n"
-		"Uniqueid: %s\r\n"
-		"Meetme: %s\r\n"
-		"Usernum: %d\r\n"
-		"Status: %s\r\n",
-		ast_channel_name(chan), ast_channel_uniqueid(chan),
-		conf->confno,
-		user->user_no, talking ? "on" : "off");
+	RAII_VAR(struct ast_json *, status_blob, status_to_json(talking), ast_json_unref);
+	meetme_stasis_generate_msg(conf, chan, user, meetme_talking_type(), status_blob);
 }
 
 static void set_user_talking(struct ast_channel *chan, struct ast_conference *conf, struct ast_conf_user *user, int talking, int monitor)
@@ -2604,7 +2954,8 @@ static void meetme_menu_admin(enum menu_modes *menu_mode, int *dtmf, struct ast_
  * \param recordingtmp character buffer which may hold the name of the conference recording file
  * \param dahdic dahdi configuration info used by the main conference loop
  */
-static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
+
+static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, int recordingtmp_size, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
 {
 	int keepplaying;
 	int playednamerec;
@@ -2725,7 +3076,7 @@ static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, st
 				}
 				ast_channel_unlock(chan);
 				if (!conf->recordingfilename) {
-					snprintf(recordingtmp, sizeof(recordingtmp), "meetme-conf-rec-%s-%s", conf->confno, ast_channel_uniqueid(chan));
+					snprintf(recordingtmp, recordingtmp_size, "meetme-conf-rec-%s-%s", conf->confno, ast_channel_uniqueid(chan));
 					conf->recordingfilename = ast_strdup(recordingtmp);
 				}
 				if (!conf->recordingformat) {
@@ -2736,7 +3087,7 @@ static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, st
 			}
 
 			ast_mutex_lock(&conf->recordthreadlock);
-			if ((conf->recordthread == AST_PTHREADT_NULL) && ast_test_flag64(confflags, CONFFLAG_RECORDCONF) && ((conf->lchan = ast_request("DAHDI", cap_slin, chan, "pseudo", NULL)))) {
+			if ((conf->recordthread == AST_PTHREADT_NULL) && ast_test_flag64(confflags, CONFFLAG_RECORDCONF) && ((conf->lchan = ast_request("DAHDI", cap_slin, NULL, chan, "pseudo", NULL)))) {
 				ast_set_read_format_by_id(conf->lchan, AST_FORMAT_SLINEAR);
 				ast_set_write_format_by_id(conf->lchan, AST_FORMAT_SLINEAR);
 				dahdic->chan = 0;
@@ -2788,7 +3139,7 @@ static void meetme_menu_admin_extended(enum menu_modes *menu_mode, int *dtmf, st
  * \param dahdic dahdi configuration info used by the main conference loop
  */
 
-static void meetme_menu(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
+static void meetme_menu(enum menu_modes *menu_mode, int *dtmf, struct ast_conference *conf, struct ast_flags64 *confflags, struct ast_channel *chan, struct ast_conf_user *user, char *recordingtmp, int recordingtmp_size, struct dahdi_confinfo *dahdic, struct ast_format_cap *cap_slin)
 {
 	switch (*menu_mode) {
 	case MENU_DISABLED:
@@ -2803,7 +3154,7 @@ static void meetme_menu(enum menu_modes *menu_mode, int *dtmf, struct ast_confer
 			break;
 		}
 	case MENU_ADMIN_EXTENDED:
-		meetme_menu_admin_extended(menu_mode, dtmf, conf, confflags, chan, user, recordingtmp, dahdic, cap_slin);
+		meetme_menu_admin_extended(menu_mode, dtmf, conf, confflags, chan, user, recordingtmp, recordingtmp_size, dahdic, cap_slin);
 		break;
 	}
 }
@@ -2863,7 +3214,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 	int setusercount = 0;
 	int confsilence = 0, totalsilence = 0;
 	char *mailbox, *context;
-	struct ast_format_cap *cap_slin = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap_slin = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	struct ast_format tmpfmt;
 
 	if (!cap_slin) {
@@ -2990,7 +3341,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 
 	ast_mutex_lock(&conf->recordthreadlock);
 	if ((conf->recordthread == AST_PTHREADT_NULL) && ast_test_flag64(confflags, CONFFLAG_RECORDCONF) &&
-		((conf->lchan = ast_request("DAHDI", cap_slin, chan, "pseudo", NULL)))) {
+		((conf->lchan = ast_request("DAHDI", cap_slin, NULL, chan, "pseudo", NULL)))) {
 		ast_set_read_format_by_id(conf->lchan, AST_FORMAT_SLINEAR);
 		ast_set_write_format_by_id(conf->lchan, AST_FORMAT_SLINEAR);
 		dahdic.chan = 0;
@@ -3335,39 +3686,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 	ast_debug(1, "Placed channel %s in DAHDI conf %d\n", ast_channel_name(chan), conf->dahdiconf);
 
 	if (!sent_event) {
-		/*** DOCUMENTATION
-			<managerEventInstance>
-				<synopsis>Raised when a user joins a MeetMe conference.</synopsis>
-				<syntax>
-					<parameter name="Meetme">
-						<para>The identifier for the MeetMe conference.</para>
-					</parameter>
-					<parameter name="Usernum">
-						<para>The identifier of the MeetMe user who joined.</para>
-					</parameter>
-				</syntax>
-				<see-also>
-					<ref type="managerEvent">MeetmeLeave</ref>
-					<ref type="application">MeetMe</ref>
-				</see-also>
-			</managerEventInstance>
-		***/
-		ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeJoin",
-			"Channel: %s\r\n"
-			"Uniqueid: %s\r\n"
-			"Meetme: %s\r\n"
-			"Usernum: %d\r\n"
-			"CallerIDnum: %s\r\n"
-			"CallerIDname: %s\r\n"
-			"ConnectedLineNum: %s\r\n"
-			"ConnectedLineName: %s\r\n",
-			ast_channel_name(chan), ast_channel_uniqueid(chan), conf->confno,
-			user->user_no,
-			S_COR(ast_channel_caller(user->chan)->id.number.valid, ast_channel_caller(user->chan)->id.number.str, "<unknown>"),
-			S_COR(ast_channel_caller(user->chan)->id.name.valid, ast_channel_caller(user->chan)->id.name.str, "<unknown>"),
-			S_COR(ast_channel_connected(user->chan)->id.number.valid, ast_channel_connected(user->chan)->id.number.str, "<unknown>"),
-			S_COR(ast_channel_connected(user->chan)->id.name.valid, ast_channel_connected(user->chan)->id.name.str, "<unknown>")
-			);
+		meetme_stasis_generate_msg(conf, chan, user, meetme_join_type(), NULL);
 		sent_event = 1;
 	}
 
@@ -3716,6 +4035,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 
 			/* If I should be muted but am still talker, mute me */
 			if ((user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && (dahdic.confmode & DAHDI_CONF_TALKER)) {
+				RAII_VAR(struct ast_json *, status_blob, status_to_json(1), ast_json_unref);
 				dahdic.confmode ^= DAHDI_CONF_TALKER;
 				if (ioctl(fd, DAHDI_SETCONF, &dahdic)) {
 					ast_log(LOG_WARNING, "Error setting conference - Un/Mute \n");
@@ -3727,95 +4047,34 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 				if (ast_test_flag64(confflags,  (CONFFLAG_MONITORTALKER | CONFFLAG_OPTIMIZETALKER))) {
 					set_user_talking(chan, conf, user, -1, ast_test_flag64(confflags, CONFFLAG_MONITORTALKER));
 				}
-				/*** DOCUMENTATION
-				<managerEventInstance>
-					<synopsis>Raised when a MeetMe user is muted.</synopsis>
-					<syntax>
-						<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
-						<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Usernum'])" />
-						<parameter name="Status">
-							<enumlist>
-								<enum name="on"/>
-								<enum name="off"/>
-							</enumlist>
-						</parameter>
-					</syntax>
-				</managerEventInstance>
-				***/
-				ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeMute",
-					"Channel: %s\r\n"
-					"Uniqueid: %s\r\n"
-					"Meetme: %s\r\n"
-					"Usernum: %d\r\n"
-					"Status: on\r\n",
-					ast_channel_name(chan), ast_channel_uniqueid(chan), conf->confno, user->user_no);
+				meetme_stasis_generate_msg(conf, chan, user, meetme_mute_type(), status_blob);
 			}
 
 			/* If I should be un-muted but am not talker, un-mute me */
 			if (!(user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && !ast_test_flag64(confflags, CONFFLAG_MONITOR) && !(dahdic.confmode & DAHDI_CONF_TALKER)) {
+				RAII_VAR(struct ast_json *, status_blob, status_to_json(0), ast_json_unref);
 				dahdic.confmode |= DAHDI_CONF_TALKER;
 				if (ioctl(fd, DAHDI_SETCONF, &dahdic)) {
 					ast_log(LOG_WARNING, "Error setting conference - Un/Mute \n");
 					ret = -1;
 					break;
 				}
-				/*** DOCUMENTATION
-				<managerEventInstance>
-					<synopsis>Raised when a MeetMe user is unmuted.</synopsis>
-				</managerEventInstance>
-				***/
-				ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeMute",
-					"Channel: %s\r\n"
-					"Uniqueid: %s\r\n"
-					"Meetme: %s\r\n"
-					"Usernum: %d\r\n"
-					"Status: off\r\n",
-					ast_channel_name(chan), ast_channel_uniqueid(chan), conf->confno, user->user_no);
+				meetme_stasis_generate_msg(conf, chan, user, meetme_mute_type(), status_blob);
 			}
-			
+
 			if ((user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && 
 				(user->adminflags & ADMINFLAG_T_REQUEST) && !(talkreq_manager)) {
-				talkreq_manager = 1;
 
-				/*** DOCUMENTATION
-				<managerEventInstance>
-					<synopsis>Raised when a MeetMe user has started talking.</synopsis>
-					<syntax>
-						<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
-						<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Usernum'])" />
-						<parameter name="Status">
-							<enumlist>
-								<enum name="on"/>
-								<enum name="off"/>
-							</enumlist>
-						</parameter>
-					</syntax>
-				</managerEventInstance>
-				***/
-				ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeTalkRequest",
-					"Channel: %s\r\n"
-					"Uniqueid: %s\r\n"
-					"Meetme: %s\r\n"
-					"Usernum: %d\r\n"
-					"Status: on\r\n",
-					ast_channel_name(chan), ast_channel_uniqueid(chan), conf->confno, user->user_no);
+				RAII_VAR(struct ast_json *, status_blob, status_to_json(1), ast_json_unref);
+				talkreq_manager = 1;
+				meetme_stasis_generate_msg(conf, chan, user, meetme_talk_request_type(), status_blob);
 			}
 
 			if (!(user->adminflags & (ADMINFLAG_MUTED | ADMINFLAG_SELFMUTED)) && 
 				!(user->adminflags & ADMINFLAG_T_REQUEST) && (talkreq_manager)) {
+				RAII_VAR(struct ast_json *, status_blob, status_to_json(0), ast_json_unref);
 				talkreq_manager = 0;
-				/*** DOCUMENTATION
-				<managerEventInstance>
-					<synopsis>Raised when a MeetMe user has finished talking.</synopsis>
-				</managerEventInstance>
-				***/
-				ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeTalkRequest",
-					"Channel: %s\r\n"
-					"Uniqueid: %s\r\n"
-					"Meetme: %s\r\n"
-					"Usernum: %d\r\n"
-					"Status: off\r\n",
-					ast_channel_name(chan), ast_channel_uniqueid(chan), conf->confno, user->user_no);
+				meetme_stasis_generate_msg(conf, chan, user, meetme_talk_request_type(), status_blob);
 			}
 
 			/* If user have been hung up, exit the conference */
@@ -3946,7 +4205,7 @@ static int conf_run(struct ast_channel *chan, struct ast_conference *conf, struc
 					}
 
 					if (dtmf > 0) {
-						meetme_menu(&menu_mode, &dtmf, conf, confflags, chan, user, recordingtmp, &dahdic, cap_slin);
+						meetme_menu(&menu_mode, &dtmf, conf, confflags, chan, user, recordingtmp, sizeof(recordingtmp), &dahdic, cap_slin);
 					}
 
 					if (musiconhold && !menu_mode) {
@@ -4169,38 +4428,7 @@ bailoutandtrynormal:
 		now = ast_tvnow();
 
 		if (sent_event) {
-			/*** DOCUMENTATION
-			<managerEventInstance>
-				<synopsis>Raised when a user leaves a MeetMe conference.</synopsis>
-				<syntax>
-					<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Meetme'])" />
-					<xi:include xpointer="xpointer(/docs/managerEvent[@name='MeetmeJoin']/managerEventInstance/syntax/parameter[@name='Usernum'])" />
-					<parameter name="Duration">
-						<para>The length of time in seconds that the Meetme user was in the conference.</para>
-					</parameter>
-				</syntax>
-				<see-also>
-					<ref type="managerEvent">MeetmeJoin</ref>
-				</see-also>
-			</managerEventInstance>
-			***/
-			ast_manager_event(chan, EVENT_FLAG_CALL, "MeetmeLeave",
-				"Channel: %s\r\n"
-				"Uniqueid: %s\r\n"
-				"Meetme: %s\r\n"
-				"Usernum: %d\r\n"
-				"CallerIDNum: %s\r\n"
-				"CallerIDName: %s\r\n"
-				"ConnectedLineNum: %s\r\n"
-				"ConnectedLineName: %s\r\n"
-				"Duration: %ld\r\n",
-				ast_channel_name(chan), ast_channel_uniqueid(chan), conf->confno,
-				user->user_no,
-				S_COR(ast_channel_caller(user->chan)->id.number.valid, ast_channel_caller(user->chan)->id.number.str, "<unknown>"),
-				S_COR(ast_channel_caller(user->chan)->id.name.valid, ast_channel_caller(user->chan)->id.name.str, "<unknown>"),
-				S_COR(ast_channel_connected(user->chan)->id.number.valid, ast_channel_connected(user->chan)->id.number.str, "<unknown>"),
-				S_COR(ast_channel_connected(user->chan)->id.name.valid, ast_channel_connected(user->chan)->id.name.str, "<unknown>"),
-				(long)(now.tv_sec - user->jointime));
+			meetme_stasis_generate_msg(conf, chan, user, meetme_leave_type(), NULL);
 		}
 
 		if (setusercount) {
@@ -5023,6 +5251,23 @@ static int admin_exec(struct ast_channel *chan, const char *data) {
 			res = -2;
 			goto usernotfound;
 		}
+	} else {
+		/* fail for commands that require a user */
+		switch (*args.command) {
+		case 'm': /* Unmute */
+		case 'M': /* Mute */
+		case 't': /* Lower user's talk volume */
+		case 'T': /* Raise user's talk volume */
+		case 'u': /* Lower user's listen volume */
+		case 'U': /* Raise user's listen volume */
+		case 'r': /* Reset user's volume level */
+		case 'k': /* Kick user */
+			res = -2;
+			ast_log(LOG_NOTICE, "No user specified!\n");
+			goto usernotfound;
+		default:
+			break;
+		}
 	}
 
 	switch (*args.command) {
@@ -5038,21 +5283,22 @@ static int admin_exec(struct ast_channel *chan, const char *data) {
 	case 101: /* e: Eject last user*/
 	{
 		int max_no = 0;
-
-		/* If they passed in a user, disregard it */
-		if (user) {
-			ao2_ref(user, -1);
-		}
+		RAII_VAR(struct ast_conf_user *, eject_user, NULL, ao2_cleanup);
 
 		ao2_callback(cnf->usercontainer, OBJ_NODATA, user_max_cmp, &max_no);
-		user = ao2_find(cnf->usercontainer, &max_no, 0);
-		if (!ast_test_flag64(&user->userflags, CONFFLAG_ADMIN))
-			user->adminflags |= ADMINFLAG_KICKME;
-		else {
+		eject_user = ao2_find(cnf->usercontainer, &max_no, 0);
+		if (!eject_user) {
+			res = -1;
+			ast_log(LOG_NOTICE, "No last user to kick!\n");
+			break;
+		}
+
+		if (!ast_test_flag64(&eject_user->userflags, CONFFLAG_ADMIN)) {
+			eject_user->adminflags |= ADMINFLAG_KICKME;
+		} else {
 			res = -1;
 			ast_log(LOG_NOTICE, "Not kicking last user, is an Admin!\n");
 		}
-		ao2_ref(user, -1);
 		break;
 	}
 	case 77: /* M: Mute */ 
@@ -5581,34 +5827,30 @@ static void load_config_meetme(void)
 	ast_config_destroy(cfg);
 }
 
-/*! \brief Find an SLA trunk by name
- * \note This must be called with the sla_trunks container locked
+/*!
+ * \internal
+ * \brief Find an SLA trunk by name
  */
 static struct sla_trunk *sla_find_trunk(const char *name)
 {
-	struct sla_trunk *trunk = NULL;
+	struct sla_trunk tmp_trunk = {
+		.name = name,
+	};
 
-	AST_RWLIST_TRAVERSE(&sla_trunks, trunk, entry) {
-		if (!strcasecmp(trunk->name, name))
-			break;
-	}
-
-	return trunk;
+	return ao2_find(sla_trunks, &tmp_trunk, OBJ_POINTER);
 }
 
-/*! \brief Find an SLA station by name
- * \note This must be called with the sla_stations container locked
+/*!
+ * \internal
+ * \brief Find an SLA station by name
  */
 static struct sla_station *sla_find_station(const char *name)
 {
-	struct sla_station *station = NULL;
+	struct sla_station tmp_station = {
+		.name = name,
+	};
 
-	AST_RWLIST_TRAVERSE(&sla_stations, station, entry) {
-		if (!strcasecmp(station->name, name))
-			break;
-	}
-
-	return station;
+	return ao2_find(sla_stations, &tmp_station, OBJ_POINTER);
 }
 
 static int sla_check_station_hold_access(const struct sla_trunk *trunk,
@@ -5632,9 +5874,11 @@ static int sla_check_station_hold_access(const struct sla_trunk *trunk,
 	return 0;
 }
 
-/*! \brief Find a trunk reference on a station by name
+/*!
+ * \brief Find a trunk reference on a station by name
  * \param station the station
  * \param name the trunk's name
+ * \pre sla_station is locked
  * \return a pointer to the station's trunk reference.  If the trunk
  *         is not found, it is not idle and barge is disabled, or if
  *         it is on hold and private hold is set, then NULL will be returned.
@@ -5661,16 +5905,32 @@ static struct sla_trunk_ref *sla_find_trunk_ref_byname(const struct sla_station 
 		break;
 	}
 
+	if (trunk_ref) {
+		ao2_ref(trunk_ref, 1);
+	}
+
 	return trunk_ref;
+}
+
+static void sla_station_ref_destructor(void *obj)
+{
+	struct sla_station_ref *station_ref = obj;
+
+	if (station_ref->station) {
+		ao2_ref(station_ref->station, -1);
+		station_ref->station = NULL;
+	}
 }
 
 static struct sla_station_ref *sla_create_station_ref(struct sla_station *station)
 {
 	struct sla_station_ref *station_ref;
 
-	if (!(station_ref = ast_calloc(1, sizeof(*station_ref))))
+	if (!(station_ref = ao2_alloc(sizeof(*station_ref), sla_station_ref_destructor))) {
 		return NULL;
+	}
 
+	ao2_ref(station, 1);
 	station_ref->station = station;
 
 	return station_ref;
@@ -5683,10 +5943,46 @@ static struct sla_ringing_station *sla_create_ringing_station(struct sla_station
 	if (!(ringing_station = ast_calloc(1, sizeof(*ringing_station))))
 		return NULL;
 
+	ao2_ref(station, 1);
 	ringing_station->station = station;
 	ringing_station->ring_begin = ast_tvnow();
 
 	return ringing_station;
+}
+
+static void sla_ringing_station_destroy(struct sla_ringing_station *ringing_station)
+{
+	if (ringing_station->station) {
+		ao2_ref(ringing_station->station, -1);
+		ringing_station->station = NULL;
+	}
+
+	ast_free(ringing_station);
+}
+
+static struct sla_failed_station *sla_create_failed_station(struct sla_station *station)
+{
+	struct sla_failed_station *failed_station;
+
+	if (!(failed_station = ast_calloc(1, sizeof(*failed_station)))) {
+		return NULL;
+	}
+
+	ao2_ref(station, 1);
+	failed_station->station = station;
+	failed_station->last_try = ast_tvnow();
+
+	return failed_station;
+}
+
+static void sla_failed_station_destroy(struct sla_failed_station *failed_station)
+{
+	if (failed_station->station) {
+		ao2_ref(failed_station->station, -1);
+		failed_station->station = NULL;
+	}
+
+	ast_free(failed_station);
 }
 
 static enum ast_device_state sla_state_to_devstate(enum sla_trunk_state state)
@@ -5711,18 +6007,25 @@ static void sla_change_trunk_state(const struct sla_trunk *trunk, enum sla_trunk
 {
 	struct sla_station *station;
 	struct sla_trunk_ref *trunk_ref;
+	struct ao2_iterator i;
 
-	AST_LIST_TRAVERSE(&sla_stations, station, entry) {
+	i = ao2_iterator_init(sla_stations, 0);
+	while ((station = ao2_iterator_next(&i))) {
+		ao2_lock(station);
 		AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
 			if (trunk_ref->trunk != trunk || (inactive_only ? trunk_ref->chan : 0)
-				|| trunk_ref == exclude)
+					|| trunk_ref == exclude) {
 				continue;
+			}
 			trunk_ref->state = state;
 			ast_devstate_changed(sla_state_to_devstate(state), AST_DEVSTATE_CACHABLE,
 					     "SLA:%s_%s", station->name, trunk->name);
 			break;
 		}
+		ao2_unlock(station);
+		ao2_ref(station, -1);
 	}
+	ao2_iterator_destroy(&i);
 }
 
 struct run_station_args {
@@ -5740,8 +6043,8 @@ static void answer_trunk_chan(struct ast_channel *chan)
 
 static void *run_station(void *data)
 {
-	struct sla_station *station;
-	struct sla_trunk_ref *trunk_ref;
+	RAII_VAR(struct sla_station *, station, NULL, ao2_cleanup);
+	RAII_VAR(struct sla_trunk_ref *, trunk_ref, NULL, ao2_cleanup);
 	struct ast_str *conf_name = ast_str_create(16);
 	struct ast_flags64 conf_flags = { 0 };
 	struct ast_conference *conf;
@@ -5784,6 +6087,8 @@ static void *run_station(void *data)
 	return NULL;
 }
 
+static void sla_ringing_trunk_destroy(struct sla_ringing_trunk *ringing_trunk);
+
 static void sla_stop_ringing_trunk(struct sla_ringing_trunk *ringing_trunk)
 {
 	char buf[80];
@@ -5793,10 +6098,11 @@ static void sla_stop_ringing_trunk(struct sla_ringing_trunk *ringing_trunk)
 	admin_exec(NULL, buf);
 	sla_change_trunk_state(ringing_trunk->trunk, SLA_TRUNK_STATE_IDLE, ALL_TRUNK_REFS, NULL);
 
-	while ((station_ref = AST_LIST_REMOVE_HEAD(&ringing_trunk->timed_out_stations, entry)))
-		ast_free(station_ref);
+	while ((station_ref = AST_LIST_REMOVE_HEAD(&ringing_trunk->timed_out_stations, entry))) {
+		ao2_ref(station_ref, -1);
+	}
 
-	ast_free(ringing_trunk);
+	sla_ringing_trunk_destroy(ringing_trunk);
 }
 
 static void sla_stop_ringing_station(struct sla_ringing_station *ringing_station,
@@ -5831,7 +6137,7 @@ static void sla_stop_ringing_station(struct sla_ringing_station *ringing_station
 	}
 
 done:
-	ast_free(ringing_station);
+	sla_ringing_station_destroy(ringing_station);
 }
 
 static void sla_dial_state_callback(struct ast_dial *dial)
@@ -5883,8 +6189,10 @@ static struct sla_ringing_trunk *sla_choose_ringing_trunk(struct sla_station *st
 			if (rm)
 				AST_LIST_REMOVE_CURRENT(entry);
 
-			if (trunk_ref)
+			if (trunk_ref) {
+				ao2_ref(s_trunk_ref, 1);
 				*trunk_ref = s_trunk_ref;
+			}
 
 			break;
 		}
@@ -5902,7 +6210,7 @@ static void sla_handle_dial_state_event(void)
 	struct sla_ringing_station *ringing_station;
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&sla.ringing_stations, ringing_station, entry) {
-		struct sla_trunk_ref *s_trunk_ref = NULL;
+		RAII_VAR(struct sla_trunk_ref *, s_trunk_ref, NULL, ao2_cleanup);
 		struct sla_ringing_trunk *ringing_trunk = NULL;
 		struct run_station_args args;
 		enum ast_dial_result dial_res;
@@ -5935,7 +6243,7 @@ static void sla_handle_dial_state_event(void)
 				ast_dial_join(ringing_station->station->dial);
 				ast_dial_destroy(ringing_station->station->dial);
 				ringing_station->station->dial = NULL;
-				ast_free(ringing_station);
+				sla_ringing_station_destroy(ringing_station);
 				break;
 			}
 			/* Track the channel that answered this trunk */
@@ -5946,12 +6254,14 @@ static void sla_handle_dial_state_event(void)
 			/* Now, start a thread that will connect this station to the trunk.  The rest of
 			 * the code here sets up the thread and ensures that it is able to save the arguments
 			 * before they are no longer valid since they are allocated on the stack. */
+			ao2_ref(s_trunk_ref, 1);
 			args.trunk_ref = s_trunk_ref;
+			ao2_ref(ringing_station->station, 1);
 			args.station = ringing_station->station;
 			args.cond = &cond;
 			args.cond_lock = &cond_lock;
-			ast_free(ringing_trunk);
-			ast_free(ringing_station);
+			sla_ringing_trunk_destroy(ringing_trunk);
+			sla_ringing_station_destroy(ringing_station);
 			ast_mutex_init(&cond_lock);
 			ast_cond_init(&cond, NULL);
 			ast_mutex_lock(&cond_lock);
@@ -6005,7 +6315,7 @@ static int sla_check_failed_station(const struct sla_station *station)
 			continue;
 		if (ast_tvdiff_ms(ast_tvnow(), failed_station->last_try) > 1000) {
 			AST_LIST_REMOVE_CURRENT(entry);
-			ast_free(failed_station);
+			sla_failed_station_destroy(failed_station);
 			break;
 		}
 		res = 1;
@@ -6034,7 +6344,7 @@ static int sla_ring_station(struct sla_ringing_trunk *ringing_trunk, struct sla_
 	tech_data = ast_strdupa(station->device);
 	tech = strsep(&tech_data, "/");
 
-	if (ast_dial_append(dial, tech, tech_data) == -1) {
+	if (ast_dial_append(dial, tech, tech_data, NULL) == -1) {
 		ast_dial_destroy(dial);
 		return -1;
 	}
@@ -6058,11 +6368,9 @@ static int sla_ring_station(struct sla_ringing_trunk *ringing_trunk, struct sla_
 	if (res != AST_DIAL_RESULT_TRYING) {
 		struct sla_failed_station *failed_station;
 		ast_dial_destroy(dial);
-		if (!(failed_station = ast_calloc(1, sizeof(*failed_station))))
-			return -1;
-		failed_station->station = station;
-		failed_station->last_try = ast_tvnow();
-		AST_LIST_INSERT_HEAD(&sla.failed_stations, failed_station, entry);
+		if ((failed_station = sla_create_failed_station(station))) {
+			AST_LIST_INSERT_HEAD(&sla.failed_stations, failed_station, entry);
+		}
 		return -1;
 	}
 	if (!(ringing_station = sla_create_ringing_station(station))) {
@@ -6102,6 +6410,8 @@ static struct sla_trunk_ref *sla_find_trunk_ref(const struct sla_station *statio
 			break;
 	}
 
+	ao2_ref(trunk_ref, 1);
+
 	return trunk_ref;
 }
 
@@ -6113,7 +6423,7 @@ static struct sla_trunk_ref *sla_find_trunk_ref(const struct sla_station *statio
 static int sla_check_station_delay(struct sla_station *station, 
 	struct sla_ringing_trunk *ringing_trunk)
 {
-	struct sla_trunk_ref *trunk_ref;
+	RAII_VAR(struct sla_trunk_ref *, trunk_ref, NULL, ao2_cleanup);
 	unsigned int delay = UINT_MAX;
 	int time_left, time_elapsed;
 
@@ -6206,7 +6516,7 @@ static void sla_hangup_stations(void)
 			ast_dial_join(ringing_station->station->dial);
 			ast_dial_destroy(ringing_station->station->dial);
 			ringing_station->station->dial = NULL;
-			ast_free(ringing_station);
+			sla_ringing_station_destroy(ringing_station);
 		}
 	}
 	AST_LIST_TRAVERSE_SAFE_END
@@ -6363,8 +6673,10 @@ static int sla_calc_station_delays(unsigned int *timeout)
 {
 	struct sla_station *station;
 	int res = 0;
+	struct ao2_iterator i;
 
-	AST_LIST_TRAVERSE(&sla_stations, station, entry) {
+	i = ao2_iterator_init(sla_stations, 0);
+	for (; (station = ao2_iterator_next(&i)); ao2_ref(station, -1)) {
 		struct sla_ringing_trunk *ringing_trunk;
 		int time_left;
 
@@ -6394,6 +6706,7 @@ static int sla_calc_station_delays(unsigned int *timeout)
 		if (time_left < *timeout)
 			*timeout = time_left;
 	}
+	ao2_iterator_destroy(&i);
 
 	return res;
 }
@@ -6435,47 +6748,19 @@ static int sla_process_timers(struct timespec *ts)
 	return 1;
 }
 
-static int sla_load_config(int reload);
-
-/*!
- * \internal
- * \brief Check if we can do a reload of SLA, and do it if we can
- * \pre sla.lock is locked.
- */
-static void sla_check_reload(void)
+static void sla_event_destroy(struct sla_event *event)
 {
-	struct sla_station *station;
-	struct sla_trunk *trunk;
-
-	if (!AST_LIST_EMPTY(&sla.event_q) || !AST_LIST_EMPTY(&sla.ringing_trunks)
-		|| !AST_LIST_EMPTY(&sla.ringing_stations) || !AST_LIST_EMPTY(&sla.failed_stations)) {
-		return;
+	if (event->trunk_ref) {
+		ao2_ref(event->trunk_ref, -1);
+		event->trunk_ref = NULL;
 	}
 
-	AST_RWLIST_RDLOCK(&sla_stations);
-	AST_RWLIST_TRAVERSE(&sla_stations, station, entry) {
-		if (station->ref_count)
-			break;
-	}
-	AST_RWLIST_UNLOCK(&sla_stations);
-	if (station) {
-		return;
+	if (event->station) {
+		ao2_ref(event->station, -1);
+		event->station = NULL;
 	}
 
-	AST_RWLIST_RDLOCK(&sla_trunks);
-	AST_RWLIST_TRAVERSE(&sla_trunks, trunk, entry) {
-		if (trunk->ref_count || trunk->chan || trunk->active_stations || trunk->hold_stations) {
-			break;
-		}
-	}
-	AST_RWLIST_UNLOCK(&sla_trunks);
-	if (trunk) {
-		return;
-	}
-
-	/* yay */
-	sla_load_config(1);
-	sla.reload = 0;
+	ast_free(event);
 }
 
 static void *sla_thread(void *data)
@@ -6514,27 +6799,21 @@ static void *sla_thread(void *data)
 			case SLA_EVENT_RINGING_TRUNK:
 				sla_handle_ringing_trunk_event();
 				break;
-			case SLA_EVENT_RELOAD:
-				sla.reload = 1;
-			case SLA_EVENT_CHECK_RELOAD:
-				break;
 			}
-			ast_free(event);
+			sla_event_destroy(event);
 			ast_mutex_lock(&sla.lock);
-		}
-
-		if (sla.reload) {
-			sla_check_reload();
 		}
 	}
 
 	ast_mutex_unlock(&sla.lock);
 
-	while ((ringing_station = AST_LIST_REMOVE_HEAD(&sla.ringing_stations, entry)))
-		ast_free(ringing_station);
+	while ((ringing_station = AST_LIST_REMOVE_HEAD(&sla.ringing_stations, entry))) {
+		sla_ringing_station_destroy(ringing_station);
+	}
 
-	while ((failed_station = AST_LIST_REMOVE_HEAD(&sla.failed_stations, entry)))
-		ast_free(failed_station);
+	while ((failed_station = AST_LIST_REMOVE_HEAD(&sla.failed_stations, entry))) {
+		sla_failed_station_destroy(failed_station);
+	}
 
 	return NULL;
 }
@@ -6555,7 +6834,8 @@ static void *dial_trunk(void *data)
 	char conf_name[MAX_CONFNUM];
 	struct ast_conference *conf;
 	struct ast_flags64 conf_flags = { 0 };
-	struct sla_trunk_ref *trunk_ref = args->trunk_ref;
+	RAII_VAR(struct sla_trunk_ref *, trunk_ref, args->trunk_ref, ao2_cleanup);
+	RAII_VAR(struct sla_station *, station, args->station, ao2_cleanup);
 	int caller_is_saved;
 	struct ast_party_caller caller;
 	int last_state = 0;
@@ -6570,7 +6850,7 @@ static void *dial_trunk(void *data)
 
 	tech_data = ast_strdupa(trunk_ref->trunk->device);
 	tech = strsep(&tech_data, "/");
-	if (ast_dial_append(dial, tech, tech_data) == -1) {
+	if (ast_dial_append(dial, tech, tech_data, NULL) == -1) {
 		ast_mutex_lock(args->cond_lock);
 		ast_cond_signal(args->cond);
 		ast_mutex_unlock(args->cond_lock);
@@ -6627,8 +6907,8 @@ static void *dial_trunk(void *data)
 			break;
 
 		/* check that SLA station that originated trunk call is still alive */
-		if (args->station && ast_device_state(args->station->device) == AST_DEVICE_NOT_INUSE) {
-			ast_debug(3, "Originating station device %s no longer active\n", args->station->device);
+		if (station && ast_device_state(station->device) == AST_DEVICE_NOT_INUSE) {
+			ast_debug(3, "Originating station device %s no longer active\n", station->device);
 			trunk_ref->trunk->chan = NULL;
 			break;
 		}
@@ -6681,15 +6961,19 @@ static void *dial_trunk(void *data)
 	return NULL;
 }
 
-/*! \brief For a given station, choose the highest priority idle trunk
+/*!
+ * \brief For a given station, choose the highest priority idle trunk
+ * \pre sla_station is locked
  */
 static struct sla_trunk_ref *sla_choose_idle_trunk(const struct sla_station *station)
 {
 	struct sla_trunk_ref *trunk_ref = NULL;
 
 	AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
-		if (trunk_ref->state == SLA_TRUNK_STATE_IDLE)
+		if (trunk_ref->state == SLA_TRUNK_STATE_IDLE) {
+			ao2_ref(trunk_ref, 1);
 			break;
+		}
 	}
 
 	return trunk_ref;
@@ -6698,8 +6982,8 @@ static struct sla_trunk_ref *sla_choose_idle_trunk(const struct sla_station *sta
 static int sla_station_exec(struct ast_channel *chan, const char *data)
 {
 	char *station_name, *trunk_name;
-	struct sla_station *station;
-	struct sla_trunk_ref *trunk_ref = NULL;
+	RAII_VAR(struct sla_station *, station, NULL, ao2_cleanup);
+	RAII_VAR(struct sla_trunk_ref *, trunk_ref, NULL, ao2_cleanup);
 	char conf_name[MAX_CONFNUM];
 	struct ast_flags64 conf_flags = { 0 };
 	struct ast_conference *conf;
@@ -6719,25 +7003,21 @@ static int sla_station_exec(struct ast_channel *chan, const char *data)
 		return 0;
 	}
 
-	AST_RWLIST_WRLOCK(&sla_stations);
 	station = sla_find_station(station_name);
-	if (station)
-		ast_atomic_fetchadd_int((int *) &station->ref_count, 1);
-	AST_RWLIST_UNLOCK(&sla_stations);
 
 	if (!station) {
 		ast_log(LOG_WARNING, "Station '%s' not found!\n", station_name);
 		pbx_builtin_setvar_helper(chan, "SLASTATION_STATUS", "FAILURE");
-		sla_queue_event(SLA_EVENT_CHECK_RELOAD);
 		return 0;
 	}
 
-	AST_RWLIST_RDLOCK(&sla_trunks);
+	ao2_lock(station);
 	if (!ast_strlen_zero(trunk_name)) {
 		trunk_ref = sla_find_trunk_ref_byname(station, trunk_name);
-	} else
+	} else {
 		trunk_ref = sla_choose_idle_trunk(station);
-	AST_RWLIST_UNLOCK(&sla_trunks);
+	}
+	ao2_unlock(station);
 
 	if (!trunk_ref) {
 		if (ast_strlen_zero(trunk_name))
@@ -6747,8 +7027,6 @@ static int sla_station_exec(struct ast_channel *chan, const char *data)
 				"'%s' due to access controls.\n", trunk_name);
 		}
 		pbx_builtin_setvar_helper(chan, "SLASTATION_STATUS", "CONGESTION");
-		ast_atomic_fetchadd_int((int *) &station->ref_count, -1);
-		sla_queue_event(SLA_EVENT_CHECK_RELOAD);
 		return 0;
 	}
 
@@ -6777,7 +7055,7 @@ static int sla_station_exec(struct ast_channel *chan, const char *data)
 			answer_trunk_chan(ringing_trunk->trunk->chan);
 			sla_change_trunk_state(ringing_trunk->trunk, SLA_TRUNK_STATE_UP, ALL_TRUNK_REFS, NULL);
 
-			free(ringing_trunk);
+			sla_ringing_trunk_destroy(ringing_trunk);
 
 			/* Queue up reprocessing ringing trunks, and then ringing stations again */
 			sla_queue_event(SLA_EVENT_RINGING_TRUNK);
@@ -6797,6 +7075,8 @@ static int sla_station_exec(struct ast_channel *chan, const char *data)
 			.cond_lock = &cond_lock,
 			.cond = &cond,
 		};
+		ao2_ref(trunk_ref, 1);
+		ao2_ref(station, 1);
 		sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_UP, ALL_TRUNK_REFS, NULL);
 		/* Create a thread to dial the trunk and dump it into the conference.
 		 * However, we want to wait until the trunk has been dialed and the
@@ -6816,8 +7096,6 @@ static int sla_station_exec(struct ast_channel *chan, const char *data)
 			pbx_builtin_setvar_helper(chan, "SLASTATION_STATUS", "CONGESTION");
 			sla_change_trunk_state(trunk_ref->trunk, SLA_TRUNK_STATE_IDLE, ALL_TRUNK_REFS, NULL);
 			trunk_ref->chan = NULL;
-			ast_atomic_fetchadd_int((int *) &station->ref_count, -1);
-			sla_queue_event(SLA_EVENT_CHECK_RELOAD);
 			return 0;
 		}
 	}
@@ -6850,19 +7128,28 @@ static int sla_station_exec(struct ast_channel *chan, const char *data)
 	
 	pbx_builtin_setvar_helper(chan, "SLASTATION_STATUS", "SUCCESS");
 
-	ast_atomic_fetchadd_int((int *) &station->ref_count, -1);
-	sla_queue_event(SLA_EVENT_CHECK_RELOAD);
-
 	return 0;
+}
+
+static void sla_trunk_ref_destructor(void *obj)
+{
+	struct sla_trunk_ref *trunk_ref = obj;
+
+	if (trunk_ref->trunk) {
+		ao2_ref(trunk_ref->trunk, -1);
+		trunk_ref->trunk = NULL;
+	}
 }
 
 static struct sla_trunk_ref *create_trunk_ref(struct sla_trunk *trunk)
 {
 	struct sla_trunk_ref *trunk_ref;
 
-	if (!(trunk_ref = ast_calloc(1, sizeof(*trunk_ref))))
+	if (!(trunk_ref = ao2_alloc(sizeof(*trunk_ref), sla_trunk_ref_destructor))) {
 		return NULL;
+	}
 
+	ao2_ref(trunk, 1);
 	trunk_ref->trunk = trunk;
 
 	return trunk_ref;
@@ -6872,9 +7159,11 @@ static struct sla_ringing_trunk *queue_ringing_trunk(struct sla_trunk *trunk)
 {
 	struct sla_ringing_trunk *ringing_trunk;
 
-	if (!(ringing_trunk = ast_calloc(1, sizeof(*ringing_trunk))))
+	if (!(ringing_trunk = ast_calloc(1, sizeof(*ringing_trunk)))) {
 		return NULL;
-	
+	}
+
+	ao2_ref(trunk, 1);
 	ringing_trunk->trunk = trunk;
 	ringing_trunk->ring_begin = ast_tvnow();
 
@@ -6887,6 +7176,16 @@ static struct sla_ringing_trunk *queue_ringing_trunk(struct sla_trunk *trunk)
 	sla_queue_event(SLA_EVENT_RINGING_TRUNK);
 
 	return ringing_trunk;
+}
+
+static void sla_ringing_trunk_destroy(struct sla_ringing_trunk *ringing_trunk)
+{
+	if (ringing_trunk->trunk) {
+		ao2_ref(ringing_trunk->trunk, -1);
+		ringing_trunk->trunk = NULL;
+	}
+
+	ast_free(ringing_trunk);
 }
 
 enum {
@@ -6907,7 +7206,7 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 	char conf_name[MAX_CONFNUM];
 	struct ast_conference *conf;
 	struct ast_flags64 conf_flags = { 0 };
-	struct sla_trunk *trunk;
+	RAII_VAR(struct sla_trunk *, trunk, NULL, ao2_cleanup);
 	struct sla_ringing_trunk *ringing_trunk;
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(trunk_name);
@@ -6931,16 +7230,11 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 		}
 	}
 
-	AST_RWLIST_WRLOCK(&sla_trunks);
 	trunk = sla_find_trunk(args.trunk_name);
-	if (trunk)
-		ast_atomic_fetchadd_int((int *) &trunk->ref_count, 1);
-	AST_RWLIST_UNLOCK(&sla_trunks);
 
 	if (!trunk) {
 		ast_log(LOG_ERROR, "SLA Trunk '%s' not found!\n", args.trunk_name);
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "FAILURE");
-		sla_queue_event(SLA_EVENT_CHECK_RELOAD);	
 		return 0;
 	}
 
@@ -6948,8 +7242,6 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 		ast_log(LOG_ERROR, "Call came in on %s, but the trunk is already in use!\n",
 			args.trunk_name);
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "FAILURE");
-		ast_atomic_fetchadd_int((int *) &trunk->ref_count, -1);
-		sla_queue_event(SLA_EVENT_CHECK_RELOAD);	
 		return 0;
 	}
 
@@ -6957,8 +7249,6 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 
 	if (!(ringing_trunk = queue_ringing_trunk(trunk))) {
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "FAILURE");
-		ast_atomic_fetchadd_int((int *) &trunk->ref_count, -1);
-		sla_queue_event(SLA_EVENT_CHECK_RELOAD);	
 		return 0;
 	}
 
@@ -6966,8 +7256,6 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 	conf = build_conf(conf_name, "", "", 1, 1, 1, chan, NULL);
 	if (!conf) {
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "FAILURE");
-		ast_atomic_fetchadd_int((int *) &trunk->ref_count, -1);
-		sla_queue_event(SLA_EVENT_CHECK_RELOAD);	
 		return 0;
 	}
 	ast_set_flag64(&conf_flags, 
@@ -7001,15 +7289,12 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 	AST_LIST_TRAVERSE_SAFE_END;
 	ast_mutex_unlock(&sla.lock);
 	if (ringing_trunk) {
-		ast_free(ringing_trunk);
+		sla_ringing_trunk_destroy(ringing_trunk);
 		pbx_builtin_setvar_helper(chan, "SLATRUNK_STATUS", "UNANSWERED");
 		/* Queue reprocessing of ringing trunks to make stations stop ringing
 		 * that shouldn't be ringing after this trunk stopped. */
 		sla_queue_event(SLA_EVENT_RINGING_TRUNK);
 	}
-
-	ast_atomic_fetchadd_int((int *) &trunk->ref_count, -1);
-	sla_queue_event(SLA_EVENT_CHECK_RELOAD);	
 
 	return 0;
 }
@@ -7017,30 +7302,24 @@ static int sla_trunk_exec(struct ast_channel *chan, const char *data)
 static enum ast_device_state sla_state(const char *data)
 {
 	char *buf, *station_name, *trunk_name;
-	struct sla_station *station;
+	RAII_VAR(struct sla_station *, station, NULL, ao2_cleanup);
 	struct sla_trunk_ref *trunk_ref;
 	enum ast_device_state res = AST_DEVICE_INVALID;
 
 	trunk_name = buf = ast_strdupa(data);
 	station_name = strsep(&trunk_name, "_");
 
-	AST_RWLIST_RDLOCK(&sla_stations);
-	AST_LIST_TRAVERSE(&sla_stations, station, entry) {
-		if (strcasecmp(station_name, station->name))
-			continue;
-		AST_RWLIST_RDLOCK(&sla_trunks);
+	station = sla_find_station(station_name);
+	if (station) {
+		ao2_lock(station);
 		AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
-			if (!strcasecmp(trunk_name, trunk_ref->trunk->name))
+			if (!strcasecmp(trunk_name, trunk_ref->trunk->name)) {
+				res = sla_state_to_devstate(trunk_ref->state);
 				break;
+			}
 		}
-		if (!trunk_ref) {
-			AST_RWLIST_UNLOCK(&sla_trunks);
-			break;
-		}
-		res = sla_state_to_devstate(trunk_ref->state);
-		AST_RWLIST_UNLOCK(&sla_trunks);
+		ao2_unlock(station);
 	}
-	AST_RWLIST_UNLOCK(&sla_stations);
 
 	if (res == AST_DEVICE_INVALID) {
 		ast_log(LOG_ERROR, "Could not determine state for trunk %s on station %s!\n",
@@ -7050,26 +7329,39 @@ static enum ast_device_state sla_state(const char *data)
 	return res;
 }
 
-static void destroy_trunk(struct sla_trunk *trunk)
+static int sla_trunk_release_refs(void *obj, void *arg, int flags)
 {
+	struct sla_trunk *trunk = obj;
 	struct sla_station_ref *station_ref;
 
-	if (!ast_strlen_zero(trunk->autocontext))
-		ast_context_remove_extension(trunk->autocontext, "s", 1, sla_registrar);
+	while ((station_ref = AST_LIST_REMOVE_HEAD(&trunk->stations, entry))) {
+		ao2_ref(station_ref, -1);
+	}
 
-	while ((station_ref = AST_LIST_REMOVE_HEAD(&trunk->stations, entry)))
-		ast_free(station_ref);
-
-	ast_string_field_free_memory(trunk);
-	ast_free(trunk);
+	return 0;
 }
 
-static void destroy_station(struct sla_station *station)
+static int sla_station_release_refs(void *obj, void *arg, int flags)
 {
+	struct sla_station *station = obj;
 	struct sla_trunk_ref *trunk_ref;
 
+	while ((trunk_ref = AST_LIST_REMOVE_HEAD(&station->trunks, entry))) {
+		ao2_ref(trunk_ref, -1);
+	}
+
+	return 0;
+}
+
+static void sla_station_destructor(void *obj)
+{
+	struct sla_station *station = obj;
+
+	ast_debug(1, "sla_station destructor for '%s'\n", station->name);
+
 	if (!ast_strlen_zero(station->autocontext)) {
-		AST_RWLIST_RDLOCK(&sla_trunks);
+		struct sla_trunk_ref *trunk_ref;
+
 		AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
 			char exten[AST_MAX_EXTENSION];
 			char hint[AST_MAX_APP];
@@ -7080,31 +7372,43 @@ static void destroy_station(struct sla_station *station)
 			ast_context_remove_extension(station->autocontext, hint, 
 				PRIORITY_HINT, sla_registrar);
 		}
-		AST_RWLIST_UNLOCK(&sla_trunks);
 	}
 
-	while ((trunk_ref = AST_LIST_REMOVE_HEAD(&station->trunks, entry)))
-		ast_free(trunk_ref);
+	sla_station_release_refs(station, NULL, 0);
 
 	ast_string_field_free_memory(station);
-	ast_free(station);
+}
+
+static int sla_trunk_hash(const void *obj, const int flags)
+{
+	const struct sla_trunk *trunk = obj;
+
+	return ast_str_case_hash(trunk->name);
+}
+
+static int sla_trunk_cmp(void *obj, void *arg, int flags)
+{
+	struct sla_trunk *trunk = obj, *trunk2 = arg;
+
+	return !strcasecmp(trunk->name, trunk2->name) ? CMP_MATCH | CMP_STOP : 0;
+}
+
+static int sla_station_hash(const void *obj, const int flags)
+{
+	const struct sla_station *station = obj;
+
+	return ast_str_case_hash(station->name);
+}
+
+static int sla_station_cmp(void *obj, void *arg, int flags)
+{
+	struct sla_station *station = obj, *station2 = arg;
+
+	return !strcasecmp(station->name, station2->name) ? CMP_MATCH | CMP_STOP : 0;
 }
 
 static void sla_destroy(void)
 {
-	struct sla_trunk *trunk;
-	struct sla_station *station;
-
-	AST_RWLIST_WRLOCK(&sla_trunks);
-	while ((trunk = AST_RWLIST_REMOVE_HEAD(&sla_trunks, entry)))
-		destroy_trunk(trunk);
-	AST_RWLIST_UNLOCK(&sla_trunks);
-
-	AST_RWLIST_WRLOCK(&sla_stations);
-	while ((station = AST_RWLIST_REMOVE_HEAD(&sla_stations, entry)))
-		destroy_station(station);
-	AST_RWLIST_UNLOCK(&sla_stations);
-
 	if (sla.thread != AST_PTHREADT_NULL) {
 		ast_mutex_lock(&sla.lock);
 		sla.stop = 1;
@@ -7118,6 +7422,15 @@ static void sla_destroy(void)
 
 	ast_mutex_destroy(&sla.lock);
 	ast_cond_destroy(&sla.cond);
+
+	ao2_callback(sla_trunks, 0, sla_trunk_release_refs, NULL);
+	ao2_callback(sla_stations, 0, sla_station_release_refs, NULL);
+
+	ao2_ref(sla_trunks, -1);
+	sla_trunks = NULL;
+
+	ao2_ref(sla_stations, -1);
+	sla_stations = NULL;
 }
 
 static int sla_check_device(const char *device)
@@ -7133,11 +7446,27 @@ static int sla_check_device(const char *device)
 	return 0;
 }
 
+static void sla_trunk_destructor(void *obj)
+{
+	struct sla_trunk *trunk = obj;
+
+	ast_debug(1, "sla_trunk destructor for '%s'\n", trunk->name);
+
+	if (!ast_strlen_zero(trunk->autocontext)) {
+		ast_context_remove_extension(trunk->autocontext, "s", 1, sla_registrar);
+	}
+
+	sla_trunk_release_refs(trunk, NULL, 0);
+
+	ast_string_field_free_memory(trunk);
+}
+
 static int sla_build_trunk(struct ast_config *cfg, const char *cat)
 {
-	struct sla_trunk *trunk;
+	RAII_VAR(struct sla_trunk *, trunk, NULL, ao2_cleanup);
 	struct ast_variable *var;
 	const char *dev;
+	int existing_trunk = 0;
 
 	if (!(dev = ast_variable_retrieve(cfg, cat, "device"))) {
 		ast_log(LOG_ERROR, "SLA Trunk '%s' defined with no device!\n", cat);
@@ -7145,16 +7474,25 @@ static int sla_build_trunk(struct ast_config *cfg, const char *cat)
 	}
 
 	if (sla_check_device(dev)) {
-		ast_log(LOG_ERROR, "SLA Trunk '%s' define with invalid device '%s'!\n",
+		ast_log(LOG_ERROR, "SLA Trunk '%s' defined with invalid device '%s'!\n",
 			cat, dev);
 		return -1;
 	}
 
-	if (!(trunk = ast_calloc_with_stringfields(1, struct sla_trunk, 32))) {
+	if ((trunk = sla_find_trunk(cat))) {
+		trunk->mark = 0;
+		existing_trunk = 1;
+	} else if ((trunk = ao2_alloc(sizeof(*trunk), sla_trunk_destructor))) {
+		if (ast_string_field_init(trunk, 32)) {
+			return -1;
+		}
+		ast_string_field_set(trunk, name, cat);
+	} else {
 		return -1;
 	}
 
-	ast_string_field_set(trunk, name, cat);
+	ao2_lock(trunk);
+
 	ast_string_field_set(trunk, device, dev);
 
 	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
@@ -7183,54 +7521,65 @@ static int sla_build_trunk(struct ast_config *cfg, const char *cat)
 		}
 	}
 
+	ao2_unlock(trunk);
+
 	if (!ast_strlen_zero(trunk->autocontext)) {
 		struct ast_context *context;
 		context = ast_context_find_or_create(NULL, NULL, trunk->autocontext, sla_registrar);
 		if (!context) {
 			ast_log(LOG_ERROR, "Failed to automatically find or create "
 				"context '%s' for SLA!\n", trunk->autocontext);
-			destroy_trunk(trunk);
 			return -1;
 		}
 		if (ast_add_extension2(context, 0 /* don't replace */, "s", 1,
 			NULL, NULL, slatrunk_app, ast_strdup(trunk->name), ast_free_ptr, sla_registrar)) {
 			ast_log(LOG_ERROR, "Failed to automatically create extension "
 				"for trunk '%s'!\n", trunk->name);
-			destroy_trunk(trunk);
 			return -1;
 		}
 	}
 
-	AST_RWLIST_WRLOCK(&sla_trunks);
-	AST_RWLIST_INSERT_TAIL(&sla_trunks, trunk, entry);
-	AST_RWLIST_UNLOCK(&sla_trunks);
+	if (!existing_trunk) {
+		ao2_link(sla_trunks, trunk);
+	}
 
 	return 0;
 }
 
+/*!
+ * \internal
+ * \pre station is not locked
+ */
 static void sla_add_trunk_to_station(struct sla_station *station, struct ast_variable *var)
 {
-	struct sla_trunk *trunk;
-	struct sla_trunk_ref *trunk_ref;
+	RAII_VAR(struct sla_trunk *, trunk, NULL, ao2_cleanup);
+	struct sla_trunk_ref *trunk_ref = NULL;
 	struct sla_station_ref *station_ref;
 	char *trunk_name, *options, *cur;
+	int existing_trunk_ref = 0;
+	int existing_station_ref = 0;
 
 	options = ast_strdupa(var->value);
 	trunk_name = strsep(&options, ",");
-	
-	AST_RWLIST_RDLOCK(&sla_trunks);
-	AST_RWLIST_TRAVERSE(&sla_trunks, trunk, entry) {
-		if (!strcasecmp(trunk->name, trunk_name))
-			break;
-	}
 
-	AST_RWLIST_UNLOCK(&sla_trunks);
+	trunk = sla_find_trunk(trunk_name);
 	if (!trunk) {
 		ast_log(LOG_ERROR, "Trunk '%s' not found!\n", var->value);
 		return;
 	}
-	if (!(trunk_ref = create_trunk_ref(trunk)))
+
+	AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
+		if (trunk_ref->trunk == trunk) {
+			trunk_ref->mark = 0;
+			existing_trunk_ref = 1;
+			break;
+		}
+	}
+
+	if (!trunk_ref && !(trunk_ref = create_trunk_ref(trunk))) {
 		return;
+	}
+
 	trunk_ref->state = SLA_TRUNK_STATE_IDLE;
 
 	while ((cur = strsep(&options, ","))) {
@@ -7254,41 +7603,73 @@ static void sla_add_trunk_to_station(struct sla_station *station, struct ast_var
 		}
 	}
 
-	if (!(station_ref = sla_create_station_ref(station))) {
-		ast_free(trunk_ref);
+	AST_LIST_TRAVERSE(&trunk->stations, station_ref, entry) {
+		if (station_ref->station == station) {
+			station_ref->mark = 0;
+			existing_station_ref = 1;
+			break;
+		}
+	}
+
+	if (!station_ref && !(station_ref = sla_create_station_ref(station))) {
+		if (!existing_trunk_ref) {
+			ao2_ref(trunk_ref, -1);
+		} else {
+			trunk_ref->mark = 1;
+		}
 		return;
 	}
-	ast_atomic_fetchadd_int((int *) &trunk->num_stations, 1);
-	AST_RWLIST_WRLOCK(&sla_trunks);
-	AST_LIST_INSERT_TAIL(&trunk->stations, station_ref, entry);
-	AST_RWLIST_UNLOCK(&sla_trunks);
-	AST_LIST_INSERT_TAIL(&station->trunks, trunk_ref, entry);
+
+	if (!existing_station_ref) {
+		ao2_lock(trunk);
+		AST_LIST_INSERT_TAIL(&trunk->stations, station_ref, entry);
+		ast_atomic_fetchadd_int((int *) &trunk->num_stations, 1);
+		ao2_unlock(trunk);
+	}
+
+	if (!existing_trunk_ref) {
+		ao2_lock(station);
+		AST_LIST_INSERT_TAIL(&station->trunks, trunk_ref, entry);
+		ao2_unlock(station);
+	}
 }
 
 static int sla_build_station(struct ast_config *cfg, const char *cat)
 {
-	struct sla_station *station;
+	RAII_VAR(struct sla_station *, station, NULL, ao2_cleanup);
 	struct ast_variable *var;
 	const char *dev;
+	int existing_station = 0;
 
 	if (!(dev = ast_variable_retrieve(cfg, cat, "device"))) {
 		ast_log(LOG_ERROR, "SLA Station '%s' defined with no device!\n", cat);
 		return -1;
 	}
 
-	if (!(station = ast_calloc_with_stringfields(1, struct sla_station, 32))) {
+	if ((station = sla_find_station(cat))) {
+		station->mark = 0;
+		existing_station = 1;
+	} else if ((station = ao2_alloc(sizeof(*station), sla_station_destructor))) {
+		if (ast_string_field_init(station, 32)) {
+			return -1;
+		}
+		ast_string_field_set(station, name, cat);
+	} else {
 		return -1;
 	}
 
-	ast_string_field_set(station, name, cat);
+	ao2_lock(station);
+
 	ast_string_field_set(station, device, dev);
 
 	for (var = ast_variable_browse(cfg, cat); var; var = var->next) {
-		if (!strcasecmp(var->name, "trunk"))
+		if (!strcasecmp(var->name, "trunk")) {
+			ao2_unlock(station);
 			sla_add_trunk_to_station(station, var);
-		else if (!strcasecmp(var->name, "autocontext"))
+			ao2_lock(station);
+		} else if (!strcasecmp(var->name, "autocontext")) {
 			ast_string_field_set(station, autocontext, var->value);
-		else if (!strcasecmp(var->name, "ringtimeout")) {
+		} else if (!strcasecmp(var->name, "ringtimeout")) {
 			if (sscanf(var->value, "%30u", &station->ring_timeout) != 1) {
 				ast_log(LOG_WARNING, "Invalid ringtimeout '%s' specified for station '%s'\n",
 					var->value, station->name);
@@ -7316,6 +7697,8 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 		}
 	}
 
+	ao2_unlock(station);
+
 	if (!ast_strlen_zero(station->autocontext)) {
 		struct ast_context *context;
 		struct sla_trunk_ref *trunk_ref;
@@ -7323,7 +7706,6 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 		if (!context) {
 			ast_log(LOG_ERROR, "Failed to automatically find or create "
 				"context '%s' for SLA!\n", station->autocontext);
-			destroy_station(station);
 			return -1;
 		}
 		/* The extension for when the handset goes off-hook.
@@ -7332,10 +7714,8 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 			NULL, NULL, slastation_app, ast_strdup(station->name), ast_free_ptr, sla_registrar)) {
 			ast_log(LOG_ERROR, "Failed to automatically create extension "
 				"for trunk '%s'!\n", station->name);
-			destroy_station(station);
 			return -1;
 		}
-		AST_RWLIST_RDLOCK(&sla_trunks);
 		AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
 			char exten[AST_MAX_EXTENSION];
 			char hint[AST_MAX_APP];
@@ -7347,7 +7727,6 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 				NULL, NULL, slastation_app, ast_strdup(exten), ast_free_ptr, sla_registrar)) {
 				ast_log(LOG_ERROR, "Failed to automatically create extension "
 					"for trunk '%s'!\n", station->name);
-				destroy_station(station);
 				return -1;
 			}
 			/* Hint for this line button 
@@ -7356,18 +7735,113 @@ static int sla_build_station(struct ast_config *cfg, const char *cat)
 				NULL, NULL, hint, NULL, NULL, sla_registrar)) {
 				ast_log(LOG_ERROR, "Failed to automatically create hint "
 					"for trunk '%s'!\n", station->name);
-				destroy_station(station);
 				return -1;
 			}
 		}
-		AST_RWLIST_UNLOCK(&sla_trunks);
 	}
 
-	AST_RWLIST_WRLOCK(&sla_stations);
-	AST_RWLIST_INSERT_TAIL(&sla_stations, station, entry);
-	AST_RWLIST_UNLOCK(&sla_stations);
+	if (!existing_station) {
+		ao2_link(sla_stations, station);
+	}
 
 	return 0;
+}
+
+static int sla_trunk_mark(void *obj, void *arg, int flags)
+{
+	struct sla_trunk *trunk = obj;
+	struct sla_station_ref *station_ref;
+
+	ao2_lock(trunk);
+
+	trunk->mark = 1;
+
+	AST_LIST_TRAVERSE(&trunk->stations, station_ref, entry) {
+		station_ref->mark = 1;
+	}
+
+	ao2_unlock(trunk);
+
+	return 0;
+}
+
+static int sla_station_mark(void *obj, void *arg, int flags)
+{
+	struct sla_station *station = obj;
+	struct sla_trunk_ref *trunk_ref;
+
+	ao2_lock(station);
+
+	station->mark = 1;
+
+	AST_LIST_TRAVERSE(&station->trunks, trunk_ref, entry) {
+		trunk_ref->mark = 1;
+	}
+
+	ao2_unlock(station);
+
+	return 0;
+}
+
+static int sla_trunk_is_marked(void *obj, void *arg, int flags)
+{
+	struct sla_trunk *trunk = obj;
+
+	ao2_lock(trunk);
+
+	if (trunk->mark) {
+		/* Only remove all of the station references if the trunk itself is going away */
+		sla_trunk_release_refs(trunk, NULL, 0);
+	} else {
+		struct sla_station_ref *station_ref;
+
+		/* Otherwise only remove references to stations no longer in the config */
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&trunk->stations, station_ref, entry) {
+			if (!station_ref->mark) {
+				continue;
+			}
+			AST_LIST_REMOVE_CURRENT(entry);
+			ao2_ref(station_ref, -1);
+		}
+		AST_LIST_TRAVERSE_SAFE_END
+	}
+
+	ao2_unlock(trunk);
+
+	return trunk->mark ? CMP_MATCH : 0;
+}
+
+static int sla_station_is_marked(void *obj, void *arg, int flags)
+{
+	struct sla_station *station = obj;
+
+	ao2_lock(station);
+
+	if (station->mark) {
+		/* Only remove all of the trunk references if the station itself is going away */
+		sla_station_release_refs(station, NULL, 0);
+	} else {
+		struct sla_trunk_ref *trunk_ref;
+
+		/* Otherwise only remove references to trunks no longer in the config */
+		AST_LIST_TRAVERSE_SAFE_BEGIN(&station->trunks, trunk_ref, entry) {
+			if (!trunk_ref->mark) {
+				continue;
+			}
+			AST_LIST_REMOVE_CURRENT(entry);
+			ao2_ref(trunk_ref, -1);
+		}
+		AST_LIST_TRAVERSE_SAFE_END
+	}
+
+	ao2_unlock(station);
+
+	return station->mark ? CMP_MATCH : 0;
+}
+
+static int sla_in_use(void)
+{
+	return ao2_container_count(sla_trunks) || ao2_container_count(sla_stations);
 }
 
 static int sla_load_config(int reload)
@@ -7381,6 +7855,8 @@ static int sla_load_config(int reload)
 	if (!reload) {
 		ast_mutex_init(&sla.lock);
 		ast_cond_init(&sla.cond, NULL);
+		sla_trunks = ao2_container_alloc(1, sla_trunk_hash, sla_trunk_cmp);
+		sla_stations = ao2_container_alloc(1, sla_station_hash, sla_station_cmp);
 	}
 
 	if (!(cfg = ast_config_load(SLA_CONFIG_FILE, config_flags))) {
@@ -7393,21 +7869,8 @@ static int sla_load_config(int reload)
 	}
 
 	if (reload) {
-		struct sla_station *station;
-		struct sla_trunk *trunk;
-
-		/* We need to actually delete the previous versions of trunks and stations now */
-		AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sla_stations, station, entry) {
-			AST_RWLIST_REMOVE_CURRENT(entry);
-			ast_free(station);
-		}
-		AST_RWLIST_TRAVERSE_SAFE_END;
-
-		AST_RWLIST_TRAVERSE_SAFE_BEGIN(&sla_trunks, trunk, entry) {
-			AST_RWLIST_REMOVE_CURRENT(entry);
-			ast_free(trunk);
-		}
-		AST_RWLIST_TRAVERSE_SAFE_END;
+		ao2_callback(sla_trunks, 0, sla_trunk_mark, NULL);
+		ao2_callback(sla_stations, 0, sla_station_mark, NULL);
 	}
 
 	if ((val = ast_variable_retrieve(cfg, "general", "attemptcallerid")))
@@ -7434,9 +7897,13 @@ static int sla_load_config(int reload)
 
 	ast_config_destroy(cfg);
 
-	/* Even if we don't have any stations, we may after a reload and we need to
-	 * be able to process the SLA_EVENT_RELOAD event in that case */
-	if (sla.thread == AST_PTHREADT_NULL && (!AST_LIST_EMPTY(&sla_stations) || !AST_LIST_EMPTY(&sla_trunks))) {
+	if (reload) {
+		ao2_callback(sla_trunks, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, sla_trunk_is_marked, NULL);
+		ao2_callback(sla_stations, OBJ_NODATA | OBJ_UNLINK | OBJ_MULTIPLE, sla_station_is_marked, NULL);
+	}
+
+	/* Start SLA event processing thread once SLA has been configured. */
+	if (sla.thread == AST_PTHREADT_NULL && sla_in_use()) {
 		ast_pthread_create(&sla.thread, NULL, sla_thread, NULL);
 	}
 
@@ -7521,15 +7988,7 @@ static struct ast_custom_function meetme_info_acf = {
 static int load_config(int reload)
 {
 	load_config_meetme();
-
-	if (reload && sla.thread != AST_PTHREADT_NULL) {
-		sla_queue_event(SLA_EVENT_RELOAD);
-		ast_log(LOG_NOTICE, "A reload of the SLA configuration has been requested "
-			"and will be completed when the system is idle.\n");
-		return 0;
-	}
-	
-	return sla_load_config(0);
+	return sla_load_config(reload);
 }
 
 #define MEETME_DATA_EXPORT(MEMBER)					\
@@ -7673,11 +8132,13 @@ AST_TEST_DEFINE(test_meetme_data_provider)
 		break;
 	}
 
-	chan = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL, NULL, NULL, 0, 0, "MeetMeTest");
+	chan = ast_channel_alloc(0, AST_STATE_DOWN, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, "MeetMeTest");
 	if (!chan) {
 		ast_test_status_update(test, "Channel allocation failed\n");
 		return AST_TEST_FAIL;
 	}
+
+	ast_channel_unlock(chan);
 
 	cnf = build_conf("9898", "", "1234", 1, 1, 1, chan, test);
 	if (!cnf) {
@@ -7739,6 +8200,8 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&meetme_info_acf);
 	ast_unload_realtime("meetme");
 
+	meetme_stasis_cleanup();
+
 	return res;
 }
 
@@ -7757,6 +8220,8 @@ static int load_module(void)
 	int res = 0;
 
 	res |= load_config(0);
+
+	res |= meetme_stasis_init();
 
 	ast_cli_register_multiple(cli_meetme, ARRAY_LEN(cli_meetme));
 	res |= ast_manager_register_xml("MeetmeMute", EVENT_FLAG_CALL, action_meetmemute);

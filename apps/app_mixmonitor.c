@@ -56,6 +56,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/mod_format.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/test.h"
+#include "asterisk/mixmonitor.h"
+#include "asterisk/beep.h"
 
 /*** DOCUMENTATION
 	<application name="MixMonitor" language="en_US">
@@ -78,10 +80,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</option>
 					<option name="b">
 						<para>Only save audio to the file while the channel is bridged.</para>
-						<note><para>Does not include conferences or sounds played to each bridged party</para></note>
 						<note><para>If you utilize this option inside a Local channel, you must make sure the Local
 						channel is not optimized away. To do this, be sure to call your Local channel with the
 						<literal>/n</literal> option. For example: Dial(Local/start@mycontext/n)</para></note>
+					</option>
+					<option name="B">
+						<para>Play a periodic beep while this call is being recorded.</para>
+						<argument name="interval"><para>Interval, in seconds. Default is 15.</para></argument>
 					</option>
 					<option name="v">
 						<para>Adjust the <emphasis>heard</emphasis> volume by a factor of <replaceable>x</replaceable>
@@ -103,7 +108,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>Use the specified file to record the <emphasis>receive</emphasis> audio feed.
 						Like with the basic filename argument, if an absolute path isn't given, it will create
 						the file in the configured monitoring directory.</para>
-
 					</option>
 					<option name="t">
 						<argument name="file" required="true" />
@@ -133,16 +137,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Records the audio on the current channel to the specified file.</para>
 			<para>This application does not automatically answer and should be preceeded by
 			an application such as Answer or Progress().</para>
-			<note><para>MixMonitor runs as an audiohook. In order to keep it running through
-			a transfer, AUDIOHOOK_INHERIT must be set for the channel which ran mixmonitor.
-			For more information, including dialplan configuration set for using
-			AUDIOHOOK_INHERIT with MixMonitor, see the function documentation for
-			AUDIOHOOK_INHERIT.</para></note>
+			<note><para>MixMonitor runs as an audiohook.</para></note>
 			<variablelist>
 				<variable name="MIXMONITOR_FILENAME">
 					<para>Will contain the filename used to record.</para>
 				</variable>
-			</variablelist>	
+			</variablelist>
 		</description>
 		<see-also>
 			<ref type="application">Monitor</ref>
@@ -213,6 +213,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				would apply if invoked from the MixMonitor application. For a list of
 				available options, see the documentation for the mixmonitor application. </para>
 			</parameter>
+			<parameter name="Command">
+				<para>Will be executed when the recording is over.
+				Any strings matching <literal>^{X}</literal> will be unescaped to <variable>X</variable>.
+				All variables will be evaluated at the time MixMonitor is called.</para>
+			</parameter>
 		</syntax>
 		<description>
 			<para>This action records the audio on the current channel to the specified file.</para>
@@ -242,6 +247,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			action on the current channel.</para>
 		</description>
 	</manager>
+	<function name="MIXMONITOR" language="en_US">
+		<synopsis>
+			Retrieve data pertaining to specific instances of MixMonitor on a channel.
+		</synopsis>
+		<syntax>
+			<parameter name="id" required="true">
+				<para>The unique ID of the MixMonitor instance. The unique ID can be retrieved through the channel
+				variable used as an argument to the <replaceable>i</replaceable> option to MixMonitor.</para>
+			</parameter>
+			<parameter name="key" required="true">
+				<para>The piece of data to retrieve from the MixMonitor.</para>
+				<enumlist>
+					<enum name="filename" />
+				</enumlist>
+			</parameter>
+		</syntax>
+	</function>
 
  ***/
 
@@ -302,6 +324,7 @@ enum mixmonitor_flags {
 	MUXFLAG_COMBINED = (1 << 8),
 	MUXFLAG_UID = (1 << 9),
 	MUXFLAG_VMRECIPIENTS = (1 << 10),
+	MUXFLAG_BEEP = (1 << 11),
 };
 
 enum mixmonitor_args {
@@ -312,12 +335,14 @@ enum mixmonitor_args {
 	OPT_ARG_READNAME,
 	OPT_ARG_UID,
 	OPT_ARG_VMRECIPIENTS,
+	OPT_ARG_BEEP_INTERVAL,
 	OPT_ARG_ARRAY_SIZE,	/* Always last element of the enum */
 };
 
 AST_APP_OPTIONS(mixmonitor_opts, {
 	AST_APP_OPTION('a', MUXFLAG_APPEND),
 	AST_APP_OPTION('b', MUXFLAG_BRIDGED),
+	AST_APP_OPTION_ARG('B', MUXFLAG_BEEP, OPT_ARG_BEEP_INTERVAL),
 	AST_APP_OPTION_ARG('v', MUXFLAG_READVOLUME, OPT_ARG_READVOLUME),
 	AST_APP_OPTION_ARG('V', MUXFLAG_WRITEVOLUME, OPT_ARG_WRITEVOLUME),
 	AST_APP_OPTION_ARG('W', MUXFLAG_VOLUME, OPT_ARG_VOLUME),
@@ -343,6 +368,8 @@ struct mixmonitor_ds {
 	struct ast_audiohook *audiohook;
 
 	unsigned int samp_rate;
+	char *filename;
+	char *beep_id;
 };
 
 /*!
@@ -386,6 +413,8 @@ static void mixmonitor_ds_destroy(void *data)
 	ast_mutex_lock(&mixmonitor_ds->lock);
 	mixmonitor_ds->audiohook = NULL;
 	mixmonitor_ds->destruction_ok = 1;
+	ast_free(mixmonitor_ds->filename);
+	ast_free(mixmonitor_ds->beep_id);
 	ast_cond_signal(&mixmonitor_ds->destruction_condition);
 	ast_mutex_unlock(&mixmonitor_ds->lock);
 }
@@ -409,7 +438,7 @@ static void destroy_monitor_audiohook(struct mixmonitor *mixmonitor)
 	ast_audiohook_destroy(&mixmonitor->audiohook);
 }
 
-static int startmon(struct ast_channel *chan, struct ast_audiohook *audiohook) 
+static int startmon(struct ast_channel *chan, struct ast_audiohook *audiohook)
 {
 	int res = 0;
 
@@ -501,12 +530,14 @@ static void mixmonitor_free(struct mixmonitor *mixmonitor)
 		if (mixmonitor->mixmonitor_ds) {
 			ast_mutex_destroy(&mixmonitor->mixmonitor_ds->lock);
 			ast_cond_destroy(&mixmonitor->mixmonitor_ds->destruction_condition);
-			ast_free(mixmonitor->filename_write);
-			ast_free(mixmonitor->filename_read);
 			ast_free(mixmonitor->mixmonitor_ds);
-			ast_free(mixmonitor->name);
-			ast_free(mixmonitor->post_process);
 		}
+
+		ast_free(mixmonitor->name);
+		ast_free(mixmonitor->post_process);
+		ast_free(mixmonitor->filename);
+		ast_free(mixmonitor->filename_write);
+		ast_free(mixmonitor->filename_read);
 
 		/* Free everything in the recipient list */
 		clear_mixmonitor_recipient_list(mixmonitor);
@@ -591,7 +622,7 @@ static void mixmonitor_save_prep(struct mixmonitor *mixmonitor, char *filename, 
 	}
 }
 
-static void *mixmonitor_thread(void *obj) 
+static void *mixmonitor_thread(void *obj)
 {
 	struct mixmonitor *mixmonitor = obj;
 	char *fs_ext = "";
@@ -648,7 +679,9 @@ static void *mixmonitor_thread(void *obj)
 		 * Unlock it, but remember to lock it before looping or exiting */
 		ast_audiohook_unlock(&mixmonitor->audiohook);
 
-		if (!ast_test_flag(mixmonitor, MUXFLAG_BRIDGED) || (mixmonitor->autochan->chan && ast_bridged_channel(mixmonitor->autochan->chan))) {
+		if (!ast_test_flag(mixmonitor, MUXFLAG_BRIDGED)
+			|| (mixmonitor->autochan->chan
+				&& ast_channel_is_bridged(mixmonitor->autochan->chan))) {
 			ast_mutex_lock(&mixmonitor->mixmonitor_ds->lock);
 
 			/* Write out the frame(s) */
@@ -744,10 +777,12 @@ static void *mixmonitor_thread(void *obj)
 	}
 
 	mixmonitor_free(mixmonitor);
+
+	ast_module_unref(ast_module_info->self);
 	return NULL;
 }
 
-static int setup_mixmonitor_ds(struct mixmonitor *mixmonitor, struct ast_channel *chan, char **datastore_id)
+static int setup_mixmonitor_ds(struct mixmonitor *mixmonitor, struct ast_channel *chan, char **datastore_id, const char *beep_id)
 {
 	struct ast_datastore *datastore = NULL;
 	struct mixmonitor_ds *mixmonitor_ds;
@@ -773,6 +808,10 @@ static int setup_mixmonitor_ds(struct mixmonitor *mixmonitor, struct ast_channel
 
 	mixmonitor_ds->samp_rate = 8000;
 	mixmonitor_ds->audiohook = &mixmonitor->audiohook;
+	mixmonitor_ds->filename = ast_strdup(mixmonitor->filename);
+	if (!ast_strlen_zero(beep_id)) {
+		mixmonitor_ds->beep_id = ast_strdup(beep_id);
+	}
 	datastore->data = mixmonitor_ds;
 
 	ast_channel_lock(chan);
@@ -783,11 +822,11 @@ static int setup_mixmonitor_ds(struct mixmonitor *mixmonitor, struct ast_channel
 	return 0;
 }
 
-static void launch_monitor_thread(struct ast_channel *chan, const char *filename,
+static int launch_monitor_thread(struct ast_channel *chan, const char *filename,
 				  unsigned int flags, int readvol, int writevol,
 				  const char *post_process, const char *filename_write,
 				  char *filename_read, const char *uid_channel_var,
-				  const char *recipients)
+				  const char *recipients, const char *beep_id)
 {
 	pthread_t thread;
 	struct mixmonitor *mixmonitor;
@@ -805,38 +844,52 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 				*p2 = '$';
 			}
 		}
+		ast_channel_lock(chan);
 		pbx_substitute_variables_helper(chan, p1, postprocess2, sizeof(postprocess2) - 1);
+		ast_channel_unlock(chan);
 	}
 
 	/* Pre-allocate mixmonitor structure and spy */
 	if (!(mixmonitor = ast_calloc(1, sizeof(*mixmonitor)))) {
-		return;
+		return -1;
 	}
 
 	/* Now that the struct has been calloced, go ahead and initialize the string fields. */
 	if (ast_string_field_init(mixmonitor, 512)) {
 		mixmonitor_free(mixmonitor);
-		return;
+		return -1;
 	}
 
 	/* Setup the actual spy before creating our thread */
 	if (ast_audiohook_init(&mixmonitor->audiohook, AST_AUDIOHOOK_TYPE_SPY, mixmonitor_spy_type, 0)) {
 		mixmonitor_free(mixmonitor);
-		return;
+		return -1;
 	}
 
 	/* Copy over flags and channel name */
 	mixmonitor->flags = flags;
 	if (!(mixmonitor->autochan = ast_autochan_setup(chan))) {
 		mixmonitor_free(mixmonitor);
-		return;
+		return -1;
 	}
 
-	if (setup_mixmonitor_ds(mixmonitor, chan, &datastore_id)) {
+	if (!ast_strlen_zero(filename)) {
+		mixmonitor->filename = ast_strdup(filename);
+	}
+
+	if (!ast_strlen_zero(filename_write)) {
+		mixmonitor->filename_write = ast_strdup(filename_write);
+	}
+
+	if (!ast_strlen_zero(filename_read)) {
+		mixmonitor->filename_read = ast_strdup(filename_read);
+	}
+
+	if (setup_mixmonitor_ds(mixmonitor, chan, &datastore_id, beep_id)) {
 		ast_autochan_destroy(mixmonitor->autochan);
 		mixmonitor_free(mixmonitor);
 		ast_free(datastore_id);
-		return;
+		return -1;
 	}
 
 	if (!ast_strlen_zero(uid_channel_var)) {
@@ -850,18 +903,6 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 
 	if (!ast_strlen_zero(postprocess2)) {
 		mixmonitor->post_process = ast_strdup(postprocess2);
-	}
-
-	if (!ast_strlen_zero(filename)) {
-		mixmonitor->filename = ast_strdup(filename);
-	}
-
-	if (!ast_strlen_zero(filename_write)) {
-		mixmonitor->filename_write = ast_strdup(filename_write);
-	}
-
-	if (!ast_strlen_zero(filename_read)) {
-		mixmonitor->filename_read = ast_strdup(filename_read);
 	}
 
 	if (!ast_strlen_zero(recipients)) {
@@ -905,13 +946,13 @@ static void launch_monitor_thread(struct ast_channel *chan, const char *filename
 			mixmonitor_spy_type, ast_channel_name(chan));
 		ast_audiohook_destroy(&mixmonitor->audiohook);
 		mixmonitor_free(mixmonitor);
-		return;
+		return -1;
 	}
 
 	/* reference be released at mixmonitor destruction */
 	mixmonitor->callid = ast_read_threadstorage_callid();
 
-	ast_pthread_create_detached_background(&thread, NULL, mixmonitor_thread, mixmonitor);
+	return ast_pthread_create_detached_background(&thread, NULL, mixmonitor_thread, mixmonitor);
 }
 
 /* a note on filename_parse: creates directory structure and assigns absolute path from relative paths for filenames */
@@ -944,7 +985,8 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 	char *filename_read = NULL;
 	char *filename_write = NULL;
 	char filename_buffer[1024] = "";
-        char *uid_channel_var = NULL;
+	char *uid_channel_var = NULL;
+	char beep_id[64] = "";
 
 	struct ast_flags flags = { 0 };
 	char *recipients = NULL;
@@ -1018,6 +1060,21 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 		if (ast_test_flag(&flags, MUXFLAG_UID)) {
 			uid_channel_var = opts[OPT_ARG_UID];
 		}
+
+		if (ast_test_flag(&flags, MUXFLAG_BEEP)) {
+			const char *interval_str = S_OR(opts[OPT_ARG_BEEP_INTERVAL], "15");
+			unsigned int interval = 15;
+
+			if (sscanf(interval_str, "%30u", &interval) != 1) {
+				ast_log(LOG_WARNING, "Invalid interval '%s' for periodic beep. Using default of %u\n",
+						interval_str, interval);
+			}
+
+			if (ast_beep_start(chan, interval, beep_id, sizeof(beep_id))) {
+				ast_log(LOG_WARNING, "Unable to enable periodic beep, please ensure func_periodic_hook is loaded.\n");
+				return -1;
+			}
+		}
 	}
 	/* If there are no file writing arguments/options for the mix monitor, send a warning message and return -1 */
 
@@ -1032,7 +1089,10 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 	}
 
 	pbx_builtin_setvar_helper(chan, "MIXMONITOR_FILENAME", args.filename);
-	launch_monitor_thread(chan,
+
+	/* If launch_monitor_thread works, the module reference must not be released until it is finished. */
+	ast_module_ref(ast_module_info->self);
+	if (launch_monitor_thread(chan,
 			args.filename,
 			flags.flags,
 			readvol,
@@ -1041,7 +1101,10 @@ static int mixmonitor_exec(struct ast_channel *chan, const char *data)
 			filename_write,
 			filename_read,
 			uid_channel_var,
-			recipients);
+			recipients,
+			beep_id)) {
+		ast_module_unref(ast_module_info->self);
+	}
 
 	return 0;
 }
@@ -1051,6 +1114,7 @@ static int stop_mixmonitor_full(struct ast_channel *chan, const char *data)
 	struct ast_datastore *datastore = NULL;
 	char *parse = "";
 	struct mixmonitor_ds *mixmonitor_ds;
+	const char *beep_id = NULL;
 
 	AST_DECLARE_APP_ARGS(args,
 		AST_APP_ARG(mixmonid);
@@ -1064,15 +1128,16 @@ static int stop_mixmonitor_full(struct ast_channel *chan, const char *data)
 
 	ast_channel_lock(chan);
 
-	if (!(datastore = ast_channel_datastore_find(chan, &mixmonitor_ds_info, args.mixmonid))) {
+	datastore = ast_channel_datastore_find(chan, &mixmonitor_ds_info, args.mixmonid);
+	if (!datastore) {
 		ast_channel_unlock(chan);
-                return -1;
+		return -1;
 	}
 	mixmonitor_ds = datastore->data;
 
 	ast_mutex_lock(&mixmonitor_ds->lock);
 
-	/* closing the filestream here guarantees the file is avaliable to the dialplan
+	/* closing the filestream here guarantees the file is available to the dialplan
 	 * after calling StopMixMonitor */
 	mixmonitor_ds_close_fs(mixmonitor_ds);
 
@@ -1089,6 +1154,10 @@ static int stop_mixmonitor_full(struct ast_channel *chan, const char *data)
 		mixmonitor_ds->audiohook = NULL;
 	}
 
+	if (!ast_strlen_zero(mixmonitor_ds->beep_id)) {
+		beep_id = ast_strdupa(mixmonitor_ds->beep_id);
+	}
+
 	ast_mutex_unlock(&mixmonitor_ds->lock);
 
 	/* Remove the datastore so the monitor thread can exit */
@@ -1096,6 +1165,10 @@ static int stop_mixmonitor_full(struct ast_channel *chan, const char *data)
 		ast_datastore_free(datastore);
 	}
 	ast_channel_unlock(chan);
+
+	if (!ast_strlen_zero(beep_id)) {
+		ast_beep_stop(chan, beep_id);
+	}
 
 	return 0;
 }
@@ -1116,9 +1189,11 @@ static char *handle_cli_mixmonitor(struct ast_cli_entry *e, int cmd, struct ast_
 	case CLI_INIT:
 		e->command = "mixmonitor {start|stop|list}";
 		e->usage =
-			"Usage: mixmonitor <start|stop|list> <chan_name> [args]\n"
-			"       The optional arguments are passed to the MixMonitor\n"
-			"       application when the 'start' command is used.\n";
+			"Usage: mixmonitor start <chan_name> [args]\n"
+			"         The optional arguments are passed to the MixMonitor application.\n"
+			"       mixmonitor stop <chan_name> [args]\n"
+			"         The optional arguments are passed to the StopMixMonitor application.\n"
+			"       mixmonitor list <chan_name>\n";
 		return NULL;
 	case CLI_GENERATE:
 		return ast_complete_channels(a->line, a->word, a->pos, a->n, 2);
@@ -1134,35 +1209,35 @@ static char *handle_cli_mixmonitor(struct ast_cli_entry *e, int cmd, struct ast_
 		return CLI_SUCCESS;
 	}
 
-	ast_channel_lock(chan);
-
 	if (!strcasecmp(a->argv[1], "start")) {
 		mixmonitor_exec(chan, (a->argc >= 4) ? a->argv[3] : "");
-		ast_channel_unlock(chan);
 	} else if (!strcasecmp(a->argv[1], "stop")){
-		ast_channel_unlock(chan);
 		stop_mixmonitor_exec(chan, (a->argc >= 4) ? a->argv[3] : "");
 	} else if (!strcasecmp(a->argv[1], "list")) {
 		ast_cli(a->fd, "MixMonitor ID\tFile\tReceive File\tTransmit File\n");
 		ast_cli(a->fd, "=========================================================================\n");
+		ast_channel_lock(chan);
 		AST_LIST_TRAVERSE(ast_channel_datastores(chan), datastore, entry) {
 			if (datastore->info == &mixmonitor_ds_info) {
 				char *filename = "";
 				char *filename_read = "";
 				char *filename_write = "";
+
 				mixmonitor_ds = datastore->data;
-				if (mixmonitor_ds->fs)
-					filename = ast_strdupa(mixmonitor_ds->fs->filename);
-				if (mixmonitor_ds->fs_read)
-					filename_read = ast_strdupa(mixmonitor_ds->fs_read->filename);
-				if (mixmonitor_ds->fs_write)
-					filename_write = ast_strdupa(mixmonitor_ds->fs_write->filename);
+				if (mixmonitor_ds->fs) {
+					filename = mixmonitor_ds->fs->filename;
+				}
+				if (mixmonitor_ds->fs_read) {
+					filename_read = mixmonitor_ds->fs_read->filename;
+				}
+				if (mixmonitor_ds->fs_write) {
+					filename_write = mixmonitor_ds->fs_write->filename;
+				}
 				ast_cli(a->fd, "%p\t%s\t%s\t%s\n", mixmonitor_ds, filename, filename_read, filename_write);
 			}
 		}
 		ast_channel_unlock(chan);
 	} else {
-		ast_channel_unlock(chan);
 		chan = ast_channel_unref(chan);
 		return CLI_SHOWUSAGE;
 	}
@@ -1175,15 +1250,12 @@ static char *handle_cli_mixmonitor(struct ast_cli_entry *e, int cmd, struct ast_
 /*! \brief  Mute / unmute  a MixMonitor channel */
 static int manager_mute_mixmonitor(struct mansession *s, const struct message *m)
 {
-	struct ast_channel *c = NULL;
-
+	struct ast_channel *c;
 	const char *name = astman_get_header(m, "Channel");
 	const char *id = astman_get_header(m, "ActionID");
 	const char *state = astman_get_header(m, "State");
 	const char *direction = astman_get_header(m,"Direction");
-
 	int clearmute = 1;
-
 	enum ast_audiohook_flags flag;
 
 	if (ast_strlen_zero(direction)) {
@@ -1213,15 +1285,15 @@ static int manager_mute_mixmonitor(struct mansession *s, const struct message *m
 	}
 
 	clearmute = ast_false(state);
-	c = ast_channel_get_by_name(name);
 
+	c = ast_channel_get_by_name(name);
 	if (!c) {
 		astman_send_error(s, m, "No such channel");
 		return AMI_SUCCESS;
 	}
 
 	if (ast_audiohook_set_mute(c, mixmonitor_spy_type, flag, clearmute)) {
-		c = ast_channel_unref(c);
+		ast_channel_unref(c);
 		astman_send_error(s, m, "Cannot set mute flag");
 		return AMI_SUCCESS;
 	}
@@ -1234,33 +1306,50 @@ static int manager_mute_mixmonitor(struct mansession *s, const struct message *m
 
 	astman_append(s, "\r\n");
 
-	c = ast_channel_unref(c);
+	ast_channel_unref(c);
 
 	return AMI_SUCCESS;
 }
 
+static int start_mixmonitor_callback(struct ast_channel *chan, const char *filename, const char *options)
+{
+	char args[PATH_MAX];
+
+	if (ast_strlen_zero(options)) {
+		snprintf(args, sizeof(args), "%s", filename);
+	} else {
+		snprintf(args, sizeof(args), "%s,%s", filename, options);
+	}
+
+	return mixmonitor_exec(chan, args);
+}
+
+static int stop_mixmonitor_callback(struct ast_channel *chan, const char *mixmonitor_id)
+{
+	return stop_mixmonitor_full(chan, mixmonitor_id);
+}
+
 static int manager_mixmonitor(struct mansession *s, const struct message *m)
 {
-	struct ast_channel *c = NULL;
-
+	struct ast_channel *c;
 	const char *name = astman_get_header(m, "Channel");
 	const char *id = astman_get_header(m, "ActionID");
 	const char *file = astman_get_header(m, "File");
 	const char *options = astman_get_header(m, "Options");
+	const char *command = astman_get_header(m, "Command");
 	char *opts[OPT_ARG_ARRAY_SIZE] = { NULL, };
 	struct ast_flags flags = { 0 };
 	char *uid_channel_var = NULL;
 	const char *mixmonitor_id = NULL;
-
 	int res;
-	char args[PATH_MAX] = "";
+	char args[PATH_MAX];
+
 	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return AMI_SUCCESS;
 	}
 
 	c = ast_channel_get_by_name(name);
-
 	if (!c) {
 		astman_send_error(s, m, "No such channel");
 		return AMI_SUCCESS;
@@ -1270,19 +1359,20 @@ static int manager_mixmonitor(struct mansession *s, const struct message *m)
 		ast_app_parse_options(mixmonitor_opts, &flags, opts, ast_strdupa(options));
 	}
 
-	snprintf(args, sizeof(args), "%s,%s", file, options);
+	snprintf(args, sizeof(args), "%s,%s,%s", file, options, command);
 
-	ast_channel_lock(c);
 	res = mixmonitor_exec(c, args);
 
 	if (ast_test_flag(&flags, MUXFLAG_UID)) {
 		uid_channel_var = opts[OPT_ARG_UID];
+		ast_channel_lock(c);
 		mixmonitor_id = pbx_builtin_getvar_helper(c, uid_channel_var);
+		mixmonitor_id = ast_strdupa(S_OR(mixmonitor_id, ""));
+		ast_channel_unlock(c);
 	}
-	ast_channel_unlock(c);
 
 	if (res) {
-		c = ast_channel_unref(c);
+		ast_channel_unref(c);
 		astman_send_error(s, m, "Could not start monitoring channel");
 		return AMI_SUCCESS;
 	}
@@ -1299,35 +1389,33 @@ static int manager_mixmonitor(struct mansession *s, const struct message *m)
 
 	astman_append(s, "\r\n");
 
-	c = ast_channel_unref(c);
+	ast_channel_unref(c);
 
 	return AMI_SUCCESS;
 }
 
 static int manager_stop_mixmonitor(struct mansession *s, const struct message *m)
 {
-	struct ast_channel *c = NULL;
-
+	struct ast_channel *c;
 	const char *name = astman_get_header(m, "Channel");
 	const char *id = astman_get_header(m, "ActionID");
 	const char *mixmonitor_id = astman_get_header(m, "MixMonitorID");
-
 	int res;
+
 	if (ast_strlen_zero(name)) {
 		astman_send_error(s, m, "No channel specified");
 		return AMI_SUCCESS;
 	}
 
 	c = ast_channel_get_by_name(name);
-
 	if (!c) {
 		astman_send_error(s, m, "No such channel");
 		return AMI_SUCCESS;
 	}
 
 	res = stop_mixmonitor_full(c, mixmonitor_id);
-
 	if (res) {
+		ast_channel_unref(c);
 		astman_send_error(s, m, "Could not stop monitoring channel");
 		return AMI_SUCCESS;
 	}
@@ -1340,14 +1428,72 @@ static int manager_stop_mixmonitor(struct mansession *s, const struct message *m
 
 	astman_append(s, "\r\n");
 
-	c = ast_channel_unref(c);
+	ast_channel_unref(c);
 
 	return AMI_SUCCESS;
 }
 
+static int func_mixmonitor_read(struct ast_channel *chan, const char *cmd, char *data,
+		char *buf, size_t len)
+{
+	struct ast_datastore *datastore;
+	struct mixmonitor_ds *ds_data;
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(id);
+		AST_APP_ARG(key);
+	);
+
+	AST_STANDARD_APP_ARGS(args, data);
+
+	if (ast_strlen_zero(args.id) || ast_strlen_zero(args.key)) {
+		ast_log(LOG_WARNING, "Not enough arguments provided to %s. "
+				"An ID and key must be provided\n", cmd);
+		return -1;
+	}
+
+	ast_channel_lock(chan);
+	datastore = ast_channel_datastore_find(chan, &mixmonitor_ds_info, args.id);
+	ast_channel_unlock(chan);
+
+	if (!datastore) {
+		ast_log(LOG_WARNING, "Could not find MixMonitor with ID %s\n", args.id);
+		return -1;
+	}
+
+	ds_data = datastore->data;
+
+	if (!strcasecmp(args.key, "filename")) {
+		ast_copy_string(buf, ds_data->filename, len);
+	} else {
+		ast_log(LOG_WARNING, "Unrecognized %s option %s\n", cmd, args.key);
+		return -1;
+	}
+	return 0;
+}
+
+static struct ast_custom_function mixmonitor_function = {
+	.name = "MIXMONITOR",
+	.read = func_mixmonitor_read,
+};
+
 static struct ast_cli_entry cli_mixmonitor[] = {
 	AST_CLI_DEFINE(handle_cli_mixmonitor, "Execute a MixMonitor command")
 };
+
+static int set_mixmonitor_methods(void)
+{
+	struct ast_mixmonitor_methods mixmonitor_methods = {
+		.start = start_mixmonitor_callback,
+		.stop = stop_mixmonitor_callback,
+	};
+
+	return ast_set_mixmonitor_methods(&mixmonitor_methods);
+}
+
+static int clear_mixmonitor_methods(void)
+{
+	return ast_clear_mixmonitor_methods();
+}
 
 static int unload_module(void)
 {
@@ -1359,6 +1505,8 @@ static int unload_module(void)
 	res |= ast_manager_unregister("MixMonitorMute");
 	res |= ast_manager_unregister("MixMonitor");
 	res |= ast_manager_unregister("StopMixMonitor");
+	res |= ast_custom_function_unregister(&mixmonitor_function);
+	res |= clear_mixmonitor_methods();
 
 	return res;
 }
@@ -1373,6 +1521,8 @@ static int load_module(void)
 	res |= ast_manager_register_xml("MixMonitorMute", 0, manager_mute_mixmonitor);
 	res |= ast_manager_register_xml("MixMonitor", 0, manager_mixmonitor);
 	res |= ast_manager_register_xml("StopMixMonitor", 0, manager_stop_mixmonitor);
+	res |= ast_custom_function_register(&mixmonitor_function);
+	res |= set_mixmonitor_methods();
 
 	return res;
 }

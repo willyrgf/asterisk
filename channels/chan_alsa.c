@@ -62,6 +62,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/abstract_jb.h"
 #include "asterisk/musiconhold.h"
 #include "asterisk/poll-compat.h"
+#include "asterisk/stasis_channels.h"
 
 /*! Global jitterbuffer configuration - by default, jb is disabled
  *  \note Values shown here match the defaults shown in alsa.conf.sample */
@@ -140,7 +141,7 @@ static int autoanswer = 1;
 static int mute = 0;
 static int noaudiocapture = 0;
 
-static struct ast_channel *alsa_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause);
+static struct ast_channel *alsa_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause);
 static int alsa_digit(struct ast_channel *c, char digit, unsigned int duration);
 static int alsa_text(struct ast_channel *c, const char *text);
 static int alsa_hangup(struct ast_channel *c);
@@ -573,12 +574,14 @@ static int alsa_indicate(struct ast_channel *chan, int cond, const void *data, s
 	return res;
 }
 
-static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state, const char *linkedid)
+static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *tmp = NULL;
 
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, "", p->exten, p->context, linkedid, 0, "ALSA/%s", indevname)))
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, "", p->exten, p->context, assignedids, requestor, 0, "ALSA/%s", indevname)))
 		return NULL;
+
+	ast_channel_stage_snapshot(tmp);
 
 	ast_channel_tech_set(tmp, &alsa_tech);
 	ast_channel_set_fd(tmp, 0, readdev);
@@ -596,6 +599,10 @@ static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state, const ch
 	p->owner = tmp;
 	ast_module_ref(ast_module_info->self);
 	ast_jb_configure(tmp, &global_jbconf);
+
+	ast_channel_stage_snapshot_done(tmp);
+	ast_channel_unlock(tmp);
+
 	if (state != AST_STATE_DOWN) {
 		if (ast_pbx_start(tmp)) {
 			ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(tmp));
@@ -607,7 +614,7 @@ static struct ast_channel *alsa_new(struct chan_alsa_pvt *p, int state, const ch
 	return tmp;
 }
 
-static struct ast_channel *alsa_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *alsa_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_format tmpfmt;
 	char buf[256];
@@ -625,7 +632,7 @@ static struct ast_channel *alsa_request(const char *type, struct ast_format_cap 
 	if (alsa.owner) {
 		ast_log(LOG_NOTICE, "Already have a call on the ALSA channel\n");
 		*cause = AST_CAUSE_BUSY;
-	} else if (!(tmp = alsa_new(&alsa, AST_STATE_DOWN, requestor ? ast_channel_linkedid(requestor) : NULL))) {
+	} else if (!(tmp = alsa_new(&alsa, AST_STATE_DOWN, assignedids, requestor))) {
 		ast_log(LOG_WARNING, "Unable to create new ALSA channel\n");
 	}
 
@@ -874,7 +881,7 @@ static char *console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_args 
 			ast_copy_string(alsa.exten, mye, sizeof(alsa.exten));
 			ast_copy_string(alsa.context, myc, sizeof(alsa.context));
 			hookstate = 1;
-			alsa_new(&alsa, AST_STATE_RINGING, NULL);
+			alsa_new(&alsa, AST_STATE_RINGING, NULL, NULL);
 		} else
 			ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
 	}
@@ -954,7 +961,7 @@ static int load_module(void)
 	struct ast_flags config_flags = { 0 };
 	struct ast_format tmpfmt;
 
-	if (!(alsa_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(alsa_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(alsa_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR, 0));

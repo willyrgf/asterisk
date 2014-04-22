@@ -250,7 +250,9 @@ static void delete_users(void);
 static void delete_aliases(void);
 static void prune_peers(void);
 
-static struct ast_channel *oh323_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *dest, int *cause);
+static void oh323_set_owner(struct oh323_pvt *pvt, struct ast_channel *c);
+
+static struct ast_channel *oh323_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *dest, int *cause);
 static int oh323_digit_begin(struct ast_channel *c, char digit);
 static int oh323_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int oh323_call(struct ast_channel *c, const char *dest, int timeout);
@@ -353,8 +355,8 @@ static void __oh323_update_info(struct ast_channel *c, struct oh323_pvt *pvt)
 		if (h323debug)
 			ast_debug(1, "Preparing %s for new native format\n", ast_channel_name(c));
 		ast_format_cap_from_old_bitfield(ast_channel_nativeformats(c), pvt->nativeformats);
-		ast_set_read_format(c, &c->readformat);
-		ast_set_write_format(c, &c->writeformat);
+		ast_set_read_format(c, ast_channel_readformat(c));
+		ast_set_write_format(c, ast_channel_writeformat(c));
 	}
 	if (pvt->needhangup) {
 		if (h323debug)
@@ -719,7 +721,7 @@ static int oh323_hangup(struct ast_channel *c)
 		return 0;
 	}
 
-	pvt->owner = NULL;
+	oh323_set_owner(pvt, NULL);
 	ast_channel_tech_pvt_set(c, NULL);
 
 	if (ast_channel_hangupcause(c)) {
@@ -794,8 +796,8 @@ static struct ast_frame *oh323_rtp_read(struct oh323_pvt *pvt)
 
 				pvt->nativeformats = ast_format_to_old_bitfield(&f->subclass.format);
 
-				ast_set_read_format(pvt->owner, &pvt->owner->readformat);
-				ast_set_write_format(pvt->owner, &pvt->owner->writeformat);
+				ast_set_read_format(pvt->owner, ast_channel_readformat(pvt->owner));
+				ast_set_write_format(pvt->owner,ast_channel_writeformat(pvt->owner));
 				ast_channel_unlock(pvt->owner);
 			}
 			/* Do in-band DTMF detection */
@@ -861,7 +863,10 @@ static int oh323_write(struct ast_channel *c, struct ast_frame *frame)
 		if (!(ast_format_cap_iscompatible(ast_channel_nativeformats(c), &frame->subclass.format))) {
 			char tmp[256];
 			ast_log(LOG_WARNING, "Asked to transmit frame type '%s', while native formats is '%s' (read/write = %s/%s)\n",
-				ast_getformatname(&frame->subclass.format), ast_getformatname_multiple(tmp, sizeof(tmp), ast_channel_nativeformats(c)), ast_getformatname(&c->readformat), ast_getformatname(&c->writeformat));
+				ast_getformatname(&frame->subclass.format),
+				ast_getformatname_multiple(tmp, sizeof(tmp), ast_channel_nativeformats(c)),
+				ast_getformatname(ast_channel_readformat(c)),
+				ast_getformatname(ast_channel_writeformat(c)));
 			return 0;
 		}
 	}
@@ -974,7 +979,7 @@ static int oh323_fixup(struct ast_channel *oldchan, struct ast_channel *newchan)
 		ast_log(LOG_WARNING, "old channel wasn't %p but was %p\n", oldchan, pvt->owner);
 		return -1;
 	}
-	pvt->owner = newchan;
+	oh323_set_owner(pvt, newchan);
 	ast_mutex_unlock(&pvt->lock);
 	return 0;
 }
@@ -1007,6 +1012,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 		ast_debug(1, "Created RTP channel\n");
 
 	ast_rtp_instance_set_qos(pvt->rtp, tos, cos, "H323 RTP");
+	ast_rtp_instance_set_channel_id(pvt->rtp, pvt->owner ? ast_channel_uniqueid(pvt->owner) : "");
 
 	if (h323debug)
 		ast_debug(1, "Setting NAT on RTP to %d\n", pvt->options.nat);
@@ -1033,7 +1039,7 @@ static int __oh323_rtp_create(struct oh323_pvt *pvt)
 }
 
 /*! \brief Private structure should be locked on a call */
-static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host, const char *linkedid)
+static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const char *host, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *ch;
 	char *cid_num, *cid_name;
@@ -1052,7 +1058,7 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 	
 	/* Don't hold a oh323_pvt lock while we allocate a chanel */
 	ast_mutex_unlock(&pvt->lock);
-	ch = ast_channel_alloc(1, state, cid_num, cid_name, pvt->accountcode, pvt->exten, pvt->context, linkedid, pvt->amaflags, "H323/%s", host);
+	ch = ast_channel_alloc(1, state, cid_num, cid_name, pvt->accountcode, pvt->exten, pvt->context, assignedids, requestor, pvt->amaflags, "H323/%s", host);
 	/* Update usage counter */
 	ast_module_ref(ast_module_info->self);
 	ast_mutex_lock(&pvt->lock);
@@ -1068,10 +1074,10 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 
 		pvt->nativeformats = ast_format_cap_to_old_bitfield(ast_channel_nativeformats(ch));
 		ast_best_codec(ast_channel_nativeformats(ch), &tmpfmt);
-		ast_format_copy(&ch->writeformat, &tmpfmt);
-		ast_format_copy(&ch->rawwriteformat, &tmpfmt);
-		ast_format_copy(&ch->readformat, &tmpfmt);
-		ast_format_copy(&ch->rawreadformat, &tmpfmt);
+		ast_format_copy(ast_channel_writeformat(ch), &tmpfmt);
+		ast_format_copy(ast_channel_rawwriteformat(ch), &tmpfmt);
+		ast_format_copy(ast_channel_readformat(ch), &tmpfmt);
+		ast_format_copy(ast_channel_rawreadformat(ch), &tmpfmt);
 		if (!pvt->rtp)
 			__oh323_rtp_create(pvt);
 #if 0
@@ -1100,7 +1106,7 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		/* Register channel functions. */
 		ast_channel_tech_pvt_set(ch, pvt);
 		/* Set the owner of this channel */
-		pvt->owner = ch;
+		oh323_set_owner(pvt, ch);
 
 		ast_channel_context_set(ch, pvt->context);
 		ast_channel_exten_set(ch, pvt->exten);
@@ -1133,6 +1139,7 @@ static struct ast_channel *__oh323_new(struct oh323_pvt *pvt, int state, const c
 		}
 		if (pvt->cd.transfer_capability >= 0)
 			ast_channel_transfercapability_set(ch, pvt->cd.transfer_capability);
+		ast_channel_unlock(ch);
 		if (state != AST_STATE_DOWN) {
 			if (ast_pbx_start(ch)) {
 				ast_log(LOG_WARNING, "Unable to start PBX on %s\n", ast_channel_name(ch));
@@ -1187,6 +1194,14 @@ static struct oh323_pvt *oh323_alloc(int callid)
 	iflist = pvt;
 	ast_mutex_unlock(&iflock);
 	return pvt;
+}
+
+static void oh323_set_owner(struct oh323_pvt *pvt, struct ast_channel *chan)
+{
+	pvt->owner = chan;
+	if (pvt->rtp) {
+		ast_rtp_instance_set_channel_id(pvt->rtp, chan ? ast_channel_uniqueid(chan) : "");
+	}
 }
 
 static struct oh323_pvt *find_call_locked(int call_reference, const char *token)
@@ -1299,7 +1314,7 @@ static struct oh323_alias *realtime_alias(const char *alias)
 static int h323_parse_allow_disallow(struct ast_codec_pref *pref, h323_format *formats, const char *list, int allowing)
 {
 	int res;
-	struct ast_format_cap *cap = ast_format_cap_alloc_nolock();
+	struct ast_format_cap *cap = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 	if (!cap) {
 		return 1;
 	}
@@ -1482,7 +1497,7 @@ static struct oh323_user *build_user(const char *name, struct ast_variable *v, s
 			/* Let us know we need to use ip authentication */
 			user->host = 1;
 		} else if (!strcasecmp(v->name, "amaflags")) {
-			format = ast_cdr_amaflags2int(v->value);
+			format = ast_channel_string2amaflag(v->value);
 			if (format < 0) {
 				ast_log(LOG_WARNING, "Invalid AMA Flags: %s at line %d\n", v->value, v->lineno);
 			} else {
@@ -1613,7 +1628,15 @@ static struct oh323_peer *build_peer(const char *name, struct ast_variable *v, s
 			ast_copy_string(peer->mailbox, v->value, sizeof(peer->mailbox));
 		} else if (!strcasecmp(v->name, "hasvoicemail")) {
 			if (ast_true(v->value) && ast_strlen_zero(peer->mailbox)) {
-				ast_copy_string(peer->mailbox, name, sizeof(peer->mailbox));
+				/*
+				 * hasvoicemail is a users.conf legacy voicemail enable method.
+				 * hasvoicemail is only going to work for app_voicemail mailboxes.
+				 */
+				if (strchr(name, '@')) {
+					ast_copy_string(peer->mailbox, name, sizeof(peer->mailbox));
+				} else {
+					snprintf(peer->mailbox, sizeof(peer->mailbox), "%s@default", name);
+				}
 			}
 		}
 	}
@@ -1796,7 +1819,7 @@ static int create_addr(struct oh323_pvt *pvt, char *opeer)
 		return 0;
 	}
 }
-static struct ast_channel *oh323_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *dest, int *cause)
+static struct ast_channel *oh323_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *dest, int *cause)
 {
 	struct oh323_pvt *pvt;
 	struct ast_channel *tmpc = NULL;
@@ -1868,7 +1891,7 @@ static struct ast_channel *oh323_request(const char *type, struct ast_format_cap
 	ast_mutex_unlock(&caplock);
 
 	ast_mutex_lock(&pvt->lock);
-	tmpc = __oh323_new(pvt, AST_STATE_DOWN, tmp1, requestor ? ast_channel_linkedid(requestor) : NULL);
+	tmpc = __oh323_new(pvt, AST_STATE_DOWN, tmp1, assignedids, requestor);
 	ast_mutex_unlock(&pvt->lock);
 	if (!tmpc) {
 		oh323_destroy(pvt);
@@ -2079,18 +2102,22 @@ static void setup_rtp_connection(unsigned call_reference, const char *remoteIp, 
 	/* Don't try to lock the channel if nothing changed */
 	if (nativeformats_changed || pvt->options.progress_audio || (rtp_change != NEED_NONE)) {
 		if (pvt->owner && !ast_channel_trylock(pvt->owner)) {
-			struct ast_format_cap *pvt_native = ast_format_cap_alloc_nolock();
+			struct ast_format_cap *pvt_native = ast_format_cap_alloc(AST_FORMAT_CAP_FLAG_NOLOCK);
 			ast_format_cap_from_old_bitfield(pvt_native, pvt->nativeformats);
 
 			/* Re-build translation path only if native format(s) has been changed */
 			if (!(ast_format_cap_identical(ast_channel_nativeformats(pvt->owner), pvt_native))) {
 				if (h323debug) {
 					char tmp[256], tmp2[256];
-					ast_debug(1, "Native format changed to '%s' from '%s', read format is %s, write format is %s\n", ast_getformatname_multiple(tmp, sizeof(tmp), pvt_native), ast_getformatname_multiple(tmp2, sizeof(tmp2), ast_channel_nativeformats(pvt->owner)), ast_getformatname(&pvt->owner->readformat), ast_getformatname(&pvt->owner->writeformat));
+					ast_debug(1, "Native format changed to '%s' from '%s', read format is %s, write format is %s\n",
+						ast_getformatname_multiple(tmp, sizeof(tmp), pvt_native),
+						ast_getformatname_multiple(tmp2, sizeof(tmp2), ast_channel_nativeformats(pvt->owner)),
+						ast_getformatname(ast_channel_readformat(pvt->owner)),
+						ast_getformatname(ast_channel_writeformat(pvt->owner)));
 				}
 				ast_format_cap_copy(ast_channel_nativeformats(pvt->owner), pvt_native);
-				ast_set_read_format(pvt->owner, &pvt->owner->readformat);
-				ast_set_write_format(pvt->owner, &pvt->owner->writeformat);
+				ast_set_read_format(pvt->owner, ast_channel_readformat(pvt->owner));
+				ast_set_write_format(pvt->owner, ast_channel_writeformat(pvt->owner));
 			}
 			if (pvt->options.progress_audio)
 				ast_queue_control(pvt->owner, AST_CONTROL_PROGRESS);
@@ -2367,7 +2394,7 @@ static int answer_call(unsigned call_reference, const char *token)
 	}
 
 	/* allocate a channel and tell asterisk about it */
-	c = __oh323_new(pvt, AST_STATE_RINGING, pvt->cd.call_token, NULL);
+	c = __oh323_new(pvt, AST_STATE_RINGING, pvt->cd.call_token, NULL, NULL);
 
 	/* And release when done */
 	ast_mutex_unlock(&pvt->lock);
@@ -3318,7 +3345,7 @@ static enum ast_module_load_result load_module(void)
 {
 	int res;
 
-	if (!(oh323_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(oh323_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_FAILURE;
 	}
 	ast_format_cap_add_all_by_type(oh323_tech.capabilities, AST_FORMAT_TYPE_AUDIO);

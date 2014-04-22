@@ -26,8 +26,8 @@
 #include "asterisk/logger.h"
 #include "asterisk/linkedlists.h"
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
-#include "asterisk/bridging_features.h"
+#include "asterisk/bridge.h"
+#include "asterisk/bridge_features.h"
 #include "conf_state.h"
 
 /* Maximum length of a conference bridge name */
@@ -37,6 +37,7 @@
 
 #define DEFAULT_USER_PROFILE "default_user"
 #define DEFAULT_BRIDGE_PROFILE "default_bridge"
+#define DEFAULT_MENU_PROFILE "default_menu"
 
 #define DEFAULT_TALKING_THRESHOLD 160
 #define DEFAULT_SILENCE_THRESHOLD 2500
@@ -58,6 +59,7 @@ enum user_profile_flags {
 	USER_OPT_DTMF_PASS    =  (1 << 13), /*!< Sets if dtmf should be passed into the conference or not */
 	USER_OPT_ANNOUNCEUSERCOUNTALL = (1 << 14), /*!< Sets if the number of users should be announced to everyone. */
 	USER_OPT_JITTERBUFFER =  (1 << 15), /*!< Places a jitterbuffer on the user. */
+	USER_OPT_ANNOUNCE_JOIN_LEAVE_REVIEW = (1 << 16), /*!< modifies ANNOUNCE_JOIN_LEAVE - user reviews the recording before continuing */
 };
 
 enum bridge_profile_flags {
@@ -161,6 +163,7 @@ enum conf_sounds {
 	CONF_SOUND_LEAVE,
 	CONF_SOUND_PARTICIPANTS_MUTED,
 	CONF_SOUND_PARTICIPANTS_UNMUTED,
+	CONF_SOUND_BEGIN,
 };
 
 struct bridge_profile_sounds {
@@ -187,11 +190,13 @@ struct bridge_profile_sounds {
 		AST_STRING_FIELD(join);
 		AST_STRING_FIELD(participantsmuted);
 		AST_STRING_FIELD(participantsunmuted);
+		AST_STRING_FIELD(begin);
 	);
 };
 
 struct bridge_profile {
 	char name[64];
+	char language[MAX_LANGUAGE];		  /*!< Language used for playback_chan */
 	char rec_file[PATH_MAX];
 	unsigned int flags;
 	unsigned int max_members;          /*!< The maximum number of participants allowed in the conference */
@@ -240,6 +245,7 @@ struct confbridge_user {
 	struct ast_bridge_features features;         /*!< Bridge features structure */
 	struct ast_bridge_tech_optimizations tech_args; /*!< Bridge technology optimizations for talk detection */
 	unsigned int suspended_moh;                  /*!< Count of active suspended MOH actions. */
+	unsigned int muted:1;                        /*!< Has the user requested to be muted? */
 	unsigned int kicked:1;                       /*!< User has been kicked from the conference */
 	unsigned int playing_moh:1;                  /*!< MOH is currently being played to the user */
 	AST_LIST_HEAD_NOLOCK(, post_join_action) post_join_list; /*!< List of sounds to play after joining */;
@@ -247,7 +253,10 @@ struct confbridge_user {
 };
 
 /*! \brief load confbridge.conf file */
-int conf_load_config(int reload);
+int conf_load_config(void);
+
+/*! \brief reload confbridge.conf file */
+int conf_reload_config(void);
 
 /*! \brief destroy the information loaded from the confbridge.conf file*/
 void conf_destroy_config(void);
@@ -256,30 +265,55 @@ void conf_destroy_config(void);
  * \brief find a user profile given a user profile's name and store
  * that profile in result structure.
  *
- * \details This function first attempts to find any custom user
- * profile that might exist on a channel datastore, if that doesn't
- * exist it looks up the provided user profile name, if that doesn't
- * exist either the default_user profile is used.
-
+ * \param chan channel the user profile is requested for
+ * \param user_profile_name name of the profile requested (optional)
+ * \param result data contained by the user profile will be copied to this struct pointer
+ *
+ * \details If user_profile_name is not provided, this function will
+ * check for the presence of a user profile set by the CONFBRIDGE
+ * function on a channel datastore. If that doesn't exist, the
+ * default_user profile is used.
+ *
  * \retval user profile on success
  * \retval NULL on failure
  */
 const struct user_profile *conf_find_user_profile(struct ast_channel *chan, const char *user_profile_name, struct user_profile *result);
 
 /*!
- * \brief Find a bridge profile
+ * \brief Find a bridge profile given a bridge profile's name and store
+ * that profile in result structure.
  *
- * \details Any bridge profile found using this function must be
- * destroyed using conf_bridge_profile_destroy.  This function first
- * attempts to find any custom bridge profile that might exist on
- * a channel datastore, if that doesn't exist it looks up the
- * provided bridge profile name, if that doesn't exist either
- * the default_bridge profile is used.
+ * \param chan channel the bridge profile is requested for
+ * \param bridge_profile_name name of the profile requested (optional)
+ * \param result data contained by the bridge profile will be copied to this struct pointer
  *
- * \retval Bridge profile on success
+ * \details If bridge_profile_name is not provided, this function will
+ * check for the presence of a bridge profile set by the CONFBRIDGE
+ * function on a channel datastore. If that doesn't exist, the
+ * default_bridge profile is used.
+ *
+ * \retval bridge profile on success
  * \retval NULL on failure
  */
 const struct bridge_profile *conf_find_bridge_profile(struct ast_channel *chan, const char *bridge_profile_name, struct bridge_profile *result);
+
+/*!
+ * \brief find a menu profile given a menu profile's name and apply
+ * the menu in DTMF hooks.
+ *
+ * \param chan channel the menu profile is requested for
+ * \param user user profile the menu is being applied to
+ * \param menu_profile_name name of the profile requested (optional)
+ *
+ * \details If menu_profile_name is not provided, this function will
+ * check for the presence of a menu profile set by the CONFBRIDGE
+ * function on a channel datastore. If that doesn't exist, the
+ * default_menu profile is used.
+ *
+ * \retval 0 on success
+ * \retval -1 on failure
+ */
+int conf_set_menu_to_user(struct ast_channel *chan, struct confbridge_user *user, const char *menu_profile_name);
 
 /*!
  * \brief Destroy a bridge profile found by 'conf_find_bridge_profile'
@@ -291,14 +325,6 @@ void conf_bridge_profile_destroy(struct bridge_profile *b_profile);
  * \note conf_bridge_profile_destroy must be called on the dst structure
  */
 void conf_bridge_profile_copy(struct bridge_profile *dst, struct bridge_profile *src);
-
-/*!
- * \brief Set a DTMF menu to a conference user by menu name.
- *
- * \retval 0 on success, menu was found and set
- * \retval -1 on error, menu was not found
- */
-int conf_set_menu_to_user(const char *menu_name, struct confbridge_user *user);
 
 /*!
  * \brief Finds a menu_entry in a menu structure matched by DTMF sequence.
@@ -363,6 +389,15 @@ int play_sound_file(struct confbridge_conference *conference, const char *filena
 void conf_ended(struct confbridge_conference *conference);
 
 /*!
+ * \brief Update the actual mute status of the user and set it on the bridge.
+ *
+ * \param user User to update the mute status.
+ *
+ * \return Nothing
+ */
+void conf_update_user_mute(struct confbridge_user *user);
+
+/*!
  * \brief Stop MOH for the conference user.
  *
  * \param user Conference user to stop MOH on.
@@ -384,13 +419,6 @@ void conf_moh_start(struct confbridge_user *user);
  * \param conference A conference bridge containing a single user
  */
 void conf_mute_only_active(struct confbridge_conference *conference);
-
-/*! \brief Callback to execute any time we transition from zero to one marked users
- * \param user The first marked user joining the conference
- * \retval 0 success
- * \retval -1 failure
- */
-int conf_handle_first_marked_common(struct confbridge_user *user);
 
 /*! \brief Callback to execute any time we transition from zero to one active users
  * \param conference The conference bridge with a single active user joined

@@ -157,6 +157,11 @@ static int frame_trace_helper(struct ast_channel *chan, const char *cmd, char *d
 	};
 	int i = 0;
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
 	if (!(framedata = ast_calloc(1, sizeof(*framedata)))) {
 		return 0;
 	}
@@ -343,6 +348,18 @@ static void print_frame(struct ast_frame *frame)
 		case AST_CONTROL_STREAM_FORWARD:
 			ast_verbose("SubClass: STREAM_FORWARD\n");
 			break;
+		case AST_CONTROL_RECORD_CANCEL:
+			ast_verbose("SubClass: RECORD_CANCEL\n");
+			break;
+		case AST_CONTROL_RECORD_STOP:
+			ast_verbose("SubClass: RECORD_STOP\n");
+			break;
+		case AST_CONTROL_RECORD_SUSPEND:
+			ast_verbose("SubClass: RECORD_SUSPEND\n");
+			break;
+		case AST_CONTROL_RECORD_MUTE:
+			ast_verbose("SubClass: RECORD_MUTE\n");
+			break;
 		}
 
 		if (frame->subclass.integer == -1) {
@@ -379,6 +396,10 @@ static void print_frame(struct ast_frame *frame)
 	case AST_FRAME_BRIDGE_ACTION:
 		ast_verbose("FrameType: Bridge\n");
 		ast_verbose("SubClass: %d\n", frame->subclass.integer);
+		break;
+	case AST_FRAME_BRIDGE_ACTION_SYNC:
+		ast_verbose("Frametype: Synchronous Bridge\n");
+		ast_verbose("Subclass: %d\n", frame->subclass.integer);
 		break;
 	}
 

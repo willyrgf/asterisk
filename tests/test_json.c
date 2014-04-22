@@ -41,6 +41,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/module.h"
 #include "asterisk/test.h"
 
+#include <stdio.h>
+#include <unistd.h>
+
+#define CATEGORY "/main/json/"
+
 /*!
  * Number of allocations from JSON library that have not yet been freed.
  */
@@ -53,7 +58,7 @@ static size_t alloc_count;
  */
 static void *json_debug_malloc(size_t size)
 {
-	void *p = ast_malloc(size);
+	void *p = ast_json_malloc(size);
 	if (p) {
 		++alloc_count;
 	}
@@ -65,36 +70,37 @@ static void json_debug_free(void *p)
 	if (p) {
 		--alloc_count;
 	}
-	ast_free(p);
+	ast_json_free(p);
 }
 
-static void *json_test_init(struct ast_test *test)
+static int json_test_init(struct ast_test_info *info, struct ast_test *test)
 {
 	ast_json_set_alloc_funcs(json_debug_malloc, json_debug_free);
 	alloc_count = 0;
-	return test;
+	return 0;
 }
 
-static void json_test_finish(void *test)
+static int json_test_cleanup(struct ast_test_info *info, struct ast_test *test)
 {
-	struct ast_test *t = test;
 	ast_json_reset_alloc_funcs();
 	if (0 != alloc_count) {
-		ast_test_status_update(t, "JSON test leaked %zd allocations!", alloc_count);
+		ast_test_status_update(test,
+			"JSON test leaked %zd allocations!\n", alloc_count);
+		return -1;
 	}
+	return 0;
 }
 
 /*!@}*/
 
 AST_TEST_DEFINE(json_test_false)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "false";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing fundamental JSON false value.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -114,13 +120,12 @@ AST_TEST_DEFINE(json_test_false)
 
 AST_TEST_DEFINE(json_test_true)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "true";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON true value.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -140,13 +145,12 @@ AST_TEST_DEFINE(json_test_true)
 
 AST_TEST_DEFINE(json_test_bool0)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "bool0";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON boolean function (false).";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -168,13 +172,12 @@ AST_TEST_DEFINE(json_test_bool0)
 
 AST_TEST_DEFINE(json_test_bool1)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "bool1";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON boolean function (true).";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -196,13 +199,12 @@ AST_TEST_DEFINE(json_test_bool1)
 
 AST_TEST_DEFINE(json_test_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON null value.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -222,11 +224,10 @@ AST_TEST_DEFINE(json_test_null)
 
 AST_TEST_DEFINE(json_test_null_val)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "null_val";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON handling of NULL.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -249,14 +250,13 @@ AST_TEST_DEFINE(json_test_null_val)
 
 AST_TEST_DEFINE(json_test_string)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "string";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Basic string tests.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -290,13 +290,12 @@ AST_TEST_DEFINE(json_test_string)
 
 AST_TEST_DEFINE(json_test_string_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "string_null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "JSON string NULL tests.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -323,14 +322,13 @@ AST_TEST_DEFINE(json_test_string_null)
 
 AST_TEST_DEFINE(json_test_stringf)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "stringf";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Basic string formatting tests.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -357,14 +355,13 @@ AST_TEST_DEFINE(json_test_stringf)
 
 AST_TEST_DEFINE(json_test_int)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "int";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Basic JSON integer tests.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -399,13 +396,12 @@ AST_TEST_DEFINE(json_test_int)
 
 AST_TEST_DEFINE(json_test_non_int)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "non_int";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing integer functions with non-integer types.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -438,13 +434,12 @@ AST_TEST_DEFINE(json_test_non_int)
 
 AST_TEST_DEFINE(json_test_array_create)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_create";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing creating JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -463,14 +458,13 @@ AST_TEST_DEFINE(json_test_array_create)
 
 AST_TEST_DEFINE(json_test_array_append)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_append";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing appending to JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -493,14 +487,13 @@ AST_TEST_DEFINE(json_test_array_append)
 
 AST_TEST_DEFINE(json_test_array_inset)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_insert";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing inserting into JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -521,14 +514,13 @@ AST_TEST_DEFINE(json_test_array_inset)
 
 AST_TEST_DEFINE(json_test_array_set)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_set";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing setting a value in JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -549,7 +541,6 @@ AST_TEST_DEFINE(json_test_array_set)
 
 AST_TEST_DEFINE(json_test_array_remove)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	int uut_res;
@@ -557,7 +548,7 @@ AST_TEST_DEFINE(json_test_array_remove)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_remove";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing removing a value from JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -577,14 +568,13 @@ AST_TEST_DEFINE(json_test_array_remove)
 
 AST_TEST_DEFINE(json_test_array_clear)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_clear";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing clearing JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -603,7 +593,6 @@ AST_TEST_DEFINE(json_test_array_clear)
 
 AST_TEST_DEFINE(json_test_array_extend)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, tail, NULL, ast_json_unref);
@@ -612,7 +601,7 @@ AST_TEST_DEFINE(json_test_array_extend)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_extend";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing extending JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -650,13 +639,12 @@ AST_TEST_DEFINE(json_test_array_extend)
 
 AST_TEST_DEFINE(json_test_array_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "array_null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing NULL conditions for JSON arrays.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -682,13 +670,12 @@ AST_TEST_DEFINE(json_test_array_null)
 
 AST_TEST_DEFINE(json_test_object_alloc)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_alloc";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing creating JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -707,7 +694,6 @@ AST_TEST_DEFINE(json_test_object_alloc)
 
 AST_TEST_DEFINE(json_test_object_set)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	int uut_res;
@@ -715,7 +701,7 @@ AST_TEST_DEFINE(json_test_object_set)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_set";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing setting values in JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -740,14 +726,13 @@ AST_TEST_DEFINE(json_test_object_set)
 
 AST_TEST_DEFINE(json_test_object_set_overwrite)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_set_overwriting";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing changing values in JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -766,13 +751,12 @@ AST_TEST_DEFINE(json_test_object_set_overwrite)
 
 AST_TEST_DEFINE(json_test_object_get)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_get";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing getting values from JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -791,7 +775,6 @@ AST_TEST_DEFINE(json_test_object_get)
 
 AST_TEST_DEFINE(json_test_object_del)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	int uut_res;
@@ -799,7 +782,7 @@ AST_TEST_DEFINE(json_test_object_del)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_del";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing deleting values from JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -821,14 +804,13 @@ AST_TEST_DEFINE(json_test_object_del)
 
 AST_TEST_DEFINE(json_test_object_clear)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_clear";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing clearing values from JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -850,7 +832,6 @@ AST_TEST_DEFINE(json_test_object_clear)
 
 AST_TEST_DEFINE(json_test_object_merge_all)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, merge, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
@@ -859,7 +840,7 @@ AST_TEST_DEFINE(json_test_object_merge_all)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_alloc";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing merging JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -896,7 +877,6 @@ AST_TEST_DEFINE(json_test_object_merge_all)
 
 AST_TEST_DEFINE(json_test_object_merge_existing)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, merge, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
@@ -905,7 +885,7 @@ AST_TEST_DEFINE(json_test_object_merge_existing)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_alloc";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing merging JSON objects, updating only existing fields.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -940,7 +920,6 @@ AST_TEST_DEFINE(json_test_object_merge_existing)
 
 AST_TEST_DEFINE(json_test_object_merge_missing)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, merge, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
@@ -949,7 +928,7 @@ AST_TEST_DEFINE(json_test_object_merge_missing)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_merge_missing";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing merging JSON objects, adding only missing fields.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -986,13 +965,12 @@ AST_TEST_DEFINE(json_test_object_merge_missing)
 
 AST_TEST_DEFINE(json_test_object_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON object NULL behavior.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1022,7 +1000,6 @@ AST_TEST_DEFINE(json_test_object_null)
 
 AST_TEST_DEFINE(json_test_object_iter)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	struct ast_json_iter *iter;
 	int count;
 	int uut_res;
@@ -1031,7 +1008,7 @@ AST_TEST_DEFINE(json_test_object_iter)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_iter";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing iterating through JSON objects.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1086,13 +1063,12 @@ AST_TEST_DEFINE(json_test_object_iter)
 
 AST_TEST_DEFINE(json_test_object_iter_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_iter_null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing JSON object iterator NULL testings.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1116,7 +1092,6 @@ AST_TEST_DEFINE(json_test_object_iter_null)
 
 AST_TEST_DEFINE(json_test_dump_load_string)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	RAII_VAR(char *, str, NULL, json_debug_free);
@@ -1124,7 +1099,7 @@ AST_TEST_DEFINE(json_test_dump_load_string)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "dump_load_string";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing dumping strings from JSON.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1146,7 +1121,6 @@ AST_TEST_DEFINE(json_test_dump_load_string)
 
 AST_TEST_DEFINE(json_test_dump_load_str)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	RAII_VAR(struct ast_str *, astr, NULL, ast_free);
@@ -1155,7 +1129,7 @@ AST_TEST_DEFINE(json_test_dump_load_str)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "dump_load_str";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing dumping ast_str from JSON.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1177,7 +1151,6 @@ AST_TEST_DEFINE(json_test_dump_load_str)
 
 AST_TEST_DEFINE(json_test_dump_str_fail)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	struct ast_str *astr;
@@ -1186,7 +1159,7 @@ AST_TEST_DEFINE(json_test_dump_str_fail)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "dump_str_fail";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing dumping to ast_str when it can't grow.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1205,14 +1178,13 @@ AST_TEST_DEFINE(json_test_dump_str_fail)
 
 AST_TEST_DEFINE(json_test_load_buffer)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	const char *str;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "load_buffer";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing loading JSON from buffer.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1239,19 +1211,40 @@ static int safe_fclose(FILE *f)
 	return 0;
 }
 
+static FILE *mkstemp_file(char *template, const char *mode)
+{
+	int fd = mkstemp(template);
+	FILE *file;
+
+	if (fd < 0) {
+		ast_log(LOG_ERROR, "Failed to create temp file: %s\n",
+			strerror(errno));
+		return NULL;
+	}
+
+	file = fdopen(fd, mode);
+	if (!file) {
+		ast_log(LOG_ERROR, "Failed to create temp file: %s\n",
+			strerror(errno));
+		return NULL;
+	}
+
+	return file;
+}
+
 AST_TEST_DEFINE(json_test_dump_load_file)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
-	RAII_VAR(char *, filename, NULL, free);
+	char filename[] = "/tmp/ast_json.XXXXXX";
+	RAII_VAR(char *, rm_on_exit, filename, unlink);
 	RAII_VAR(FILE *, file, NULL, safe_fclose);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "dump_load_file";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing dumping/loading JSON to/from file by FILE *.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1261,12 +1254,13 @@ AST_TEST_DEFINE(json_test_dump_load_file)
 
 	/* dump/load file */
 	expected = ast_json_pack("{ s: i }", "one", 1);
-	filename = tempnam(NULL, "ast-json");
-	file = fopen(filename, "w");
+	file = mkstemp_file(filename, "w");
+	ast_test_validate(test, NULL != file);
 	uut_res = ast_json_dump_file(expected, file);
 	ast_test_validate(test, 0 == uut_res);
 	fclose(file);
 	file = fopen(filename, "r");
+	ast_test_validate(test, NULL != file);
 	uut = ast_json_load_file(file, NULL);
 	ast_test_validate(test, ast_json_equal(expected, uut));
 
@@ -1275,16 +1269,17 @@ AST_TEST_DEFINE(json_test_dump_load_file)
 
 AST_TEST_DEFINE(json_test_dump_load_new_file)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
-	RAII_VAR(char *, filename, NULL, free);
+	char filename[] = "/tmp/ast_json.XXXXXX";
+	RAII_VAR(char *, rm_on_exit, filename, unlink);
+	RAII_VAR(FILE *, file, NULL, safe_fclose);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "dump_load_new_file";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing dumping/load JSON to/from file by filename.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1294,7 +1289,8 @@ AST_TEST_DEFINE(json_test_dump_load_new_file)
 
 	/* dump/load filename */
 	expected = ast_json_pack("{ s: i }", "one", 1);
-	filename = tempnam(NULL, "ast-json");
+	file = mkstemp_file(filename, "w");
+	ast_test_validate(test, NULL != file);
 	uut_res = ast_json_dump_new_file(expected, filename);
 	ast_test_validate(test, 0 == uut_res);
 	uut = ast_json_load_new_file(filename, NULL);
@@ -1305,15 +1301,15 @@ AST_TEST_DEFINE(json_test_dump_load_new_file)
 
 AST_TEST_DEFINE(json_test_dump_load_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
-	RAII_VAR(char *, filename, NULL, free);
+	char filename[] = "/tmp/ast_json.XXXXXX";
+	RAII_VAR(char *, rm_on_exit, filename, unlink);
 	RAII_VAR(FILE *, file, NULL, safe_fclose);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "dump_load_null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing NULL handling of dump/load functions.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1324,8 +1320,8 @@ AST_TEST_DEFINE(json_test_dump_load_null)
 	/* dump/load NULL tests */
 	uut = ast_json_load_string("{ \"one\": 1 }", NULL);
 	ast_test_validate(test, NULL != uut);
-	filename = tempnam(NULL, "ast-json");
-	file = fopen(filename, "w");
+	file = mkstemp_file(filename, "w");
+	ast_test_validate(test, NULL != file);
 	ast_test_validate(test, NULL == ast_json_dump_string(NULL));
 	ast_test_validate(test, -1 == ast_json_dump_file(NULL, file));
 	ast_test_validate(test, -1 == ast_json_dump_file(uut, NULL));
@@ -1343,13 +1339,12 @@ AST_TEST_DEFINE(json_test_dump_load_null)
 
 AST_TEST_DEFINE(json_test_parse_errors)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "parse_errors";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing various parse errors.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1372,14 +1367,13 @@ AST_TEST_DEFINE(json_test_parse_errors)
 
 AST_TEST_DEFINE(json_test_pack)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "pack";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing json_pack function.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1403,13 +1397,12 @@ AST_TEST_DEFINE(json_test_pack)
 
 AST_TEST_DEFINE(json_test_pack_ownership)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "pack_ownership";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing json_pack failure conditions.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1424,13 +1417,12 @@ AST_TEST_DEFINE(json_test_pack_ownership)
 
 AST_TEST_DEFINE(json_test_pack_errors)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "object_alloc";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing json_pack failure conditions.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1448,14 +1440,13 @@ AST_TEST_DEFINE(json_test_pack_errors)
 
 AST_TEST_DEFINE(json_test_copy)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "copy";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing copying JSON.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1475,14 +1466,13 @@ AST_TEST_DEFINE(json_test_copy)
 
 AST_TEST_DEFINE(json_test_deep_copy)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "deep_copy";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing deep copying of JSON.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1505,11 +1495,10 @@ AST_TEST_DEFINE(json_test_deep_copy)
 
 AST_TEST_DEFINE(json_test_copy_null)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "copy_null";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Testing NULL handling of copy functions.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1526,14 +1515,13 @@ AST_TEST_DEFINE(json_test_copy_null)
 
 AST_TEST_DEFINE(json_test_circular_object)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "circular_object";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Object cannot be added to itself.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1553,14 +1541,13 @@ AST_TEST_DEFINE(json_test_circular_object)
 
 AST_TEST_DEFINE(json_test_circular_array)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	int uut_res;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "circular_array";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "Array cannot be added to itself.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1579,7 +1566,6 @@ AST_TEST_DEFINE(json_test_circular_array)
 
 AST_TEST_DEFINE(json_test_clever_circle)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, inner_child, NULL, ast_json_unref);
 	RAII_VAR(char *, str, NULL, json_debug_free);
@@ -1588,7 +1574,7 @@ AST_TEST_DEFINE(json_test_clever_circle)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "clever_circle";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "JSON with circular references cannot be encoded.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1613,14 +1599,13 @@ AST_TEST_DEFINE(json_test_clever_circle)
 
 AST_TEST_DEFINE(json_test_name_number)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "name_number";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "JSON encoding of name/number pair.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1643,7 +1628,6 @@ AST_TEST_DEFINE(json_test_name_number)
 
 AST_TEST_DEFINE(json_test_timeval)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 	struct timeval tv = {};
@@ -1651,7 +1635,7 @@ AST_TEST_DEFINE(json_test_timeval)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "timeval";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "JSON encoding of timevals.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1672,14 +1656,13 @@ AST_TEST_DEFINE(json_test_timeval)
 
 AST_TEST_DEFINE(json_test_cep)
 {
-	RAII_VAR(void *, alloc_debug, json_test_init(test), json_test_finish);
 	RAII_VAR(struct ast_json *, uut, NULL, ast_json_unref);
 	RAII_VAR(struct ast_json *, expected, NULL, ast_json_unref);
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "cep";
-		info->category = "/main/json/";
+		info->category = CATEGORY;
 		info->summary = "JSON with circular references cannot be encoded.";
 		info->description = "Test JSON abstraction library.";
 		return AST_TEST_NOT_RUN;
@@ -1815,6 +1798,10 @@ static int load_module(void)
 	AST_TEST_REGISTER(json_test_name_number);
 	AST_TEST_REGISTER(json_test_timeval);
 	AST_TEST_REGISTER(json_test_cep);
+
+	ast_test_register_init(CATEGORY, json_test_init);
+	ast_test_register_cleanup(CATEGORY, json_test_cleanup);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

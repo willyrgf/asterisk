@@ -71,13 +71,22 @@
   <!ELEMENT see-also (ref|xi:include)*>
 
   <!ELEMENT ref (#PCDATA)>
-  <!ATTLIST ref type (application|function|astcli|link|manpage|filename|agi|manager|managerEvent) #REQUIRED>
+  <!ATTLIST ref type (application|function|astcli|link|manpage|filename|agi|manager|managerEvent|configOption) #REQUIRED>
   <!ATTLIST ref module CDATA #IMPLIED>
 
   <!ELEMENT synopsis (#PCDATA)>
 
-  <!ELEMENT syntax (parameter|dataType|category|matchInfo|xi:include)*>
+  <!ELEMENT syntax (parameter|dataType|category|matchInfo|xi:include|channel_snapshot|bridge_snapshot)*>
   <!ATTLIST syntax argsep CDATA ",">
+
+  <!ELEMENT channel_snapshot (#PCDATA)>
+  <!ATTLIST channel_snapshot prefix CDATA "">
+
+  <!ELEMENT bridge_snapshot (#PCDATA)>
+  <!ATTLIST bridge_snapshot prefix CDATA "">
+
+  <!ELEMENT configOptionToEnum (configOption|xi:include)*>
+  <!ATTLIST configOptionToEnum prefix CDATA "">
 
   <!ELEMENT description (para|note|warning|variablelist|enumlist|info|xi:include)*>
 
@@ -97,7 +106,7 @@
   <!ATTLIST option implies CDATA "">
   <!ATTLIST option hasparams CDATA "">
 
-  <!ELEMENT enumlist (enum+)>
+  <!ELEMENT enumlist (configOptionToEnum|enum+)>
   <!ELEMENT enum (para|note|warning|parameter|enumlist|info|xi:include)*>
   <!ATTLIST enum name CDATA "">
 

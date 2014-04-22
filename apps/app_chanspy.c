@@ -145,6 +145,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<option name="S">
 						<para>Stop when no more channels are left to spy on.</para>
 					</option>
+					<option name="u">
+						<para>The <literal>chanprefix</literal> parameter is a channel uniqueid
+						or fully specified channel name.</para>
+					</option>
 					<option name="v">
 						<argument name="value" />
 						<para>Adjust the initial volume in the range from <literal>-4</literal> 
@@ -160,7 +164,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</option>
 					<option name="x">
 						<argument name="digit" required="true">
-							<para>Specify a DTMF digit that can be used to exit the application.</para>
+							<para>Specify a DTMF digit that can be used to exit the application while actively
+							spying on a channel. If there is no channel being spied on, the DTMF digit will be
+							ignored.</para>
 						</argument>
 					</option>
 					<option name="X">
@@ -181,9 +187,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para> - Dialing <literal>#</literal> cycles the volume level.</para>
 			<para> - Dialing <literal>*</literal> will stop spying and look for another channel to spy on.</para>
 			<para> - Dialing a series of digits followed by <literal>#</literal> builds a channel name to append
-			to 'chanprefix'. For example, executing ChanSpy(Agent) and then dialing the digits '1234#' 
-			while spying will begin spying on the channel 'Agent/1234'. Note that this feature will be overridden if the 'd' option
-			is used</para>
+			to <literal>chanprefix</literal>. For example, executing ChanSpy(Agent) and then dialing the digits '1234#'
+			while spying will begin spying on the channel 'Agent/1234'. Note that this feature will be overridden
+			if the 'd' or 'u' options are used.</para>
 			<note><para>The <replaceable>X</replaceable> option supersedes the three features above in that if a valid
 			single digit extension exists in the correct context ChanSpy will exit to it.
 			This also disables choosing a channel based on <literal>chanprefix</literal> and a digit sequence.</para></note>
@@ -299,7 +305,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</option>
 					<option name="x">
 						<argument name="digit" required="true">
-							<para>Specify a DTMF digit that can be used to exit the application.</para>
+							<para>Specify a DTMF digit that can be used to exit the application while actively
+							spying on a channel. If there is no channel being spied on, the DTMF digit will be
+							ignored.</para>
 						</argument>
 					</option>
 					<option name="X">
@@ -372,10 +380,11 @@ enum {
 	OPTION_NAME              = (1 << 12),   /* Say the name of the person on whom we will spy */
 	OPTION_DTMF_SWITCH_MODES = (1 << 13),   /* Allow numeric DTMF to switch between chanspy modes */
 	OPTION_DTMF_EXIT         = (1 << 14),	/* Set DTMF to exit, added for DAHDIScan integration */
-	OPTION_DTMF_CYCLE        = (1 << 15),	/* Custom DTMF for cycling next avaliable channel, (default is '*') */
+	OPTION_DTMF_CYCLE        = (1 << 15),	/* Custom DTMF for cycling next available channel, (default is '*') */
 	OPTION_DAHDI_SCAN        = (1 << 16),	/* Scan groups in DAHDIScan mode */
 	OPTION_STOP              = (1 << 17),
 	OPTION_EXITONHANGUP      = (1 << 18),   /* Hang up when the spied-on channel hangs up. */
+	OPTION_UNIQUEID          = (1 << 19),	/* The chanprefix is a channel uniqueid or fully specified channel name. */
 };
 
 enum {
@@ -403,6 +412,7 @@ AST_APP_OPTIONS(spy_opts, {
 	AST_APP_OPTION_ARG('r', OPTION_RECORD, OPT_ARG_RECORD),
 	AST_APP_OPTION('s', OPTION_NOTECH),
 	AST_APP_OPTION('S', OPTION_STOP),
+	AST_APP_OPTION('u', OPTION_UNIQUEID),
 	AST_APP_OPTION_ARG('v', OPTION_VOLUME, OPT_ARG_VOLUME),
 	AST_APP_OPTION('w', OPTION_WHISPER),
 	AST_APP_OPTION('W', OPTION_PRIVATE),
@@ -637,12 +647,14 @@ static int channel_spy(struct ast_channel *chan, struct ast_autochan *spyee_auto
 	}
 
 	if (ast_test_flag(flags, OPTION_BARGE | OPTION_DTMF_SWITCH_MODES)) {
+		RAII_VAR(struct ast_channel *, bridged, ast_channel_bridge_peer(spyee_autochan->chan), ast_channel_cleanup);
+
 		/* And this hook lets us inject audio into the channel that the spied on
 		   channel is currently bridged with.
 		*/
 		ast_audiohook_init(&csth.bridge_whisper_audiohook, AST_AUDIOHOOK_TYPE_WHISPER, "Chanspy", 0);
 
-		if ((spyee_bridge_autochan = ast_autochan_setup(ast_bridged_channel(spyee_autochan->chan)))) {
+		if ((spyee_bridge_autochan = ast_autochan_setup(bridged))) {
 			ast_channel_lock(spyee_bridge_autochan->chan);
 			if (start_spying(spyee_bridge_autochan, spyer_name, &csth.bridge_whisper_audiohook)) {
 				ast_log(LOG_WARNING, "Unable to attach barge audiohook on spyee %s. Barge mode disabled!\n", name);
@@ -883,7 +895,19 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 
 		/* Set up the iterator we'll be using during this call */
 		if (!ast_strlen_zero(spec)) {
-			iter = ast_channel_iterator_by_name_new(spec, strlen(spec));
+			if (ast_test_flag(flags, OPTION_UNIQUEID)) {
+				struct ast_channel *unique_chan;
+
+				unique_chan = ast_channel_get_by_name(spec);
+				if (!unique_chan) {
+					res = -1;
+					goto exit;
+				}
+				iter = ast_channel_iterator_by_name_new(ast_channel_name(unique_chan), 0);
+				ast_channel_unref(unique_chan);
+			} else {
+				iter = ast_channel_iterator_by_name_new(spec, strlen(spec));
+			}
 		} else if (!ast_strlen_zero(exten)) {
 			iter = ast_channel_iterator_by_exten_new(exten, context);
 		} else {
@@ -935,7 +959,7 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 				break;
 			}
 
-			if (ast_test_flag(flags, OPTION_BRIDGED) && !ast_bridged_channel(autochan->chan)) {
+			if (ast_test_flag(flags, OPTION_BRIDGED) && !ast_channel_is_bridged(autochan->chan)) {
 				continue;
 			}
 
@@ -1046,7 +1070,7 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 								break;
 							}
 						} else {
-							res = ast_say_character_str(chan, peer_name, "", ast_channel_language(chan));
+							res = ast_say_character_str(chan, peer_name, "", ast_channel_language(chan), AST_SAY_CASE_NONE);
 						}
 					}
 					if (ptr && (num = atoi(ptr))) {
@@ -1067,7 +1091,7 @@ static int common_exec(struct ast_channel *chan, struct ast_flags *flags,
 				ast_autochan_destroy(autochan);
 				iter = ast_channel_iterator_destroy(iter);
 				goto exit;
-			} else if (res > 1 && spec) {
+			} else if (res > 1 && spec && !ast_test_flag(flags, OPTION_UNIQUEID)) {
 				struct ast_channel *next;
 
 				snprintf(nameprefix, AST_NAME_STRLEN, "%s/%d", spec, res);

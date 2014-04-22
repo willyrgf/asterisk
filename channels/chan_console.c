@@ -76,6 +76,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/musiconhold.h"
 #include "asterisk/callerid.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/stasis_channels.h"
 
 /*! 
  * \brief The sample rate to request from PortAudio 
@@ -194,7 +195,7 @@ static struct ast_jb_conf global_jbconf;
 
 /*! Channel Technology Callbacks @{ */
 static struct ast_channel *console_request(const char *type, struct ast_format_cap *cap,
-	const struct ast_channel *requestor, const char *data, int *cause);
+	const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause);
 static int console_digit_begin(struct ast_channel *c, char digit);
 static int console_digit_end(struct ast_channel *c, char digit, unsigned int duration);
 static int console_text(struct ast_channel *c, const char *text);
@@ -418,14 +419,16 @@ static int stop_stream(struct console_pvt *pvt)
 /*!
  * \note Called with the pvt struct locked
  */
-static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext, const char *ctx, int state, const char *linkedid)
+static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext, const char *ctx, int state, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor)
 {
 	struct ast_channel *chan;
 
 	if (!(chan = ast_channel_alloc(1, state, pvt->cid_num, pvt->cid_name, NULL, 
-		ext, ctx, linkedid, 0, "Console/%s", pvt->name))) {
+		ext, ctx, assignedids, requestor, 0, "Console/%s", pvt->name))) {
 		return NULL;
 	}
+
+	ast_channel_stage_snapshot(chan);
 
 	ast_channel_tech_set(chan, &console_tech);
 	ast_format_set(ast_channel_readformat(chan), AST_FORMAT_SLINEAR16, 0);
@@ -440,6 +443,9 @@ static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext,
 
 	ast_jb_configure(chan, &global_jbconf);
 
+	ast_channel_stage_snapshot_done(chan);
+	ast_channel_unlock(chan);
+
 	if (state != AST_STATE_DOWN) {
 		if (ast_pbx_start(chan)) {
 			ast_channel_hangupcause_set(chan, AST_CAUSE_SWITCH_CONGESTION);
@@ -452,7 +458,7 @@ static struct ast_channel *console_new(struct console_pvt *pvt, const char *ext,
 	return chan;
 }
 
-static struct ast_channel *console_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *console_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_channel *chan = NULL;
 	struct console_pvt *pvt;
@@ -475,7 +481,7 @@ static struct ast_channel *console_request(const char *type, struct ast_format_c
 	}
 
 	console_pvt_lock(pvt);
-	chan = console_new(pvt, NULL, NULL, AST_STATE_DOWN, requestor ? ast_channel_linkedid(requestor) : NULL);
+	chan = console_new(pvt, NULL, NULL, AST_STATE_DOWN, assignedids, requestor);
 	console_pvt_unlock(pvt);
 
 	if (!chan)
@@ -838,7 +844,7 @@ static char *cli_console_dial(struct ast_cli_entry *e, int cmd, struct ast_cli_a
 	if (ast_exists_extension(NULL, myc, mye, 1, NULL)) {
 		console_pvt_lock(pvt);
 		pvt->hookstate = 1;
-		console_new(pvt, mye, myc, AST_STATE_RINGING, NULL);
+		console_new(pvt, mye, myc, AST_STATE_RINGING, NULL, NULL);
 		console_pvt_unlock(pvt);
 	} else
 		ast_cli(a->fd, "No such extension '%s' in context '%s'\n", mye, myc);
@@ -1492,7 +1498,7 @@ static int load_module(void)
 	struct ast_format tmpfmt;
 	PaError res;
 
-	if (!(console_tech.capabilities = ast_format_cap_alloc())) {
+	if (!(console_tech.capabilities = ast_format_cap_alloc(0))) {
 		return AST_MODULE_LOAD_DECLINE;
 	}
 	ast_format_cap_add(console_tech.capabilities, ast_format_set(&tmpfmt, AST_FORMAT_SLINEAR16, 0));

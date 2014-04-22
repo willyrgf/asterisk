@@ -20,7 +20,7 @@
  *
  * \author Kevin P. Fleming <kpfleming@digium.com>
  * \author Ben Winslow
- * 
+ *
  * \ingroup functions
  */
 
@@ -37,12 +37,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/module.h"
 #include "asterisk/channel.h"
+#include "asterisk/bridge.h"
 #include "asterisk/pbx.h"
 #include "asterisk/utils.h"
 #include "asterisk/app.h"
 #include "asterisk/indications.h"
 #include "asterisk/stringfields.h"
 #include "asterisk/global_datastores.h"
+#include "asterisk/bridge_basic.h"
+#include "asterisk/bridge_after.h"
 
 /*** DOCUMENTATION
 	<function name="CHANNELS" language="en_US">
@@ -100,6 +103,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					<enum name="audiowriteformat">
 						<para>R/O format currently being written.</para>
 					</enum>
+					<enum name="dtmf_features">
+						<para>R/W The channel's DTMF bridge features.
+						May include one or more of 'T' 'K' 'H' 'W' and 'X' in a similar manner to options
+						in the <literal>Dial</literal> application. When setting it, the features string
+						must be all upper case.</para>
+					</enum>
 					<enum name="callgroup">
 						<para>R/W numeric call pickup groups that this channel is a member.</para>
 					</enum>
@@ -117,6 +126,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 					</enum>
 					<enum name="checkhangup">
 						<para>R/O Whether the channel is hanging up (1/0)</para>
+					</enum>
+					<enum name="after_bridge_goto">
+						<para>R/W the parseable goto string indicating where the channel is
+						expected to return to in the PBX after exiting the next bridge it joins
+						on the condition that it doesn't hang up. The parseable goto string uses
+						the same syntax as the <literal>Goto</literal> application.</para>
 					</enum>
 					<enum name="hangup_handler_pop">
 						<para>W/O Replace the most recently added hangup handler
@@ -253,15 +268,35 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>     <literal>audio</literal>             Get audio destination</para>
 						<para>     <literal>video</literal>             Get video destination</para>
 						<para>     <literal>text</literal>              Get text destination</para>
+						<para>   Defaults to <literal>audio</literal> if unspecified.</para>
+					</enum>
+					<enum name="rtpsource">
+						<para>R/O Get source RTP destination information.</para>
+						<para>   This option takes one additional argument:</para>
+						<para>    Argument 1:</para>
+						<para>     <literal>audio</literal>             Get audio destination</para>
+						<para>     <literal>video</literal>             Get video destination</para>
+						<para>     <literal>text</literal>              Get text destination</para>
+						<para>   Defaults to <literal>audio</literal> if unspecified.</para>
 					</enum>
 				</enumlist>
+				<xi:include xpointer="xpointer(/docs/info[@name='PJSIPCHANNEL'])" />
 				<para><emphasis>chan_iax2</emphasis> provides the following additional options:</para>
 				<enumlist>
+					<enum name="osptoken">
+						<para>R/O Get the peer's osptoken.</para>
+					</enum>
 					<enum name="peerip">
 						<para>R/O Get the peer's ip address.</para>
 					</enum>
 					<enum name="peername">
 						<para>R/O Get the peer's username.</para>
+					</enum>
+					<enum name="secure_signaling">
+						<para>R/O Get the if the IAX channel is secured.</para>
+					</enum>
+					<enum name="secure_media">
+						<para>R/O Get the if the IAX channel is secured.</para>
 					</enum>
 				</enumlist>
 				<para><emphasis>chan_dahdi</emphasis> provides the following additional options:</para>
@@ -320,17 +355,35 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<para><emphasis>chan_ooh323</emphasis> provides the following additional options:</para>
 				<enumlist>
 					<enum name="faxdetect">
-						<para>Fax Detect [R/W]</para>
+						<para>R/W Fax Detect</para>
 						<para>Returns 0 or 1</para>
 						<para>Write yes or no</para>
 					</enum>
 					<enum name="t38support">
-						<para>t38support [R/W]</para>
+						<para>R/W t38support</para>
 						<para>Returns 0 or 1</para>
 						<para>Write yes or no</para>
 					</enum>
-					<enum name="h323id">
-						<para>Returns h323id [R]</para>
+					<enum name="h323id_url">
+						<para>R/0 Returns caller URL</para>
+ 					</enum>
+					<enum name="caller_h323id">
+						<para>R/0 Returns caller h323id</para>
+					</enum>
+					<enum name="caller_dialeddigits">
+						<para>R/0 Returns caller dialed digits</para>
+					</enum>
+					<enum name="caller_email">
+						<para>R/0 Returns caller email</para>
+					</enum>
+					<enum name="callee_email">
+						<para>R/0 Returns callee email</para>
+					</enum>
+					<enum name="callee_dialeddigits">
+						<para>R/0 Returns callee dialed digits</para>
+					</enum>
+					<enum name="caller_url">
+						<para>R/0 Returns caller URL</para>
 					</enum>
 				</enumlist>
 			</parameter>
@@ -342,13 +395,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</description>
 	</function>
  ***/
-
-/*
- * BUGBUG add CHANNEL(after_bridge_goto)=<parseable-goto> Sets an after bridge goto datastore property on the channel.
- * CHANNEL(after_bridge_goto)=<empty> Deletes any after bridge goto datastore property on the channel.
- *
- * BUGBUG add CHANNEL(dtmf_features)=tkhwx sets channel dtmf features to specified. (transfer, park, hangup, monitor, mixmonitor)
- */
 
 #define locked_copy_string(chan, dest, source, len) \
 	do { \
@@ -375,6 +421,11 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 	int ret = 0;
 	struct ast_format_cap *tmpcap;
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
 	if (!strcasecmp(data, "audionativeformat")) {
 		char tmp[512];
 
@@ -399,9 +450,13 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		ast_copy_string(buf, ast_channel_trace_is_enabled(chan) ? "1" : "0", len);
 		ast_channel_unlock(chan);
 #endif
-	} else if (!strcasecmp(data, "tonezone") && ast_channel_zone(chan))
+	} else if (!strcasecmp(data, "tonezone") && ast_channel_zone(chan)) {
 		locked_copy_string(chan, buf, ast_channel_zone(chan)->country, len);
-	else if (!strcasecmp(data, "language"))
+	} else if (!strcasecmp(data, "dtmf_features")) {
+		if (ast_bridge_features_ds_get_string(chan, buf, len)) {
+			buf[0] = '\0';
+		}
+	} else if (!strcasecmp(data, "language"))
 		locked_copy_string(chan, buf, ast_channel_language(chan), len);
 	else if (!strcasecmp(data, "musicclass"))
 		locked_copy_string(chan, buf, ast_channel_musicclass(chan), len);
@@ -446,11 +501,11 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		}
 		ast_channel_unlock(chan);
 	} else if (!strcasecmp(data, "peer")) {
-		struct ast_channel *p;
+		RAII_VAR(struct ast_channel *, p, NULL, ast_channel_cleanup);
 
 		ast_channel_lock(chan);
-		p = ast_bridged_channel(chan);
-		if (p || ast_channel_tech(chan) || ast_channel_cdr(chan)) /* dummy channel? if so, we hid the peer name in the language */
+		p = ast_channel_bridge_peer(chan);
+		if (p || ast_channel_tech(chan)) /* dummy channel? if so, we hid the peer name in the language */
 			ast_copy_string(buf, (p ? ast_channel_name(p) : ""), len);
 		else {
 			/* a dummy channel can still pass along bridged peer info via
@@ -482,6 +537,8 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 		struct ast_str *tmp_str = ast_str_alloca(1024);
 
 		locked_copy_string(chan, buf,  ast_print_namedgroups(&tmp_str, ast_channel_named_pickupgroups(chan)), len);
+	} else if (!strcasecmp(data, "after_bridge_goto")) {
+		ast_bridge_read_after_goto(chan, buf, len);
 	} else if (!strcasecmp(data, "amaflags")) {
 		ast_channel_lock(chan);
 		snprintf(buf, len, "%d", ast_channel_amaflags(chan));
@@ -523,9 +580,15 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		locked_string_field_set(chan, accountcode, value);
 	else if (!strcasecmp(data, "userfield"))
 		locked_string_field_set(chan, userfield, value);
-	else if (!strcasecmp(data, "amaflags")) {
+	else if (!strcasecmp(data, "after_bridge_goto")) {
+		if (ast_strlen_zero(value)) {
+			ast_bridge_discard_after_goto(chan);
+		} else {
+			ast_bridge_set_after_go_on(chan, ast_channel_context(chan), ast_channel_exten(chan), ast_channel_priority(chan), value);
+		}
+	} else if (!strcasecmp(data, "amaflags")) {
 		ast_channel_lock(chan);
-		if(isdigit(*value)) {
+		if (isdigit(*value)) {
 			int amaflags;
 			sscanf(value, "%30d", &amaflags);
 			ast_channel_amaflags_set(chan, amaflags);
@@ -545,7 +608,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 #ifdef CHANNEL_TRACE
 	else if (!strcasecmp(data, "trace")) {
 		ast_channel_lock(chan);
-		if (ast_true(value)) 
+		if (ast_true(value))
 			ret = ast_channel_trace_enable(chan);
 		else if (ast_false(value))
 			ret = ast_channel_trace_disable(chan);
@@ -560,7 +623,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		struct ast_tone_zone *new_zone;
 		if (!(new_zone = ast_get_indication_zone(value))) {
 			ast_log(LOG_ERROR, "Unknown country code '%s' for tonezone. Check indications.conf for available country codes.\n", value);
-			ret = -1;	
+			ret = -1;
 		} else {
 			ast_channel_lock(chan);
 			if (ast_channel_zone(chan)) {
@@ -570,6 +633,8 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 			ast_channel_unlock(chan);
 			new_zone = ast_tone_zone_unref(new_zone);
 		}
+	} else if (!strcasecmp(data, "dtmf_features")) {
+		ret = ast_bridge_features_ds_set_string(chan, value);
 	} else if (!strcasecmp(data, "callgroup")) {
 		ast_channel_lock(chan);
 		ast_channel_callgroup_set(chan, ast_get_group(value));
@@ -673,6 +738,11 @@ static int func_channel_write(struct ast_channel *chan, const char *function, ch
 		.value = value,
 	};
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
 	res = func_channel_write_real(chan, function, data, value);
 	ast_channel_setoption(chan, AST_OPTION_CHANNEL_WRITE, &write_info, sizeof(write_info), 0);
 
@@ -746,8 +816,15 @@ static struct ast_custom_function channels_function = {
 static int func_mchan_read(struct ast_channel *chan, const char *function,
 			     char *data, struct ast_str **buf, ssize_t len)
 {
-	struct ast_channel *mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
+	struct ast_channel *mchan;
 	char *template = ast_alloca(4 + strlen(data));
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
+	mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
 	sprintf(template, "${%s}", data); /* SAFE */
 	ast_str_substitute_variables(buf, len, mchan ? mchan : chan, template);
 	if (mchan) {
@@ -759,7 +836,14 @@ static int func_mchan_read(struct ast_channel *chan, const char *function,
 static int func_mchan_write(struct ast_channel *chan, const char *function,
 			      char *data, const char *value)
 {
-	struct ast_channel *mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
+	struct ast_channel *mchan;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
+	mchan = ast_channel_get_by_name(ast_channel_linkedid(chan));
 	pbx_builtin_setvar_helper(mchan ? mchan : chan, data, value);
 	if (mchan) {
 		ast_channel_unref(mchan);

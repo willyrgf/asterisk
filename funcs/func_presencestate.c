@@ -41,7 +41,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/app.h"
 #ifdef TEST_FRAMEWORK
 #include "asterisk/test.h"
-#include "asterisk/event.h"
 #include <semaphore.h>
 #endif
 
@@ -90,7 +89,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Set(BASE64_LAMP3_PRESENCE=${PRESENCE_STATE(CustomPresence:lamp3,subtype,e)})</para>
 			<para>You can subscribe to the status of a custom presence state using a hint in
 			the dialplan:</para>
-			<para>exten => 1234,hint,CustomPresence:lamp1</para>
+			<para>exten => 1234,hint,,CustomPresence:lamp1</para>
 			<para>The possible values for both uses of this function are:</para>
 			<para>not_set | unavailable | available | away | xa | chat | dnd</para>
 		</description>
@@ -650,7 +649,7 @@ struct test_cb_data {
 	sem_t sem;
 };
 
-static void test_cb(void *userdata, struct stasis_subscription *sub, struct stasis_topic *topic, struct stasis_message *msg)
+static void test_cb(void *userdata, struct stasis_subscription *sub, struct stasis_message *msg)
 {
 	struct test_cb_data *cb_data = userdata;
 	if (stasis_message_type(msg) != ast_presence_state_message_type()) {

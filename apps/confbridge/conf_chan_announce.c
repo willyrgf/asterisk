@@ -32,7 +32,7 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/channel.h"
-#include "asterisk/bridging.h"
+#include "asterisk/bridge.h"
 #include "asterisk/core_unreal.h"
 #include "include/confbridge.h"
 
@@ -75,9 +75,10 @@ static void announce_pvt_destructor(void *vdoomed)
 
 	ao2_cleanup(doomed->bridge);
 	doomed->bridge = NULL;
+	ast_unreal_destructor(&doomed->base);
 }
 
-static struct ast_channel *announce_request(const char *type, struct ast_format_cap *cap, const struct ast_channel *requestor, const char *data, int *cause)
+static struct ast_channel *announce_request(const char *type, struct ast_format_cap *cap, const struct ast_assigned_ids *assignedids, const struct ast_channel *requestor, const char *data, int *cause)
 {
 	struct ast_channel *chan;
 	const char *conf_name = data;
@@ -102,7 +103,7 @@ static struct ast_channel *announce_request(const char *type, struct ast_format_
 	ao2_ref(pvt->bridge, +1);
 
 	chan = ast_unreal_new_channels(&pvt->base, conf_announce_get_tech(),
-		AST_STATE_UP, AST_STATE_UP, NULL, NULL, requestor, NULL);
+		AST_STATE_UP, AST_STATE_UP, NULL, NULL, assignedids, requestor, NULL);
 	if (chan) {
 		ast_answer(pvt->base.owner);
 		ast_answer(pvt->base.chan);
@@ -134,6 +135,7 @@ static struct ast_channel_tech announce_tech = {
 	.send_text = ast_unreal_sendtext,
 	.queryoption = ast_unreal_queryoption,
 	.setoption = ast_unreal_setoption,
+	.properties = AST_CHAN_TP_INTERNAL,
 };
 
 struct ast_channel_tech *conf_announce_get_tech(void)
@@ -158,9 +160,6 @@ void conf_announce_channel_depart(struct ast_channel *chan)
 	}
 	ast_clear_flag(&p->base, AST_UNREAL_CARETAKER_THREAD);
 	chan = p->base.chan;
-	if (chan) {
-		ast_channel_ref(chan);
-	}
 	ao2_unlock(p);
 	ao2_ref(p, -1);
 	if (chan) {
@@ -172,8 +171,8 @@ void conf_announce_channel_depart(struct ast_channel *chan)
 int conf_announce_channel_push(struct ast_channel *ast)
 {
 	struct ast_bridge_features *features;
+	struct ast_channel *chan;
 	RAII_VAR(struct announce_pvt *, p, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_channel *, chan, NULL, ast_channel_unref);
 
 	{
 		SCOPED_CHANNELLOCK(lock, ast);
@@ -192,12 +191,16 @@ int conf_announce_channel_push(struct ast_channel *ast)
 
 	features = ast_bridge_features_new();
 	if (!features) {
+		ast_channel_unref(chan);
 		return -1;
 	}
 	ast_set_flag(&features->feature_flags, AST_BRIDGE_CHANNEL_FLAG_IMMOVABLE);
 
 	/* Impart the output channel into the bridge */
-	if (ast_bridge_impart(p->bridge, chan, NULL, features, 0)) {
+	if (ast_bridge_impart(p->bridge, chan, NULL, features,
+		AST_BRIDGE_IMPART_CHAN_DEPARTABLE)) {
+		ast_bridge_features_destroy(features);
+		ast_channel_unref(chan);
 		return -1;
 	}
 	ao2_lock(p);
