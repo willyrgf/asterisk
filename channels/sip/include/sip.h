@@ -156,7 +156,7 @@
  *  \todo This string should be set dynamically. We only support REFER and SUBSCRIBE if we have
  *  allowsubscribe and allowrefer on in sip.conf.
  */
-#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH"
+#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, MESSAGE"
 
 /*! \brief Standard SIP unsecure port for UDP and TCP from RFC 3261. DO NOT CHANGE THIS */
 #define STANDARD_SIP_PORT	5060
@@ -348,13 +348,18 @@
 #define SIP_PAGE2_HAVEPEERCONTEXT           (1 << 28)   /*< Are we associated with a configured peer context? */
 #define SIP_PAGE2_USE_SRTP                  (1 << 29)   /*!< DP: Whether we should offer (only)  SRTP */
 
+#define SIP_PAGE2_TRUST_ID_OUTBOUND         (3 << 30)   /*!< DP: Do we trust the peer with private presence information? */
+#define SIP_PAGE2_TRUST_ID_OUTBOUND_LEGACY  (0 << 30)   /*!< Legacy, Do not provide private presence information, but include PAI/RPID when private */
+#define SIP_PAGE2_TRUST_ID_OUTBOUND_NO      (1 << 30)   /*!< No, Do not provide private presence information, do not include PAI/RPID when private */
+#define SIP_PAGE2_TRUST_ID_OUTBOUND_YES     (2 << 30)   /*!< Yes, provide private presence information in PAI/RPID headers */
+
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
 	SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | \
 	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
 	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS | SIP_PAGE2_PREFERRED_CODEC | \
 	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP |\
-	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP)
+	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP | SIP_PAGE2_TRUST_ID_OUTBOUND)
 
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */

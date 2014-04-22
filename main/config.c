@@ -122,8 +122,10 @@ static void  CB_ADD(struct ast_str **cb, const char *str)
 static void  CB_ADD_LEN(struct ast_str **cb, const char *str, int len)
 {
 	char *s = ast_alloca(len + 1);
-	ast_copy_string(s, str, len);
-	ast_str_append(cb, 0, "%s", str);
+
+	memcpy(s, str, len);
+	s[len] = '\0';
+	ast_str_append(cb, 0, "%s", s);
 }
 
 static void CB_RESET(struct ast_str *cb, struct ast_str *llb)  
@@ -1092,10 +1094,14 @@ static void cfmstat_clear(struct cache_file_mtime *cfmtime)
 static void cfmstat_save(struct cache_file_mtime *cfmtime, struct stat *statbuf)
 {
 	cfmtime->stat_size = statbuf->st_size;
-#if defined(_BSD_SOURCE) || defined(_SVID_SOURCE) || (defined(_POSIX_C_SOURCE) && 200809L <= _POSIX_C_SOURCE) || (defined(_XOPEN_SOURCE) && 700 <= _XOPEN_SOURCE)
+#if defined(HAVE_STRUCT_STAT_ST_MTIM)
 	cfmtime->stat_mtime_nsec = statbuf->st_mtim.tv_nsec;
-#else
+#elif defined(HAVE_STRUCT_STAT_ST_MTIMENSEC)
 	cfmtime->stat_mtime_nsec = statbuf->st_mtimensec;
+#elif defined(HAVE_STRUCT_STAT_ST_MTIMESPEC)
+	cfmtime->stat_mtime_nsec = statbuf->st_mtimespec.tv_nsec;
+#else
+	cfmtime->stat_mtime_nsec = 0;
 #endif
 	cfmtime->stat_mtime = statbuf->st_mtime;
 }
@@ -1142,7 +1148,7 @@ static void config_cache_attribute(const char *configfile, enum config_cache_att
 		AST_LIST_INSERT_SORTALPHA(&cfmtime_head, cfmtime, list, filename);
 	}
 
-	if (!stat(configfile, &statbuf)) {
+	if (stat(configfile, &statbuf)) {
 		cfmstat_clear(cfmtime);
 	} else {
 		cfmstat_save(cfmtime, &statbuf);
@@ -1644,7 +1650,7 @@ static struct ast_config *config_text_file_load(const char *database, const char
 					} else if ((comment_p >= new_buf + 2) &&
 						   (*(comment_p - 1) == COMMENT_TAG) &&
 						   (*(comment_p - 2) == COMMENT_TAG)) {
-						/* Meta-Comment end detected */
+						/* Meta-Comment end detected "--;" */
 						comment--;
 						new_buf = comment_p + 1;
 						if (!comment) {

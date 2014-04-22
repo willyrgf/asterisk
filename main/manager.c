@@ -1353,6 +1353,15 @@ static void session_destructor(void *obj)
 	}
 
 	if (session->f != NULL) {
+		/*
+		 * Issuing shutdown() is necessary here to avoid a race
+		 * condition where the last data written may not appear
+		 * in the the TCP stream.  See ASTERISK-23548
+		*/
+		fflush(session->f);
+		if (session->fd != -1) {
+			shutdown(session->fd, SHUT_RDWR);
+		}
 		fclose(session->f);
 	}
 	if (eqe) {
@@ -5080,7 +5089,7 @@ static void *session_do(void *data)
 
 	/* here we set TCP_NODELAY on the socket to disable Nagle's algorithm.
 	 * This is necessary to prevent delays (caused by buffering) as we
-	 * write to the socket in bits and peices. */
+	 * write to the socket in bits and pieces. */
 	p = getprotobyname("tcp");
 	if (p) {
 		int arg = 1;
@@ -5913,12 +5922,21 @@ static void process_output(struct mansession *s, struct ast_str **out, struct as
 	}
 
 	if (s->f) {
+		/*
+		 * Issuing shutdown() is necessary here to avoid a race
+		 * condition where the last data written may not appear
+		 * in the the TCP stream.  See ASTERISK-23548
+		*/
+		if (s->fd != -1) {
+			shutdown(s->fd, SHUT_RDWR);
+		}
 		if (fclose(s->f)) {
 			ast_log(LOG_ERROR, "fclose() failed: %s\n", strerror(errno));
 		}
 		s->f = NULL;
 		s->fd = -1;
 	} else if (s->fd != -1) {
+		shutdown(s->fd, SHUT_RDWR);
 		if (close(s->fd)) {
 			ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
 		}

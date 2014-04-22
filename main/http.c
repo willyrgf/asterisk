@@ -187,9 +187,7 @@ uint32_t ast_http_manid_from_vars(struct ast_variable *headers)
 			break;
 		}
 	}
-	if (cookies) {
-		ast_variables_destroy(cookies);
-	}
+	ast_variables_destroy(cookies);
 	return mngid;
 }
 
@@ -436,7 +434,9 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 	/* send content */
 	if (method != AST_HTTP_HEAD || status_code >= 400) {
 		if (out) {
-			fprintf(ser->f, "%s", ast_str_buffer(out));
+			if (fwrite(ast_str_buffer(out), content_length, 1, ser->f) != 1) {
+				ast_log(LOG_ERROR, "fwrite() failed: %s\n", strerror(errno));
+			}
 		}
 
 		if (fd) {
@@ -458,8 +458,7 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 		ast_free(out);
 	}
 
-	fclose(ser->f);
-	ser->f = 0;
+	ast_tcptls_close_session_file(ser);
 	return;
 }
 
@@ -824,12 +823,13 @@ static int ssl_close(void *cookie)
 }*/
 #endif	/* DO_SSL */
 
-static struct ast_variable *parse_cookies(char *cookies)
+static struct ast_variable *parse_cookies(const char *cookies)
 {
+	char *parse = ast_strdupa(cookies);
 	char *cur;
 	struct ast_variable *vars = NULL, *var;
 
-	while ((cur = strsep(&cookies, ";"))) {
+	while ((cur = strsep(&parse, ";"))) {
 		char *name, *val;
 
 		name = val = cur;
@@ -859,21 +859,19 @@ static struct ast_variable *parse_cookies(char *cookies)
 /* get cookie from Request headers */
 struct ast_variable *ast_http_get_cookies(struct ast_variable *headers)
 {
-	struct ast_variable *v, *cookies=NULL;
+	struct ast_variable *v, *cookies = NULL;
 
 	for (v = headers; v; v = v->next) {
 		if (!strcasecmp(v->name, "Cookie")) {
-			char *tmp = ast_strdupa(v->value);
-			if (cookies) {
-				ast_variables_destroy(cookies);
-			}
-
-			cookies = parse_cookies(tmp);
+			ast_variables_destroy(cookies);
+			cookies = parse_cookies(v->value);
 		}
 	}
 	return cookies;
 }
 
+/*! Limit the number of request headers in case the sender is being ridiculous. */
+#define MAX_HTTP_REQUEST_HEADERS	100
 
 static void *httpd_helper_thread(void *data)
 {
@@ -884,9 +882,26 @@ static void *httpd_helper_thread(void *data)
 	struct ast_variable *tail = headers;
 	char *uri, *method;
 	enum ast_http_method http_method = AST_HTTP_UNKNOWN;
+	int remaining_headers;
+	struct protoent *p;
 
 	if (ast_atomic_fetchadd_int(&session_count, +1) >= session_limit) {
 		goto done;
+	}
+
+	/* here we set TCP_NODELAY on the socket to disable Nagle's algorithm.
+	 * This is necessary to prevent delays (caused by buffering) as we
+	 * write to the socket in bits and pieces. */
+	p = getprotobyname("tcp");
+	if (p) {
+		int arg = 1;
+		if( setsockopt(ser->fd, p->p_proto, TCP_NODELAY, (char *)&arg, sizeof(arg) ) < 0 ) {
+			ast_log(LOG_WARNING, "Failed to set TCP_NODELAY on HTTP connection: %s\n", strerror(errno));
+			ast_log(LOG_WARNING, "Some HTTP requests may be slow to respond.\n");
+		}
+	} else {
+		ast_log(LOG_WARNING, "Failed to set TCP_NODELAY on HTTP connection, getprotobyname(\"tcp\") failed\n");
+		ast_log(LOG_WARNING, "Some HTTP requests may be slow to respond.\n");
 	}
 
 	if (!fgets(buf, sizeof(buf), ser->f)) {
@@ -918,9 +933,13 @@ static void *httpd_helper_thread(void *data)
 		if (*c) {
 			*c = '\0';
 		}
+	} else {
+		ast_http_error(ser, 400, "Bad Request", "Invalid Request");
+		goto done;
 	}
 
 	/* process "Request Headers" lines */
+	remaining_headers = MAX_HTTP_REQUEST_HEADERS;
 	while (fgets(header_line, sizeof(header_line), ser->f)) {
 		char *name, *value;
 
@@ -943,6 +962,11 @@ static void *httpd_helper_thread(void *data)
 
 		ast_trim_blanks(name);
 
+		if (!remaining_headers--) {
+			/* Too many headers. */
+			ast_http_error(ser, 413, "Request Entity Too Large", "Too many headers");
+			goto done;
+		}
 		if (!headers) {
 			headers = ast_variable_new(name, value, __FILE__);
 			tail = headers;
@@ -950,11 +974,17 @@ static void *httpd_helper_thread(void *data)
 			tail->next = ast_variable_new(name, value, __FILE__);
 			tail = tail->next;
 		}
-	}
+		if (!tail) {
+			/*
+			 * Variable allocation failure.
+			 * Try to make some room.
+			 */
+			ast_variables_destroy(headers);
+			headers = NULL;
 
-	if (!*uri) {
-		ast_http_error(ser, 400, "Bad Request", "Invalid Request");
-		goto done;
+			ast_http_error(ser, 500, "Server Error", "Out of memory");
+			goto done;
+		}
 	}
 
 	handle_uri(ser, uri, http_method, headers);
@@ -963,9 +993,7 @@ done:
 	ast_atomic_fetchadd_int(&session_count, -1);
 
 	/* clean up all the header information */
-	if (headers) {
-		ast_variables_destroy(headers);
-	}
+	ast_variables_destroy(headers);
 
 	if (ser->f) {
 		fclose(ser->f);
