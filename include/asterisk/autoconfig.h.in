@@ -606,6 +606,10 @@
 /* Define to 1 if PRI has the ISDN service messages feature. */
 #undef HAVE_PRI_SERVICE_MESSAGES
 
+/* Define to 1 if PRI has the ISDN PRI progress inband ie in SETUP ACK
+   feature. */
+#undef HAVE_PRI_SETUP_ACK_INBAND
+
 /* Define to 1 if PRI has the ISDN PRI keypad facility in SETUP feature. */
 #undef HAVE_PRI_SETUP_KEYPAD
 
@@ -843,16 +847,16 @@
 /* Define to 1 if `st_blksize' is member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_BLKSIZE
 
-/* Define to 1 if `st_mtim' is a member of `struct stat'. */
+/* Define to 1 if `st_mtim' is member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_MTIM
 
-/* Define to 1 if `st_mtimensec' is a member of `struct stat'. */
+/* Define to 1 if `st_mtimensec' is member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_MTIMENSEC
 
-/* Define to 1 if `st_mtimespec' is a member of `struct stat'. */
+/* Define to 1 if `st_mtimespec' is member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_MTIMESPEC
 
-/* Define to 1 if `cr_uid' is a member of `struct ucred'. */
+/* Define to 1 if `cr_uid' is member of `struct ucred'. */
 #undef HAVE_STRUCT_UCRED_CR_UID
 
 /* Define to 1 if `uid' is member of `struct ucred'. */
