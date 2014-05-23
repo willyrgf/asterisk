@@ -75,7 +75,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #define RTCP_PT_APP     204
 
 #define RTP_MTU		1200
-#define DTMF_SAMPLE_RATE_MS    8 /*!< DTMF samples per millisecond */
+#define DTMF_SAMPLE_RATE_MS    8 /*!< DTMF samples per millisecond  - this assumes 8000 hz, bad */
 
 #define DEFAULT_DTMF_TIMEOUT (150 * (8000 / 1000))	/*!< samples */
 
@@ -167,8 +167,8 @@ struct ast_rtp {
 	/* DTMF Transmission Variables */
 	unsigned int lastdigitts;
 	enum dtmf_send_states sending_dtmf;     /*!< - are we sending dtmf */
-	char send_digit;	/*!< digit we are sending */
-	char send_dtmf_frame;	/*!< Number of samples in a frame with the current packetization */
+	char send_digit;		/*!< digit we are sending in Ascii */
+	char send_dtmf_frame;		/*!< Number of samples in a frame with the current packetization */
 	AST_LIST_HEAD_NOLOCK(, ast_frame) dtmfqueue;	/*!< \ref DTMFQUEUE : Queue for DTMF that we receive while occupied with transmitting an outbound DTMF */
 	struct timeval dtmfmute;
 
@@ -699,6 +699,27 @@ static int ast_rtp_dtmf_mode_set(struct ast_rtp_instance *instance, enum ast_rtp
 	return 0;
 }
 
+static int dtmf_char_to_code(char digit)
+{
+	/* Convert the given digit to the one we are going to send */
+	if (digit == '*') {
+		return 10;
+	} 
+	if (digit == '#') {
+		return 11;
+	}
+	if ((digit >= 'A') && (digit <= 'D')) {
+		return digit - 'A' + 12;
+	} 
+	if ((digit >= 'a') && (digit <= 'd')) {
+		return digit - 'a' + 12;
+	}
+	if ((digit <= '9') && (digit >= '0')) {
+		return digit - '0';
+	}
+	return -1;
+}
+
 static enum ast_rtp_dtmf_mode ast_rtp_dtmf_mode_get(struct ast_rtp_instance *instance)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
@@ -712,6 +733,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 	int hdrlen = 12, res = 0, i = 0, payload = 101;
 	char data[256];
 	unsigned int *rtpheader = (unsigned int*)data;
+	int dtmfcode;
 
 	ast_rtp_instance_get_remote_address(instance, &remote_address);
 
@@ -731,18 +753,8 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 /* OEJ Fix ??? */
 	}
 
-	/* Convert given digit into what we want to transmit */
-	if ((digit <= '9') && (digit >= '0')) {
-		digit -= '0';
-	} else if (digit == '*') {
-		digit = 10;
-	} else if (digit == '#') {
-		digit = 11;
-	} else if ((digit >= 'A') && (digit <= 'D')) {
-		digit = digit - 'A' + 12;
-	} else if ((digit >= 'a') && (digit <= 'd')) {
-		digit = digit - 'a' + 12;
-	} else {
+	dtmfcode = dtmf_char_to_code(digit);
+	if (dtmfcode < 0 ) {
 		ast_log(LOG_WARNING, "Don't know how to represent '%c'\n", digit);
 		return -1;
 	}
@@ -763,7 +775,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 
 	/* Actually send the packet */
 	for (i = 0; i < 2; i++) {
-		rtpheader[3] = htonl((digit << 24) | (0xa << 16) | (rtp->send_duration));
+		rtpheader[3] = htonl((dtmfcode << 24) | (0xa << 16) | (rtp->send_duration));
 		res = rtp_sendto(instance, (void *) rtpheader, hdrlen + 4, 0, &remote_address);
 		if (res < 0) {
 			ast_log(LOG_ERROR, "RTP Transmission error to %s: %s\n",
@@ -786,7 +798,7 @@ static int ast_rtp_dtmf_begin(struct ast_rtp_instance *instance, char digit)
 	rtp->send_digit = digit;
 	rtp->send_payload = payload;
 
-	ast_debug(4, "DEBUG DTMF BEGIN - Digit %d send-digit %d\n", digit, rtp->send_digit);
+	ast_debug(4, "DEBUG DTMF BEGIN - Digit %d send-digit %d\n", dtmfcode, dtmfcode);
 
 	return 0;
 }
@@ -796,7 +808,7 @@ static int ast_rtp_dtmf_continue(struct ast_rtp_instance *instance, char digit, 
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 
-	ast_debug(4, "DTMF CONTINUE - Duration %d Digit %d Send-digit %d\n", duration, digit, rtp->send_digit);
+	ast_debug(4, "DTMF CONTINUE - Duration %d Digit %d Send-digit %d\n", duration, digit, dtmf_char_to_code(rtp->send_digit));
 
 	/* If we missed the BEGIN, we will have to turn on the flag */
 	if (!rtp->sending_dtmf) {
@@ -866,17 +878,17 @@ static int ast_rtp_dtmf_cont(struct ast_rtp_instance *instance)
 		rtp->send_duration += 160;
 	} 
 	if (rtp->send_endflag) {
-		ast_debug(4, "---- Send duration %d Received duration %d - sending END packet\n", rtp->send_duration, rtp->received_duration);
+		ast_debug(4, "---- Send duration %d (samples) Received duration %d (samples) - sending END packet\n", rtp->send_duration, rtp->received_duration);
 		/* We are done, ready to send end flag */
 		rtp->send_endflag = 0;
-		return ast_rtp_dtmf_end_with_duration(instance, 0, rtp->received_duration);
+		return ast_rtp_dtmf_end_with_duration(instance, rtp->send_digit, rtp->received_duration);
 	}
 	ast_debug(4, "---- Send duration %d Received duration %d Endflag %d Send-digit %d\n", rtp->send_duration, rtp->received_duration, rtp->send_endflag, rtp->send_digit);
 	/* Actually create the packet we will be sending */
 	rtpheader[0] = htonl((2 << 30) | (rtp->send_payload << 16) | (rtp->seqno));
 	rtpheader[1] = htonl(rtp->lastdigitts);
 	rtpheader[2] = htonl(rtp->ssrc);
-	rtpheader[3] = htonl((rtp->send_digit << 24) | (0xa << 16) | (rtp->send_duration));
+	rtpheader[3] = htonl((dtmf_char_to_code(rtp->send_digit) << 24) | (0xa << 16) | (rtp->send_duration));
 
 	/* Boom, send it on out */
 	res = rtp_sendto(instance, (void *) rtpheader, hdrlen + 4, 0, &remote_address);
@@ -910,6 +922,7 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 	unsigned int *rtpheader = (unsigned int*)data;
 	unsigned int measured_samples;
 	unsigned int dursamples;
+	int dtmfcode;
 
 	ast_rtp_instance_get_remote_address(instance, &remote_address);
 
@@ -917,46 +930,38 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 	if (ast_sockaddr_isnull(&remote_address)) {
 		goto cleanup;
 	}
-	dursamples =  duration * (8000 / 1000);     /* How do we get the sample rate for the primary media in this call? */
+	dursamples = duration * rtp_get_rate(rtp->f.subclass.codec) / 1000;
 
-	ast_debug(1, "---- Send duration %d Received duration %d Duration %d Endflag %d Digit %d      Send-digit %d\n", rtp->send_duration, rtp->received_duration, duration, rtp->send_endflag, digit, rtp     ->send_digit);
+	ast_debug(1, "---- Send duration %d samples, Received duration %d samples, Duration %d ms, Endflag %d Digit %d      Send-digit %d\n", rtp->send_duration, rtp->received_duration, duration, rtp->send_endflag, digit, dtmf_char_to_code(rtp->send_digit));
+
+	if (duration > 0 && dursamples > rtp->send_duration) {
+		ast_debug(2, "Adjusting final end duration from %d samples to %u samples\n", rtp->send_duration, measured_samples);
+		rtp->received_duration = dursamples;
+	}
 
 	if (!rtp->send_endflag && rtp->send_duration + 160 < rtp->received_duration) {
 		/* We still have to send DTMF continuation, because otherwise we will end prematurely. Set end flag to indicate
 		   that we will have to end ourselves when we're done with the actual duration
 		 */
-		ast_debug(4, "---- Send duration %d Received duration %d - Avoiding sending END packet\n", rtp->send_duration, rtp->received_duration);
+		ast_debug(4, "---- Send duration %d samples, Received duration %d samples - Avoiding sending END packet\n", rtp->send_duration, rtp->received_duration);
 		rtp->send_endflag = 1;
 		return ast_rtp_dtmf_cont(instance);
 	}
 
-	/* Convert the given digit to the one we are going to send */
-	if ((digit <= '9') && (digit >= '0')) {
-		digit -= '0';
-	} else if (digit == '*') {
-		digit = 10;
-	} else if (digit == '#') {
-		digit = 11;
-	} else if ((digit >= 'A') && (digit <= 'D')) {
-		digit = digit - 'A' + 12;
-	} else if ((digit >= 'a') && (digit <= 'd')) {
-		digit = digit - 'a' + 12;
-	} else {
+	dtmfcode = dtmf_char_to_code(digit);
+	if (dtmfcode < 0 ) {
 		ast_log(LOG_WARNING, "Don't know how to represent '%c'\n", digit);
 		goto cleanup;
 	}
 
 	rtp->dtmfmute = ast_tvadd(ast_tvnow(), ast_tv(0, 500000));
 
-	if (duration > 0 && (measured_samples = duration * rtp_get_rate(rtp->f.subclass.codec) / 1000) > rtp->send_duration) {
-		ast_debug(2, "Adjusting final end duration from %d to %u\n", rtp->send_duration, measured_samples);
-		rtp->send_duration = measured_samples;
-	}
 
 	/* Construct the packet we are going to send */
 	rtpheader[1] = htonl(rtp->lastdigitts);
 	rtpheader[2] = htonl(rtp->ssrc);
-	rtpheader[3] = htonl((digit << 24) | (0xa << 16) | (rtp->send_duration));
+	/* Since this is the final packet, we will use the received duration when sending */
+	rtpheader[3] = htonl((dtmfcode << 24) | (0xa << 16) | (rtp->received_duration));
 	rtpheader[3] |= htonl((1 << 23));
 
 	/* Send it 3 times, that's the magical number */
@@ -971,9 +976,10 @@ static int ast_rtp_dtmf_end_with_duration(struct ast_rtp_instance *instance, cha
 				strerror(errno));
 		}
 		if (rtp_debug_test_addr(&remote_address)) {
-			ast_verbose("Sent RTP DTMF packet to %s (type %-2.2d, seq %-6.6d, ts %-6.6u, len %-6.6d)\n",
+			ast_verbose("Sent RTP DTMF packet to %s (type %-2.2d, seq %-6.6d, ts %-6.6u, len %-6.6d) %s\n",
 				    ast_sockaddr_stringify(&remote_address),
-				    rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
+				    rtp->send_payload, rtp->seqno, rtp->lastdigitts, res - hdrlen),
+				    i > 0 ? " retransmission" : "";
 		}
 
 		rtp->seqno++;
@@ -1691,7 +1697,7 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 	samples &= 0xFFFF;
 
 	if (rtp_debug_test_addr(&remote_address)) {
-		ast_verbose("Got  RTP RFC2833 from   %s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6d, mark %d, event %08x, end %d, duration %-5.5u) \n",
+		ast_verbose("Got  RTP RFC2833 from   %s (type %-2.2d, seq %-6.6u, ts %-6.6u, len %-6.6d, mark %d, event %08x, end %d, duration (samples)  %-5.5u) \n",
 			    ast_sockaddr_stringify(&remote_address),
 			    payloadtype, seqno, timestamp, len, (mark?1:0), event, ((event_end & 0x80)?1:0), samples);
 	}
@@ -1747,8 +1753,17 @@ static void process_dtmf_rfc2833(struct ast_rtp_instance *instance, unsigned cha
 				rtp->resp = resp;
 				f = ast_frdup(create_dtmf_frame(instance, AST_FRAME_DTMF_END, 0));
 				f->len = ast_tvdiff_ms(ast_samp2tv(rtp->dtmf_duration, rtp_get_rate(f->subclass.codec)), ast_tv(0, 0));
+
+				/* Avoid the DTMF emulation in the core, that is harmful to RTP 
+				   This way the RTP layer will sort itself out.
+				 */
+				if (f->len < option_dtmfminduration) {
+					f->len = option_dtmfminduration;
+					ast_debug(4, "--GOT DTMF END message. Duration samples %d (%ld ms - adjusted to min DTMF)\n", rtp->dtmf_duration, f->len);
+				} else {
+					ast_debug(4, "--GOT DTMF END message. Duration samples %d (%ld ms)\n", rtp->dtmf_duration, f->len);
+				}
 				rtp->resp = 0;
-				ast_debug(4, "--GOT DTMF END message. Duration samples %d (%ld ms)\n", rtp->dtmf_duration, f->len);
 				rtp->dtmf_duration = rtp->dtmf_timeout = 0;
 				AST_LIST_INSERT_TAIL(frames, f, frame_list);
 			} else if (rtpdebug) {
