@@ -30,6 +30,7 @@ OBJS+=stdtime/localtime.o
 AST_LIBS += $(OPENSSL_LIB)
 AST_LIBS += $(BKTR_LIB)
 AST_LIBS += $(LIBXML2_LIB) 
+AST_LIBS += $(UUID_LIB)
 
 ifneq ($(findstring $(OSARCH), linux-gnu uclinux linux-uclibc),)
   ifneq ($(findstring LOADABLE_MODULES,$(MENUSELECT_CFLAGS)),)
