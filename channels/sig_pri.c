@@ -649,12 +649,7 @@ static int ast_to_pri_char_set(enum AST_PARTY_CHAR_SET ast_char_set)
  */
 static void sig_pri_set_subaddress(struct ast_party_subaddress *ast_subaddress, const struct pri_party_subaddress *pri_subaddress)
 {
-	char *cnum, *ptr;
-	int x, len;
-
-	if (ast_subaddress->str) {
-		ast_free(ast_subaddress->str);
-	}
+	ast_free(ast_subaddress->str);
 	if (pri_subaddress->length <= 0) {
 		ast_party_subaddress_init(ast_subaddress);
 		return;
@@ -664,8 +659,14 @@ static void sig_pri_set_subaddress(struct ast_party_subaddress *ast_subaddress, 
 		/* NSAP */
 		ast_subaddress->str = ast_strdup((char *) pri_subaddress->data);
 	} else {
+		char *cnum;
+		char *ptr;
+		int x;
+		int len;
+
 		/* User Specified */
-		if (!(cnum = ast_malloc(2 * pri_subaddress->length + 1))) {
+		cnum = ast_malloc(2 * pri_subaddress->length + 1);
+		if (!cnum) {
 			ast_party_subaddress_init(ast_subaddress);
 			return;
 		}
@@ -673,15 +674,15 @@ static void sig_pri_set_subaddress(struct ast_party_subaddress *ast_subaddress, 
 		ptr = cnum;
 		len = pri_subaddress->length - 1; /* -1 account for zero based indexing */
 		for (x = 0; x < len; ++x) {
-			ptr += sprintf(ptr, "%02x", pri_subaddress->data[x]);
+			ptr += sprintf(ptr, "%02x", (unsigned)pri_subaddress->data[x]);
 		}
 
 		if (pri_subaddress->odd_even_indicator) {
 			/* ODD */
-			sprintf(ptr, "%01x", (pri_subaddress->data[len]) >> 4);
+			sprintf(ptr, "%01x", (unsigned)((pri_subaddress->data[len]) >> 4));
 		} else {
 			/* EVEN */
-			sprintf(ptr, "%02x", pri_subaddress->data[len]);
+			sprintf(ptr, "%02x", (unsigned)pri_subaddress->data[len]);
 		}
 		ast_subaddress->str = cnum;
 	}
@@ -1956,10 +1957,10 @@ static void *pri_ss_thread(void *data)
 		/* Start the real PBX */
 		ast_copy_string(chan->exten, exten, sizeof(chan->exten));
 		sig_pri_dsp_reset_and_flush_digits(p);
-#if defined(ISSUE_16789)
+#if defined(JIRA_ASTERISK_15594)
 		/*
-		 * Conditionaled out this code to effectively revert the Mantis
-		 * issue 16789 change.  It breaks overlap dialing through
+		 * Conditionaled out this code to effectively revert the JIRA
+		 * ASTERISK-15594 change.  It breaks overlap dialing through
 		 * Asterisk.  There is not enough information available at this
 		 * point to know if dialing is complete.  The
 		 * ast_exists_extension(), ast_matchmore_extension(), and
@@ -1982,7 +1983,7 @@ static void *pri_ss_thread(void *data)
 			}
 			sig_pri_unlock_private(p);
 		}
-#endif	/* defined(ISSUE_16789) */
+#endif	/* defined(JIRA_ASTERISK_15594) */
 
 		sig_pri_set_echocanceller(p, 1);
 		ast_setstate(chan, AST_STATE_RING);
@@ -2179,7 +2180,7 @@ static void sig_pri_event_party_id(struct ast_str **msg, const char *prefix, str
 
 	/* Party number */
 	ast_str_append(msg, 0, "%sNumValid: %d\r\n", prefix,
-		(unsigned) party->number.valid);
+		party->number.valid);
 	ast_str_append(msg, 0, "%sNum: %s\r\n", prefix,
 		S_COR(party->number.valid, party->number.str, ""));
 	ast_str_append(msg, 0, "%ston: %d\r\n", prefix, party->number.plan);
@@ -2192,7 +2193,7 @@ static void sig_pri_event_party_id(struct ast_str **msg, const char *prefix, str
 
 	/* Party name */
 	ast_str_append(msg, 0, "%sNameValid: %d\r\n", prefix,
-		(unsigned) party->name.valid);
+		party->name.valid);
 	ast_str_append(msg, 0, "%sName: %s\r\n", prefix,
 		S_COR(party->name.valid, party->name.str, ""));
 	if (party->name.valid) {
@@ -4145,14 +4146,11 @@ static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int ev
 
 				pri->pvts[chanpos]->cid_subaddr[0] = '\0';
 #if defined(HAVE_PRI_SUBADDR)
-				if (ast_connected.id.subaddress.valid) {
-					ast_party_subaddress_set(&owner->caller.id.subaddress,
-						&ast_connected.id.subaddress);
-					if (ast_connected.id.subaddress.str) {
-						ast_copy_string(pri->pvts[chanpos]->cid_subaddr,
-							ast_connected.id.subaddress.str,
-							sizeof(pri->pvts[chanpos]->cid_subaddr));
-					}
+				if (ast_connected.id.subaddress.str) {
+					ast_copy_string(pri->pvts[chanpos]->cid_subaddr,
+						ast_connected.id.subaddress.str,
+						sizeof(pri->pvts[chanpos]->cid_subaddr));
+					caller_id_update = 1;
 				}
 #endif	/* defined(HAVE_PRI_SUBADDR) */
 				if (caller_id_update) {
@@ -4166,12 +4164,13 @@ static void sig_pri_handle_subcmds(struct sig_pri_span *pri, int chanpos, int ev
 					ast_caller.id = ast_connected.id;
 					ast_caller.ani = ast_connected.id;
 					ast_channel_set_caller_event(owner, &ast_caller, NULL);
-				}
 
-				/* Update the connected line information on the other channel */
-				if (event_id != PRI_EVENT_RING) {
-					/* This connected_line update was not from a SETUP message. */
-					ast_channel_queue_connected_line_update(owner, &ast_connected, NULL);
+					/* Update the connected line information on the other channel */
+					if (event_id != PRI_EVENT_RING) {
+						/* This connected_line update was not from a SETUP message. */
+						ast_channel_queue_connected_line_update(owner, &ast_connected,
+							NULL);
+					}
 				}
 
 				ast_party_connected_line_free(&ast_connected);
@@ -5256,6 +5255,9 @@ static void *pri_dchannel(void *vpri)
 				/* Make sure extension exists (or in overlap dial mode, can exist) */
 				if (((pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING) && ast_canmatch_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) ||
 					ast_exists_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
+					int could_match_more;
+					int need_dialtone;
+
 					/* Select audio companding mode. */
 					switch (e->ring.layer1) {
 					case PRI_LAYER_1_ALAW:
@@ -5270,6 +5272,23 @@ static void *pri_dchannel(void *vpri)
 						break;
 					}
 
+					could_match_more = !e->ring.complete
+						&& (pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)
+						&& ast_matchmore_extension(NULL, pri->pvts[chanpos]->context,
+							pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num);
+
+					need_dialtone = could_match_more
+						/*
+						 * Must explicitly check the digital capability this
+						 * way instead of checking the pvt->digital flag
+						 * because the flag hasn't been set yet.
+						 */
+						&& !(e->ring.ctype & AST_TRANS_CAP_DIGITAL)
+						&& !pri->pvts[chanpos]->no_b_channel
+						&& (!strlen(pri->pvts[chanpos]->exten)
+							|| ast_ignore_pattern(pri->pvts[chanpos]->context,
+								pri->pvts[chanpos]->exten));
+
 					if (e->ring.complete || !(pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)) {
 						/* Just announce proceeding */
 						pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_PROCEEDING;
@@ -5279,13 +5298,17 @@ static void *pri_dchannel(void *vpri)
 						pri_answer(pri->pri, e->ring.call, PVT_TO_CHANNEL(pri->pvts[chanpos]), 1);
 					} else {
 						pri->pvts[chanpos]->call_level = SIG_PRI_CALL_LEVEL_OVERLAP;
-						pri_need_more_info(pri->pri, e->ring.call, PVT_TO_CHANNEL(pri->pvts[chanpos]), 1);
+#if defined(HAVE_PRI_SETUP_ACK_INBAND)
+						pri_setup_ack(pri->pri, e->ring.call,
+							PVT_TO_CHANNEL(pri->pvts[chanpos]), 1, need_dialtone);
+#else	/* !defined(HAVE_PRI_SETUP_ACK_INBAND) */
+						pri_need_more_info(pri->pri, e->ring.call,
+							PVT_TO_CHANNEL(pri->pvts[chanpos]), 1);
+#endif	/* !defined(HAVE_PRI_SETUP_ACK_INBAND) */
 					}
 
 					/* Start PBX */
-					if (!e->ring.complete
-						&& (pri->overlapdial & DAHDI_OVERLAPDIAL_INCOMING)
-						&& ast_matchmore_extension(NULL, pri->pvts[chanpos]->context, pri->pvts[chanpos]->exten, 1, pri->pvts[chanpos]->cid_num)) {
+					if (could_match_more) {
 						/*
 						 * Release the PRI lock while we create the channel so other
 						 * threads can send D channel messages.  We must also release
@@ -5349,6 +5372,10 @@ static void *pri_dchannel(void *vpri)
 
 							snprintf(calledtonstr, sizeof(calledtonstr), "%d", e->ring.calledplan);
 							pbx_builtin_setvar_helper(c, "CALLEDTON", calledtonstr);
+							ast_channel_lock(c);
+							c->dialed.number.plan = e->ring.calledplan;
+							ast_channel_unlock(c);
+
 							if (e->ring.redirectingreason >= 0) {
 								/* This is now just a status variable.  Use REDIRECTING() dialplan function. */
 								pbx_builtin_setvar_helper(c, "PRIREDIRECTREASON", redirectingreason2str(e->ring.redirectingreason));
@@ -5365,12 +5392,9 @@ static void *pri_dchannel(void *vpri)
 							sig_pri_handle_subcmds(pri, chanpos, e->e, e->ring.channel,
 								e->ring.subcmds, e->ring.call);
 
-							if (!pri->pvts[chanpos]->digital
-								&& !pri->pvts[chanpos]->no_b_channel) {
-								/*
-								 * Call has a channel.
-								 * Indicate that we are providing dialtone.
-								 */
+#if !defined(HAVE_PRI_SETUP_ACK_INBAND)
+							if (need_dialtone) {
+								/* Indicate that we are providing dialtone. */
 								pri->pvts[chanpos]->progress = 1;/* No need to send plain PROGRESS again. */
 #ifdef HAVE_PRI_PROG_W_CAUSE
 								pri_progress_with_cause(pri->pri, e->ring.call,
@@ -5380,6 +5404,7 @@ static void *pri_dchannel(void *vpri)
 									PVT_TO_CHANNEL(pri->pvts[chanpos]), 1);
 #endif
 							}
+#endif	/* !defined(HAVE_PRI_SETUP_ACK_INBAND) */
 						}
 						if (c && !ast_pthread_create_detached(&threadid, NULL, pri_ss_thread, pri->pvts[chanpos])) {
 							ast_verb(3, "Accepting overlap call from '%s' to '%s' on channel %d/%d, span %d\n",
@@ -5487,10 +5512,12 @@ static void *pri_dchannel(void *vpri)
 
 							snprintf(calledtonstr, sizeof(calledtonstr), "%d", e->ring.calledplan);
 							pbx_builtin_setvar_helper(c, "CALLEDTON", calledtonstr);
+							ast_channel_lock(c);
+							c->dialed.number.plan = e->ring.calledplan;
+							ast_channel_unlock(c);
 
 							sig_pri_handle_subcmds(pri, chanpos, e->e, e->ring.channel,
 								e->ring.subcmds, e->ring.call);
-
 						}
 						if (c && !ast_pbx_start(c)) {
 							ast_verb(3, "Accepting call from '%s' to '%s' on channel %d/%d, span %d\n",
@@ -5663,8 +5690,15 @@ static void *pri_dchannel(void *vpri)
 				if (!pri->pvts[chanpos]->progress
 					&& !pri->pvts[chanpos]->no_b_channel
 #ifdef PRI_PROGRESS_MASK
-					&& (e->proceeding.progressmask
-						& (PRI_PROG_CALL_NOT_E2E_ISDN | PRI_PROG_INBAND_AVAILABLE))
+					/*
+					 * We only care about PRI_PROG_INBAND_AVAILABLE to open the
+					 * voice path.
+					 *
+					 * We explicitly DO NOT want to check PRI_PROG_CALL_NOT_E2E_ISDN
+					 * because it will mess up ISDN to SIP interoperability for
+					 * the ALERTING message.
+					 */
+					&& (e->proceeding.progressmask & PRI_PROG_INBAND_AVAILABLE)
 #else
 					&& e->proceeding.progress == 8
 #endif
@@ -5672,9 +5706,17 @@ static void *pri_dchannel(void *vpri)
 					/* Bring voice path up */
 					pri_queue_control(pri, chanpos, AST_CONTROL_PROGRESS);
 					pri->pvts[chanpos]->progress = 1;
+					sig_pri_set_dialing(pri->pvts[chanpos], 0);
 					sig_pri_open_media(pri->pvts[chanpos]);
+				} else if (pri->inband_on_proceeding) {
+					/*
+					 * XXX This is to accomodate a broken switch that sends a
+					 * PROCEEDING without any progress indication ie for
+					 * inband audio.  This should be part of the conditional
+					 * test above to bring the voice path up.
+					 */
+					sig_pri_set_dialing(pri->pvts[chanpos], 0);
 				}
-				sig_pri_set_dialing(pri->pvts[chanpos], 0);
 				sig_pri_unlock_private(pri->pvts[chanpos]);
 				break;
 			case PRI_EVENT_FACILITY:
@@ -6265,7 +6307,19 @@ static void *pri_dchannel(void *vpri)
 				if (!pri->pvts[chanpos]->progress
 					&& (pri->overlapdial & DAHDI_OVERLAPDIAL_OUTGOING)
 					&& !pri->pvts[chanpos]->digital
-					&& !pri->pvts[chanpos]->no_b_channel) {
+					&& !pri->pvts[chanpos]->no_b_channel
+#if defined(HAVE_PRI_SETUP_ACK_INBAND)
+					/*
+					 * We only care about PRI_PROG_INBAND_AVAILABLE to open the
+					 * voice path.
+					 *
+					 * We explicitly DO NOT want to check PRI_PROG_CALL_NOT_E2E_ISDN
+					 * because it will mess up ISDN to SIP interoperability for
+					 * the ALERTING message.
+					 */
+					&& (e->setup_ack.progressmask & PRI_PROG_INBAND_AVAILABLE)
+#endif	/* defined(HAVE_PRI_SETUP_ACK_INBAND) */
+					) {
 					/*
 					 * Call has a channel.
 					 * Indicate for overlap dialing that dialtone may be present.
@@ -6732,7 +6786,7 @@ int sig_pri_call(struct sig_pri_chan *p, struct ast_channel *ast, char *rdest, i
 	if (p->pri->facilityenable)
 		pri_facility_enable(p->pri->pri);
 
-	ast_verb(3, "Requested transfer capability: 0x%.2x - %s\n", ast->transfercapability, ast_transfercapability2str(ast->transfercapability));
+	ast_verb(3, "Requested transfer capability: 0x%.2x - %s\n", (unsigned)ast->transfercapability, ast_transfercapability2str(ast->transfercapability));
 	dp_strip = 0;
 	pridialplan = p->pri->dialplan - 1;
 	if (pridialplan == -2 || pridialplan == -3) { /* compute dynamically */
@@ -7062,11 +7116,7 @@ int sig_pri_indicate(struct sig_pri_chan *p, struct ast_channel *chan, int condi
 			p->call_level = SIG_PRI_CALL_LEVEL_PROCEEDING;
 			if (p->pri && p->pri->pri) {
 				pri_grab(p, p->pri);
-				pri_proceeding(p->pri->pri,p->call, PVT_TO_CHANNEL(p),
-					p->no_b_channel || p->digital ? 0 : 1);
-				if (!p->no_b_channel && !p->digital) {
-					sig_pri_set_dialing(p, 0);
-				}
+				pri_proceeding(p->pri->pri,p->call, PVT_TO_CHANNEL(p), 0);
 				pri_rel(p->pri);
 			}
 		}
@@ -7412,7 +7462,7 @@ int sig_pri_digit_begin(struct sig_pri_chan *pvt, struct ast_channel *ast, char 
 		}
 		if (pvt->call_level < SIG_PRI_CALL_LEVEL_CONNECT) {
 			ast_log(LOG_WARNING,
-				"Span %d: Digit '%c' may be ignored by peer. (Call level:%d(%s))\n",
+				"Span %d: Digit '%c' may be ignored by peer. (Call level:%u(%s))\n",
 				pvt->pri->span, digit, pvt->call_level,
 				sig_pri_call_level2str(pvt->call_level));
 		}
@@ -7981,7 +8031,7 @@ void sig_pri_cli_show_span(int fd, int *dchannels, struct sig_pri_span *pri)
 			info_str = pri_dump_info_str(pri->pri);
 			if (info_str) {
 				ast_cli(fd, "%s", info_str);
-				free(info_str);
+				ast_std_free(info_str);
 			}
 #else
 			pri_dump_info(pri->pri);

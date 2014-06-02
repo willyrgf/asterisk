@@ -37,6 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <sys/signal.h>
 
 #include "asterisk/lock.h"
+#include "asterisk/causes.h"
 #include "asterisk/channel.h"
 #include "asterisk/config.h"
 #include "asterisk/module.h"
@@ -426,8 +427,11 @@ static int local_queue_frame(struct local_pvt *p, int isoutbound, struct ast_fra
 		return 0;
 	}
 
-	/* do not queue frame if generator is on both local channels */
-	if (us && us->generator && other->generator) {
+	/* do not queue media frames if a generator is on both local channels */
+	if (us
+		&& (f->frametype == AST_FRAME_VOICE || f->frametype == AST_FRAME_VIDEO)
+		&& us->generator
+		&& other->generator) {
 		return 0;
 	}
 
@@ -1018,6 +1022,7 @@ static int local_hangup(struct ast_channel *ast)
 	struct ast_frame f = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = ast->hangupcause };
 	struct ast_channel *owner = NULL;
 	struct ast_channel *chan = NULL;
+	int answered_elsewhere = 0;
 
 	if (!p) {
 		return -1;
@@ -1040,6 +1045,7 @@ static int local_hangup(struct ast_channel *ast)
 	isoutbound = IS_OUTBOUND(ast, p); /* just comparing pointer of ast */
 
 	if (p->chan && ast_test_flag(ast, AST_FLAG_ANSWERED_ELSEWHERE)) {
+		answered_elsewhere = 1;
 		ast_set_flag(p->chan, AST_FLAG_ANSWERED_ELSEWHERE);
 		ast_debug(2, "This local call has the ANSWERED_ELSEWHERE flag set.\n");
 	}
@@ -1056,7 +1062,13 @@ static int local_hangup(struct ast_channel *ast)
 		p->chan = NULL;
 	} else {
 		if (p->chan) {
-			ast_queue_hangup(p->chan);
+			/* Use the hangupcause to propagate the fact that the
+			 * call was answered somewhere. */
+			if (answered_elsewhere) {
+				ast_queue_hangup_with_cause(p->chan, AST_CAUSE_ANSWERED_ELSEWHERE);
+			} else {
+				ast_queue_hangup(p->chan);
+			}
 		}
 		p->owner = NULL;
 	}
@@ -1201,8 +1213,8 @@ static struct ast_channel *local_new(struct local_pvt *p, int state, const char 
 
 	/* Make sure that the ;2 channel gets the same linkedid as ;1. You can't pass linkedid to both
 	 * allocations since if linkedid isn't set, then each channel will generate its own linkedid. */
-	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%08x;1", p->exten, p->context, generated_seqno))
-		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, tmp->linkedid, ama, "Local/%s@%s-%08x;2", p->exten, p->context, generated_seqno))) {
+	if (!(tmp = ast_channel_alloc(1, state, 0, 0, t, p->exten, p->context, linkedid, ama, "Local/%s@%s-%08x;1", p->exten, p->context, (unsigned)generated_seqno))
+		|| !(tmp2 = ast_channel_alloc(1, AST_STATE_RING, 0, 0, t, p->exten, p->context, tmp->linkedid, ama, "Local/%s@%s-%08x;2", p->exten, p->context, (unsigned)generated_seqno))) {
 		if (tmp) {
 			tmp = ast_channel_release(tmp);
 		}

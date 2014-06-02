@@ -281,29 +281,17 @@ void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt);
 #else
 void ast_remove_lock_info(void *lock_addr);
 #endif /* HAVE_BKTR */
+void ast_suspend_lock_info(void *lock_addr);
+void ast_restore_lock_info(void *lock_addr);
 #else
 #ifdef HAVE_BKTR
 #define ast_remove_lock_info(ignore,me)
 #else
 #define ast_remove_lock_info(ignore)
 #endif /* HAVE_BKTR */
+#define ast_suspend_lock_info(ignore);
+#define ast_restore_lock_info(ignore);
 #endif /* !defined(LOW_MEMORY) */
-
-#ifdef HAVE_BKTR
-static inline void __dump_backtrace(struct ast_bt *bt, int canlog)
-{
-	char **strings;
-
-	ssize_t i;
-
-	strings = backtrace_symbols(bt->addresses, bt->num_frames);
-
-	for (i = 0; i < bt->num_frames; i++)
-		__ast_mutex_logger("%s\n", strings[i]);
-
-	free(strings);
-}
-#endif
 
 /*!
  * \brief log info for the current lock with ast_log().

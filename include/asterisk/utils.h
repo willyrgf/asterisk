@@ -307,8 +307,8 @@ static force_inline void ast_slinear_saturated_add(short *input, short *value)
 	res = (int) *input + *value;
 	if (res > 32767)
 		*input = 32767;
-	else if (res < -32767)
-		*input = -32767;
+	else if (res < -32768)
+		*input = -32768;
 	else
 		*input = (short) res;
 }
@@ -320,8 +320,8 @@ static force_inline void ast_slinear_saturated_subtract(short *input, short *val
 	res = (int) *input - *value;
 	if (res > 32767)
 		*input = 32767;
-	else if (res < -32767)
-		*input = -32767;
+	else if (res < -32768)
+		*input = -32768;
 	else
 		*input = (short) res;
 }
@@ -333,8 +333,8 @@ static force_inline void ast_slinear_saturated_multiply(short *input, short *val
 	res = (int) *input * *value;
 	if (res > 32767)
 		*input = 32767;
-	else if (res < -32767)
-		*input = -32767;
+	else if (res < -32768)
+		*input = -32768;
 	else
 		*input = (short) res;
 }
@@ -436,24 +436,20 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
 long int ast_random(void);
 
 
+#ifndef __AST_DEBUG_MALLOC
+#define ast_std_malloc malloc
+#define ast_std_calloc calloc
+#define ast_std_realloc realloc
+#define ast_std_free free
+
 /*! 
  * \brief free() wrapper
  *
  * ast_free_ptr should be used when a function pointer for free() needs to be passed
  * as the argument to a function. Otherwise, astmm will cause seg faults.
  */
-#ifdef __AST_DEBUG_MALLOC
-static void ast_free_ptr(void *ptr) attribute_unused;
-static void ast_free_ptr(void *ptr)
-{
-	ast_free(ptr);
-}
-#else
 #define ast_free free
 #define ast_free_ptr ast_free
-#endif
-
-#ifndef __AST_DEBUG_MALLOC
 
 #define MALLOC_FAILURE_MSG \
 	ast_log(LOG_ERROR, "Memory Allocation Failure in function %s at line %d of %s\n", func, lineno, file);
@@ -842,6 +838,15 @@ int ast_str_to_eid(struct ast_eid *eid, const char *s);
  */
 int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2);
 
+/*!
+ * \brief Get current thread ID
+ *
+ * \since 1.8.28.0
+ *
+ * \return the ID if platform is supported, else -1
+ */
+int ast_get_tid(void);
+
 /*!\brief Resolve a binary to a full pathname
  * \param binary Name of the executable to resolve
  * \param fullpath Buffer to hold the complete pathname
@@ -850,5 +855,57 @@ int ast_eid_cmp(const struct ast_eid *eid1, const struct ast_eid *eid2);
  * \return \a fullpath
  */
 char *ast_utils_which(const char *binary, char *fullpath, size_t fullpath_size);
+
+/*!
+ * \brief Declare a variable that will call a destructor function when it goes out of scope.
+ *
+ * Resource Allocation Is Initialization (RAII) variable declaration.
+ *
+ * \since 1.8.24.0
+ * \param vartype The type of the variable
+ * \param varname The name of the variable
+ * \param initval The initial value of the variable
+ * \param dtor The destructor function of type' void func(vartype *)'
+ *
+ * \code
+ * void mything_cleanup(struct mything *t)
+ * {
+ *     if (t) {
+ *         ast_free(t->stuff);
+ *     }
+ * }
+ *
+ * void do_stuff(const char *name)
+ * {
+ *     RAII_VAR(struct mything *, thing, mything_alloc(name), mything_cleanup);
+ *     ...
+ * }
+ * \endcode
+ *
+ * \note This macro is especially useful for working with ao2 objects. A common idiom
+ * would be a function that needed to look up an ao2 object and might have several error
+ * conditions after the allocation that would normally need to unref the ao2 object.
+ * With RAII_VAR, it is possible to just return and leave the cleanup to the destructor
+ * function. For example:
+ *
+ * \code
+ * void do_stuff(const char *name)
+ * {
+ *     RAII_VAR(struct mything *, thing, find_mything(name), ao2_cleanup);
+ *     if (!thing) {
+ *         return;
+ *     }
+ *     if (error) {
+ *         return;
+ *     }
+ *     do_stuff_with_thing(thing);
+ * }
+ * \endcode
+ */
+#define RAII_VAR(vartype, varname, initval, dtor) \
+    /* Prototype needed due to http://gcc.gnu.org/bugzilla/show_bug.cgi?id=36774 */ \
+    auto void _dtor_ ## varname (vartype * v); \
+    void _dtor_ ## varname (vartype * v) { dtor(*v); } \
+    vartype varname __attribute__((cleanup(_dtor_ ## varname))) = (initval)
 
 #endif /* _ASTERISK_UTILS_H */

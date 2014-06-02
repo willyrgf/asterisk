@@ -356,7 +356,7 @@ static int (*iax2_regfunk)(const char *username, int onoff) = NULL;
 			break; \
 		\
 		for (idx = 0; idx < 16; idx++) \
-			sprintf(digest + (idx << 1), "%2.2x", (unsigned char) key[idx]); \
+			sprintf(digest + (idx << 1), "%2.2x", (unsigned) key[idx]); \
 		\
 		ast_log(LOG_NOTICE, msg " IAX_COMMAND_RTKEY to rotate key to '%s'\n", digest); \
 	} while(0)
@@ -806,7 +806,7 @@ struct chan_iax2_pvt {
 	/*! Status of knowledge of peer ADSI capability */
 	int peeradsicpe;
 
-	/*! Who we are bridged to */
+	/*! Callno of native bridge peer. (Valid if nonzero) */
 	unsigned short bridgecallno;
 
 	int pingid;			/*!< Transmit PING request */
@@ -1273,6 +1273,89 @@ static void iax2_lock_owner(int callno)
 	}
 }
 
+/*!
+ * \internal
+ * \brief Check if a control subtype is allowed on the wire.
+ *
+ * \param subtype Control frame subtype to check if allowed to/from the wire.
+ *
+ * \retval non-zero if allowed.
+ */
+static int iax2_is_control_frame_allowed(int subtype)
+{
+	enum ast_control_frame_type control = subtype;
+	int is_allowed;
+
+	/*
+	 * Note: If we compare the enumeration type, which does not have any
+	 * negative constants, the compiler may optimize this code away.
+	 * Therefore, we must perform an integer comparison here.
+	 */
+	if (subtype == -1) {
+		return -1;
+	}
+
+	/* Default to not allowing control frames to pass. */
+	is_allowed = 0;
+
+	/*
+	 * The switch default is not present in order to take advantage
+	 * of the compiler complaining of a missing enum case.
+	 */
+	switch (control) {
+	/*
+	 * These control frames make sense to send/receive across the link.
+	 */
+	case AST_CONTROL_HANGUP:
+	case AST_CONTROL_RING:
+	case AST_CONTROL_RINGING:
+	case AST_CONTROL_ANSWER:
+	case AST_CONTROL_BUSY:
+	case AST_CONTROL_TAKEOFFHOOK:
+	case AST_CONTROL_OFFHOOK:
+	case AST_CONTROL_CONGESTION:
+	case AST_CONTROL_FLASH:
+	case AST_CONTROL_WINK:
+	case AST_CONTROL_OPTION:
+	case AST_CONTROL_RADIO_KEY:
+	case AST_CONTROL_RADIO_UNKEY:
+	case AST_CONTROL_PROGRESS:
+	case AST_CONTROL_PROCEEDING:
+	case AST_CONTROL_HOLD:
+	case AST_CONTROL_UNHOLD:
+	case AST_CONTROL_VIDUPDATE:
+	case AST_CONTROL_CONNECTED_LINE:
+	case AST_CONTROL_REDIRECTING:
+	case AST_CONTROL_T38_PARAMETERS:
+	case AST_CONTROL_AOC:
+	case AST_CONTROL_INCOMPLETE:
+		is_allowed = -1;
+		break;
+
+	/*
+	 * These control frames do not make sense to send/receive across the link.
+	 */
+	case _XXX_AST_CONTROL_T38:
+		/* The control value is deprecated in favor of AST_CONTROL_T38_PARAMETERS. */
+	case AST_CONTROL_SRCUPDATE:
+		/* Across an IAX link the source is still the same. */
+	case AST_CONTROL_TRANSFER:
+		/* A success/fail status report from calling ast_transfer() on this machine. */
+	case AST_CONTROL_CC:
+		/* The payload contains pointers that are valid for the sending machine only. */
+	case AST_CONTROL_SRCCHANGE:
+		/* Across an IAX link the source is still the same. */
+	case AST_CONTROL_READ_ACTION:
+		/* The action can only be done by the sending machine. */
+	case AST_CONTROL_END_OF_Q:
+		/* This frame would cause the call to unexpectedly hangup. */
+	case AST_CONTROL_UPDATE_RTP_PEER:
+		/* Only meaningful across a bridge on this machine for direct-media exchange. */
+		break;
+	}
+	return is_allowed;
+}
+
 static void mwi_event_cb(const struct ast_event *event, void *userdata)
 {
 	/* The MWI subscriptions exist just so the core knows we care about those
@@ -1460,12 +1543,11 @@ static struct iax2_thread *find_idle_thread(void)
 #ifdef SCHED_MULTITHREADED
 static int __schedule_action(void (*func)(const void *data), const void *data, const char *funcname)
 {
-	struct iax2_thread *thread = NULL;
+	struct iax2_thread *thread;
 	static time_t lasterror;
-	static time_t t;
+	time_t t;
 
 	thread = find_idle_thread();
-
 	if (thread != NULL) {
 		thread->schedfunc = func;
 		thread->scheddata = data;
@@ -1477,9 +1559,10 @@ static int __schedule_action(void (*func)(const void *data), const void *data, c
 		return 0;
 	}
 	time(&t);
-	if (t != lasterror) 
-		ast_debug(1, "Out of idle IAX2 threads for scheduling!\n");
-	lasterror = t;
+	if (t != lasterror) {
+		lasterror = t;
+		ast_debug(1, "Out of idle IAX2 threads for scheduling! (%s)\n", funcname);
+	}
 
 	return -1;
 }
@@ -2243,7 +2326,7 @@ static int calltoken_required(struct sockaddr_in *sin, const char *name, int sub
 		user_unref(user);
 	}
 
-	ast_debug(1, "Determining if address %s with username %s requires calltoken validation.  Optional = %d  calltoken_required = %d \n", ast_inet_ntoa(sin->sin_addr), name, optional, calltoken_required);
+	ast_debug(1, "Determining if address %s with username %s requires calltoken validation.  Optional = %d  calltoken_required = %u\n", ast_inet_ntoa(sin->sin_addr), name, optional, calltoken_required);
 	if (((calltoken_required == CALLTOKEN_NO) || (calltoken_required == CALLTOKEN_AUTO)) ||
 		(optional && (calltoken_required == CALLTOKEN_DEFAULT))) {
 		res = 0;
@@ -2723,7 +2806,7 @@ static int create_callno_pools(void)
  * \brief Schedules delayed removal of iax2_pvt call number data
  *
  * \note After MIN_REUSE_TIME has passed for a destroyed iax2_pvt, the callno is
- * avaliable again, and the address from the previous connection must be decremented
+ * available again, and the address from the previous connection must be decremented
  * from the peercnts table.  This function schedules these operations to take place.
  */
 static void sched_delay_remove(struct sockaddr_in *sin, struct callno_entry *callno_entry)
@@ -3042,7 +3125,7 @@ static int try_firmware(char *s)
 	else
 		last = s;
 
-	snprintf(s2, strlen(s) + 100, "/var/tmp/%s-%ld", last, (unsigned long)ast_random());
+	snprintf(s2, strlen(s) + 100, "/var/tmp/%s-%ld", last, ast_random());
 
 	if ((res = stat(s, &stbuf) < 0)) {
 		ast_log(LOG_WARNING, "Failed to stat '%s': %s\n", s, strerror(errno));
@@ -3343,7 +3426,7 @@ static int send_packet(struct iax_frame *f)
 	
 	/* Called with iaxsl held */
 	if (iaxdebug)
-		ast_debug(3, "Sending %d on %d/%d to %s:%d\n", f->ts, callno, iaxs[callno]->peercallno, ast_inet_ntoa(iaxs[callno]->addr.sin_addr), ntohs(iaxs[callno]->addr.sin_port));
+		ast_debug(3, "Sending %u on %d/%d to %s:%d\n", f->ts, callno, iaxs[callno]->peercallno, ast_inet_ntoa(iaxs[callno]->addr.sin_addr), ntohs(iaxs[callno]->addr.sin_port));
 	
 	if (f->transfer) {
 		iax_outputframe(f, NULL, 0, &iaxs[callno]->transfer, f->datalen - sizeof(struct ast_iax2_full_hdr));
@@ -3489,42 +3572,49 @@ static void __attempt_transmit(const void *data)
 	struct iax_frame *f = (struct iax_frame *)data;
 	int freeme = 0;
 	int callno = f->callno;
+
 	/* Make sure this call is still active */
 	if (callno) 
 		ast_mutex_lock(&iaxsl[callno]);
 	if (callno && iaxs[callno]) {
-		if ((f->retries < 0) /* Already ACK'd */ ||
-		    (f->retries >= max_retries) /* Too many attempts */) {
-				/* Record an error if we've transmitted too many times */
-				if (f->retries >= max_retries) {
-					if (f->transfer) {
-						/* Transfer timeout */
-						send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_TXREJ, 0, NULL, 0, -1);
-					} else if (f->final) {
-						iax2_destroy(callno);
-					} else {
-						if (iaxs[callno]->owner)
-							ast_log(LOG_WARNING, "Max retries exceeded to host %s on %s (type = %d, subclass = %u, ts=%d, seqno=%d)\n", ast_inet_ntoa(iaxs[f->callno]->addr.sin_addr),iaxs[f->callno]->owner->name , f->af.frametype, f->af.subclass.integer, f->ts, f->oseqno);
-						iaxs[callno]->error = ETIMEDOUT;
-						if (iaxs[callno]->owner) {
-							struct ast_frame fr = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = AST_CAUSE_DESTINATION_OUT_OF_ORDER };
-							/* Hangup the fd */
-							iax2_queue_frame(callno, &fr); /* XXX */
-							/* Remember, owner could disappear */
-							if (iaxs[callno] && iaxs[callno]->owner)
-								iaxs[callno]->owner->hangupcause = AST_CAUSE_DESTINATION_OUT_OF_ORDER;
-						} else {
-							if (iaxs[callno]->reg) {
-								memset(&iaxs[callno]->reg->us, 0, sizeof(iaxs[callno]->reg->us));
-								iaxs[callno]->reg->regstate = REG_STATE_TIMEOUT;
-								iaxs[callno]->reg->refresh = IAX_DEFAULT_REG_EXPIRE;
-							}
-							iax2_destroy(callno);
-						}
-					}
-
+		if (f->retries < 0) {
+			/* Already ACK'd */
+			freeme = 1;
+		} else if (f->retries >= max_retries) {
+			/* Too many attempts.  Record an error. */
+			if (f->transfer) {
+				/* Transfer timeout */
+				send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_TXREJ, 0, NULL, 0, -1);
+			} else if (f->final) {
+				iax2_destroy(callno);
+			} else {
+				if (iaxs[callno]->owner) {
+					ast_log(LOG_WARNING, "Max retries exceeded to host %s on %s (type = %u, subclass = %d, ts=%u, seqno=%d)\n",
+						ast_inet_ntoa(iaxs[f->callno]->addr.sin_addr),
+						iaxs[f->callno]->owner->name,
+						f->af.frametype,
+						f->af.subclass.integer,
+						f->ts,
+						f->oseqno);
 				}
-				freeme = 1;
+				iaxs[callno]->error = ETIMEDOUT;
+				if (iaxs[callno]->owner) {
+					struct ast_frame fr = { AST_FRAME_CONTROL, { AST_CONTROL_HANGUP }, .data.uint32 = AST_CAUSE_DESTINATION_OUT_OF_ORDER };
+					/* Hangup the fd */
+					iax2_queue_frame(callno, &fr); /* XXX */
+					/* Remember, owner could disappear */
+					if (iaxs[callno] && iaxs[callno]->owner)
+						iaxs[callno]->owner->hangupcause = AST_CAUSE_DESTINATION_OUT_OF_ORDER;
+				} else {
+					if (iaxs[callno]->reg) {
+						memset(&iaxs[callno]->reg->us, 0, sizeof(iaxs[callno]->reg->us));
+						iaxs[callno]->reg->regstate = REG_STATE_TIMEOUT;
+						iaxs[callno]->reg->refresh = IAX_DEFAULT_REG_EXPIRE;
+					}
+					iax2_destroy(callno);
+				}
+			}
+			freeme = 1;
 		} else {
 			/* Update it if it needs it */
 			update_packet(f);
@@ -5400,7 +5490,7 @@ static int iax2_key_rotate(const void *vpvt)
 	pvt->keyrotateid = 
 		ast_sched_thread_add(sched, 120000 + (ast_random() % 180001), iax2_key_rotate, vpvt);
 
-	snprintf(key, sizeof(key), "%lX", ast_random());
+	snprintf(key, sizeof(key), "%lX", (unsigned long)ast_random());
 
 	MD5Init(&md5);
 	MD5Update(&md5, (unsigned char *) key, strlen(key));
@@ -5534,7 +5624,7 @@ static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_cha
 			unlock_both(callno0, callno1);
 			return AST_BRIDGE_FAILED_NOWARN;
 		}
-		/* check if transfered and if we really want native bridging */
+		/* check if transferred and if we really want native bridging */
 		if (!transferstarted && !ast_test_flag64(iaxs[callno0], IAX_NOTRANSFER) && !ast_test_flag64(iaxs[callno1], IAX_NOTRANSFER)) {
 			/* Try the transfer */
 			if (iax2_start_transfer(callno0, callno1, (flags & (AST_BRIDGE_DTMF_CHANNEL_0 | AST_BRIDGE_DTMF_CHANNEL_1)) ||
@@ -5586,31 +5676,42 @@ static enum ast_bridge_result iax2_bridge(struct ast_channel *c0, struct ast_cha
 			res = AST_BRIDGE_COMPLETE;
 			break;
 		}
-		if ((f->frametype == AST_FRAME_CONTROL) && !(flags & AST_BRIDGE_IGNORE_SIGS) && (f->subclass.integer != AST_CONTROL_SRCUPDATE)) {
-			*fo = f;
-			*rc = who;
-			res =  AST_BRIDGE_COMPLETE;
-			break;
-		}
 		other = (who == c0) ? c1 : c0;  /* the 'other' channel */
-		if ((f->frametype == AST_FRAME_VOICE) ||
-			(f->frametype == AST_FRAME_TEXT) ||
-			(f->frametype == AST_FRAME_VIDEO) || 
-			(f->frametype == AST_FRAME_IMAGE) ||
-			(f->frametype == AST_FRAME_DTMF) ||
-			(f->frametype == AST_FRAME_CONTROL)) {
+		if (f->frametype == AST_FRAME_CONTROL && !(flags & AST_BRIDGE_IGNORE_SIGS)) {
+			switch (f->subclass.integer) {
+			case AST_CONTROL_VIDUPDATE:
+			case AST_CONTROL_SRCUPDATE:
+			case AST_CONTROL_SRCCHANGE:
+			case AST_CONTROL_T38_PARAMETERS:
+				ast_write(other, f);
+				break;
+			default:
+				*fo = f;
+				*rc = who;
+				res = AST_BRIDGE_COMPLETE;
+				break;
+			}
+			if (res == AST_BRIDGE_COMPLETE) {
+				break;
+			}
+		} else if (f->frametype == AST_FRAME_VOICE
+			|| f->frametype == AST_FRAME_TEXT
+			|| f->frametype == AST_FRAME_VIDEO
+			|| f->frametype == AST_FRAME_IMAGE) {
+			ast_write(other, f);
+		} else if (f->frametype == AST_FRAME_DTMF) {
 			/* monitored dtmf take out of the bridge.
 			 * check if we monitor the specific source.
 			 */
 			int monitored_source = (who == c0) ? AST_BRIDGE_DTMF_CHANNEL_0 : AST_BRIDGE_DTMF_CHANNEL_1;
-			if (f->frametype == AST_FRAME_DTMF && (flags & monitored_source)) {
+
+			if (flags & monitored_source) {
 				*rc = who;
 				*fo = f;
 				res = AST_BRIDGE_COMPLETE;
 				/* Remove from native mode */
 				break;
 			}
-			/* everything else goes to the other side */
 			ast_write(other, f);
 		}
 		ast_frfree(f);
@@ -5670,8 +5771,13 @@ static int iax2_indicate(struct ast_channel *c, int condition, const void *data,
 		}
 		break;
 	case AST_CONTROL_CONNECTED_LINE:
-		if (!ast_test_flag64(pvt, IAX_SENDCONNECTEDLINE))
+	case AST_CONTROL_REDIRECTING:
+		if (!ast_test_flag64(pvt, IAX_SENDCONNECTEDLINE)) {
+			/* We are not configured to allow sending these updates. */
+			ast_debug(2, "Callno %d: Config blocked sending control frame %d.\n",
+				callno, condition);
 			goto done;
+		}
 		break;
 	}
 
@@ -5990,7 +6096,7 @@ static unsigned int calc_timestamp(struct chan_iax2_pvt *p, unsigned int ts, str
 				* frame size too) */
 
 				if (iaxdebug && abs(ms - p->nextpred) > MAX_TIMESTAMP_SKEW )
-					ast_debug(1, "predicted timestamp skew (%u) > max (%u), using real ts instead.\n",
+					ast_debug(1, "predicted timestamp skew (%d) > max (%d), using real ts instead.\n",
 						abs(ms - p->nextpred), MAX_TIMESTAMP_SKEW);
 
 				if (f->samples >= rate) /* check to make sure we don't core dump */
@@ -6045,7 +6151,7 @@ static unsigned int calc_rxstamp(struct chan_iax2_pvt *p, unsigned int offset)
 	if (ast_tvzero(p->rxcore)) {
 		p->rxcore = ast_tvnow();
 		if (iaxdebug)
-			ast_debug(1, "calc_rxstamp: call=%d: rxcore set to %d.%6.6d - %dms\n",
+			ast_debug(1, "calc_rxstamp: call=%d: rxcore set to %d.%6.6d - %ums\n",
 					p->callno, (int)(p->rxcore.tv_sec), (int)(p->rxcore.tv_usec), offset);
 		p->rxcore = ast_tvsub(p->rxcore, ast_samp2tv(offset, 1000));
 #if 1
@@ -6130,7 +6236,7 @@ static int iax2_trunk_queue(struct chan_iax2_pvt *pvt, struct iax_frame *fr)
 				
 				tpeer->trunkdataalloc += DEFAULT_TRUNKDATA;
 				tpeer->trunkdata = tmp;
-				ast_debug(1, "Expanded trunk '%s:%d' to %d bytes\n", ast_inet_ntoa(tpeer->addr.sin_addr), ntohs(tpeer->addr.sin_port), tpeer->trunkdataalloc);
+				ast_debug(1, "Expanded trunk '%s:%d' to %u bytes\n", ast_inet_ntoa(tpeer->addr.sin_addr), ntohs(tpeer->addr.sin_port), tpeer->trunkdataalloc);
 			} else {
 				ast_log(LOG_WARNING, "Maximum trunk data space exceeded to %s:%d\n", ast_inet_ntoa(tpeer->addr.sin_addr), ntohs(tpeer->addr.sin_port));
 				ast_mutex_unlock(&tpeer->lock);
@@ -6270,7 +6376,7 @@ static int decode_frame(ast_aes_decrypt_key *dcx, struct ast_iax2_full_hdr *fh, 
 
 		padding = 16 + (workspace[15] & 0x0f);
 		if (iaxdebug)
-			ast_debug(1, "Decoding full frame with length %d (padding = %d) (15=%02x)\n", *datalen, padding, workspace[15]);
+			ast_debug(1, "Decoding full frame with length %d (padding = %d) (15=%02x)\n", *datalen, padding, (unsigned)workspace[15]);
 		if (*datalen < padding + sizeof(struct ast_iax2_full_hdr))
 			return -1;
 
@@ -6317,7 +6423,7 @@ static int encrypt_frame(ast_aes_encrypt_key *ecx, struct ast_iax2_full_hdr *fh,
 		workspace[15] &= 0xf0;
 		workspace[15] |= (padding & 0xf);
 		if (iaxdebug)
-			ast_debug(1, "Encoding full frame %d/%d with length %d + %d padding (15=%02x)\n", fh->type, fh->csub, *datalen, padding, workspace[15]);
+			ast_debug(1, "Encoding full frame %d/%d with length %d + %d padding (15=%02x)\n", fh->type, fh->csub, *datalen, padding, (unsigned)workspace[15]);
 		*datalen += padding;
 		memcpy_encrypt(efh->encdata, workspace, *datalen - sizeof(struct ast_iax2_full_enc_hdr), ecx);
 		if (*datalen >= 32 + sizeof(struct ast_iax2_full_enc_hdr))
@@ -6813,10 +6919,10 @@ static char *handle_cli_iax2_show_threads(struct ast_cli_entry *e, int cmd, stru
 	AST_LIST_LOCK(&idle_list);
 	AST_LIST_TRAVERSE(&idle_list, thread, list) {
 #ifdef DEBUG_SCHED_MULTITHREAD
-		ast_cli(a->fd, "Thread %d: state=%d, update=%d, actions=%d, func='%s'\n", 
+		ast_cli(a->fd, "Thread %d: state=%u, update=%d, actions=%d, func='%s'\n", 
 			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc);
 #else
-		ast_cli(a->fd, "Thread %d: state=%d, update=%d, actions=%d\n", 
+		ast_cli(a->fd, "Thread %d: state=%u, update=%d, actions=%d\n", 
 			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions);
 #endif
 		threadcount++;
@@ -6830,10 +6936,10 @@ static char *handle_cli_iax2_show_threads(struct ast_cli_entry *e, int cmd, stru
 		else
 			type = 'P';
 #ifdef DEBUG_SCHED_MULTITHREAD
-		ast_cli(a->fd, "Thread %c%d: state=%d, update=%d, actions=%d, func='%s'\n", 
+		ast_cli(a->fd, "Thread %c%d: state=%u, update=%d, actions=%d, func='%s'\n", 
 			type, thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc);
 #else
-		ast_cli(a->fd, "Thread %c%d: state=%d, update=%d, actions=%d\n", 
+		ast_cli(a->fd, "Thread %c%d: state=%u, update=%d, actions=%d\n", 
 			type, thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions);
 #endif
 		threadcount++;
@@ -6843,10 +6949,10 @@ static char *handle_cli_iax2_show_threads(struct ast_cli_entry *e, int cmd, stru
 	AST_LIST_LOCK(&dynamic_list);
 	AST_LIST_TRAVERSE(&dynamic_list, thread, list) {
 #ifdef DEBUG_SCHED_MULTITHREAD
-		ast_cli(a->fd, "Thread %d: state=%d, update=%d, actions=%d, func='%s'\n",
+		ast_cli(a->fd, "Thread %d: state=%u, update=%d, actions=%d, func='%s'\n",
 			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions, thread->curfunc);
 #else
-		ast_cli(a->fd, "Thread %d: state=%d, update=%d, actions=%d\n",
+		ast_cli(a->fd, "Thread %d: state=%u, update=%d, actions=%d\n",
 			thread->threadnum, thread->iostate, (int)(t - thread->checktime), thread->actions);
 #endif
 		dynamiccount++;
@@ -7243,8 +7349,8 @@ static int ast_cli_netstats(struct mansession *s, int fd, int limit_fmt)
 	int numchans = 0;
 	char first_message[10] = { 0, };
 	char last_message[10] = { 0, };
-#define ACN_FORMAT1 "%-20.25s %4d %4d %4d %5d %3d %5d %4d %6d %4d %4d %5d %3d %5d %4d %6d %s%s %4s%s\n"
-#define ACN_FORMAT2 "%s %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %s%s %s%s\n"
+#define ACN_FORMAT1 "%-20.25s %4u %4d %4d %5d %3d %5d %4d %6d %4d %4d %5d %3d %5d %4d %6d %s%s %4s%s\n"
+#define ACN_FORMAT2 "%s %u %d %d %d %d %d %d %d %d %d %d %d %d %d %d %s%s %s%s\n"
 	for (x = 0; x < ARRAY_LEN(iaxs); x++) {
 		ast_mutex_lock(&iaxsl[x]);
 		if (iaxs[x]) {
@@ -7499,6 +7605,12 @@ static int __send_command(struct chan_iax2_pvt *i, char type, int command, unsig
 
 static int send_command(struct chan_iax2_pvt *i, char type, int command, unsigned int ts, const unsigned char *data, int datalen, int seqno)
 {
+	if (type == AST_FRAME_CONTROL && !iax2_is_control_frame_allowed(command)) {
+		/* Control frame should not go out on the wire. */
+		ast_debug(2, "Callno %d: Blocked sending control frame %d.\n",
+			i->callno, command);
+		return 0;
+	}
 	return __send_command(i, type, command, ts, data, datalen, seqno, 0, 0, 0);
 }
 
@@ -7935,7 +8047,7 @@ static int authenticate_verify(struct chan_iax2_pvt *p, struct iax_ies *ies)
 			MD5Final(digest, &md5);
 			/* If they support md5, authenticate with it.  */
 			for (x=0;x<16;x++)
-				sprintf(requeststr + (x << 1), "%2.2x", digest[x]); /* safe */
+				sprintf(requeststr + (x << 1), "%2.2x", (unsigned)digest[x]); /* safe */
 			if (!strcasecmp(requeststr, md5secret)) {
 				res = 0;
 				break;
@@ -8065,7 +8177,7 @@ static int register_verify(int callno, struct sockaddr_in *sin, struct iax_ies *
 			MD5Update(&md5, (unsigned char *)tmppw, strlen(tmppw));
 			MD5Final(digest, &md5);
 			for (x=0;x<16;x++)
-				sprintf(requeststr + (x << 1), "%2.2x", digest[x]); /* safe */
+				sprintf(requeststr + (x << 1), "%2.2x", (unsigned)digest[x]); /* safe */
 			if (!strcasecmp(requeststr, md5secret))
 				break;
 		}
@@ -8148,7 +8260,7 @@ static int authenticate(const char *challenge, const char *secret, const char *k
 			MD5Final(digest, &md5);
 			/* If they support md5, authenticate with it.  */
 			for (x=0;x<16;x++)
-				sprintf(digres + (x << 1),  "%2.2x", digest[x]); /* safe */
+				sprintf(digres + (x << 1),  "%2.2x", (unsigned)digest[x]); /* safe */
 			if (pvt) {
 				build_encryption_keys(digest, pvt);
 			}
@@ -8634,7 +8746,7 @@ static void __expire_registry(const void *data)
 		realtime_update_peer(peer->name, &peer->addr, 0);
 	manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: IAX2\r\nPeer: IAX2/%s\r\nPeerStatus: Unregistered\r\nCause: Expired\r\n", peer->name);
 	/* modify entry in peercnts table as _not_ registered */
-	peercnt_modify(0, 0, &peer->addr);
+	peercnt_modify((unsigned char) 0, 0, &peer->addr);
 	/* Reset the address */
 	memset(&peer->addr, 0, sizeof(peer->addr));
 	/* Reset expiry value */
@@ -8660,8 +8772,6 @@ static int expire_registry(const void *data)
 		__expire_registry(data);
 	return 0;
 }
-
-static int iax2_poke_peer(struct iax2_peer *peer, int heldcall);
 
 static void reg_source_db(struct iax2_peer *p)
 {
@@ -8756,13 +8866,29 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 		}
 	}
 
+	/* treat an unspecified refresh interval as the minimum */
+	if (!refresh) {
+		refresh = min_reg_expire;
+	}
+	if (refresh > max_reg_expire) {
+		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
+			p->name, max_reg_expire, refresh);
+		p->expiry = max_reg_expire;
+	} else if (refresh < min_reg_expire) {
+		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
+			p->name, min_reg_expire, refresh);
+		p->expiry = min_reg_expire;
+	} else {
+		p->expiry = refresh;
+	}
+
 	if (ast_sockaddr_cmp(&p->addr, &sockaddr)) {
 		if (iax2_regfunk) {
 			iax2_regfunk(p->name, 1);
 		}
 
 		/* modify entry in peercnts table as _not_ registered */
-		peercnt_modify(0, 0, &p->addr);
+		peercnt_modify((unsigned char) 0, 0, &p->addr);
 
 		/* Stash the IP address from which they registered */
 		ast_sockaddr_from_sin(&p->addr, sin);
@@ -8790,7 +8916,7 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 
 	/* modify entry in peercnts table as registered */
 	if (p->maxcallno) {
-		peercnt_modify(1, p->maxcallno, &p->addr);
+		peercnt_modify((unsigned char) 1, p->maxcallno, &p->addr);
 	}
 
 	/* Make sure our call still exists, an INVAL at the right point may make it go away */
@@ -8808,20 +8934,7 @@ static int update_registry(struct sockaddr_in *sin, int callno, char *devtype, i
 			peer_unref(p);
 		}
 	}
-	/* treat an unspecified refresh interval as the minimum */
-	if (!refresh)
-		refresh = min_reg_expire;
-	if (refresh > max_reg_expire) {
-		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
-			p->name, max_reg_expire, refresh);
-		p->expiry = max_reg_expire;
-	} else if (refresh < min_reg_expire) {
-		ast_log(LOG_NOTICE, "Restricting registration for peer '%s' to %d seconds (requested %d)\n",
-			p->name, min_reg_expire, refresh);
-		p->expiry = min_reg_expire;
-	} else {
-		p->expiry = refresh;
-	}
+
 	if (p->expiry && sin->sin_addr.s_addr) {
 		p->expire = iax2_sched_add(sched, (p->expiry + 10) * 1000, expire_registry, peer_ref(p));
 		if (p->expire == -1)
@@ -9201,7 +9314,7 @@ static int timing_read(int *id, int fd, short events, void *cbdata)
 			res = send_trunk(tpeer, &now);
 			trunk_timed++; 
 			if (iaxtrunkdebug)
-				ast_verbose(" - Trunk peer (%s:%d) has %d call chunk%s in transit, %d bytes backloged and has hit a high water mark of %d bytes\n", ast_inet_ntoa(tpeer->addr.sin_addr), ntohs(tpeer->addr.sin_port), res, (res != 1) ? "s" : "", tpeer->trunkdatalen, tpeer->trunkdataalloc);
+				ast_verbose(" - Trunk peer (%s:%d) has %d call chunk%s in transit, %u bytes backloged and has hit a high water mark of %u bytes\n", ast_inet_ntoa(tpeer->addr.sin_addr), ntohs(tpeer->addr.sin_port), res, (res != 1) ? "s" : "", tpeer->trunkdatalen, tpeer->trunkdataalloc);
 		}		
 		totalcalls += res;	
 		res = 0;
@@ -9511,7 +9624,7 @@ static void log_jitterstats(unsigned short callno)
 			localooo = jbinfo.frames_ooo;
 			localpackets = jbinfo.frames_in;
 		}
-		ast_debug(3, "JB STATS:%s ping=%d ljitterms=%d ljbdelayms=%d ltotlost=%d lrecentlosspct=%d ldropped=%d looo=%d lrecvd=%d rjitterms=%d rjbdelayms=%d rtotlost=%d rrecentlosspct=%d rdropped=%d rooo=%d rrecvd=%d\n",
+		ast_debug(3, "JB STATS:%s ping=%u ljitterms=%d ljbdelayms=%d ltotlost=%d lrecentlosspct=%d ldropped=%d looo=%d lrecvd=%d rjitterms=%d rjbdelayms=%d rtotlost=%d rrecentlosspct=%d rdropped=%d rooo=%d rrecvd=%d\n",
 			iaxs[callno]->owner->name,
 			iaxs[callno]->pingtime,
 			localjitter,
@@ -9528,7 +9641,7 @@ static void log_jitterstats(unsigned short callno)
 			iaxs[callno]->remote_rr.dropped,
 			iaxs[callno]->remote_rr.ooo,
 			iaxs[callno]->remote_rr.packets);
-		manager_event(EVENT_FLAG_REPORTING, "JitterBufStats", "Owner: %s\r\nPing: %d\r\nLocalJitter: %d\r\nLocalJBDelay: %d\r\nLocalTotalLost: %d\r\nLocalLossPercent: %d\r\nLocalDropped: %d\r\nLocalooo: %d\r\nLocalReceived: %d\r\nRemoteJitter: %d\r\nRemoteJBDelay: %d\r\nRemoteTotalLost: %d\r\nRemoteLossPercent: %d\r\nRemoteDropped: %d\r\nRemoteooo: %d\r\nRemoteReceived: %d\r\n",
+		manager_event(EVENT_FLAG_REPORTING, "JitterBufStats", "Owner: %s\r\nPing: %u\r\nLocalJitter: %d\r\nLocalJBDelay: %d\r\nLocalTotalLost: %d\r\nLocalLossPercent: %d\r\nLocalDropped: %d\r\nLocalooo: %d\r\nLocalReceived: %d\r\nRemoteJitter: %d\r\nRemoteJBDelay: %d\r\nRemoteTotalLost: %d\r\nRemoteLossPercent: %d\r\nRemoteDropped: %d\r\nRemoteooo: %d\r\nRemoteReceived: %d\r\n",
 			iaxs[callno]->owner->name,
 			iaxs[callno]->pingtime,
 			localjitter,
@@ -9608,6 +9721,9 @@ static void defer_full_frame(struct iax2_thread *from_here, struct iax2_thread *
 
 	if (!cur_pkt_buf)
 		AST_LIST_INSERT_TAIL(&to_here->full_frames, pkt_buf, entry);
+
+	to_here->iostate = IAX_IOSTATE_READY;
+	ast_cond_signal(&to_here->cond);
 	
 	ast_mutex_unlock(&to_here->lock);
 }
@@ -9622,9 +9738,10 @@ static int socket_read(int *id, int fd, short events, void *cbdata)
 
 	if (!(thread = find_idle_thread())) {
 		time(&t);
-		if (t != last_errtime)
+		if (t != last_errtime) {
+			last_errtime = t;
 			ast_debug(1, "Out of idle IAX2 threads for I/O, pausing!\n");
-		last_errtime = t;
+		}
 		usleep(1);
 		return 1;
 	}
@@ -9819,9 +9936,16 @@ static int socket_process_meta(int packet_len, struct ast_iax2_meta_hdr *meta, s
 
 static int acf_iaxvar_read(struct ast_channel *chan, const char *cmd, char *data, char *buf, size_t len)
 {
-	struct ast_datastore *variablestore = ast_channel_datastore_find(chan, &iax2_variable_datastore_info, NULL);
+	struct ast_datastore *variablestore;
 	AST_LIST_HEAD(, ast_var_t) *varlist;
 	struct ast_var_t *var;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
+	variablestore = ast_channel_datastore_find(chan, &iax2_variable_datastore_info, NULL);
 
 	if (!variablestore) {
 		*buf = '\0';
@@ -9842,9 +9966,16 @@ static int acf_iaxvar_read(struct ast_channel *chan, const char *cmd, char *data
 
 static int acf_iaxvar_write(struct ast_channel *chan, const char *cmd, char *data, const char *value)
 {
-	struct ast_datastore *variablestore = ast_channel_datastore_find(chan, &iax2_variable_datastore_info, NULL);
+	struct ast_datastore *variablestore;
 	AST_LIST_HEAD(, ast_var_t) *varlist;
 	struct ast_var_t *var;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
+	variablestore = ast_channel_datastore_find(chan, &iax2_variable_datastore_info, NULL);
 
 	if (!variablestore) {
 		variablestore = ast_datastore_alloc(&iax2_variable_datastore_info, NULL);
@@ -10148,7 +10279,7 @@ static int socket_process(struct iax2_thread *thread)
 	}
 	if (ntohs(mh->callno) & IAX_FLAG_FULL) {
 		if (iaxdebug)
-			ast_debug(1, "Received packet %d, (%d, %u)\n", fh->oseqno, f.frametype, f.subclass.integer);
+			ast_debug(1, "Received packet %d, (%u, %d)\n", fh->oseqno, f.frametype, f.subclass.integer);
 		/* Check if it's out of order (and not an ACK or INVAL) */
 		fr->oseqno = fh->oseqno;
 		fr->iseqno = fh->iseqno;
@@ -10188,7 +10319,7 @@ static int socket_process(struct iax2_thread *thread)
 			  (f.subclass.integer != IAX_COMMAND_VNAK)) ||
 			  (f.frametype != AST_FRAME_IAX)) {
 			 	/* If it's not an ACK packet, it's out of order. */
-				ast_debug(1, "Packet arrived out of order (expecting %d, got %d) (frametype = %d, subclass = %d)\n", 
+				ast_debug(1, "Packet arrived out of order (expecting %d, got %d) (frametype = %u, subclass = %d)\n", 
 					iaxs[fr->callno]->iseqno, fr->oseqno, f.frametype, f.subclass.integer);
 				/* Check to see if we need to request retransmission,
 				 * and take sequence number wraparound into account */
@@ -10412,13 +10543,6 @@ static int socket_process(struct iax2_thread *thread)
 				iaxs[fr->callno]->videoformat = f.subclass.codec & ~0x1LL;
 			}
 		}
-		if (f.frametype == AST_FRAME_CONTROL && iaxs[fr->callno]->owner) {
-			if (f.subclass.integer == AST_CONTROL_BUSY) {
-				iaxs[fr->callno]->owner->hangupcause = AST_CAUSE_BUSY;
-			} else if (f.subclass.integer == AST_CONTROL_CONGESTION) {
-				iaxs[fr->callno]->owner->hangupcause = AST_CAUSE_CONGESTION;
-			}
-		}
 		if (f.frametype == AST_FRAME_IAX) {
 			ast_sched_thread_del(sched, iaxs[fr->callno]->initid);
 			/* Handle the IAX pseudo frame itself */
@@ -10432,7 +10556,7 @@ static int socket_process(struct iax2_thread *thread)
                             f.subclass.integer != IAX_COMMAND_LAGRP) {
 				iaxs[fr->callno]->last = fr->ts;
 				if (iaxdebug)
-					ast_debug(1, "For call=%d, set last=%d\n", fr->callno, fr->ts);
+					ast_debug(1, "For call=%d, set last=%u\n", fr->callno, fr->ts);
 			}
 			iaxs[fr->callno]->last_iax_message = f.subclass.integer;
 			if (!iaxs[fr->callno]->first_iax_message) {
@@ -10927,14 +11051,14 @@ static int socket_process(struct iax2_thread *thread)
 					peer = iaxs[fr->callno]->peerpoke;
 					if ((peer->lastms < 0)  || (peer->historicms > peer->maxms)) {
 						if (iaxs[fr->callno]->pingtime <= peer->maxms) {
-							ast_log(LOG_NOTICE, "Peer '%s' is now REACHABLE! Time: %d\n", peer->name, iaxs[fr->callno]->pingtime);
-							manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: IAX2\r\nPeer: IAX2/%s\r\nPeerStatus: Reachable\r\nTime: %d\r\n", peer->name, iaxs[fr->callno]->pingtime); 
+							ast_log(LOG_NOTICE, "Peer '%s' is now REACHABLE! Time: %u\n", peer->name, iaxs[fr->callno]->pingtime);
+							manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: IAX2\r\nPeer: IAX2/%s\r\nPeerStatus: Reachable\r\nTime: %u\r\n", peer->name, iaxs[fr->callno]->pingtime); 
 							ast_devstate_changed(AST_DEVICE_NOT_INUSE, AST_DEVSTATE_CACHABLE, "IAX2/%s", peer->name); /* Activate notification */
 						}
 					} else if ((peer->historicms > 0) && (peer->historicms <= peer->maxms)) {
 						if (iaxs[fr->callno]->pingtime > peer->maxms) {
-							ast_log(LOG_NOTICE, "Peer '%s' is now TOO LAGGED (%d ms)!\n", peer->name, iaxs[fr->callno]->pingtime);
-							manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: IAX2\r\nPeer: IAX2/%s\r\nPeerStatus: Lagged\r\nTime: %d\r\n", peer->name, iaxs[fr->callno]->pingtime); 
+							ast_log(LOG_NOTICE, "Peer '%s' is now TOO LAGGED (%u ms)!\n", peer->name, iaxs[fr->callno]->pingtime);
+							manager_event(EVENT_FLAG_SYSTEM, "PeerStatus", "ChannelType: IAX2\r\nPeer: IAX2/%s\r\nPeerStatus: Lagged\r\nTime: %u\r\n", peer->name, iaxs[fr->callno]->pingtime); 
 							ast_devstate_changed(AST_DEVICE_UNAVAILABLE, AST_DEVSTATE_CACHABLE, "IAX2/%s", peer->name); /* Activate notification */
 						}
 					}
@@ -11366,65 +11490,101 @@ immediatedial:
 				}
 				break;
 			case IAX_COMMAND_TXREJ:
-				iaxs[fr->callno]->transferring = 0;
+				while (iaxs[fr->callno]
+					&& iaxs[fr->callno]->bridgecallno
+					&& ast_mutex_trylock(&iaxsl[iaxs[fr->callno]->bridgecallno])) {
+					DEADLOCK_AVOIDANCE(&iaxsl[fr->callno]);
+				}
+				if (!iaxs[fr->callno]) {
+					break;
+				}
+
+				iaxs[fr->callno]->transferring = TRANSFER_NONE;
 				ast_verb(3, "Channel '%s' unable to transfer\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>");
 				memset(&iaxs[fr->callno]->transfer, 0, sizeof(iaxs[fr->callno]->transfer));
-				if (iaxs[fr->callno]->bridgecallno) {
-					if (iaxs[iaxs[fr->callno]->bridgecallno]->transferring) {
-						iaxs[iaxs[fr->callno]->bridgecallno]->transferring = 0;
-						send_command(iaxs[iaxs[fr->callno]->bridgecallno], AST_FRAME_IAX, IAX_COMMAND_TXREJ, 0, NULL, 0, -1);
-					}
+
+				if (!iaxs[fr->callno]->bridgecallno) {
+					break;
 				}
+
+				if (iaxs[iaxs[fr->callno]->bridgecallno]
+					&& iaxs[iaxs[fr->callno]->bridgecallno]->transferring) {
+					iaxs[iaxs[fr->callno]->bridgecallno]->transferring = TRANSFER_NONE;
+					send_command(iaxs[iaxs[fr->callno]->bridgecallno], AST_FRAME_IAX, IAX_COMMAND_TXREJ, 0, NULL, 0, -1);
+				}
+				ast_mutex_unlock(&iaxsl[iaxs[fr->callno]->bridgecallno]);
 				break;
 			case IAX_COMMAND_TXREADY:
-				if ((iaxs[fr->callno]->transferring == TRANSFER_BEGIN) ||
-				    (iaxs[fr->callno]->transferring == TRANSFER_MBEGIN)) {
-					if (iaxs[fr->callno]->transferring == TRANSFER_MBEGIN)
-						iaxs[fr->callno]->transferring = TRANSFER_MREADY;
-					else
-						iaxs[fr->callno]->transferring = TRANSFER_READY;
-					ast_verb(3, "Channel '%s' ready to transfer\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>");
-					if (iaxs[fr->callno]->bridgecallno) {
-						if ((iaxs[iaxs[fr->callno]->bridgecallno]->transferring == TRANSFER_READY) ||
-						    (iaxs[iaxs[fr->callno]->bridgecallno]->transferring == TRANSFER_MREADY)) {
-							/* They're both ready, now release them. */
-							if (iaxs[fr->callno]->transferring == TRANSFER_MREADY) {
-								ast_verb(3, "Attempting media bridge of %s and %s\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>",
-										iaxs[iaxs[fr->callno]->bridgecallno]->owner ? iaxs[iaxs[fr->callno]->bridgecallno]->owner->name : "<Unknown>");
-
-								iaxs[iaxs[fr->callno]->bridgecallno]->transferring = TRANSFER_MEDIA;
-								iaxs[fr->callno]->transferring = TRANSFER_MEDIA;
-
-								memset(&ied0, 0, sizeof(ied0));
-								memset(&ied1, 0, sizeof(ied1));
-								iax_ie_append_short(&ied0, IAX_IE_CALLNO, iaxs[iaxs[fr->callno]->bridgecallno]->peercallno);
-								iax_ie_append_short(&ied1, IAX_IE_CALLNO, iaxs[fr->callno]->peercallno);
-								send_command(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_TXMEDIA, 0, ied0.buf, ied0.pos, -1);
-								send_command(iaxs[iaxs[fr->callno]->bridgecallno], AST_FRAME_IAX, IAX_COMMAND_TXMEDIA, 0, ied1.buf, ied1.pos, -1);
-							} else {
-								ast_verb(3, "Releasing %s and %s\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>",
-										iaxs[iaxs[fr->callno]->bridgecallno]->owner ? iaxs[iaxs[fr->callno]->bridgecallno]->owner->name : "<Unknown>");
-
-								iaxs[iaxs[fr->callno]->bridgecallno]->transferring = TRANSFER_RELEASED;
-								iaxs[fr->callno]->transferring = TRANSFER_RELEASED;
-								ast_set_flag64(iaxs[iaxs[fr->callno]->bridgecallno], IAX_ALREADYGONE);
-								ast_set_flag64(iaxs[fr->callno], IAX_ALREADYGONE);
-
-								/* Stop doing lag & ping requests */
-								stop_stuff(fr->callno);
-								stop_stuff(iaxs[fr->callno]->bridgecallno);
-
-								memset(&ied0, 0, sizeof(ied0));
-								memset(&ied1, 0, sizeof(ied1));
-								iax_ie_append_short(&ied0, IAX_IE_CALLNO, iaxs[iaxs[fr->callno]->bridgecallno]->peercallno);
-								iax_ie_append_short(&ied1, IAX_IE_CALLNO, iaxs[fr->callno]->peercallno);
-								send_command(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_TXREL, 0, ied0.buf, ied0.pos, -1);
-								send_command(iaxs[iaxs[fr->callno]->bridgecallno], AST_FRAME_IAX, IAX_COMMAND_TXREL, 0, ied1.buf, ied1.pos, -1);
-							}
-
-						}
-					}
+				while (iaxs[fr->callno]
+					&& iaxs[fr->callno]->bridgecallno
+					&& ast_mutex_trylock(&iaxsl[iaxs[fr->callno]->bridgecallno])) {
+					DEADLOCK_AVOIDANCE(&iaxsl[fr->callno]);
 				}
+				if (!iaxs[fr->callno]) {
+					break;
+				}
+
+				if (iaxs[fr->callno]->transferring == TRANSFER_BEGIN) {
+					iaxs[fr->callno]->transferring = TRANSFER_READY;
+				} else if (iaxs[fr->callno]->transferring == TRANSFER_MBEGIN) {
+					iaxs[fr->callno]->transferring = TRANSFER_MREADY;
+				} else {
+					if (iaxs[fr->callno]->bridgecallno) {
+						ast_mutex_unlock(&iaxsl[iaxs[fr->callno]->bridgecallno]);
+					}
+					break;
+				}
+				ast_verb(3, "Channel '%s' ready to transfer\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>");
+
+				if (!iaxs[fr->callno]->bridgecallno) {
+					break;
+				}
+
+				if (!iaxs[iaxs[fr->callno]->bridgecallno]
+					|| (iaxs[iaxs[fr->callno]->bridgecallno]->transferring != TRANSFER_READY
+						&& iaxs[iaxs[fr->callno]->bridgecallno]->transferring != TRANSFER_MREADY)) {
+					ast_mutex_unlock(&iaxsl[iaxs[fr->callno]->bridgecallno]);
+					break;
+				}
+
+				/* Both sides are ready */
+
+				/* XXX what isn't checked here is that both sides match transfer types. */
+
+				if (iaxs[fr->callno]->transferring == TRANSFER_MREADY) {
+					ast_verb(3, "Attempting media bridge of %s and %s\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>",
+							iaxs[iaxs[fr->callno]->bridgecallno]->owner ? iaxs[iaxs[fr->callno]->bridgecallno]->owner->name : "<Unknown>");
+
+					iaxs[iaxs[fr->callno]->bridgecallno]->transferring = TRANSFER_MEDIA;
+					iaxs[fr->callno]->transferring = TRANSFER_MEDIA;
+
+					memset(&ied0, 0, sizeof(ied0));
+					memset(&ied1, 0, sizeof(ied1));
+					iax_ie_append_short(&ied0, IAX_IE_CALLNO, iaxs[iaxs[fr->callno]->bridgecallno]->peercallno);
+					iax_ie_append_short(&ied1, IAX_IE_CALLNO, iaxs[fr->callno]->peercallno);
+					send_command(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_TXMEDIA, 0, ied0.buf, ied0.pos, -1);
+					send_command(iaxs[iaxs[fr->callno]->bridgecallno], AST_FRAME_IAX, IAX_COMMAND_TXMEDIA, 0, ied1.buf, ied1.pos, -1);
+				} else {
+					ast_verb(3, "Releasing %s and %s\n", iaxs[fr->callno]->owner ? iaxs[fr->callno]->owner->name : "<Unknown>",
+							iaxs[iaxs[fr->callno]->bridgecallno]->owner ? iaxs[iaxs[fr->callno]->bridgecallno]->owner->name : "<Unknown>");
+
+					iaxs[iaxs[fr->callno]->bridgecallno]->transferring = TRANSFER_RELEASED;
+					iaxs[fr->callno]->transferring = TRANSFER_RELEASED;
+					ast_set_flag64(iaxs[iaxs[fr->callno]->bridgecallno], IAX_ALREADYGONE);
+					ast_set_flag64(iaxs[fr->callno], IAX_ALREADYGONE);
+
+					/* Stop doing lag & ping requests */
+					stop_stuff(fr->callno);
+					stop_stuff(iaxs[fr->callno]->bridgecallno);
+
+					memset(&ied0, 0, sizeof(ied0));
+					memset(&ied1, 0, sizeof(ied1));
+					iax_ie_append_short(&ied0, IAX_IE_CALLNO, iaxs[iaxs[fr->callno]->bridgecallno]->peercallno);
+					iax_ie_append_short(&ied1, IAX_IE_CALLNO, iaxs[fr->callno]->peercallno);
+					send_command(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_TXREL, 0, ied0.buf, ied0.pos, -1);
+					send_command(iaxs[iaxs[fr->callno]->bridgecallno], AST_FRAME_IAX, IAX_COMMAND_TXREL, 0, ied1.buf, ied1.pos, -1);
+				}
+				ast_mutex_unlock(&iaxsl[iaxs[fr->callno]->bridgecallno]);
 				break;
 			case IAX_COMMAND_TXREQ:
 				try_transfer(iaxs[fr->callno], &ies);
@@ -11508,13 +11668,14 @@ immediatedial:
 			}
 
 			/* Don't actually pass these frames along */
-			if ((f.subclass.integer != IAX_COMMAND_ACK) && 
-			  (f.subclass.integer != IAX_COMMAND_TXCNT) && 
-			  (f.subclass.integer != IAX_COMMAND_TXACC) && 
-			  (f.subclass.integer != IAX_COMMAND_INVAL) &&
-			  (f.subclass.integer != IAX_COMMAND_VNAK)) { 
-			  	if (iaxs[fr->callno] && iaxs[fr->callno]->aseqno != iaxs[fr->callno]->iseqno)
+			if ((f.subclass.integer != IAX_COMMAND_ACK) &&
+				(f.subclass.integer != IAX_COMMAND_TXCNT) &&
+				(f.subclass.integer != IAX_COMMAND_TXACC) &&
+				(f.subclass.integer != IAX_COMMAND_INVAL) &&
+				(f.subclass.integer != IAX_COMMAND_VNAK)) {
+				if (iaxs[fr->callno] && iaxs[fr->callno]->aseqno != iaxs[fr->callno]->iseqno) {
 					send_command_immediate(iaxs[fr->callno], AST_FRAME_IAX, IAX_COMMAND_ACK, fr->ts, NULL, 0,fr->iseqno);
+				}
 			}
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
@@ -11575,23 +11736,58 @@ immediatedial:
 		fr->ts = (iaxs[fr->callno]->last & 0xFFFF0000L) | ntohs(mh->ts);
 		/* FIXME? Surely right here would be the right place to undo timestamp wraparound? */
 	}
+
 	/* Don't pass any packets until we're started */
-	if (!ast_test_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED)) {
+	if (!iaxs[fr->callno]
+		|| !ast_test_flag(&iaxs[fr->callno]->state, IAX_STATE_STARTED)) {
 		ast_variables_destroy(ies.vars);
 		ast_mutex_unlock(&iaxsl[fr->callno]);
 		return 1;
 	}
-	/* Don't allow connected line updates unless we are configured to */
-	if (f.frametype == AST_FRAME_CONTROL && f.subclass.integer == AST_CONTROL_CONNECTED_LINE) {
-		struct ast_party_connected_line connected;
 
-		if (!ast_test_flag64(iaxs[fr->callno], IAX_RECVCONNECTEDLINE)) {
+	if (f.frametype == AST_FRAME_CONTROL) {
+		if (!iax2_is_control_frame_allowed(f.subclass.integer)) {
+			/* Control frame not allowed to come from the wire. */
+			ast_debug(2, "Callno %d: Blocked receiving control frame %d.\n",
+				fr->callno, f.subclass.integer);
 			ast_variables_destroy(ies.vars);
 			ast_mutex_unlock(&iaxsl[fr->callno]);
 			return 1;
 		}
+		if (f.subclass.integer == AST_CONTROL_CONNECTED_LINE
+			|| f.subclass.integer == AST_CONTROL_REDIRECTING) {
+			if (iaxs[fr->callno]
+				&& !ast_test_flag64(iaxs[fr->callno], IAX_RECVCONNECTEDLINE)) {
+				/* We are not configured to allow receiving these updates. */
+				ast_debug(2, "Callno %d: Config blocked receiving control frame %d.\n",
+					fr->callno, f.subclass.integer);
+				ast_variables_destroy(ies.vars);
+				ast_mutex_unlock(&iaxsl[fr->callno]);
+				return 1;
+			}
+		}
 
-		/* Initialize defaults */
+		iax2_lock_owner(fr->callno);
+		if (iaxs[fr->callno] && iaxs[fr->callno]->owner) {
+			if (f.subclass.integer == AST_CONTROL_BUSY) {
+				iaxs[fr->callno]->owner->hangupcause = AST_CAUSE_BUSY;
+			} else if (f.subclass.integer == AST_CONTROL_CONGESTION) {
+				iaxs[fr->callno]->owner->hangupcause = AST_CAUSE_CONGESTION;
+			}
+			ast_channel_unlock(iaxs[fr->callno]->owner);
+		}
+	}
+
+	if (f.frametype == AST_FRAME_CONTROL
+		&& f.subclass.integer == AST_CONTROL_CONNECTED_LINE
+		&& iaxs[fr->callno]) {
+		struct ast_party_connected_line connected;
+
+		/*
+		 * Process a received connected line update.
+		 *
+		 * Initialize defaults.
+		 */
 		ast_party_connected_line_init(&connected);
 		connected.id.number.presentation = iaxs[fr->callno]->calling_pres;
 		connected.id.name.presentation = iaxs[fr->callno]->calling_pres;
@@ -11614,6 +11810,7 @@ immediatedial:
 		}
 		ast_party_connected_line_free(&connected);
 	}
+
 	/* Common things */
 	f.src = "IAX2";
 	f.mallocd = 0;
@@ -11633,20 +11830,23 @@ immediatedial:
 		/*iaxs[fr->callno]->last = fr->ts; (do it afterwards cos schedule/forward_delivery needs the last ts too)*/
 		fr->outoforder = 0;
 	} else {
-		if (iaxdebug && iaxs[fr->callno])
-			ast_debug(1, "Received out of order packet... (type=%d, subclass %d, ts = %d, last = %d)\n", f.frametype, f.subclass.integer, fr->ts, iaxs[fr->callno]->last);
+		if (iaxdebug && iaxs[fr->callno]) {
+			ast_debug(1, "Received out of order packet... (type=%u, subclass %d, ts = %u, last = %u)\n", f.frametype, f.subclass.integer, fr->ts, iaxs[fr->callno]->last);
+		}
 		fr->outoforder = -1;
 	}
 	fr->cacheable = ((f.frametype == AST_FRAME_VOICE) || (f.frametype == AST_FRAME_VIDEO));
-	duped_fr = iaxfrdup2(fr);
-	if (duped_fr) {
-		schedule_delivery(duped_fr, updatehistory, 0, &fr->ts);
+	if (iaxs[fr->callno]) {
+		duped_fr = iaxfrdup2(fr);
+		if (duped_fr) {
+			schedule_delivery(duped_fr, updatehistory, 0, &fr->ts);
+		}
 	}
 	if (iaxs[fr->callno] && iaxs[fr->callno]->last < fr->ts) {
 		iaxs[fr->callno]->last = fr->ts;
 #if 1
 		if (iaxdebug)
-			ast_debug(1, "For call=%d, set last=%d\n", fr->callno, fr->ts);
+			ast_debug(1, "For call=%d, set last=%u\n", fr->callno, fr->ts);
 #endif
 	}
 
@@ -11752,11 +11952,10 @@ static void *iax2_process_thread(void *data)
 			break;
 		}
 
-		if (thread->iostate == IAX_IOSTATE_IDLE)
-			continue;
-
 		/* See what we need to do */
 		switch (thread->iostate) {
+		case IAX_IOSTATE_IDLE:
+			continue;
 		case IAX_IOSTATE_READY:
 			thread->actions++;
 			thread->iostate = IAX_IOSTATE_PROCESSING;
@@ -11769,14 +11968,10 @@ static void *iax2_process_thread(void *data)
 #ifdef SCHED_MULTITHREADED
 			thread->schedfunc(thread->scheddata);
 #endif		
+			break;
 		default:
 			break;
 		}
-		time(&thread->checktime);
-		thread->iostate = IAX_IOSTATE_IDLE;
-#ifdef DEBUG_SCHED_MULTITHREAD
-		thread->curfunc[0]='\0';
-#endif		
 
 		/* The network thread added us to the active_thread list when we were given
 		 * frames to process, Now that we are done, we must remove ourselves from
@@ -11787,12 +11982,18 @@ static void *iax2_process_thread(void *data)
 
 		/* Make sure another frame didn't sneak in there after we thought we were done. */
 		handle_deferred_full_frames(thread);
+
+		time(&thread->checktime);
+		thread->iostate = IAX_IOSTATE_IDLE;
+#ifdef DEBUG_SCHED_MULTITHREAD
+		thread->curfunc[0]='\0';
+#endif
 	}
 
 	/*!
-	 * \note For some reason, idle threads are exiting without being removed
-	 * from an idle list, which is causing memory corruption.  Forcibly remove
-	 * it from the list, if it's there.
+	 * \note For some reason, idle threads are exiting without being
+	 * removed from an idle list, which is causing memory
+	 * corruption.  Forcibly remove it from the list, if it's there.
 	 */
 	AST_LIST_LOCK(&idle_list);
 	AST_LIST_REMOVE(&idle_list, thread, list);
@@ -12231,16 +12432,26 @@ static int start_network_thread(void)
 			ast_cond_init(&thread->cond, NULL);
 			ast_mutex_init(&thread->init_lock);
 			ast_cond_init(&thread->init_cond, NULL);
+
+			ast_mutex_lock(&thread->init_lock);
+
 			if (ast_pthread_create_background(&thread->threadid, NULL, iax2_process_thread, thread)) {
 				ast_log(LOG_WARNING, "Failed to create new thread!\n");
 				ast_mutex_destroy(&thread->lock);
 				ast_cond_destroy(&thread->cond);
+				ast_mutex_unlock(&thread->init_lock);
 				ast_mutex_destroy(&thread->init_lock);
 				ast_cond_destroy(&thread->init_cond);
 				ast_free(thread);
 				thread = NULL;
 				continue;
 			}
+			/* Wait for the thread to be ready */
+			ast_cond_wait(&thread->init_cond, &thread->init_lock);
+
+			/* Done with init_lock */
+			ast_mutex_unlock(&thread->init_lock);
+
 			AST_LIST_LOCK(&idle_list);
 			AST_LIST_INSERT_TAIL(&idle_list, thread, list);
 			AST_LIST_UNLOCK(&idle_list);
@@ -12454,7 +12665,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 			peer->pokefreqok = DEFAULT_FREQ_OK;
 			peer->pokefreqnotok = DEFAULT_FREQ_NOTOK;
 			peer->maxcallno = 0;
-			peercnt_modify(0, 0, &peer->addr);
+			peercnt_modify((unsigned char) 0, 0, &peer->addr);
 			peer->calltoken_required = CALLTOKEN_DEFAULT;
 			ast_string_field_set(peer,context,"");
 			ast_string_field_set(peer,peercontext,"");
@@ -12639,7 +12850,7 @@ static struct iax2_peer *build_peer(const char *name, struct ast_variable *v, st
 				if (sscanf(v->value, "%10hu", &peer->maxcallno) != 1) {
 					ast_log(LOG_WARNING, "maxcallnumbers must be set to a valid number. %s is not valid at line %d.\n", v->value, v->lineno);
 				} else {
-					peercnt_modify(1, peer->maxcallno, &peer->addr);
+					peercnt_modify((unsigned char) 1, peer->maxcallno, &peer->addr);
 				}
 			} else if (!strcasecmp(v->name, "requirecalltoken")) {
 				/* default is required unless in optional ip list */
@@ -13930,8 +14141,9 @@ static int function_iaxpeer(struct ast_channel *chan, const char *cmd, char *dat
 	/* if our channel, return the IP address of the endpoint of current channel */
 	if (!strcmp(peername,"CURRENTCHANNEL")) {
 	        unsigned short callno;
-		if (chan->tech != &iax2_tech)
+		if (!chan || chan->tech != &iax2_tech) {
 			return -1;
+		}
 		callno = PTR_TO_CALLNO(chan->tech_pvt);	
 		ast_copy_string(buf, iaxs[callno]->addr.sin_addr.s_addr ? ast_inet_ntoa(iaxs[callno]->addr.sin_addr) : "", len);
 		return 0;
@@ -14051,7 +14263,7 @@ static int iax2_devicestate(void *data)
 		return res;
 
 	res = AST_DEVICE_UNAVAILABLE;
-	ast_debug(3, "iax2_devicestate: Found peer. What's device state of %s? addr=%d, defaddr=%d maxms=%d, lastms=%d\n",
+	ast_debug(3, "Found peer. What's device state of %s? addr=%u, defaddr=%u maxms=%d, lastms=%d\n",
 		pds.peer, ast_sockaddr_ipv4(&p->addr), p->defaddr.sin_addr.s_addr, p->maxms, p->lastms);
 	
 	if ((ast_sockaddr_ipv4(&p->addr) || p->defaddr.sin_addr.s_addr) &&
@@ -14340,7 +14552,7 @@ static void cleanup_thread_list(void *head)
 	struct iax2_thread *thread;
 
 	AST_LIST_LOCK(list_head);
-	while ((thread = AST_LIST_REMOVE_HEAD(&idle_list, list))) {
+	while ((thread = AST_LIST_REMOVE_HEAD(list_head, list))) {
 		pthread_t thread_id = thread->threadid;
 
 		thread->stop = 1;
@@ -14382,9 +14594,9 @@ static int __unload_module(void)
 	}
 
 	/* Call for all threads to halt */
-	cleanup_thread_list(&idle_list);
 	cleanup_thread_list(&active_list);
 	cleanup_thread_list(&dynamic_list);
+	cleanup_thread_list(&idle_list);
 
 	ast_netsock_release(netsock);
 	ast_netsock_release(outsock);

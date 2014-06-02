@@ -20,7 +20,7 @@
  *
  * \author Kevin P. Fleming <kpfleming@digium.com>
  * \author Ben Winslow
- * 
+ *
  * \ingroup functions
  */
 
@@ -77,6 +77,20 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<parameter name="item" required="true">
 				<para>Standard items (provided by all channel technologies) are:</para>
 				<enumlist>
+					<enum name="amaflags">
+						<para>R/W the Automatic Message Accounting (AMA) flags on the channel.
+						When read from a channel, the integer value will always be returned.
+						When written to a channel, both the string format or integer value
+						is accepted.</para>
+						<enumlist>
+							<enum name="1"><para><literal>OMIT</literal></para></enum>
+							<enum name="2"><para><literal>BILLING</literal></para></enum>
+							<enum name="3"><para><literal>DOCUMENTATION</literal></para></enum>
+						</enumlist>
+					</enum>
+					<enum name="accountcode">
+						<para>R/W the channel's account code.</para>
+					</enum>
 					<enum name="audioreadformat">
 						<para>R/O format currently being read.</para>
 					</enum>
@@ -207,15 +221,34 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 						<para>     <literal>audio</literal>             Get audio destination</para>
 						<para>     <literal>video</literal>             Get video destination</para>
 						<para>     <literal>text</literal>              Get text destination</para>
+						<para>   Defaults to <literal>audio</literal> if unspecified.</para>
+					</enum>
+					<enum name="rtpsource">
+						<para>R/O Get source RTP destination information.</para>
+						<para>   This option takes one additional argument:</para>
+						<para>    Argument 1:</para>
+						<para>     <literal>audio</literal>             Get audio destination</para>
+						<para>     <literal>video</literal>             Get video destination</para>
+						<para>     <literal>text</literal>              Get text destination</para>
+						<para>   Defaults to <literal>audio</literal> if unspecified.</para>
 					</enum>
 				</enumlist>
 				<para><emphasis>chan_iax2</emphasis> provides the following additional options:</para>
 				<enumlist>
+					<enum name="osptoken">
+						<para>R/O Get the peer's osptoken.</para>
+					</enum>
 					<enum name="peerip">
 						<para>R/O Get the peer's ip address.</para>
 					</enum>
 					<enum name="peername">
 						<para>R/O Get the peer's username.</para>
+					</enum>
+					<enum name="secure_signaling">
+						<para>R/O Get the if the IAX channel is secured.</para>
+					</enum>
+					<enum name="secure_media">
+						<para>R/O Get the if the IAX channel is secured.</para>
 					</enum>
 				</enumlist>
 				<para><emphasis>chan_dahdi</emphasis> provides the following additional options:</para>
@@ -304,6 +337,11 @@ static int func_channel_read(struct ast_channel *chan, const char *function,
 			     char *data, char *buf, size_t len)
 {
 	int ret = 0;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
 
 	if (!strcasecmp(data, "audionativeformat"))
 		/* use the _multiple version when chan->nativeformats holds multiple formats */
@@ -453,7 +491,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 #ifdef CHANNEL_TRACE
 	else if (!strcasecmp(data, "trace")) {
 		ast_channel_lock(chan);
-		if (ast_true(value)) 
+		if (ast_true(value))
 			ret = ast_channel_trace_enable(chan);
 		else if (ast_false(value))
 			ret = ast_channel_trace_disable(chan);
@@ -468,7 +506,7 @@ static int func_channel_write_real(struct ast_channel *chan, const char *functio
 		struct ast_tone_zone *new_zone;
 		if (!(new_zone = ast_get_indication_zone(value))) {
 			ast_log(LOG_ERROR, "Unknown country code '%s' for tonezone. Check indications.conf for available country codes.\n", value);
-			ret = -1;	
+			ret = -1;
 		} else {
 			ast_channel_lock(chan);
 			if (chan->zone) {
@@ -547,6 +585,11 @@ static int func_channel_write(struct ast_channel *chan, const char *function, ch
 		.value = value,
 	};
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
 	res = func_channel_write_real(chan, function, data, value);
 	ast_channel_setoption(chan, AST_OPTION_CHANNEL_WRITE, &write_info, sizeof(write_info), 0);
 
@@ -620,8 +663,15 @@ static struct ast_custom_function channels_function = {
 static int func_mchan_read(struct ast_channel *chan, const char *function,
 			     char *data, struct ast_str **buf, ssize_t len)
 {
-	struct ast_channel *mchan = ast_channel_get_by_name(chan->linkedid);
+	struct ast_channel *mchan;
 	char *template = ast_alloca(4 + strlen(data));
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
+	mchan = ast_channel_get_by_name(chan->linkedid);
 	sprintf(template, "${%s}", data); /* SAFE */
 	ast_str_substitute_variables(buf, len, mchan ? mchan : chan, template);
 	if (mchan) {
@@ -633,7 +683,14 @@ static int func_mchan_read(struct ast_channel *chan, const char *function,
 static int func_mchan_write(struct ast_channel *chan, const char *function,
 			      char *data, const char *value)
 {
-	struct ast_channel *mchan = ast_channel_get_by_name(chan->linkedid);
+	struct ast_channel *mchan;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
+	mchan = ast_channel_get_by_name(chan->linkedid);
 	pbx_builtin_setvar_helper(mchan ? mchan : chan, data, value);
 	if (mchan) {
 		ast_channel_unref(mchan);

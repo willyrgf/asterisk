@@ -332,7 +332,7 @@ static void analog_swap_subs(struct analog_pvt *p, enum analog_sub a, enum analo
 	int tinthreeway;
 	struct ast_channel *towner;
 
-	ast_debug(1, "Swapping %d and %d\n", a, b);
+	ast_debug(1, "Swapping %u and %u\n", a, b);
 
 	towner = p->subs[a].owner;
 	p->subs[a].owner = p->subs[b].owner;
@@ -679,13 +679,11 @@ static int analog_is_dialing(struct analog_pvt *p, enum analog_sub index)
  * \param p Analog private structure.
  * \param inthreeway TRUE if the 3-way call is conferenced.
  *
- * \note
- * On entry these locks are held: real-call, private, 3-way call.
+ * \note On entry these locks are held: real-call, private, 3-way call.
+ * \note On exit these locks are held: real-call, private.
  *
- * \retval 1 Transfer successful.  3-way call is unlocked and subchannel is unalloced.
- *         Swapped real and 3-way subchannel.
- * \retval 0 Transfer successful.  3-way call is unlocked and subchannel is unalloced.
- * \retval -1 on error.  Caller must unlock 3-way call.
+ * \retval 0 on success.
+ * \retval -1 on error.
  */
 static int analog_attempt_transfer(struct analog_pvt *p, int inthreeway)
 {
@@ -693,6 +691,7 @@ static int analog_attempt_transfer(struct analog_pvt *p, int inthreeway)
 	struct ast_channel *owner_3way;
 	struct ast_channel *bridge_real;
 	struct ast_channel *bridge_3way;
+	int ret = 0;
 
 	owner_real = p->subs[ANALOG_SUB_REAL].owner;
 	owner_3way = p->subs[ANALOG_SUB_THREEWAY].owner;
@@ -720,15 +719,8 @@ static int analog_attempt_transfer(struct analog_pvt *p, int inthreeway)
 			bridge_3way, &owner_3way->connected, !inthreeway)) {
 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
 				bridge_3way->name, owner_real->name);
-			return -1;
+			ret = -1;
 		}
-
-		/* Three-way is now the REAL */
-		analog_swap_subs(p, ANALOG_SUB_THREEWAY, ANALOG_SUB_REAL);
-		ast_channel_unlock(owner_3way);
-		analog_unalloc_sub(p, ANALOG_SUB_THREEWAY);
-		/* Tell the caller not to hangup */
-		return 1;
 	} else if (bridge_real) {
 		/* Try transferring the other way. */
 		ast_verb(3, "TRANSFERRING %s to %s\n", owner_real->name, owner_3way->name);
@@ -746,18 +738,19 @@ static int analog_attempt_transfer(struct analog_pvt *p, int inthreeway)
 			!inthreeway, bridge_real, &owner_real->connected, 0)) {
 			ast_log(LOG_WARNING, "Unable to masquerade %s as %s\n",
 				bridge_real->name, owner_3way->name);
-			return -1;
+			ret = -1;
 		}
-
-		/* Orphan the channel after releasing the lock */
-		ast_channel_unlock(owner_3way);
-		analog_unalloc_sub(p, ANALOG_SUB_THREEWAY);
-		return 0;
 	} else {
 		ast_debug(1, "Neither %s nor %s are in a bridge, nothing to transfer\n",
 			owner_real->name, owner_3way->name);
-		return -1;
+		ret = -1;
 	}
+
+	if (ret) {
+		ast_softhangup_nolock(owner_3way, AST_SOFTHANGUP_DEV);
+	}
+	ast_channel_unlock(owner_3way);
+	return ret;
 }
 
 static int analog_update_conf(struct analog_pvt *p)
@@ -1599,7 +1592,7 @@ void analog_handle_dtmf(struct analog_pvt *p, struct ast_channel *ast, enum anal
 
 	ast_debug(1, "%s DTMF digit: 0x%02X '%c' on %s\n",
 		f->frametype == AST_FRAME_DTMF_BEGIN ? "Begin" : "End",
-		f->subclass.integer, f->subclass.integer, ast->name);
+		(unsigned)f->subclass.integer, f->subclass.integer, ast->name);
 
 	if (analog_check_confirmanswer(p)) {
 		if (f->frametype == AST_FRAME_DTMF_END) {
@@ -2692,7 +2685,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 
 	res = analog_get_event(p);
 
-	ast_debug(1, "Got event %s(%d) on channel %d (index %d)\n", analog_event2str(res), res, p->channel, idx);
+	ast_debug(1, "Got event %s(%d) on channel %d (index %u)\n", analog_event2str(res), res, p->channel, idx);
 
 	if (res & (ANALOG_EVENT_PULSEDIGIT | ANALOG_EVENT_DTMFUP)) {
 		analog_set_pulsedial(p, (res & ANALOG_EVENT_PULSEDIGIT) ? 1 : 0);
@@ -2854,7 +2847,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					}
 
 					mssinceflash = ast_tvdiff_ms(ast_tvnow(), p->flashtime);
-					ast_debug(1, "Last flash was %d ms ago\n", mssinceflash);
+					ast_debug(1, "Last flash was %u ms ago\n", mssinceflash);
 					if (mssinceflash < MIN_MS_SINCE_FLASH) {
 						/* It hasn't been long enough since the last flashook.  This is probably a bounce on
 						   hanging up.  Hangup both channels now */
@@ -2881,16 +2874,13 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 								analog_set_new_owner(p, NULL);
 								/* Ring the phone */
 								analog_ring(p);
-							} else {
-								res = analog_attempt_transfer(p, inthreeway);
-								if (res < 0) {
-									/* Transfer attempt failed. */
-									ast_softhangup_nolock(p->subs[ANALOG_SUB_THREEWAY].owner, AST_SOFTHANGUP_DEV);
-									ast_channel_unlock(p->subs[ANALOG_SUB_THREEWAY].owner);
-								} else if (res) {
-									/* Don't actually hang up at this point */
-									break;
-								}
+							} else if (!analog_attempt_transfer(p, inthreeway)) {
+								/*
+								 * Transfer successful.  Don't actually hang up at this point.
+								 * Let our channel legs of the calls die off as the transfer
+								 * percolates through the core.
+								 */
+								break;
 							}
 						} else {
 							ast_softhangup_nolock(p->subs[ANALOG_SUB_THREEWAY].owner, AST_SOFTHANGUP_DEV);
@@ -2907,7 +2897,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 					}
 				}
 			} else {
-				ast_log(LOG_WARNING, "Got a hangup and my index is %d?\n", idx);
+				ast_log(LOG_WARNING, "Got a hangup and my index is %u?\n", idx);
 			}
 			/* Fall through */
 		default:
@@ -3020,7 +3010,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				}
 				break;
 			default:
-				ast_log(LOG_WARNING, "FXO phone off hook in weird state %d??\n", ast->_state);
+				ast_log(LOG_WARNING, "FXO phone off hook in weird state %u??\n", ast->_state);
 			}
 			break;
 		case ANALOG_SIG_FXSLS:
@@ -3072,7 +3062,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 				}
 				/* Fall through */
 			default:
-				ast_log(LOG_WARNING, "Ring/Off-hook in strange state %d on channel %d\n", ast->_state, p->channel);
+				ast_log(LOG_WARNING, "Ring/Off-hook in strange state %u on channel %d\n", ast->_state, p->channel);
 				break;
 			}
 			break;
@@ -3126,7 +3116,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 		case ANALOG_SIG_FXOLS:
 		case ANALOG_SIG_FXOGS:
 		case ANALOG_SIG_FXOKS:
-			ast_debug(1, "Winkflash, index: %d, normal: %d, callwait: %d, thirdcall: %d\n",
+			ast_debug(1, "Winkflash, index: %u, normal: %d, callwait: %d, thirdcall: %d\n",
 				idx, analog_get_sub_fd(p, ANALOG_SUB_REAL), analog_get_sub_fd(p, ANALOG_SUB_CALLWAIT), analog_get_sub_fd(p, ANALOG_SUB_THREEWAY));
 
 			/* Cancel any running CallerID spill */
@@ -3134,7 +3124,7 @@ static struct ast_frame *__analog_handle_event(struct analog_pvt *p, struct ast_
 			p->callwaitcas = 0;
 
 			if (idx != ANALOG_SUB_REAL) {
-				ast_log(LOG_WARNING, "Got flash hook with index %d on channel %d?!?\n", idx, p->channel);
+				ast_log(LOG_WARNING, "Got flash hook with index %u on channel %d?!?\n", idx, p->channel);
 				goto winkflashdone;
 			}
 
@@ -3344,7 +3334,7 @@ winkflashdone:
 			if (p->dialing) {
 				ast_debug(1, "Ignoring wink on channel %d\n", p->channel);
 			} else {
-				ast_debug(1, "Got wink in weird state %d on channel %d\n", ast->_state, p->channel);
+				ast_debug(1, "Got wink in weird state %u on channel %d\n", ast->_state, p->channel);
 			}
 			break;
 		case ANALOG_SIG_FEATDMF_TA:
@@ -3482,7 +3472,7 @@ winkflashdone:
 				case AST_STATE_PRERING:				/*!< Channel has detected an incoming call and is waiting for ring */
 				default:
 					if (p->answeronpolarityswitch || p->hanguponpolarityswitch) {
-						ast_debug(1, "Ignoring Polarity switch on channel %d, state %d\n", p->channel, ast->_state);
+						ast_debug(1, "Ignoring Polarity switch on channel %d, state %u\n", p->channel, ast->_state);
 					}
 					break;
 				}
@@ -3493,20 +3483,20 @@ winkflashdone:
 				case AST_STATE_DIALING:		/*!< Digits (or equivalent) have been dialed */
 				case AST_STATE_RINGING:		/*!< Remote end is ringing */
 					if (p->answeronpolarityswitch) {
-						ast_debug(1, "Polarity switch detected but NOT answering (too close to OffHook event) on channel %d, state %d\n", p->channel, ast->_state);
+						ast_debug(1, "Polarity switch detected but NOT answering (too close to OffHook event) on channel %d, state %u\n", p->channel, ast->_state);
 					}
 					break;
 
 				case AST_STATE_UP:			/*!< Line is up */
 				case AST_STATE_RING:		/*!< Line is ringing */
 					if (p->hanguponpolarityswitch) {
-						ast_debug(1, "Polarity switch detected but NOT hanging up (too close to Answer event) on channel %d, state %d\n", p->channel, ast->_state);
+						ast_debug(1, "Polarity switch detected but NOT hanging up (too close to Answer event) on channel %d, state %u\n", p->channel, ast->_state);
 					}
 					break;
 
 				default:
 					if (p->answeronpolarityswitch || p->hanguponpolarityswitch) {
-						ast_debug(1, "Polarity switch detected (too close to previous event) on channel %d, state %d\n", p->channel, ast->_state);
+						ast_debug(1, "Polarity switch detected (too close to previous event) on channel %d, state %u\n", p->channel, ast->_state);
 					}
 					break;
 				}
@@ -3514,7 +3504,7 @@ winkflashdone:
 		}
 
 		/* Added more log_debug information below to provide a better indication of what is going on */
-		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %d, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
+		ast_debug(1, "Polarity Reversal event occured - DEBUG 2: channel %d, state %u, pol= %d, aonp= %d, honp= %d, pdelay= %d, tv= %" PRIi64 "\n", p->channel, ast->_state, p->polarity, p->answeronpolarityswitch, p->hanguponpolarityswitch, p->polarityonanswerdelay, ast_tvdiff_ms(ast_tvnow(), p->polaritydelaytv) );
 		break;
 	default:
 		ast_debug(1, "Dunno what to do with event %d on channel %d\n", res, p->channel);

@@ -1104,14 +1104,12 @@ struct H245AudioCapability* ooCapabilityCreateNonStandardCapability
    (ooH323EpCapability *epCap, OOCTXT* pctxt, int dir)
 {
    H245AudioCapability *pAudio=NULL;
-   OOCapParams *params;
    if(!epCap || !epCap->params)
    {
      OOTRACEERR1("Error:Invalid capability parameters to "
                  "ooCapabilityCreateSimpleCapability.\n");
      return NULL;
    }
-   params =(OOCapParams*)epCap->params;
    pAudio = (H245AudioCapability*)memAlloc(pctxt, 
                                                 sizeof(H245AudioCapability));
    if(!pAudio)
@@ -1228,7 +1226,6 @@ struct H245DataApplicationCapability* ooCapabilityCreateT38Capability
    (ooH323EpCapability *epCap, OOCTXT* pctxt, int dir)
 {
    H245DataApplicationCapability *pT38=NULL;
-   OOCapParams *params;
    H245DataMode_application *pT38app;
    if(!epCap || !epCap->params)
    {
@@ -1236,7 +1233,6 @@ struct H245DataApplicationCapability* ooCapabilityCreateT38Capability
                  "ooCapabilityCreateSimpleCapability.\n");
      return NULL;
    }
-   params =(OOCapParams*)epCap->params;
    pT38 = (H245DataApplicationCapability*)memAlloc(pctxt, 
                                                 sizeof(H245DataApplicationCapability));
    if(!pT38)
@@ -2939,6 +2935,22 @@ int ooCapabilityUpdateJointCapabilities
        epCap = ooIsT38Supported(call, cap->u.receiveAndTransmitDataApplicationCapability, OORX);
       break;
 
+
+   case T_H245Capability_receiveAndTransmitUserInputCapability:
+      if((cap->u.receiveAndTransmitUserInputCapability->t == 
+                                 T_H245UserInputCapability_basicString) &&
+         (call->dtmfmode & OO_CAP_DTMF_H245_alphanumeric))
+      {
+         call->jointDtmfMode |= OO_CAP_DTMF_H245_alphanumeric;
+         return OO_OK;
+      }
+      else if((cap->u.receiveAndTransmitUserInputCapability->t ==
+               T_H245UserInputCapability_dtmf) &&
+               (call->dtmfmode & OO_CAP_DTMF_H245_signal))
+      {
+         call->jointDtmfMode |= OO_CAP_DTMF_H245_signal;
+         return OO_OK;
+      }
 
    case T_H245Capability_receiveUserInputCapability:
       if((cap->u.receiveUserInputCapability->t == 

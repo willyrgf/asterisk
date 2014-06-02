@@ -147,6 +147,10 @@ AST_THREADSTORAGE(tmp_buf);
 			<para>Literally returns the given <replaceable>string</replaceable>.  The intent is to permit
 			other dialplan functions which take a variable name as an argument to be able to take a literal
 			string, instead.</para>
+			<note><para>The functions which take a variable name need to be passed var and not
+			${var}.  Similarly, use PASSTHRU() and not ${PASSTHRU()}.</para></note>
+			<para>Example: ${CHANNEL} contains SIP/321-1</para>
+			<para>         ${CUT(PASSTHRU(${CUT(CHANNEL,-,1)}),/,2)}) will return 321</para>
 		</description>
 	</function>
 	<function name="REGEX" language="en_US">
@@ -331,7 +335,7 @@ AST_THREADSTORAGE(tmp_buf);
 			<parameter name="string" required="true" />
 		</syntax>
 		<description>
-			<para>Example: ${QUOTE(ab"c"de)} will return "abcde"</para>
+			<para>Example: ${QUOTE(ab"c"de)} will return ""ab\"c\"de""</para>
 		</description>
 	</function>
 	<function name="CSV_QUOTE" language="en_US">
@@ -776,7 +780,7 @@ static int replace(struct ast_channel *chan, const char *cmd, char *data, struct
 		AST_APP_ARG(replace);
 	);
 	char *strptr, *varsubst;
-	struct ast_str *str = ast_str_thread_get(&result_buf, 16);
+	RAII_VAR(struct ast_str *, str, ast_str_create(16), ast_free);
 	char find[256]; /* Only 256 characters possible */
 	char replace[2] = "";
 	size_t unused;
@@ -819,8 +823,7 @@ static int replace(struct ast_channel *chan, const char *cmd, char *data, struct
 		 * directly there */
 		if (strchr(find, *strptr)) {
 			if (ast_strlen_zero(replace)) {
-				/* Remove character */
-				strcpy(strptr, strptr + 1); /* SAFE */
+				memmove(strptr, strptr + 1, strlen(strptr + 1) + 1);
 				strptr--;
 			} else {
 				/* Replace character */
@@ -987,6 +990,11 @@ static int hashkeys_read(struct ast_channel *chan, const char *cmd, char *data, 
 	struct ast_var_t *newvar;
 	struct ast_str *prefix = ast_str_alloca(80);
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
 	ast_str_set(&prefix, -1, HASH_PREFIX, data);
 	memset(buf, 0, len);
 
@@ -1008,6 +1016,11 @@ static int hashkeys_read2(struct ast_channel *chan, const char *cmd, char *data,
 	struct ast_var_t *newvar;
 	struct ast_str *prefix = ast_str_alloca(80);
 	char *tmp;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
 
 	ast_str_set(&prefix, -1, HASH_PREFIX, data);
 
@@ -1077,6 +1090,11 @@ static int hash_read(struct ast_channel *chan, const char *cmd, char *data, char
 		AST_DECLARE_APP_ARGS(arg2,
 			AST_APP_ARG(col)[100];
 		);
+
+		if (!chan) {
+			ast_log(LOG_WARNING, "No channel and only 1 parameter was provided to %s function.\n", cmd);
+			return -1;
+		}
 
 		/* Get column names, in no particular order */
 		hashkeys_read(chan, "HASHKEYS", arg.hashname, colnames, sizeof(colnames));
@@ -1587,9 +1605,85 @@ AST_TEST_DEFINE(test_FIELDNUM)
 
 	for (i = 0; i < ARRAY_LEN(test_args); i++) {
 		struct ast_var_t *var = ast_var_assign("FIELDS", test_args[i].fields);
+		if (!var) {
+			ast_test_status_update(test, "Out of memory\n");
+			res = AST_TEST_FAIL;
+			break;
+		}
+
 		AST_LIST_INSERT_HEAD(&chan->varshead, var, entries);
 
 		snprintf(expression, sizeof(expression), "${FIELDNUM(%s,%s,%s)}", var->name, test_args[i].delim, test_args[i].field);
+		ast_str_substitute_variables(&str, 0, chan, expression);
+
+		AST_LIST_REMOVE(&chan->varshead, var, entries);
+		ast_var_delete(var);
+
+		if (strcasecmp(ast_str_buffer(str), test_args[i].expected)) {
+			ast_test_status_update(test, "Evaluation of '%s' returned '%s' instead of the expected value '%s'\n",
+				expression, ast_str_buffer(str), test_args[i].expected);
+			res = AST_TEST_FAIL;
+			break;
+		}
+	}
+
+	ast_free(str);
+	ast_channel_release(chan);
+
+	return res;
+}
+
+AST_TEST_DEFINE(test_REPLACE)
+{
+	int i, res = AST_TEST_PASS;
+	struct ast_channel *chan;
+	struct ast_str *str;
+	char expression[256];
+	struct {
+		const char *test_string;
+		const char *find_chars;
+		const char *replace_char;
+		const char *expected;
+	} test_args[] = {
+		{"abc,def", "\\,", "-", "abc-def"},
+		{"abc,abc", "bc",  "a", "aaa,aaa"},
+		{"abc,def", "x",   "?", "abc,def"},
+		{"abc,def", "\\,", "",  "abcdef"}
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "func_REPLACE_test";
+		info->category = "/funcs/func_strings/";
+		info->summary = "Test REPLACE function";
+		info->description = "Verify REPLACE behavior";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (!(chan = ast_dummy_channel_alloc())) {
+		ast_test_status_update(test, "Unable to allocate dummy channel\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (!(str = ast_str_create(16))) {
+		ast_test_status_update(test, "Unable to allocate dynamic string buffer\n");
+		ast_channel_release(chan);
+		return AST_TEST_FAIL;
+	}
+
+	for (i = 0; i < ARRAY_LEN(test_args); i++) {
+		struct ast_var_t *var = ast_var_assign("TEST_STRING", test_args[i].test_string);
+		if (!var) {
+			ast_test_status_update(test, "Out of memory\n");
+			res = AST_TEST_FAIL;
+			break;
+		}
+
+		AST_LIST_INSERT_HEAD(&chan->varshead, var, entries);
+
+		snprintf(expression, sizeof(expression), "${REPLACE(%s,%s,%s)}", var->name, test_args[i].find_chars, test_args[i].replace_char);
 		ast_str_substitute_variables(&str, 0, chan, expression);
 
 		AST_LIST_REMOVE(&chan->varshead, var, entries);
@@ -1650,6 +1744,7 @@ static int unload_module(void)
 	int res = 0;
 
 	AST_TEST_UNREGISTER(test_FIELDNUM);
+	AST_TEST_UNREGISTER(test_REPLACE);
 	AST_TEST_UNREGISTER(test_FILTER);
 	res |= ast_custom_function_unregister(&fieldqty_function);
 	res |= ast_custom_function_unregister(&fieldnum_function);
@@ -1684,6 +1779,7 @@ static int load_module(void)
 	int res = 0;
 
 	AST_TEST_REGISTER(test_FIELDNUM);
+	AST_TEST_REGISTER(test_REPLACE);
 	AST_TEST_REGISTER(test_FILTER);
 	res |= ast_custom_function_register(&fieldqty_function);
 	res |= ast_custom_function_register(&fieldnum_function);

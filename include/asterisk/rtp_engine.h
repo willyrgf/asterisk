@@ -412,7 +412,9 @@ struct ast_rtp_glue {
 	enum ast_rtp_glue_result (*get_trtp_info)(struct ast_channel *chan, struct ast_rtp_instance **instance);
 	/*! Callback for updating the destination that the remote side should send RTP to */
 	int (*update_peer)(struct ast_channel *chan, struct ast_rtp_instance *instance, struct ast_rtp_instance *vinstance, struct ast_rtp_instance *tinstance, format_t codecs, int nat_active);
-	/*! Callback for retrieving codecs that the channel can do */
+	/*! Callback for retrieving codecs that the channel can do
+	 * \note chan will be locked when this function is called
+	 */
 	format_t (*get_codec)(struct ast_channel *chan);
 	/*! Linked list information */
 	AST_RWLIST_ENTRY(ast_rtp_glue) entry;
@@ -1411,12 +1413,12 @@ struct ast_rtp_instance *ast_rtp_instance_get_bridged(struct ast_rtp_instance *i
 /*!
  * \brief Make two channels compatible for early bridging
  *
- * \param c0 First channel part of the bridge
- * \param c1 Second channel part of the bridge
+ * \param c_dst Destination channel to copy to
+ * \param c_src Source channel to copy from
  *
  * \since 1.8
  */
-void ast_rtp_instance_early_bridge_make_compatible(struct ast_channel *c0, struct ast_channel *c1);
+void ast_rtp_instance_early_bridge_make_compatible(struct ast_channel *c_dst, struct ast_channel *c_src);
 
 /*!
  * \brief Early bridge two channels that use RTP instances

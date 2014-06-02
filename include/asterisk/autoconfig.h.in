@@ -29,6 +29,9 @@
 /* Define to 1 if using `alloca.c'. */
 #undef C_ALLOCA
 
+/* Use the FreeRADIUS-client library */
+#undef FREERADIUS_CLIENT
+
 /* Define to 1 if you have the `acos' function. */
 #undef HAVE_ACOS
 
@@ -603,6 +606,10 @@
 /* Define to 1 if PRI has the ISDN service messages feature. */
 #undef HAVE_PRI_SERVICE_MESSAGES
 
+/* Define to 1 if PRI has the ISDN PRI progress inband ie in SETUP ACK
+   feature. */
+#undef HAVE_PRI_SETUP_ACK_INBAND
+
 /* Define to 1 if PRI has the ISDN PRI keypad facility in SETUP feature. */
 #undef HAVE_PRI_SETUP_KEYPAD
 
@@ -739,6 +746,9 @@
 /* Define to 1 if you have the Secure RTP library. */
 #undef HAVE_SRTP
 
+/* Define to 1 if SRTP has the SRTP Library Shutdown Function feature. */
+#undef HAVE_SRTP_SHUTDOWN
+
 /* Define to 1 if you have the ISDN SS7 library. */
 #undef HAVE_SS7
 
@@ -836,6 +846,15 @@
 
 /* Define to 1 if `st_blksize' is a member of `struct stat'. */
 #undef HAVE_STRUCT_STAT_ST_BLKSIZE
+
+/* Define to 1 if `st_mtim' is a member of `struct stat'. */
+#undef HAVE_STRUCT_STAT_ST_MTIM
+
+/* Define to 1 if `st_mtimensec' is a member of `struct stat'. */
+#undef HAVE_STRUCT_STAT_ST_MTIMENSEC
+
+/* Define to 1 if `st_mtimespec' is a member of `struct stat'. */
+#undef HAVE_STRUCT_STAT_ST_MTIMESPEC
 
 /* Define to 1 if `cr_uid' is a member of `struct ucred'. */
 #undef HAVE_STRUCT_UCRED_CR_UID
@@ -1199,11 +1218,6 @@
 
 /* Define to 1 if running on Darwin. */
 #undef _DARWIN_UNLIMITED_SELECT
-
-/* Enable large inode numbers on Mac OS X 10.5.  */
-#ifndef _DARWIN_USE_64_BIT_INODE
-# define _DARWIN_USE_64_BIT_INODE 1
-#endif
 
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS

@@ -97,7 +97,7 @@ static void dump_string_hex(char *output, int maxlen, void *value, int len)
 	int i = 0;
 
 	while (len-- && (i + 1) * 4 < maxlen) {
-		sprintf(output + (4 * i), "\\x%2.2x", *((unsigned char *)value + i));
+		sprintf(output + (4 * i), "\\x%2.2x", (unsigned)*((unsigned char *)value + i));
 		i++;
 	}
 }
@@ -239,11 +239,12 @@ static void dump_prov(char *output, int maxlen, void *value, int len)
 	dump_prov_ies(output, maxlen, value, len);
 }
 
-static struct iax2_ie {
+struct iax2_ie {
 	int ie;
 	char *name;
 	void (*dump)(char *output, int maxlen, void *value, int len);
-} infoelts[] = {
+};
+static struct iax2_ie infoelts[] = {
 	{ IAX_IE_CALLED_NUMBER, "CALLED NUMBER", dump_string },
 	{ IAX_IE_CALLING_NUMBER, "CALLING NUMBER", dump_string },
 	{ IAX_IE_CALLING_ANI, "ANI", dump_string },
@@ -392,6 +393,7 @@ static void dump_ies(unsigned char *iedata, int len)
 	int found;
 	char interp[1024];
 	char tmp[1024];
+
 	if (len < 2)
 		return;
 	while(len > 2) {
@@ -604,6 +606,14 @@ void iax_showframe(struct iax_frame *f, struct ast_iax2_full_hdr *fhi, int rx, s
 		"TXFER  ",
 		"CNLINE ",
 		"REDIR  ",
+		"T38PARM",
+		"CC ERR!",/* This must never go across an IAX link. */
+		"SRCCHG ",
+		"READACT",
+		"AOC    ",
+		"ENDOFQ ",
+		"INCOMPL",
+		"UPDRTPP",
 	};
 	struct ast_iax2_full_hdr *fh;
 	char retries[20];
@@ -1111,7 +1121,7 @@ int iax_parse_ies(struct iax_ies *ies, unsigned char *data, int datalen)
 				ies->osptokenblock[count] = (char *)data + 2 + 1;
 				ies->ospblocklength[count] = len - 1;
 			} else {
-				snprintf(tmp, (int)sizeof(tmp), "Expected OSP token block index to be 0~%d but was %d\n", IAX_MAX_OSPBLOCK_NUM - 1, count);
+				snprintf(tmp, (int)sizeof(tmp), "Expected OSP token block index to be 0~%d but was %u\n", IAX_MAX_OSPBLOCK_NUM - 1, count);
 				errorf(tmp);
 			}
 			break;

@@ -155,6 +155,9 @@ static int shared_read(struct ast_channel *chan, const char *cmd, char *data, ch
 			return -1;
 		}
 		chan = c_ref;
+	} else if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
 	}
 
 	ast_channel_lock(chan);
@@ -213,6 +216,9 @@ static int shared_write(struct ast_channel *chan, const char *cmd, char *data, c
 			return -1;
 		}
 		chan = c_ref;
+	} else if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
 	}
 
 	ast_channel_lock(chan);
@@ -253,15 +259,16 @@ static int shared_write(struct ast_channel *chan, const char *cmd, char *data, c
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 
-	var = ast_var_assign(args.var, S_OR(value, ""));
-	AST_LIST_INSERT_HEAD(varshead, var, entries);
-	manager_event(EVENT_FLAG_DIALPLAN, "VarSet", 
-		"Channel: %s\r\n"
-		"Variable: SHARED(%s)\r\n"
-		"Value: %s\r\n"
-		"Uniqueid: %s\r\n", 
-		chan ? chan->name : "none", args.var, value, 
-		chan ? chan->uniqueid : "none");
+	if ((var = ast_var_assign(args.var, S_OR(value, "")))) {
+		AST_LIST_INSERT_HEAD(varshead, var, entries);
+		manager_event(EVENT_FLAG_DIALPLAN, "VarSet", 
+			"Channel: %s\r\n"
+			"Variable: SHARED(%s)\r\n"
+			"Value: %s\r\n"
+			"Uniqueid: %s\r\n", 
+			chan ? chan->name : "none", args.var, value, 
+			chan ? chan->uniqueid : "none");
+	}
 
 	ast_channel_unlock(chan);
 
