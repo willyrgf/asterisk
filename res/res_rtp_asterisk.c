@@ -176,6 +176,7 @@ struct ast_rtp {
 	struct ast_smoother *smoother;
 	int *ioid;
 	unsigned short seqno;		/*!< Sequence number, RFC 3550, page 13. */
+	unsigned short prev_frame_seqno;        /*!< Sequence number of previous packet */
 	unsigned short rxseqno;
 	struct sched_context *sched;
 	struct io_context *io;
@@ -905,6 +906,16 @@ static void ast_rtp_change_source(struct ast_rtp_instance *instance)
 	rtp->ssrc = ssrc;
 
 	return;
+}
+
+static void increment_seqno(struct ast_rtp *rtp, struct ast_frame *f)
+{
+	if (f != NULL) {
+		rtp->prev_frame_seqno = f->seqno;
+	} else {
+		rtp->prev_frame_seqno = 0;      /* Reset if we're sending DTMF or so */
+	}
+	rtp->seqno++;
 }
 
 static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw)
