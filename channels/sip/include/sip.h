@@ -156,7 +156,7 @@
  *  \todo This string should be set dynamically. We only support REFER and SUBSCRIBE if we have
  *  allowsubscribe and allowrefer on in sip.conf.
  */
-#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH"
+#define ALLOWED_METHODS "INVITE, ACK, CANCEL, OPTIONS, BYE, REFER, SUBSCRIBE, NOTIFY, INFO, PUBLISH, MESSAGE"
 
 /*! \brief Standard SIP unsecure port for UDP and TCP from RFC 3261. DO NOT CHANGE THIS */
 #define STANDARD_SIP_PORT	5060
@@ -348,13 +348,18 @@
 #define SIP_PAGE2_HAVEPEERCONTEXT           (1 << 28)   /*< Are we associated with a configured peer context? */
 #define SIP_PAGE2_USE_SRTP                  (1 << 29)   /*!< DP: Whether we should offer (only)  SRTP */
 
+#define SIP_PAGE2_TRUST_ID_OUTBOUND         (3 << 30)   /*!< DP: Do we trust the peer with private presence information? */
+#define SIP_PAGE2_TRUST_ID_OUTBOUND_LEGACY  (0 << 30)   /*!< Legacy, Do not provide private presence information, but include PAI/RPID when private */
+#define SIP_PAGE2_TRUST_ID_OUTBOUND_NO      (1 << 30)   /*!< No, Do not provide private presence information, do not include PAI/RPID when private */
+#define SIP_PAGE2_TRUST_ID_OUTBOUND_YES     (2 << 30)   /*!< Yes, provide private presence information in PAI/RPID headers */
+
 #define SIP_PAGE2_FLAGS_TO_COPY \
 	(SIP_PAGE2_ALLOWSUBSCRIBE | SIP_PAGE2_ALLOWOVERLAP | SIP_PAGE2_IGNORESDPVERSION | \
 	SIP_PAGE2_VIDEOSUPPORT | SIP_PAGE2_T38SUPPORT | SIP_PAGE2_RFC2833_COMPENSATE | \
 	SIP_PAGE2_BUGGY_MWI | SIP_PAGE2_TEXTSUPPORT | SIP_PAGE2_FAX_DETECT | \
 	SIP_PAGE2_UDPTL_DESTINATION | SIP_PAGE2_VIDEOSUPPORT_ALWAYS | SIP_PAGE2_PREFERRED_CODEC | \
 	SIP_PAGE2_RPID_IMMEDIATE | SIP_PAGE2_RPID_UPDATE | SIP_PAGE2_SYMMETRICRTP |\
-	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP)
+	SIP_PAGE2_Q850_REASON | SIP_PAGE2_HAVEPEERCONTEXT | SIP_PAGE2_USE_SRTP | SIP_PAGE2_TRUST_ID_OUTBOUND)
 
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
@@ -471,7 +476,6 @@ enum check_auth_result {
 	AUTH_SECRET_FAILED = -1,
 	AUTH_USERNAME_MISMATCH = -2,
 	AUTH_NOT_FOUND = -3,	/*!< returned by register_verify */
-	AUTH_FAKE_AUTH = -4,
 	AUTH_UNKNOWN_DOMAIN = -5,
 	AUTH_PEER_NOT_DYNAMIC = -6,
 	AUTH_ACL_FAILED = -7,
@@ -906,7 +910,6 @@ struct sip_st_dlg {
 	int st_interval;                   /*!< Session-Timers negotiated session refresh interval */
 	enum st_refresher st_ref;          /*!< Session-Timers cached refresher */
 	int st_schedid;                    /*!< Session-Timers ast_sched scheduler id */
-	int st_expirys;                    /*!< Session-Timers number of expirys */
 	int st_active_peer_ua;             /*!< Session-Timers on/off in peer UA */
 	int st_cached_min_se;              /*!< Session-Timers cached Min-SE */
 	int st_cached_max_se;              /*!< Session-Timers cached Session-Expires */
@@ -969,6 +972,7 @@ struct sip_pvt {
 		AST_STRING_FIELD(rdnis);        /*!< Referring DNIS */
 		AST_STRING_FIELD(redircause);   /*!< Referring cause */
 		AST_STRING_FIELD(theirtag);     /*!< Their tag */
+		AST_STRING_FIELD(theirprovtag); /*!< Provisional their tag, used when evaluating responses to invites */
 		AST_STRING_FIELD(tag);          /*!< Our tag for this session */
 		AST_STRING_FIELD(username);     /*!< [user] name */
 		AST_STRING_FIELD(peername);     /*!< [peer] name, not set if [user] */
@@ -1030,7 +1034,7 @@ struct sip_pvt {
 	int jointnoncodeccapability;      /*!< Joint Non codec capability */
 	format_t redircodecs;             /*!< Redirect codecs */
 	int maxcallbitrate;               /*!< Maximum Call Bitrate for Video Calls */	
-	int t38_maxdatagram;              /*!< T.38 FaxMaxDatagram override */
+	unsigned int t38_maxdatagram;              /*!< T.38 FaxMaxDatagram override */
 	int request_queue_sched_id;       /*!< Scheduler ID of any scheduled action to process queued requests */
 	int provisional_keepalive_sched_id;   /*!< Scheduler ID for provisional responses that need to be sent out to avoid cancellation */
 	const char *last_provisional;         /*!< The last successfully transmitted provisonal response message */
@@ -1233,7 +1237,7 @@ struct sip_peer {
 	int inRinging;                  /*!< Number of calls ringing */
 	int onHold;                     /*!< Peer has someone on hold */
 	int call_limit;                 /*!< Limit of concurrent calls */
-	int t38_maxdatagram;            /*!< T.38 FaxMaxDatagram override */
+	unsigned int t38_maxdatagram;            /*!< T.38 FaxMaxDatagram override */
 	int busy_level;                 /*!< Level of active channels where we signal busy */
 	int maxforwards;                /*!< SIP Loop prevention */
 	enum transfermodes allowtransfer;   /*! SIP Refer restriction scheme */
@@ -1311,6 +1315,7 @@ struct sip_registry {
 		AST_STRING_FIELD(md5secret);  /*!< Password in md5 */
 		AST_STRING_FIELD(callback);   /*!< Contact extension */
 		AST_STRING_FIELD(peername);   /*!< Peer registering to */
+		AST_STRING_FIELD(localtag);   /*!< Local tag generated same time as callid */
 	);
 	enum sip_transport transport;   /*!< Transport for this registration UDP, TCP or TLS */
 	int portno;                     /*!< Optional port override */

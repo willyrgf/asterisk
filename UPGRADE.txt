@@ -18,48 +18,6 @@
 ===
 ===========================================================
 
-<<<<<<< .working
-from 1.8.21.0 to 1.8.22.0:
-* Added the 'n' option to MeetMe to prevent application of the DENOISE function
-  to a channel joining a conference. Some channel drivers that vary the number
-  of audio samples in a voice frame will experience significant quality problems
-  if a denoiser is attached to the channel; this option gives them the ability
-  to remove the denoiser without having to unload func_speex.
-
-* The Registry AMI event for SIP registrations will now always include the
-  Username field. A previous bug fix missed an instance where it was not
-  included; that has been corrected in this release.
-
-from 1.8.20.0 to 1.8.20.1:
-* Asterisk would previously not output certain error messages when a remote
-  console attempted to connect to Asterisk and no instance of Asterisk was
-  running. This error message is displayed on stderr; as a result, some
-  initialization scripts that used remote consoles to test for the presence
-  of a running Asterisk instance started to display erroneous error messages.
-  The init.d scripts and the safe_asterisk have been updated in the contrib
-  folder to account for this.
-
-from 1.8.19 to 1.8.20:
-* Asterisk has always had code to ignore dash '-' characters that are not
-  part of a character set in the dialplan extensions.  The code now
-  consistently ignores these characters when matching dialplan extensions.
-
-from 1.8.18 to 1.8.19:
-* Queue strategy rrmemory now has a predictable order similar to strategy
-  rrordered. Members will be called in the order that they are added to the
-  queue.
-
-From 1.8.13 to 1.8.14:
-* permitdirectmedia/denydirectmedia now controls whether peers can be
-  bridged via directmedia by comparing the ACL to the bridging peer's
-  address rather than its own address.
-
-From 1.8.12 to 1.8.13:
-* The complex processor detection and optimization has been removed from
-  the makefile in favor of using native optimization suppport when available.
-  BUILD_NATIVE can be disabled via menuselect under "Compiler Flags".
-
-=======
 from 1.8.27.0 to 1.8.28.0:
 * The asterisk command line -I option and the asterisk.conf internal_timing
   option are removed and always enabled if any timing module is loaded.
@@ -166,7 +124,6 @@ From 1.8.12 to 1.8.13:
   the makefile in favor of using native optimization suppport when available.
   BUILD_NATIVE can be disabled via menuselect under "Compiler Flags".
 
->>>>>>> .merge-right.r414880
 From 1.8.11 to 1.8.12:
 * In AEL dialplans, the "h" extension will now be inherited from prior
   calling contexts, just as it had in 1.4.  If you have created an AEL

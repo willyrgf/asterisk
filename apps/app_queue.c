@@ -205,10 +205,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				connected to a queue member.</para>
 			</parameter>
 			<parameter name="macro">
-				<para>Will run a macro on the calling party's channel once they are connected to a queue member.</para>
+				<para>Will run a macro on the called party's channel (the queue member) once the parties are connected.</para>
 			</parameter>
 			<parameter name="gosub">
-				<para>Will run a gosub on the calling party's channel once they are connected to a queue member.</para>
+				<para>Will run a gosub on the called party's channel (the queue member) once the parties are connected.</para>
 			</parameter>
 			<parameter name="rule">
 				<para>Will cause the queue's defaultrule to be overridden by the rule specified.</para>
@@ -685,6 +685,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax>
 		</syntax>
 		<description>
+			<para>Show queues information.</para>
 		</description>
 	</manager>
 	<manager name="QueueStatus" language="en_US">
@@ -693,10 +694,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Queue" />
-			<parameter name="Member" />
+			<parameter name="Queue">
+				<para>Limit the response to the status of the specified queue.</para>
+			</parameter>
+			<parameter name="Member">
+				<para>Limit the response to the status of the specified member.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Check the status of one or more queues.</para>
 		</description>
 	</manager>
 	<manager name="QueueSummary" language="en_US">
@@ -705,9 +711,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Queue" />
+			<parameter name="Queue">
+				<para>Queue for which the summary is requested.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Request the manager to send a QueueSummary event.</para>
 		</description>
 	</manager>
 	<manager name="QueueAdd" language="en_US">
@@ -716,11 +725,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Queue" required="true" />
-			<parameter name="Interface" required="true" />
-			<parameter name="Penalty" />
-			<parameter name="Paused" />
-			<parameter name="MemberName" />
+			<parameter name="Queue" required="true">
+				<para>Queue's name.</para>
+			</parameter>
+			<parameter name="Interface" required="true">
+				<para>The name of the interface (tech/name) to add to the queue.</para>
+			</parameter>
+			<parameter name="Penalty">
+				<para>A penalty (number) to apply to this member. Asterisk will distribute calls to members with higher penalties only after attempting to distribute calls to those with lower penalty.</para>
+			</parameter>
+			<parameter name="Paused">
+				<para>To pause or not the member initially (true/false or 1/0).</para>
+			</parameter>
+			<parameter name="MemberName">
+				<para>Text alias for the interface.</para>
+			</parameter>
 			<parameter name="StateInterface" />
 		</syntax>
 		<description>
@@ -732,8 +751,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Queue" required="true" />
-			<parameter name="Interface" required="true" />
+			<parameter name="Queue" required="true">
+				<para>The name of the queue to take action on.</para>
+			</parameter>
+			<parameter name="Interface" required="true">
+				<para>The interface (tech/name) to remove from queue.</para>
+			</parameter>
 		</syntax>
 		<description>
 		</description>
@@ -744,12 +767,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Interface" required="true" />
-			<parameter name="Paused" required="true" />
-			<parameter name="Queue" />
-			<parameter name="Reason" />
+			<parameter name="Interface" required="true">
+				<para>The name of the interface (tech/name) to pause or unpause.</para>
+			</parameter>
+			<parameter name="Paused" required="true">
+				<para>Pause or unpause the interface. Set to 'true' to pause the member or 'false' to unpause.</para>
+			</parameter>
+			<parameter name="Queue">
+				<para>The name of the queue in which to pause or unpause this member. If not specified, the member will be paused or unpaused in all the queues it is a member of.</para>
+			</parameter>
+			<parameter name="Reason">
+				<para>Text description, returned in the event QueueMemberPaused.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Pause or unpause a member in a queue.</para>
 		</description>
 	</manager>
 	<manager name="QueueLog" language="en_US">
@@ -773,11 +805,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Interface" required="true" />
-			<parameter name="Penalty" required="true" />
-			<parameter name="Queue" />
+			<parameter name="Interface" required="true">
+				<para>The interface (tech/name) of the member whose penalty to change.</para>
+			</parameter>
+			<parameter name="Penalty" required="true">
+				<para>The new penalty (number) for the member. Must be nonnegative.</para>
+			</parameter>
+			<parameter name="Queue">
+				<para>If specified, only set the penalty for the member of this queue. Otherwise, set the penalty for the member in all queues to which the member belongs.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Change the penalty of a queue member</para>
 		</description>
 	</manager>
 	<manager name="QueueRule" language="en_US">
@@ -786,9 +825,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Rule" />
+			<parameter name="Rule">
+				<para>The name of the rule in queuerules.conf whose contents to list.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>List queue rules defined in queuerules.conf</para>
 		</description>
 	</manager>
 	<manager name="QueueReload" language="en_US">
@@ -797,20 +839,25 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Queue" />
+			<parameter name="Queue">
+				<para>The name of the queue to take action on. If no queue name is specified, then all queues are affected.</para>
+			</parameter>
 			<parameter name="Members">
+				<para>Whether to reload the queue's members.</para>
 				<enumlist>
 					<enum name="yes" />
 					<enum name="no" />
 				</enumlist>
 			</parameter>
 			<parameter name="Rules">
+				<para>Whether to reload queuerules.conf</para>
 				<enumlist>
 					<enum name="yes" />
 					<enum name="no" />
 				</enumlist>
 			</parameter>
 			<parameter name="Parameters">
+				<para>Whether to reload the other queue options.</para>
 				<enumlist>
 					<enum name="yes" />
 					<enum name="no" />
@@ -826,9 +873,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Queue" />
+			<parameter name="Queue">
+				<para>The name of the queue on which to reset statistics.</para>
+			</parameter>
 		</syntax>
 		<description>
+			<para>Reset the statistics for a queue.</para>
 		</description>
 	</manager>
  ***/
@@ -1406,7 +1456,7 @@ static int get_member_status(struct call_queue *q, int max_penalty, int min_pena
 	ao2_lock(q);
 	mem_iter = ao2_iterator_init(q->members, 0);
 	for (; (member = ao2_iterator_next(&mem_iter)); ao2_ref(member, -1)) {
-		if ((max_penalty && (member->penalty > max_penalty)) || (min_penalty && (member->penalty < min_penalty))) {
+		if ((max_penalty != INT_MAX && member->penalty > max_penalty) || (min_penalty != INT_MAX && member->penalty < min_penalty)) {
 			if (conditions & QUEUE_EMPTY_PENALTY) {
 				ast_debug(4, "%s is unavailable because his penalty is not between %d and %d\n", member->membername, min_penalty, max_penalty);
 				continue;
@@ -4173,23 +4223,54 @@ static int is_our_turn(struct queue_ent *qe)
 */
 static void update_qe_rule(struct queue_ent *qe)
 {
-	int max_penalty = qe->pr->max_relative ? qe->max_penalty + qe->pr->max_value : qe->pr->max_value;
-	int min_penalty = qe->pr->min_relative ? qe->min_penalty + qe->pr->min_value : qe->pr->min_value;
-	char max_penalty_str[20], min_penalty_str[20]; 
-	/* a relative change to the penalty could put it below 0 */
-	if (max_penalty < 0)
-		max_penalty = 0;
-	if (min_penalty < 0)
-		min_penalty = 0;
-	if (min_penalty > max_penalty)
-		min_penalty = max_penalty;
-	snprintf(max_penalty_str, sizeof(max_penalty_str), "%d", max_penalty);
-	snprintf(min_penalty_str, sizeof(min_penalty_str), "%d", min_penalty);
-	pbx_builtin_setvar_helper(qe->chan, "QUEUE_MAX_PENALTY", max_penalty_str);
-	pbx_builtin_setvar_helper(qe->chan, "QUEUE_MIN_PENALTY", min_penalty_str);
-	qe->max_penalty = max_penalty;
-	qe->min_penalty = min_penalty;
-	ast_debug(3, "Setting max penalty to %d and min penalty to %d for caller %s since %d seconds have elapsed\n", qe->max_penalty, qe->min_penalty, qe->chan->name, qe->pr->time);
+	int max_penalty = INT_MAX;
+
+	if (qe->max_penalty != INT_MAX) {
+		char max_penalty_str[20];
+
+		if (qe->pr->max_relative) {
+			max_penalty = qe->max_penalty + qe->pr->max_value;
+		} else {
+			max_penalty = qe->pr->max_value;
+		}
+
+		/* a relative change to the penalty could put it below 0 */
+		if (max_penalty < 0) {
+			max_penalty = 0;
+		}
+
+		snprintf(max_penalty_str, sizeof(max_penalty_str), "%d", max_penalty);
+		pbx_builtin_setvar_helper(qe->chan, "QUEUE_MAX_PENALTY", max_penalty_str);
+		qe->max_penalty = max_penalty;
+		ast_debug(3, "Setting max penalty to %d for caller %s since %d seconds have elapsed\n",
+			qe->max_penalty, qe->chan->name, qe->pr->time);
+	}
+
+	if (qe->min_penalty != INT_MAX) {
+		char min_penalty_str[20];
+		int min_penalty;
+
+		if (qe->pr->min_relative) {
+			min_penalty = qe->min_penalty + qe->pr->min_value;
+		} else {
+			min_penalty = qe->pr->min_value;
+		}
+
+		if (min_penalty < 0) {
+			min_penalty = 0;
+		}
+
+		if (max_penalty != INT_MAX && min_penalty > max_penalty) {
+			min_penalty = max_penalty;
+		}
+
+		snprintf(min_penalty_str, sizeof(min_penalty_str), "%d", min_penalty);
+		pbx_builtin_setvar_helper(qe->chan, "QUEUE_MIN_PENALTY", min_penalty_str);
+		qe->min_penalty = min_penalty;
+		ast_debug(3, "Setting min penalty to %d for caller %s since %d seconds have elapsed\n",
+			qe->min_penalty, qe->chan->name, qe->pr->time);
+	}
+
 	qe->pr = AST_LIST_NEXT(qe->pr, list);
 }
 
@@ -4334,8 +4415,8 @@ static int calc_metric(struct call_queue *q, struct member *mem, int pos, struct
 	unsigned char usepenalty = (membercount <= q->penaltymemberslimit) ? 0 : 1;
 
 	if (usepenalty) {
-		if ((qe->max_penalty && (mem->penalty > qe->max_penalty)) ||
-			(qe->min_penalty && (mem->penalty < qe->min_penalty))) {
+		if ((qe->max_penalty != INT_MAX && mem->penalty > qe->max_penalty) ||
+			(qe->min_penalty != INT_MAX && mem->penalty < qe->min_penalty)) {
 			return -1;
 		}
 	} else {
@@ -5052,7 +5133,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 					ast_monitor_start(which, qe->parent->monfmt, qe->chan->cdr->uniqueid, 1, X_REC_IN | X_REC_OUT);
 				} else {
 					/* Last ditch effort -- no CDR, make up something */
-					snprintf(tmpid, sizeof(tmpid), "chan-%lx", ast_random());
+					snprintf(tmpid, sizeof(tmpid), "chan-%lx", (unsigned long)ast_random());
 					ast_monitor_start(which, qe->parent->monfmt, tmpid, 1, X_REC_IN | X_REC_OUT);
 				}
 				if (!ast_strlen_zero(monexec)) {
@@ -5067,7 +5148,7 @@ static int try_calling(struct queue_ent *qe, const char *options, char *announce
 						if (qe->chan->cdr)
 							ast_copy_string(tmpid, qe->chan->cdr->uniqueid, sizeof(tmpid));
 						else
-							snprintf(tmpid, sizeof(tmpid), "chan-%lx", ast_random());
+							snprintf(tmpid, sizeof(tmpid), "chan-%lx", (unsigned long)ast_random());
 					} else {
 						const char *m = monitorfilename;
 						for (p = tmpid2; p < tmpid2 + sizeof(tmpid2) - 1; p++, m++) {
@@ -6163,10 +6244,10 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_MAX_PENALTY}: Invalid value (%s), channel %s.\n",
 				max_penalty_str, chan->name);
-			max_penalty = 0;
+			max_penalty = INT_MAX;
 		}
 	} else {
-		max_penalty = 0;
+		max_penalty = INT_MAX;
 	}
 
 	if ((min_penalty_str = pbx_builtin_getvar_helper(chan, "QUEUE_MIN_PENALTY"))) {
@@ -6175,10 +6256,10 @@ static int queue_exec(struct ast_channel *chan, const char *data)
 		} else {
 			ast_log(LOG_WARNING, "${QUEUE_MIN_PENALTY}: Invalid value (%s), channel %s.\n",
 				min_penalty_str, chan->name);
-			min_penalty = 0;
+			min_penalty = INT_MAX;
 		}
 	} else {
-		min_penalty = 0;
+		min_penalty = INT_MAX;
 	}
 	ast_channel_unlock(chan);
 
@@ -6352,7 +6433,7 @@ stop:
 			}
 		} else if (qe.valid_digits) {
 			ast_queue_log(args.queuename, chan->uniqueid, "NONE", "EXITWITHKEY",
-				"%s|%d", qe.digits, qe.pos);
+				"%s|%d|%d|%ld", qe.digits, qe.pos, qe.opos, (long) time(NULL) - qe.start);
 		}
 	}
 
@@ -6921,7 +7002,7 @@ static void reload_single_member(const char *memberdata, struct call_queue *q)
 static int mark_member_dead(void *obj, void *arg, int flags)
 {
 	struct member *member = obj;
-	if (!member->dynamic) {
+	if (!member->dynamic && !member->realtime) {
 		member->delme = 1;
 	}
 	return 0;
@@ -7261,9 +7342,10 @@ static char *__queues_show(struct mansession *s, int fd, int argc, const char * 
 		ao2_lock(q);
 		/* This check is to make sure we don't print information for realtime
 		 * queues which have been deleted from realtime but which have not yet
-		 * been deleted from the in-core container
+		 * been deleted from the in-core container. Only do this if we're not
+		 * looking for a specific queue.
 		 */
-		if (q->realtime) {
+		if (argc < 3 && q->realtime) {
 			realtime_queue = load_realtime_queue(q->name);
 			if (!realtime_queue) {
 				ao2_unlock(q);

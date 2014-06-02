@@ -242,8 +242,9 @@ static int frame_set_var(struct ast_channel *chan, struct gosub_stack_frame *fra
 	}
 
 	if (!found) {
-		variables = ast_var_assign(var, "");
-		AST_LIST_INSERT_HEAD(&frame->varshead, variables, entries);
+		if ((variables = ast_var_assign(var, ""))) {
+			AST_LIST_INSERT_HEAD(&frame->varshead, variables, entries);
+		}
 		pbx_builtin_pushvar_helper(chan, var, value);
 	} else {
 		pbx_builtin_setvar_helper(chan, var, value);
@@ -501,7 +502,7 @@ static int gosub_exec(struct ast_channel *chan, const char *data)
 		frame_set_var(chan, newframe, argname, i < args2.argc ? args2.argval[i] : "");
 		ast_debug(1, "Setting '%s' to '%s'\n", argname, i < args2.argc ? args2.argval[i] : "");
 	}
-	snprintf(argname, sizeof(argname), "%d", args2.argc);
+	snprintf(argname, sizeof(argname), "%u", args2.argc);
 	frame_set_var(chan, newframe, "ARGC", argname);
 
 	/* And finally, save our return address */
@@ -568,6 +569,11 @@ static int local_read(struct ast_channel *chan, const char *cmd, char *data, cha
 	struct gosub_stack_frame *frame;
 	struct ast_var_t *variables;
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
 	ast_channel_lock(chan);
 	if (!(stack_store = ast_channel_datastore_find(chan, &stack_info, NULL))) {
 		ast_channel_unlock(chan);
@@ -601,6 +607,11 @@ static int local_write(struct ast_channel *chan, const char *cmd, char *var, con
 	struct ast_datastore *stack_store;
 	AST_LIST_HEAD(, gosub_stack_frame) *oldlist;
 	struct gosub_stack_frame *frame;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
 
 	ast_channel_lock(chan);
 	if (!(stack_store = ast_channel_datastore_find(chan, &stack_info, NULL))) {
@@ -644,6 +655,12 @@ static int peek_read(struct ast_channel *chan, const char *cmd, char *data, char
 	}
 
 	AST_STANDARD_RAW_ARGS(args, data);
+
+	if (ast_strlen_zero(args.n) || ast_strlen_zero(args.name)) {
+		ast_log(LOG_ERROR, "LOCAL_PEEK requires parameters n and varname\n");
+		return -1;
+	}
+
 	n = atoi(args.n);
 	*buf = '\0';
 
@@ -683,6 +700,11 @@ static int stackpeek_read(struct ast_channel *chan, const char *cmd, char *data,
 	data = ast_strdupa(data);
 	AST_STANDARD_APP_ARGS(args, data);
 
+	if (ast_strlen_zero(args.n) || ast_strlen_zero(args.which)) {
+		ast_log(LOG_ERROR, "STACK_PEEK requires parameters n and which\n");
+		return -1;
+	}
+
 	n = atoi(args.n);
 	if (n <= 0) {
 		ast_log(LOG_ERROR, "STACK_PEEK must be called with a positive peek value\n");
@@ -712,6 +734,7 @@ static int stackpeek_read(struct ast_channel *chan, const char *cmd, char *data,
 		if (!ast_true(args.suppress)) {
 			ast_log(LOG_ERROR, "Stack peek of '%s' is more stack frames than I have\n", args.n);
 		}
+		AST_LIST_UNLOCK(oldlist);
 		ast_channel_unlock(chan);
 		return -1;
 	}

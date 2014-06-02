@@ -21012,9 +21012,21 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 			/* Alcatel PBXs are known to send 183s with no SDP after sending
 			 * a 100 Trying response. We're just going to treat this sort of thing
 			 * the same as we would treat a 180 Ringing
+			 *
+ 			 * Lync sends 183 w sdp using PRACK the first time. AFter that, 183
+			 * without SDP. We need to keep the media stream open and not send
+			 * ringing in that case.
 			 */
-			if (!req->ignore && p->owner) {
-				ast_queue_control(p->owner, AST_CONTROL_RINGING);
+			struct ast_sockaddr remote_address = {{0,}};
+			/* If we have a remote IP for RTP, we already have a SDP and we 
+			   are fine. */
+			ast_rtp_instance_get_remote_address(p->rtp, &remote_address);
+			if (ast_sockaddr_isnull(&remote_address) || (!ast_strlen_zero(p->theirprovtag) && strcmp(p->theirtag, p->theirprovtag))) {
+				/* We got a 183 without SDP without having a previous SDP. Now, send ringing */
+				if (!req->ignore && p->owner) {
+
+					ast_queue_control(p->owner, AST_CONTROL_RINGING);
+				}
 			}
 		}
 		check_pendings(p);
@@ -23127,9 +23139,6 @@ static int handle_request_invite_st(struct sip_pvt *p, struct sip_request *req,
 	int dlg_min_se = -1;
 	int dlg_max_se = global_max_se;
 	int rtn;
-	const char *require = NULL;
-	char unsupported[256] = { 0, };
-	int start = 0;
 
 	/* Session-Timers */
 	if ((p->sipoptions & SIP_OPT_TIMER)) {
@@ -23281,40 +23290,29 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 	/* Find out what they support */
 	if (!p->sipoptions) {
-		int start = 0;
-		const char *supported = NULL;
-		/* The Supported: header can be repeated in the same SIP message */
-
-		do {
-			supported = __get_header(req, "Supported", &start);
-			if (!ast_strlen_zero(supported)) {
-				p->sipoptions |= parse_sip_options(supported, NULL, 0);
-			}
-		} while (!ast_strlen_zero(supported));
+		const char *supported = get_header(req, "Supported");
+		if (!ast_strlen_zero(supported)) {
+			p->sipoptions = parse_sip_options(supported, NULL, 0);
+		}
 	}
 
 	/* Find out what they require */
+	required = get_header(req, "Require");
+	if (!ast_strlen_zero(required)) {
+		char unsupported[256] = { 0, };
+		required_profile = parse_sip_options(required, unsupported, ARRAY_LEN(unsupported));
 
-	do {
-		/* The Require: header can be repeated in the same SIP message */
-		required = __get_header(req, "Require", &start);
-		if (!ast_strlen_zero(required)) {
-			required_profile |= parse_sip_options(required, unsupported, ARRAY_LEN(unsupported));
+		/* If there are any options required that we do not support,
+		 * then send a 420 with only those unsupported options listed */
+		if (!ast_strlen_zero(unsupported)) {
+			transmit_response_with_unsupported(p, "420 Bad extension (unsupported)", req, unsupported);
+			ast_log(LOG_WARNING, "Received SIP INVITE with unsupported required extension: required:%s unsupported:%s\n", required, unsupported);
+			p->invitestate = INV_COMPLETED;
+			if (!p->lastinvite)
+				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+			res = -1;
+			goto request_invite_cleanup;
 		}
-	} while (!ast_strlen_zero(required));
-
-	/* If there are any options required that we do not support,
-	 * then send a 420 with only those unsupported options listed */
-
-	if (!ast_strlen_zero(unsupported)) {
-		transmit_response_with_unsupported(p, "420 Bad extension (unsupported)", req, unsupported);
-		ast_log(LOG_WARNING, "Received SIP INVITE with unsupported required extension: required:%s unsupported:%s\n", required, unsupported);
-		p->invitestate = INV_COMPLETED;
-		if (!p->lastinvite) {
-			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-		}
-		res = -1;
-		goto request_invite_cleanup;
 	}
 
 	/* The option tags may be present in Supported: or Require: headers.

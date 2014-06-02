@@ -192,11 +192,11 @@ static void pgsql_log(const struct ast_event *event, void *userdata)
 				if (strncmp(cur->type, "int", 3) == 0) {
 					/* Integer, no need to escape anything */
 					LENGTHEN_BUF2(13);
-					ast_str_append(&sql2, 0, "%s%d", SEP, record.amaflag);
+					ast_str_append(&sql2, 0, "%s%u", SEP, record.amaflag);
 				} else {
 					/* Although this is a char field, there are no special characters in the values for these fields */
 					LENGTHEN_BUF2(31);
-					ast_str_append(&sql2, 0, "%s'%d'", SEP, record.amaflag);
+					ast_str_append(&sql2, 0, "%s'%u'", SEP, record.amaflag);
 				}
 			} else {
 				/* Arbitrary field, could be anything */
@@ -334,11 +334,12 @@ ast_log_cleanup:
 static int my_unload_module(void)
 {
 	struct columns *current;
-	AST_RWLIST_WRLOCK(&psql_columns);
+
 	if (event_sub) {
 		event_sub = ast_event_unsubscribe(event_sub);
-		event_sub = NULL;
 	}
+
+	AST_RWLIST_WRLOCK(&psql_columns);
 	if (conn) {
 		PQfinish(conn);
 		conn = NULL;
@@ -541,6 +542,10 @@ static int my_load_module(int reload)
 		return AST_MODULE_LOAD_SUCCESS;
 	}
 
+	if (reload) {
+		my_unload_module();
+	}
+
 	process_my_load_module(cfg);
 	ast_config_destroy(cfg);
 
@@ -561,7 +566,6 @@ static int load_module(void)
 
 static int reload(void)
 {
-	my_unload_module();
 	return my_load_module(1);
 }
 

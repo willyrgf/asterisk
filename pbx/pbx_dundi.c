@@ -594,14 +594,18 @@ static int dundi_lookup_local(struct dundi_result *dr, struct dundi_mapping *map
 			ast_eid_to_str(dr[anscnt].eid_str, sizeof(dr[anscnt].eid_str), &dr[anscnt].eid);
 			if (ast_test_flag(&flags, DUNDI_FLAG_EXISTS)) {
 				AST_LIST_HEAD_INIT_NOLOCK(&headp);
-				newvariable = ast_var_assign("NUMBER", called_number);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
-				newvariable = ast_var_assign("EID", dr[anscnt].eid_str);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
-				newvariable = ast_var_assign("SECRET", cursecret);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
-				newvariable = ast_var_assign("IPADDR", ipaddr);
-				AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				if ((newvariable = ast_var_assign("NUMBER", called_number))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
+				if ((newvariable = ast_var_assign("EID", dr[anscnt].eid_str))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
+				if ((newvariable = ast_var_assign("SECRET", cursecret))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
+				if ((newvariable = ast_var_assign("IPADDR", ipaddr))) {
+					AST_LIST_INSERT_HEAD(&headp, newvariable, entries);
+				}
 				pbx_substitute_variables_varshead(&headp, map->dest, dr[anscnt].dest, sizeof(dr[anscnt].dest));
 				while ((newvariable = AST_LIST_REMOVE_HEAD(&headp, entries)))
 					ast_var_delete(newvariable);
@@ -906,7 +910,7 @@ static int cache_save(dundi_eid *eidpeer, struct dundi_request *req, int start, 
 		/* Skip anything with an illegal pipe in it */
 		if (strchr(req->dr[x].dest, '|'))
 			continue;
-		snprintf(data + strlen(data), sizeof(data) - strlen(data), "%d/%d/%d/%s/%s|",
+		snprintf(data + strlen(data), sizeof(data) - strlen(data), "%u/%d/%d/%s/%s|",
 			req->dr[x].flags, req->dr[x].weight, req->dr[x].techint, req->dr[x].dest,
 			dundi_eid_to_str_short(eidpeer_str, sizeof(eidpeer_str), &req->dr[x].eid));
 	}
@@ -1165,7 +1169,7 @@ static int cache_lookup_internal(time_t now, struct dundi_request *req, char *ke
 			if (expiration > 0) {
 				ast_debug(1, "Found cache expiring in %d seconds!\n", expiration);
 				ptr += length + 1;
-				while((sscanf(ptr, "%30d/%30d/%30d/%n", &(flags.flags), &weight, &tech, &length) == 3)) {
+				while((sscanf(ptr, "%30d/%30d/%30d/%n", (int *)&(flags.flags), &weight, &tech, &length) == 3)) {
 					ptr += length;
 					term = strchr(ptr, '|');
 					if (term) {
@@ -1235,7 +1239,7 @@ static int cache_lookup(struct dundi_request *req, dundi_eid *peer_eid, uint32_t
 	ast_eid_to_str(eid_str_full, sizeof(eid_str_full), peer_eid);
 	snprintf(key, sizeof(key), "%s/%s/%s/e%08x", eid_str, req->number, req->dcontext, crc32);
 	res |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
-	snprintf(key, sizeof(key), "%s/%s/%s/e%08x", eid_str, req->number, req->dcontext, 0);
+	snprintf(key, sizeof(key), "%s/%s/%s/e%08x", eid_str, req->number, req->dcontext, (unsigned)0);
 	res |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
 	snprintf(key, sizeof(key), "%s/%s/%s/r%s", eid_str, req->number, req->dcontext, eidroot_str);
 	res |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
@@ -1250,7 +1254,7 @@ static int cache_lookup(struct dundi_request *req, dundi_eid *peer_eid, uint32_t
 			/* Check for hints */
 			snprintf(key, sizeof(key), "hint/%s/%s/%s/e%08x", eid_str, tmp, req->dcontext, crc32);
 			res2 |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
-			snprintf(key, sizeof(key), "hint/%s/%s/%s/e%08x", eid_str, tmp, req->dcontext, 0);
+			snprintf(key, sizeof(key), "hint/%s/%s/%s/e%08x", eid_str, tmp, req->dcontext, (unsigned)0);
 			res2 |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
 			snprintf(key, sizeof(key), "hint/%s/%s/%s/r%s", eid_str, tmp, req->dcontext, eidroot_str);
 			res2 |= cache_lookup_internal(now, req, key, eid_str_full, lowexpiration);
@@ -2162,7 +2166,7 @@ static void *network_thread(void *ignore)
 	   from the network, and queue them for delivery to the channels */
 	int res;
 	/* Establish I/O callback for socket read */
-	ast_io_add(io, netsocket, socket_read, AST_IO_IN, NULL);
+	int *socket_read_id = ast_io_add(io, netsocket, socket_read, AST_IO_IN, NULL);
 
 	while (!dundi_shutdown) {
 		res = ast_sched_wait(sched);
@@ -2177,6 +2181,7 @@ static void *network_thread(void *ignore)
 		check_password();
 	}
 
+	ast_io_remove(io, socket_read_id);
 	netthreadid = AST_PTHREADT_NULL;
 
 	return NULL;
