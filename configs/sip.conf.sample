@@ -300,6 +300,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;allow=ulaw                     ; Allow codecs in order of preference
 ;allow=ilbc                     ; see https://wiki.asterisk.org/wiki/display/AST/RTP+Packetization
 				; for framing options
+;autoframing=yes		; Set packetization based on the remote endpoint's (ptime)
+				; preferences. Defaults to no.
 ;
 ; This option specifies a preference for which music on hold class this channel
 ; should listen to when put on hold if the music class has not been set on the
@@ -335,6 +337,17 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; transmit such UPDATE messages to it, then you must enable this option.
                                 ; Otherwise, we will have to wait until we can send a reinvite to
                                 ; transmit the information.
+;trust_id_outbound = no         ; Controls whether or not we trust this peer with private identity
+                                ; information (when the remote party has callingpres=prohib or equivalent).
+                                ; no - RPID/PAI headers will not be included for private peer information
+                                ; yes - RPID/PAI headers will include the private peer information. Privacy
+                                ;       requirements will be indicated in a Privacy header for sendrpid=pai
+                                ; legacy - RPID/PAI will be included for private peer information. In the
+                                ;       case of sendrpid=pai, private data that would be included in them
+                                ;       will be anonymized. For sendrpid=rpid, private data may be included
+                                ;       but the remote party's domain will be anonymized. The way legacy
+                                ;       behaves may violate RFC-3325, but it follows historic behavior.
+                                ; This option is set to 'legacy' by default
 ;prematuremedia=no              ; Some ISDN links send empty media frames before 
                                 ; the call is in ringing or progress state. The SIP 
                                 ; channel will then send 183 indicating early media
@@ -380,6 +393,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; support it.  This assists callfile-derived calls and
                                 ; certain transferred calls to use always use video when
                                 ; available. [yes|NO|always]
+
+;textsupport=no                 ; Support for ITU-T T.140 realtime text.
+                                ; The default value is "no".
 
 ;maxcallbitrate=384             ; Maximum bitrate for video calls (default 384 kb/s)
                                 ; Videosupport and maxcallbitrate is settable
@@ -428,7 +444,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;contactpermit=172.16.0.0/255.255.0.0  ; restrict at what IPs your users may
                                        ; register their phones.
 
-;engine=asterisk                ; RTP engine to use when communicating with the device
+;rtp_engine=asterisk            ; RTP engine to use when communicating with the device
 
 ;
 ; If regcontext is specified, Asterisk will dynamically create and destroy a
@@ -469,8 +485,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                       ; Set to yes add Reason header and use Reason header if it is available.
 ;
 ;------------------------ TLS settings ------------------------------------------------------------
-;tlscertfile=</path/to/certificate.pem> ; Certificate file (*.pem format only) to use for TLS connections
-                                        ; default is to look for "asterisk.pem" in current directory
+;tlscertfile=</path/to/certificate.pem> ; Certificate chain (*.pem format only) to use for TLS connections
+                                        ; The certificates must be sorted starting with the subject's certificate
+                                        ; and followed by intermediate CA certificates if applicable.
+                                        ; Default is to look for "asterisk.pem" in current directory
 
 ;tlsprivatekey=</path/to/private.pem> ; Private key file (*.pem format only) for TLS connections.
                                       ; If no tlsprivatekey is specified, tlscertfile is searched for
@@ -545,11 +563,20 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; * session-expires   - Maximum session refresh interval in seconds. Defaults to 1800 secs.
 ; * session-minse     - Minimum session refresh interval in seconds. Defualts to 90 secs.
 ; * session-refresher - The session refresher (uac|uas). Defaults to 'uas'.
+;                            uac - Default to the caller initially refreshing when possible
+;                            uas - Default to the callee initially refreshing when possible
+;
+; Note that, due to recommendations in RFC 4028, Asterisk will always honor the other
+; endpoint's preference for who will handle refreshes. Asterisk will never override the
+; preferences of the other endpoint. Doing so could result in Asterisk and the endpoint
+; fighting over who sends the refreshes. This holds true for the initiation of session
+; timers and subsequent re-INVITE requests whether Asterisk is the caller or callee, or
+; whether Asterisk is currently the refresher or not.
 ;
 ;session-timers=originate
 ;session-expires=600
 ;session-minse=90
-;session-refresher=uas
+;session-refresher=uac
 ;
 ;--------------------------- SIP DEBUGGING ---------------------------------------------------
 ;sipdebug = yes                 ; Turn on SIP debugging by default, from
@@ -711,6 +738,9 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
                                 ; 0 = continue forever, hammering the other server
                                 ; until it accepts the registration
                                 ; Default is 0 tries, continue forever
+;register_retry_403=yes         ; Treat 403 responses to registrations as if they were
+                                ; 401 responses and continue retrying according to normal
+                                ; retry rules.
 
 ;----------------------------------------- OUTBOUND MWI SUBSCRIPTIONS -------------------------
 ; Asterisk can subscribe to receive the MWI from another SIP server and store it locally for retrieval
@@ -876,6 +906,13 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;directmedia=update             ; Yet a third option... use UPDATE for media path redirection,
                                 ; instead of INVITE. This can be combined with 'nonat', as
                                 ; 'directmedia=update,nonat'. It implies 'yes'.
+
+;directmedia=outgoing           ; When sending directmedia reinvites, do not send an immediate
+                                ; reinvite on an incoming call leg. This option is useful when
+                                ; peered with another SIP user agent that is known to send
+                                ; immediate direct media reinvites upon call establishment. Setting
+                                ; the option in this situation helps to prevent potential glares.
+                                ; Setting this option implies 'yes'.
 
 ;directrtpsetup=yes             ; Enable the new experimental direct RTP setup. This sets up
                                 ; the call directly with media peer-2-peer without re-invites.
@@ -1105,8 +1142,10 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; language
 ; allow
 ; disallow
+; autoframing
 ; insecure
 ; trustrpid
+; trust_id_outbound
 ; progressinband
 ; promiscredir
 ; useclientcode
@@ -1145,7 +1184,6 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; outboundproxy
 ; rfc2833compensate
 ; callbackextension
-; registertrying
 ; timert1
 ; timerb
 ; qualifyfreq
@@ -1275,7 +1313,8 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ;allow=g723.1                    ; Asterisk only supports g723.1 pass-thru!
 ;allow=g729                      ; Pass-thru only unless g729 license obtained
 ;callingpres=allowed_passed_screen ; Set caller ID presentation
-                                 ; See README.callingpres for more information
+                                 ; See function CALLERPRES documentation for possible
+                                 ; values.
 
 ;[xlite1]
 ; Turn off silence suppression in X-Lite ("Transmit Silence"=YES)!

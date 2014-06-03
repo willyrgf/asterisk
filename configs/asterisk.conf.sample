@@ -27,7 +27,6 @@ astlogdir => /var/log/asterisk
 ;dontwarn = yes			; Disable some warnings.
 ;dumpcore = yes			; Dump core on crash (same as -g at startup).
 ;languageprefix = yes		; Use the new sound prefix path syntax.
-;internal_timing = yes
 ;systemname = my_system_name	; Prefix uniqueid with a system name for
 				; Global uniqueness issues.
 ;autosystemname = yes		; Automatically set systemname to hostname,
@@ -73,6 +72,12 @@ documentation_language = en_US	; Set the language you want documentation
 ;lockconfdir = no		; Protect the directory containing the
 				; configuration files (/etc/asterisk) with a
 				; lock.
+;live_dangerously = no		; Enable the execution of 'dangerous' dialplan
+				; functions from external sources (AMI,
+				; etc.) These functions (such as SHELL) are
+				; considered dangerous because they can allow
+				; privilege escalation.
+				; Default yes, for backward compatability.
 
 ; Changing the following lines may compromise your security.
 ;[files]

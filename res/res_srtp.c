@@ -270,7 +270,7 @@ static int policy_set_suite(crypto_policy_t *p, enum ast_srtp_suite suite)
 		return 0;
 
 	default:
-		ast_log(LOG_ERROR, "Invalid crypto suite: %d\n", suite);
+		ast_log(LOG_ERROR, "Invalid crypto suite: %u\n", suite);
 		return -1;
 	}
 }
@@ -366,7 +366,8 @@ tryagain:
 
 			ast_debug(5, "SRTP try to re-create\n");
 			if (policy) {
-				if (srtp_create(&srtp->session, &policy->sp) == err_status_ok) {
+				int res_srtp_create = srtp_create(&srtp->session, &policy->sp);
+				if (res_srtp_create == err_status_ok) {
 					ast_debug(5, "SRTP re-created with first policy\n");
 					ao2_t_ref(policy, -1, "Unreffing first policy for re-creating srtp session");
 
@@ -384,10 +385,20 @@ tryagain:
 					ao2_iterator_destroy(&it);
 					goto tryagain;
 				}
+				ast_log(LOG_ERROR, "SRTP session could not be re-created after unprotect failure: %s\n", srtp_errstr(res_srtp_create));
+
+				/* If srtp_create() fails with a previously alloced session, it will have been dealloced before returning. */
+				srtp->session = NULL;
+
 				ao2_t_ref(policy, -1, "Unreffing first policy after srtp_create failed");
 			}
 			ao2_iterator_destroy(&it);
 		}
+	}
+
+	if (!srtp->session) {
+		errno = EINVAL;
+		return -1;
 	}
 
 	if (res != err_status_ok && res != err_status_replay_fail ) {
@@ -437,6 +448,8 @@ static int ast_srtp_create(struct ast_srtp **srtp, struct ast_rtp_instance *rtp,
 
 	/* Any failures after this point can use ast_srtp_destroy to destroy the instance */
 	if (srtp_create(&temp->session, &policy->sp) != err_status_ok) {
+		/* Session either wasn't created or was created and dealloced. */
+		temp->session = NULL;
 		ast_srtp_destroy(temp);
 		return -1;
 	}
@@ -482,18 +495,18 @@ static int ast_srtp_add_stream(struct ast_srtp *srtp, struct ast_srtp_policy *po
 			return -1;
 		} else {
 			if (srtp_remove_stream(srtp->session, match->sp.ssrc.value) != err_status_ok) {
-				ast_log(AST_LOG_WARNING, "Failed to remove SRTP stream for SSRC %d\n", match->sp.ssrc.value);
+				ast_log(AST_LOG_WARNING, "Failed to remove SRTP stream for SSRC %u\n", match->sp.ssrc.value);
 			}
 			ao2_t_unlink(srtp->policies, match, "Remove existing match policy");
 			ao2_t_ref(match, -1, "Unreffing already existing policy");
 		}
 	}
 
-	ast_debug(3, "Adding new policy for %s %d\n",
+	ast_debug(3, "Adding new policy for %s %u\n",
 		policy->sp.ssrc.type == ssrc_specific ? "SSRC" : "type",
 		policy->sp.ssrc.type == ssrc_specific ? policy->sp.ssrc.value : policy->sp.ssrc.type);
 	if (srtp_add_stream(srtp->session, &policy->sp) != err_status_ok) {
-		ast_log(AST_LOG_WARNING, "Failed to add SRTP stream for %s %d\n",
+		ast_log(AST_LOG_WARNING, "Failed to add SRTP stream for %s %u\n",
 			policy->sp.ssrc.type == ssrc_specific ? "SSRC" : "type",
 			policy->sp.ssrc.type == ssrc_specific ? policy->sp.ssrc.value : policy->sp.ssrc.type);
 		return -1;
@@ -521,7 +534,7 @@ static int ast_srtp_change_source(struct ast_srtp *srtp, unsigned int from_ssrc,
 		if (ast_srtp_add_stream(srtp, match)) {
 			ast_log(LOG_WARNING, "Couldn't add stream\n");
 		} else if ((status = srtp_remove_stream(srtp->session, from_ssrc))) {
-			ast_debug(3, "Couldn't remove stream (%d)\n", status);
+			ast_debug(3, "Couldn't remove stream (%u)\n", status);
 		}
 		ao2_t_ref(match, -1, "Unreffing found policy in change_source");
 	}
@@ -533,6 +546,9 @@ static void res_srtp_shutdown(void)
 {
 	srtp_install_event_handler(NULL);
 	ast_rtp_engine_unregister_srtp();
+#ifdef HAVE_SRTP_SHUTDOWN
+	srtp_shutdown();
+#endif
 	g_initialized = 0;
 }
 

@@ -575,9 +575,9 @@ static struct ast_calendar_event *destroy_event(struct ast_calendar_event *event
 	 * but haven't hit the end event yet, go ahead and set the devicestate to the current busy status */
 	if (event->bs_start_sched < 0 && event->bs_end_sched >= 0) {
 		if (!calendar_is_busy(event->owner)) {
-			ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Calendar:%s", event->owner->name);
+			ast_devstate_changed(AST_DEVICE_NOT_INUSE, AST_DEVSTATE_CACHABLE, "Calendar:%s", event->owner->name);
 		} else {
-			ast_devstate_changed(AST_DEVICE_BUSY, "Calendar:%s", event->owner->name);
+			ast_devstate_changed(AST_DEVICE_BUSY, AST_DEVSTATE_CACHABLE, "Calendar:%s", event->owner->name);
 		}
 	}
 
@@ -651,7 +651,7 @@ static void *event_notification_duplicate(void *data)
 /*! \brief Generate 32 byte random string (stolen from chan_sip.c)*/
 static char *generate_random_string(char *buf, size_t size)
 {
-	long val[4];
+	unsigned long val[4];
 	int x;
 
 	for (x = 0; x < 4; x++) {
@@ -725,7 +725,10 @@ static void *do_notify(void *data)
 	datastore->inheritance = DATASTORE_INHERIT_FOREVER;
 
 	ao2_ref(event, +1);
+
+	ast_channel_lock(chan);
 	res = ast_channel_datastore_add(chan, datastore);
+	ast_channel_unlock(chan);
 
 	if (!(apptext = ast_str_create(32))) {
 		goto notify_cleanup;
@@ -818,9 +821,9 @@ static int calendar_devstate_change(const void *data)
 	/* We can have overlapping events, so ignore the event->busy_state and check busy state
 	 * based on all events in the calendar */
 	if (!calendar_is_busy(event->owner)) {
-		ast_devstate_changed(AST_DEVICE_NOT_INUSE, "Calendar:%s", event->owner->name);
+		ast_devstate_changed(AST_DEVICE_NOT_INUSE, AST_DEVSTATE_CACHABLE, "Calendar:%s", event->owner->name);
 	} else {
-		ast_devstate_changed(AST_DEVICE_BUSY, "Calendar:%s", event->owner->name);
+		ast_devstate_changed(AST_DEVICE_BUSY, AST_DEVSTATE_CACHABLE, "Calendar:%s", event->owner->name);
 	}
 
 	event = ast_calendar_unref_event(event);
@@ -1300,7 +1303,7 @@ static int calendar_query_result_exec(struct ast_channel *chan, const char *cmd,
 		} else if (!strcasecmp(args.field, "end")) {
 			snprintf(buf, len, "%ld", (long) entry->event->end);
 		} else if (!strcasecmp(args.field, "busystate")) {
-			snprintf(buf, len, "%d", entry->event->busy_state);
+			snprintf(buf, len, "%u", entry->event->busy_state);
 		} else if (!strcasecmp(args.field, "attendees")) {
 			calendar_join_attendees(entry->event, buf, len);
 		} else {
@@ -1361,7 +1364,7 @@ static int calendar_write_exec(struct ast_channel *chan, const char *cmd, char *
 	}
 
 	if (fields.argc - 1 != values.argc) {
-		ast_log(LOG_WARNING, "CALENDAR_WRITE should have the same number of fields (%d) and values (%d)!\n", fields.argc - 1, values.argc);
+		ast_log(LOG_WARNING, "CALENDAR_WRITE should have the same number of fields (%u) and values (%u)!\n", fields.argc - 1, values.argc);
 		goto write_cleanup;
 	}
 
@@ -1582,6 +1585,11 @@ static int calendar_event_read(struct ast_channel *chan, const char *cmd, char *
 	struct ast_datastore *datastore;
 	struct ast_calendar_event *event;
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
+
 	if (ast_strlen_zero(data)) {
 		ast_log(LOG_WARNING, "%s requires an argument\n", cmd);
 		return -1;
@@ -1621,7 +1629,7 @@ static int calendar_event_read(struct ast_channel *chan, const char *cmd, char *
 	} else if (!strcasecmp(data, "end")) {
 		snprintf(buf, len, "%ld", (long)event->end);
 	} else if (!strcasecmp(data, "busystate")) {
-		snprintf(buf, len, "%d", event->busy_state);
+		snprintf(buf, len, "%u", event->busy_state);
 	} else if (!strcasecmp(data, "attendees")) {
 		calendar_join_attendees(event, buf, len);
 	}

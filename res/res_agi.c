@@ -598,7 +598,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<description>
 			<para>Enables/Disables the music on hold generator. If <replaceable>class</replaceable>
 			is not specified, then the <literal>default</literal> music on hold class will be
-			used.</para>
+			used. This generator will be stopped automatically when playing a file.</para>
 			<para>Always returns <literal>0</literal>.</para>
 		</description>
 	</agi>
@@ -648,7 +648,9 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<para>Send the given file, allowing playback to be interrupted by the given
 			digits, if any. Returns <literal>0</literal> if playback completes without a digit
 			being pressed, or the ASCII numerical value of the digit if one was pressed,
-			or <literal>-1</literal> on error or if the channel was disconnected.</para>
+			or <literal>-1</literal> on error or if the channel was disconnected. If
+			musiconhold is playing before calling stream file it will be automatically
+			stopped and will not be restarted after completion.</para>
 		</description>
 		<see-also>
 			<ref type="agi">control stream file</ref>
@@ -1554,10 +1556,11 @@ static enum agi_result launch_ha_netscript(char *agiurl, char *argv[], int *fds)
 	unsigned short srvport;
 
 	/* format of agiurl is "hagi://host.domain[:port][/script/name]" */
-	if (!(host = ast_strdupa(agiurl + 7))) { /* Remove hagi:// */
+	if (strlen(agiurl) < 7) { /* Remove hagi:// */
 		ast_log(LOG_WARNING, "An error occurred parsing the AGI URI: %s", agiurl);
 		return AGI_RESULT_FAILURE;
 	}
+	host = ast_strdupa(agiurl + 7);
 
 	/* Strip off any script name */
 	if ((script = strchr(host, '/'))) {
@@ -1944,8 +1947,8 @@ static int handle_streamfile(struct ast_channel *chan, AGI *agi, int argc, const
 		return RESULT_SHOWUSAGE;
 
 	if (!(fs = ast_openstream(chan, argv[2], chan->language))) {
-		ast_agi_send(agi->fd, chan, "200 result=%d endpos=%ld\n", 0, sample_offset);
-		return RESULT_SUCCESS;
+		ast_agi_send(agi->fd, chan, "200 result=-1 endpos=%ld\n", sample_offset);
+		return RESULT_FAILURE;
 	}
 
 	if ((vfs = ast_openvstream(chan, argv[2], chan->language)))
@@ -1999,9 +2002,9 @@ static int handle_getoption(struct ast_channel *chan, AGI *agi, int argc, const 
 	}
 
 	if (!(fs = ast_openstream(chan, argv[2], chan->language))) {
-		ast_agi_send(agi->fd, chan, "200 result=%d endpos=%ld\n", 0, sample_offset);
+		ast_agi_send(agi->fd, chan, "200 result=-1 endpos=%ld\n", sample_offset);
 		ast_log(LOG_WARNING, "Unable to open %s\n", argv[2]);
-		return RESULT_SUCCESS;
+		return RESULT_FAILURE;
 	}
 
 	if ((vfs = ast_openvstream(chan, argv[2], chan->language)))
@@ -2476,7 +2479,7 @@ static int handle_exec(struct ast_channel *chan, AGI *agi, int argc, const char 
 			ast_set_flag(chan, AST_FLAG_DISABLE_WORKAROUNDS);
 		}
 		if (ast_compat_res_agi && argc >= 3 && !ast_strlen_zero(argv[2])) {
-			char *compat = alloca(strlen(argv[2]) * 2 + 1), *cptr;
+			char *compat = ast_alloca(strlen(argv[2]) * 2 + 1), *cptr;
 			const char *vptr;
 			for (cptr = compat, vptr = argv[2]; *vptr; vptr++) {
 				if (*vptr == ',') {
@@ -2532,12 +2535,12 @@ static int handle_channelstatus(struct ast_channel *chan, AGI *agi, int argc, co
 	struct ast_channel *c;
 	if (argc == 2) {
 		/* no argument: supply info on the current channel */
-		ast_agi_send(agi->fd, chan, "200 result=%d\n", chan->_state);
+		ast_agi_send(agi->fd, chan, "200 result=%u\n", chan->_state);
 		return RESULT_SUCCESS;
 	} else if (argc == 3) {
 		/* one argument: look for info on the specified channel */
 		if ((c = ast_channel_get_by_name(argv[2]))) {
-			ast_agi_send(agi->fd, chan, "200 result=%d\n", c->_state);
+			ast_agi_send(agi->fd, chan, "200 result=%u\n", c->_state);
 			c = ast_channel_unref(c);
 			return RESULT_SUCCESS;
 		}
@@ -2689,16 +2692,18 @@ static int handle_dbdel(struct ast_channel *chan, AGI *agi, int argc, const char
 
 static int handle_dbdeltree(struct ast_channel *chan, AGI *agi, int argc, const char * const argv[])
 {
-	int res;
+	int num_deleted;
 
-	if ((argc < 3) || (argc > 4))
+	if ((argc < 3) || (argc > 4)) {
 		return RESULT_SHOWUSAGE;
-	if (argc == 4)
-		res = ast_db_deltree(argv[2], argv[3]);
-	else
-		res = ast_db_deltree(argv[2], NULL);
+	}
+	if (argc == 4) {
+		num_deleted = ast_db_deltree(argv[2], argv[3]);
+	} else {
+		num_deleted = ast_db_deltree(argv[2], NULL);
+	}
 
-	ast_agi_send(agi->fd, chan, "200 result=%c\n", res ? '0' : '1');
+	ast_agi_send(agi->fd, chan, "200 result=%c\n", num_deleted > 0 ? '0' : '1');
 	return RESULT_SUCCESS;
 }
 
@@ -3539,7 +3544,7 @@ static enum agi_result run_agi(struct ast_channel *chan, char *request, AGI *agi
 					break;
 				len = sizeof(buf) - buflen;
 				if (agidebug)
-					ast_verbose( "AGI Rx << temp buffer %s - errno %s\n", buf, strerror(errno));
+					ast_verbose("AGI Rx << temp buffer %s - errno %s\nNo \\n received, checking again.\n", buf, strerror(errno));
 			}
 
 			if (!buf[0]) {
@@ -3755,9 +3760,6 @@ static int write_htmldump(const char *filename)
 
 	AST_RWLIST_RDLOCK(&agi_commands);
 	AST_RWLIST_TRAVERSE(&agi_commands, command, list) {
-#ifdef AST_XML_DOCS
-		char *stringptmp;
-#endif
 		char *tempstr, *stringp;
 
 		if (!command->cmda[0])	/* end ? */
@@ -3770,8 +3772,7 @@ static int write_htmldump(const char *filename)
 		fprintf(htmlfile, "<TR><TD><TABLE BORDER=\"1\" CELLPADDING=\"5\" WIDTH=\"100%%\">\n");
 		fprintf(htmlfile, "<TR><TH ALIGN=\"CENTER\"><B>%s - %s</B></TH></TR>\n", fullcmd, command->summary);
 #ifdef AST_XML_DOCS
-		stringptmp = ast_xmldoc_printable(command->usage, 0);
-		stringp = ast_strdup(stringptmp);
+		stringp = ast_xmldoc_printable(command->usage, 0);
 #else
 		stringp = ast_strdup(command->usage);
 #endif
@@ -3789,9 +3790,6 @@ static int write_htmldump(const char *filename)
 		fprintf(htmlfile, "</TD></TR>\n");
 		fprintf(htmlfile, "</TABLE></TD></TR>\n\n");
 		ast_free(stringp);
-#ifdef AST_XML_DOCS
-		ast_free(stringptmp);
-#endif
 	}
 	AST_RWLIST_UNLOCK(&agi_commands);
 	fprintf(htmlfile, "</TABLE>\n</BODY>\n</HTML>\n");

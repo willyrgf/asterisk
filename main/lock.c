@@ -29,6 +29,7 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/utils.h"
 #include "asterisk/lock.h"
 
 /* Allow direct use of pthread_mutex_* / pthread_cond_* */
@@ -45,14 +46,30 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #undef pthread_cond_wait
 #undef pthread_cond_timedwait
 
+#if defined(DEBUG_THREADS) && defined(HAVE_BKTR)
+static void __dump_backtrace(struct ast_bt *bt, int canlog)
+{
+	char **strings;
+	ssize_t i;
+
+	strings = backtrace_symbols(bt->addresses, bt->num_frames);
+
+	for (i = 0; i < bt->num_frames; i++) {
+		__ast_mutex_logger("%s\n", strings[i]);
+	}
+
+	ast_std_free(strings);
+}
+#endif	/* defined(DEBUG_THREADS) && defined(HAVE_BKTR) */
+
 int __ast_pthread_mutex_init(int tracking, const char *filename, int lineno, const char *func,
 						const char *mutex_name, ast_mutex_t *t)
 {
 	int res;
 	pthread_mutexattr_t  attr;
 
-	t->track = NULL;
 #ifdef DEBUG_THREADS
+	t->track = NULL;
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS) && defined(CAN_COMPARE_MUTEX_TO_INIT_VALUE)
 	if ((t->mutex) != ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
 /*
@@ -191,12 +208,20 @@ int __ast_pthread_mutex_lock(const char *filename, int lineno, const char *func,
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
 #else
 		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
@@ -323,12 +348,20 @@ int __ast_pthread_mutex_trylock(const char *filename, int lineno, const char *fu
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
 #else
 		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
@@ -480,10 +513,8 @@ int __ast_cond_wait(const char *filename, int lineno, const char *func,
 
 #ifdef DEBUG_THREADS
 	struct ast_lock_track *lt;
+	struct ast_lock_track lt_orig;
 	int canlog = strcmp(filename, "logger.c") & t->tracking;
-#ifdef HAVE_BKTR
-	struct ast_bt *bt = NULL;
-#endif
 
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS) && defined(CAN_COMPARE_MUTEX_TO_INIT_VALUE)
 	if ((t->mutex) == ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
@@ -514,33 +545,20 @@ int __ast_cond_wait(const char *filename, int lineno, const char *func,
 			__dump_backtrace(&lt->backtrace[ROFFSET], canlog);
 #endif
 			DO_THREAD_CRASH;
+		} else if (lt->reentrancy <= 0) {
+			__ast_mutex_logger("%s line %d (%s): attempted to wait on an unlocked mutex '%s'\n",
+					   filename, lineno, func, mutex_name);
+			DO_THREAD_CRASH;
 		}
 
-		if (--lt->reentrancy < 0) {
-			__ast_mutex_logger("%s line %d (%s): mutex '%s' freed more times than we've locked!\n",
-				   filename, lineno, func, mutex_name);
-			lt->reentrancy = 0;
-		}
-
-		if (lt->reentrancy < AST_MAX_REENTRANCY) {
-			lt->file[lt->reentrancy] = NULL;
-			lt->lineno[lt->reentrancy] = 0;
-			lt->func[lt->reentrancy] = NULL;
-			lt->thread[lt->reentrancy] = 0;
-		}
-
-#ifdef HAVE_BKTR
-		if (lt->reentrancy) {
-			bt = &lt->backtrace[lt->reentrancy - 1];
-		}
-#endif
+		/* Waiting on a condition completely suspends a recursive mutex,
+		 * even if it's been recursively locked multiple times. Make a
+		 * copy of the lock tracking, and reset reentrancy to zero */
+		lt_orig = *lt;
+		lt->reentrancy = 0;
 		ast_reentrancy_unlock(lt);
 
-#ifdef HAVE_BKTR
-		ast_remove_lock_info(t, bt);
-#else
-		ast_remove_lock_info(t);
-#endif
+		ast_suspend_lock_info(t);
 	}
 #endif /* DEBUG_THREADS */
 
@@ -552,28 +570,16 @@ int __ast_cond_wait(const char *filename, int lineno, const char *func,
 				   filename, lineno, func, strerror(res));
 		DO_THREAD_CRASH;
 	} else if (t->tracking) {
+		pthread_mutex_t reentr_mutex_orig;
 		ast_reentrancy_lock(lt);
-		if (lt->reentrancy < AST_MAX_REENTRANCY) {
-			lt->file[lt->reentrancy] = filename;
-			lt->lineno[lt->reentrancy] = lineno;
-			lt->func[lt->reentrancy] = func;
-			lt->thread[lt->reentrancy] = pthread_self();
-#ifdef HAVE_BKTR
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
-			bt = &lt->backtrace[lt->reentrancy];
-#endif
-			lt->reentrancy++;
-		} else {
-			__ast_mutex_logger("%s line %d (%s): '%s' really deep reentrancy!\n",
-							   filename, lineno, func, mutex_name);
-		}
+		/* Restore lock tracking to what it was prior to the wait */
+		reentr_mutex_orig = lt->reentr_mutex;
+		*lt = lt_orig;
+		/* un-trash the mutex we just copied over */
+		lt->reentr_mutex = reentr_mutex_orig;
 		ast_reentrancy_unlock(lt);
 
-#ifdef HAVE_BKTR
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
-#else
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
-#endif
+		ast_restore_lock_info(t);
 	}
 #endif /* DEBUG_THREADS */
 
@@ -588,10 +594,8 @@ int __ast_cond_timedwait(const char *filename, int lineno, const char *func,
 
 #ifdef DEBUG_THREADS
 	struct ast_lock_track *lt;
+	struct ast_lock_track lt_orig;
 	int canlog = strcmp(filename, "logger.c") & t->tracking;
-#ifdef HAVE_BKTR
-	struct ast_bt *bt = NULL;
-#endif
 
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS) && defined(CAN_COMPARE_MUTEX_TO_INIT_VALUE)
 	if ((t->mutex) == ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
@@ -622,32 +626,20 @@ int __ast_cond_timedwait(const char *filename, int lineno, const char *func,
 			__dump_backtrace(&lt->backtrace[ROFFSET], canlog);
 #endif
 			DO_THREAD_CRASH;
-		}
-
-		if (--lt->reentrancy < 0) {
-			__ast_mutex_logger("%s line %d (%s): mutex '%s' freed more times than we've locked!\n",
+		} else if (lt->reentrancy <= 0) {
+			__ast_mutex_logger("%s line %d (%s): attempted to wait on an unlocked mutex '%s'\n",
 					   filename, lineno, func, mutex_name);
-			lt->reentrancy = 0;
+			DO_THREAD_CRASH;
 		}
 
-		if (lt->reentrancy < AST_MAX_REENTRANCY) {
-			lt->file[lt->reentrancy] = NULL;
-			lt->lineno[lt->reentrancy] = 0;
-			lt->func[lt->reentrancy] = NULL;
-			lt->thread[lt->reentrancy] = 0;
-		}
-#ifdef HAVE_BKTR
-		if (lt->reentrancy) {
-			bt = &lt->backtrace[lt->reentrancy - 1];
-		}
-#endif
+		/* Waiting on a condition completely suspends a recursive mutex,
+		 * even if it's been recursively locked multiple times. Make a
+		 * copy of the lock tracking, and reset reentrancy to zero */
+		lt_orig = *lt;
+		lt->reentrancy = 0;
 		ast_reentrancy_unlock(lt);
 
-#ifdef HAVE_BKTR
-		ast_remove_lock_info(t, bt);
-#else
-		ast_remove_lock_info(t);
-#endif
+		ast_suspend_lock_info(t);
 	}
 #endif /* DEBUG_THREADS */
 
@@ -659,28 +651,16 @@ int __ast_cond_timedwait(const char *filename, int lineno, const char *func,
 				   filename, lineno, func, strerror(res));
 		DO_THREAD_CRASH;
 	} else if (t->tracking) {
+		pthread_mutex_t reentr_mutex_orig;
 		ast_reentrancy_lock(lt);
-		if (lt->reentrancy < AST_MAX_REENTRANCY) {
-			lt->file[lt->reentrancy] = filename;
-			lt->lineno[lt->reentrancy] = lineno;
-			lt->func[lt->reentrancy] = func;
-			lt->thread[lt->reentrancy] = pthread_self();
-#ifdef HAVE_BKTR
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
-			bt = &lt->backtrace[lt->reentrancy];
-#endif
-			lt->reentrancy++;
-		} else {
-			__ast_mutex_logger("%s line %d (%s): '%s' really deep reentrancy!\n",
-							   filename, lineno, func, mutex_name);
-		}
+		/* Restore lock tracking to what it was prior to the wait */
+		reentr_mutex_orig = lt->reentr_mutex;
+		*lt = lt_orig;
+		/* un-trash the mutex we just copied over */
+		lt->reentr_mutex = reentr_mutex_orig;
 		ast_reentrancy_unlock(lt);
 
-#ifdef HAVE_BKTR
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t, bt);
-#else
-		ast_store_lock_info(AST_MUTEX, filename, lineno, func, mutex_name, t);
-#endif
+		ast_suspend_lock_info(t);
 	}
 #endif /* DEBUG_THREADS */
 
@@ -745,7 +725,7 @@ int __ast_rwlock_destroy(const char *filename, int lineno, const char *func, con
 		__ast_mutex_logger("%s line %d (%s): Error destroying rwlock %s: %s\n",
 				filename, lineno, func, rwlock_name, strerror(res));
 	}
-	if (t->tracking) {
+	if (t->tracking && lt) {
 		ast_reentrancy_lock(lt);
 		lt->file[0] = filename;
 		lt->lineno[0] = lineno;
@@ -882,12 +862,20 @@ int __ast_rwlock_rdlock(const char *filename, int line, const char *func, ast_rw
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t, bt);
 #else
 		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t);
@@ -1001,12 +989,20 @@ int __ast_rwlock_wrlock(const char *filename, int line, const char *func, ast_rw
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t, bt);
 #else
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t);
@@ -1124,12 +1120,20 @@ int __ast_rwlock_timedrdlock(const char *filename, int line, const char *func, a
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t, bt);
 #else
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t);
@@ -1141,13 +1145,13 @@ int __ast_rwlock_timedrdlock(const char *filename, int line, const char *func, a
 	res = pthread_rwlock_timedrdlock(&t->lock, abs_timeout);
 #else
 	do {
-		struct timeval _start = ast_tvnow(), _diff;
+		struct timeval _now;
 		for (;;) {
 			if (!(res = pthread_rwlock_tryrdlock(&t->lock))) {
 				break;
 			}
-			_diff = ast_tvsub(ast_tvnow(), _start);
-			if (_diff.tv_sec > abs_timeout->tv_sec || (_diff.tv_sec == abs_timeout->tv_sec && _diff.tv_usec * 1000 > abs_timeout->tv_nsec)) {
+			_now = ast_tvnow();
+			if (_now.tv_sec > abs_timeout->tv_sec || (_now.tv_sec == abs_timeout->tv_sec && _now.tv_usec * 1000 > abs_timeout->tv_nsec)) {
 				break;
 			}
 			usleep(1);
@@ -1227,12 +1231,20 @@ int __ast_rwlock_timedwrlock(const char *filename, int line, const char *func, a
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t, bt);
 #else
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t);
@@ -1244,13 +1256,13 @@ int __ast_rwlock_timedwrlock(const char *filename, int line, const char *func, a
 	res = pthread_rwlock_timedwrlock(&t->lock, abs_timeout);
 #else
 	do {
-		struct timeval _start = ast_tvnow(), _diff;
+		struct timeval _now;
 		for (;;) {
 			if (!(res = pthread_rwlock_trywrlock(&t->lock))) {
 				break;
 			}
-			_diff = ast_tvsub(ast_tvnow(), _start);
-			if (_diff.tv_sec > abs_timeout->tv_sec || (_diff.tv_sec == abs_timeout->tv_sec && _diff.tv_usec * 1000 > abs_timeout->tv_nsec)) {
+			_now = ast_tvnow();
+			if (_now.tv_sec > abs_timeout->tv_sec || (_now.tv_sec == abs_timeout->tv_sec && _now.tv_usec * 1000 > abs_timeout->tv_nsec)) {
 				break;
 			}
 			usleep(1);
@@ -1333,12 +1345,20 @@ int __ast_rwlock_tryrdlock(const char *filename, int line, const char *func, ast
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t, bt);
 #else
 		ast_store_lock_info(AST_RDLOCK, filename, line, func, name, t);
@@ -1403,12 +1423,20 @@ int __ast_rwlock_trywrlock(const char *filename, int line, const char *func, ast
 
 	if (t->tracking) {
 #ifdef HAVE_BKTR
+		struct ast_bt tmp;
+
+		/* The implementation of backtrace() may have its own locks.
+		 * Capture the backtrace outside of the reentrancy lock to
+		 * avoid deadlocks. See ASTERISK-22455. */
+		ast_bt_get_addresses(&tmp);
+
 		ast_reentrancy_lock(lt);
 		if (lt->reentrancy != AST_MAX_REENTRANCY) {
-			ast_bt_get_addresses(&lt->backtrace[lt->reentrancy]);
+			lt->backtrace[lt->reentrancy] = tmp;
 			bt = &lt->backtrace[lt->reentrancy];
 		}
 		ast_reentrancy_unlock(lt);
+
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t, bt);
 #else
 		ast_store_lock_info(AST_WRLOCK, filename, line, func, name, t);

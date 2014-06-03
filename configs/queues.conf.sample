@@ -5,7 +5,7 @@
 ; Persistent Members
 ;    Store each dynamic member in each queue in the astdb so that
 ;    when asterisk is restarted, each member will be automatically
-;    read into their recorded queues. Default is 'yes'.
+;    read into their recorded queues. Default is 'no'.
 ;
 persistentmembers = yes
 ;
@@ -57,7 +57,7 @@ monitor-type = MixMonitor
 ; shared_lastcall will make the lastcall and calls received be the same in
 ; members logged in more than one queue.  This is useful to make the queue
 ; respect the wrapuptime of another queue for a shared member.
-; The default value is yes.
+; The default value is no.
 ;
 ;shared_lastcall=no
 ;
@@ -292,6 +292,13 @@ monitor-type = MixMonitor
 ; will have their position announced.
 ;
 ;announce-position = yes
+;
+; If enabled, play announcements to the first user waiting in the Queue. This may mean
+; that announcements are played when an agent attempts to connect to the waiting user,
+; which may delay the time before the agent and the user can communicate. Disabled by
+; default.
+;
+; announce-to-first-user = no
 ;
 ; If you have specified "limit" or "more" for the announce-position option, then the following
 ; value is what is used to determine what announcement to play to waiting callers. If you have

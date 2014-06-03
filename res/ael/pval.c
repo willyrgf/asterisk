@@ -60,7 +60,6 @@ extern struct ast_flags ast_compat;
 extern int localized_pbx_load_module(void);
 
 static char expr_output[2096];
-#define AST_PBX_MAX_STACK  128
 #define BUF_SIZE 2000
 
 /* these functions are in ../ast_expr2.fl */
@@ -1389,7 +1388,7 @@ static void find_pval_goto_item(pval *item, int lev)
 	struct pval *p4;
 	
 	if (lev>100) {
-		ast_log(LOG_ERROR,"find_pval_goto in infinite loop! item_type: %d\n\n", item->type);
+		ast_log(LOG_ERROR,"find_pval_goto in infinite loop! item_type: %u\n\n", item->type);
 		return;
 	}
 	
@@ -2902,7 +2901,7 @@ void ael2_semantic_check(pval *item, int *arg_errs, int *arg_warns, int *arg_not
 	if (!item)
 		return; /* don't check an empty tree */
 #ifdef AAL_ARGCHECK
-	rfilename = alloca(10 + strlen(ast_config_AST_VAR_DIR));
+	rfilename = ast_alloca(10 + strlen(ast_config_AST_VAR_DIR));
 	sprintf(rfilename, "%s/applist", ast_config_AST_VAR_DIR);
 	
 	apps = argdesc_parse(rfilename, &argapp_errs); /* giveth */

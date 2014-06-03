@@ -3,9 +3,6 @@
 ;
 
 [general]
-; Enable or disable a single extension from logging in as multiple agents.
-; The default value is "yes".
-;multiplelogin=yes
 
 [agents]
 ;
@@ -30,7 +27,7 @@
 ;autologoffunavail=yes
 ;
 ; Define ackcall to require a DTMF acknowledgement when
-; an agent logs in using AgentLogin.  Default is "no".
+; a logged-in agent receives a call.  Default is "no".
 ; Use the acceptdtmf option to configure what DTMF key
 ; press should be used to acknowledge the call. The
 ; default is '#'.
@@ -56,11 +53,6 @@
 ; musiconhold => music_class
 ;
 ;musiconhold => default
-;
-; Define the default good bye sound file for agents
-; default to vm-goodbye
-;
-;goodbye => goodbye_file
 ;
 ; Define updatecdr. This is whether or not to change the source
 ; channel in the CDR record for this call to agent/agent_id so

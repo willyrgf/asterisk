@@ -439,7 +439,7 @@ static void devstate_event(const char *device, enum ast_device_state state, int 
 		event_type = AST_EVENT_DEVICE_STATE;
 	}
 
-	ast_debug(3, "device '%s' state '%d'\n", device, state);
+	ast_debug(3, "device '%s' state '%u'\n", device, state);
 
 	if (!(event = ast_event_new(event_type,
 				    AST_EVENT_IE_DEVICE, AST_EVENT_IE_PLTYPE_STR, device,
@@ -464,7 +464,7 @@ static void do_state_change(const char *device, int cachable)
 
 	state = _ast_device_state(device, 0);
 
-	ast_debug(3, "Changing state for %s - state %d (%s)\n", device, state, ast_devstate2str(state));
+	ast_debug(3, "Changing state for %s - state %u (%s)\n", device, state, ast_devstate2str(state));
 
 	devstate_event(device, state, cachable);
 }
@@ -505,7 +505,7 @@ int ast_devstate_changed_literal(enum ast_device_state state, enum ast_devstate_
 		AST_LIST_UNLOCK(&state_changes);
 	}
 
-	return 1;
+	return 0;
 }
 
 int ast_device_state_changed_literal(const char *dev)
@@ -705,7 +705,7 @@ static void *run_devstate_collector(void *data)
 static void devstate_change_collector_cb(const struct ast_event *event, void *data)
 {
 	struct devstate_change *sc;
-	const char *device;
+	const char *device, *cachable_str;
 	const struct ast_eid *eid;
 	uint32_t state;
 	enum ast_devstate_cache cachable = AST_DEVSTATE_CACHABLE;
@@ -726,6 +726,17 @@ static void devstate_change_collector_cb(const struct ast_event *event, void *da
 	strcpy(sc->device, device);
 	sc->eid = *eid;
 	sc->state = state;
+	sc->cachable = cachable;
+
+	/* For 'cachable' we cannot use ast_event_get_ie_uint(), it overwrites the default of AST_DEVSTATE_CACHABLE we
+	 * have already setup for 'cachable', if for whatever reason the AST_EVENT_IE_CACHABLE wasn't
+	 * posted in the event ast_event_get_ie_uint() is going will return 0,
+	 * which equates to AST_DEVSTATE_NOT_CACHABLE the first enumeration in 'ast_devstate_cache'.
+	 */
+
+	if ((cachable_str = ast_event_get_ie_str(event, AST_EVENT_IE_CACHABLE))) {
+		sscanf(cachable_str, "%30u", &cachable);
+	}
 	sc->cachable = cachable;
 
 	ast_mutex_lock(&devstate_collector.lock);

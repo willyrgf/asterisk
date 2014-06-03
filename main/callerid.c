@@ -314,7 +314,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, f
 	int x;
 	short *buf;
 
-	buf = alloca(2 * len + cid->oldlen);
+	buf = ast_alloca(2 * len + cid->oldlen);
 
 	memcpy(buf, cid->oldstuff, cid->oldlen);
 	mylen += cid->oldlen / 2;
@@ -447,7 +447,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, f
 						case 0x06: /* short dial number */
 						case 0x07: /* reserved */
 						default:   /* reserved */
-							ast_debug(2, "cid info:#1=%X\n", cid->rawdata[x]);
+							ast_debug(2, "cid info:#1=%X\n", (unsigned)cid->rawdata[x]);
 							break ;
 						}
 						x++; 
@@ -463,7 +463,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, f
 						case 0x09: /* private dial plan */
 						case 0x05: /* reserved */
 						default:   /* reserved */
-							ast_debug(2, "cid info:#2=%X\n", cid->rawdata[x]);
+							ast_debug(2, "cid info:#2=%X\n", (unsigned)cid->rawdata[x]);
 							break ;
 						}
 						x++; 
@@ -503,7 +503,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, f
 						case 0x07: /* reserved */
 						default:   /* reserved */
 							if (option_debug > 1)
-								ast_log(LOG_NOTICE, "did info:#1=%X\n", cid->rawdata[x]);
+								ast_log(LOG_NOTICE, "did info:#1=%X\n", (unsigned)cid->rawdata[x]);
 							break ;
 						}
 						x++;
@@ -519,7 +519,7 @@ int callerid_feed_jp(struct callerid_state *cid, unsigned char *ubuf, int len, f
 						case 0x09: /* private dial plan */
 						case 0x05: /* reserved */
 						default:   /* reserved */
-							ast_debug(2, "did info:#2=%X\n", cid->rawdata[x]);
+							ast_debug(2, "did info:#2=%X\n", (unsigned)cid->rawdata[x]);
 							break ;
 						}
 						x++;
@@ -552,7 +552,7 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, form
 	int x;
 	short *buf;
 
-	buf = alloca(2 * len + cid->oldlen);
+	buf = ast_alloca(2 * len + cid->oldlen);
 
 	memcpy(buf, cid->oldstuff, cid->oldlen);
 	mylen += cid->oldlen/2;
@@ -621,7 +621,7 @@ int callerid_feed(struct callerid_state *cid, unsigned char *ubuf, int len, form
 				}
 				break;
 			case 5: /* Check checksum */
-				if (b != (256 - (cid->cksum & 0xff))) {
+				if ((b + cid->cksum) & 0xff) {
 					ast_log(LOG_NOTICE, "Caller*ID failed checksum\n");
 					/* Try again */
 					cid->sawflag = 0;

@@ -263,14 +263,12 @@ static char *build_filename(const char *filename, const char *ext)
 		ext = "WAV";
 
 	if (filename[0] == '/') {
-		if (asprintf(&fn, "%s.%s", filename, ext) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
+		if (ast_asprintf(&fn, "%s.%s", filename, ext) < 0) {
 			fn = NULL;
 		}
 	} else {
-		if (asprintf(&fn, "%s/sounds/%s.%s",
+		if (ast_asprintf(&fn, "%s/sounds/%s.%s",
 			     ast_config_AST_DATA_DIR, filename, ext) < 0) {
-			ast_log(LOG_WARNING, "asprintf() failed: %s\n", strerror(errno));
 			fn = NULL;
 		}
 	}
@@ -324,6 +322,15 @@ static void filestream_destructor(void *arg)
 	if (f->trans)
 		ast_translator_free_path(f->trans);
 
+	if (f->fmt->close) {
+		void (*closefn)(struct ast_filestream *) = f->fmt->close;
+		closefn(f);
+	}
+
+	if (f->f) {
+		fclose(f->f);
+	}
+
 	if (f->realfilename && f->filename) {
 		pid = ast_safe_fork(0);
 		if (!pid) {
@@ -340,12 +347,6 @@ static void filestream_destructor(void *arg)
 		free(f->filename);
 	if (f->realfilename)
 		free(f->realfilename);
-	if (f->fmt->close) {
-		void (*closefn)(struct ast_filestream *) = f->fmt->close;
-		closefn(f);
-	}
-	if (f->f)
-		fclose(f->f);
 	if (f->vfs)
 		ast_closestream(f->vfs);
 	if (f->write_buffer) {
@@ -534,7 +535,7 @@ static format_t ast_filehelper(const char *filename, const void *arg2, const cha
 				break;
 
 			default:
-				ast_log(LOG_WARNING, "Unknown helper %d\n", action);
+				ast_log(LOG_WARNING, "Unknown helper %u\n", action);
 			}
 			ast_free(fn);
 		}
@@ -657,9 +658,7 @@ struct ast_filestream *ast_openstream_full(struct ast_channel *chan, const char 
 	if (preflang == NULL)
 		preflang = "";
 	buflen = strlen(preflang) + strlen(filename) + 4;
-	buf = alloca(buflen);
-	if (buf == NULL)
-		return NULL;
+	buf = ast_alloca(buflen);
 	fmts = fileexists_core(filename, NULL, preflang, buf, buflen);
 	if (fmts > 0)
 		fmts &= AST_FORMAT_AUDIO_MASK;
@@ -691,9 +690,7 @@ struct ast_filestream *ast_openvstream(struct ast_channel *chan, const char *fil
 	if (preflang == NULL)
 		preflang = "";
 	buflen = strlen(preflang) + strlen(filename) + 4;
-	buf = alloca(buflen);
-	if (buf == NULL)
-		return NULL;
+	buf = ast_alloca(buflen);
 
 	for (format = AST_FORMAT_FIRST_VIDEO_BIT; format <= AST_FORMAT_VIDEO_MASK; format = format << 1) {
 		int fd;
@@ -785,7 +782,7 @@ static enum fsread_res ast_readaudio_callback(struct ast_filestream *s)
 
 			rate = (unsigned int) roundf(samp_rate / ((float) whennext));
 
-			ast_settimeout(s->owner, rate, ast_fsread_audio, s);
+			ast_settimeout_full(s->owner, rate, ast_fsread_audio, s, 1);
 		} else {
 			s->owner->streamid = ast_sched_add(s->owner->sched, 
 				whennext / (ast_format_rate(s->fmt->format) / 1000), ast_fsread_audio, s);
@@ -927,9 +924,7 @@ int ast_fileexists(const char *filename, const char *fmt, const char *preflang)
 	if (preflang == NULL)
 		preflang = "";
 	buflen = strlen(preflang) + strlen(filename) + 4;	/* room for everything */
-	buf = alloca(buflen);
-	if (buf == NULL)
-		return 0;
+	buf = ast_alloca(buflen);
 	return fileexists_core(filename, fmt, preflang, buf, buflen);
 }
 
@@ -1016,6 +1011,9 @@ struct ast_filestream *ast_readfile(const char *filename, const char *type, cons
 			format_found = 1;
 
 		fn = build_filename(filename, type);
+		if (!fn) {
+			continue;
+		}
 		errno = 0;
 		bfile = fopen(fn, "r");
 
@@ -1036,6 +1034,7 @@ struct ast_filestream *ast_readfile(const char *filename, const char *type, cons
 		fs->mode = mode;
 		fs->filename = ast_strdup(filename);
 		fs->vfs = NULL;
+		ast_free(fn);
 		break;
 	}
 
@@ -1083,6 +1082,9 @@ struct ast_filestream *ast_writefile(const char *filename, const char *type, con
 			format_found = 1;
 
 		fn = build_filename(filename, type);
+		if (!fn) {
+			continue;
+		}
 		fd = open(fn, flags | myflags, mode);
 		if (fd > -1) {
 			/* fdopen() the resulting file stream */
@@ -1108,7 +1110,7 @@ struct ast_filestream *ast_writefile(const char *filename, const char *type, con
 					*c = '_';
 
 			size = strlen(fn) + strlen(record_cache_dir) + 2;
-			buf = alloca(size);
+			buf = ast_alloca(size);
 			strcpy(buf, record_cache_dir);
 			strcat(buf, "/");
 			strcat(buf, fn);
@@ -1143,6 +1145,9 @@ struct ast_filestream *ast_writefile(const char *filename, const char *type, con
 				if (fs) {
 					ast_closestream(fs);
 					fs = NULL;
+				}
+				if (!buf) {
+					ast_free(fn);
 				}
 				continue;
 			}
@@ -1490,8 +1495,14 @@ static struct ast_cli_entry cli_file[] = {
 	AST_CLI_DEFINE(handle_cli_core_show_file_formats, "Displays file formats")
 };
 
+static void file_shutdown(void)
+{
+	ast_cli_unregister_multiple(cli_file, ARRAY_LEN(cli_file));
+}
+
 int ast_file_init(void)
 {
 	ast_cli_register_multiple(cli_file, ARRAY_LEN(cli_file));
+	ast_register_atexit(file_shutdown);
 	return 0;
 }

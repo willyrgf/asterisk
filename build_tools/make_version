@@ -40,9 +40,6 @@ elif [ -d ${1}/.svn ]; then
             if [ ${FEATURE} != 0 ] ; then
                 RESULT="${RESULT}-${FEATURE_NAME}"
             fi
-            if [ ${FEATURE} != 0 ] ; then
-                RESULT="${RESULT}-${FEATURE_NAME}"
-            fi
             break
         fi
 

@@ -66,15 +66,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #  endif
 #endif
 
-#if defined(__linux__) && !defined(__NR_gettid)
-#include <asm/unistd.h>
-#endif
-
-#if defined(__linux__) && defined(__NR_gettid)
-#define GETTID() syscall(__NR_gettid)
-#else
-#define GETTID() getpid()
-#endif
 static char dateformat[256] = "%b %e %T";		/* Original Asterisk Format */
 
 static char queue_log_name[256] = QUEUELOG;
@@ -279,13 +270,22 @@ static struct logchannel *make_logchannel(const char *channel, const char *compo
 		ast_copy_string(chan->filename, channel, sizeof(chan->filename));
 		openlog("asterisk", LOG_PID, chan->facility);
 	} else {
-		if (!ast_strlen_zero(hostname)) {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s.%s",
-				 channel[0] != '/' ? ast_config_AST_LOG_DIR : "", channel, hostname);
-		} else {
-			snprintf(chan->filename, sizeof(chan->filename), "%s/%s",
-				 channel[0] != '/' ? ast_config_AST_LOG_DIR : "", channel);
+		const char *log_dir_prefix = "";
+		const char *log_dir_separator = "";
+
+		if (channel[0] != '/') {
+			log_dir_prefix = ast_config_AST_LOG_DIR;
+			log_dir_separator = "/";
 		}
+
+		if (!ast_strlen_zero(hostname)) {
+			snprintf(chan->filename, sizeof(chan->filename), "%s%s%s.%s",
+				log_dir_prefix, log_dir_separator, channel, hostname);
+		} else {
+			snprintf(chan->filename, sizeof(chan->filename), "%s%s%s",
+				log_dir_prefix, log_dir_separator, channel);
+		}
+
 		if (!(chan->fileptr = fopen(chan->filename, "a"))) {
 			/* Can't do real logging here since we're called with a lock
 			 * so log to any attached consoles */
@@ -935,7 +935,7 @@ static struct ast_cli_entry cli_logger[] = {
 	AST_CLI_DEFINE(handle_logger_show_channels, "List configured log channels"),
 	AST_CLI_DEFINE(handle_logger_reload, "Reopens the log files"),
 	AST_CLI_DEFINE(handle_logger_rotate, "Rotates and reopens the log files"),
-	AST_CLI_DEFINE(handle_logger_set_level, "Enables/Disables a specific logging level for this console")
+	AST_CLI_DEFINE(handle_logger_set_level, "Enables/Disables a specific logging level for this console"),
 };
 
 static void _handle_SIGXFSZ(int sig)
@@ -1087,10 +1087,6 @@ static void *logger_thread(void *data)
 			/* Free the data since we are done */
 			ast_free(msg);
 		}
-
-		/* If we should stop, then stop */
-		if (close_logger_thread)
-			break;
 	}
 
 	return NULL;
@@ -1133,8 +1129,17 @@ int init_logger(void)
 	/* auto rotate if sig SIGXFSZ comes a-knockin */
 	sigaction(SIGXFSZ, &handle_SIGXFSZ, NULL);
 
-	/* start logger thread */
+	/* Re-initialize the logmsgs mutex.  The recursive mutex can be accessed prior
+ 	 * to Asterisk being forked into the background, which can cause the thread
+ 	 * ID tracked by the underlying pthread mutex to be different than the ID of
+ 	 * the thread that unlocks the mutex.  Since init_logger is called after the
+ 	 * fork, it is safe to initialize the mutex here for future accesses.
+ 	 */
+	ast_mutex_destroy(&logmsgs.lock);
+	ast_mutex_init(&logmsgs.lock);
 	ast_cond_init(&logcond, NULL);
+
+	/* start logger thread */
 	if (ast_pthread_create(&logthread, NULL, logger_thread, NULL) < 0) {
 		ast_cond_destroy(&logcond);
 		return -1;
@@ -1155,6 +1160,9 @@ int init_logger(void)
 void close_logger(void)
 {
 	struct logchannel *f = NULL;
+	struct verb *cur = NULL;
+
+	ast_cli_unregister_multiple(cli_logger, ARRAY_LEN(cli_logger));
 
 	logger_initialized = 0;
 
@@ -1167,6 +1175,12 @@ void close_logger(void)
 	if (logthread != AST_PTHREADT_NULL)
 		pthread_join(logthread, NULL);
 
+	AST_RWLIST_WRLOCK(&verbosers);
+	while ((cur = AST_LIST_REMOVE_HEAD(&verbosers, list))) {
+		ast_free(cur);
+	}
+	AST_RWLIST_UNLOCK(&verbosers);
+
 	AST_RWLIST_WRLOCK(&logchannels);
 
 	if (qlog) {
@@ -1174,11 +1188,12 @@ void close_logger(void)
 		qlog = NULL;
 	}
 
-	AST_RWLIST_TRAVERSE(&logchannels, f, list) {
+	while ((f = AST_LIST_REMOVE_HEAD(&logchannels, list))) {
 		if (f->fileptr && (f->fileptr != stdout) && (f->fileptr != stderr)) {
 			fclose(f->fileptr);
 			f->fileptr = NULL;
 		}
+		ast_free(f);
 	}
 
 	closelog(); /* syslog */
@@ -1265,7 +1280,7 @@ void ast_log(int level, const char *file, int line, const char *function, const 
 	ast_string_field_set(logmsg, level_name, levels[level]);
 	ast_string_field_set(logmsg, file, file);
 	ast_string_field_set(logmsg, function, function);
-	logmsg->process_id = (long) GETTID();
+	logmsg->process_id = (long) ast_get_tid();
 
 	/* If the logger thread is active, append it to the tail end of the list - otherwise skip that step */
 	if (logthread != AST_PTHREADT_NULL) {
@@ -1319,7 +1334,7 @@ void *ast_bt_destroy(struct ast_bt *bt)
 
 char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 {
-	char **strings = NULL;
+	char **strings;
 #if defined(BETTER_BACKTRACES)
 	int stackfr;
 	bfd *bfdobj;           /* bfd.h */
@@ -1339,9 +1354,12 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 
 #if defined(BETTER_BACKTRACES)
 	strings_size = num_frames * sizeof(*strings);
-	eachlen = ast_calloc(num_frames, sizeof(*eachlen));
 
-	if (!(strings = ast_calloc(num_frames, sizeof(*strings)))) {
+	eachlen = ast_calloc(num_frames, sizeof(*eachlen));
+	strings = ast_std_calloc(num_frames, sizeof(*strings));
+	if (!eachlen || !strings) {
+		ast_free(eachlen);
+		ast_std_free(strings);
 		return NULL;
 	}
 
@@ -1356,6 +1374,7 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 
 		if (strcmp(dli.dli_fname, "asterisk") == 0) {
 			char asteriskpath[256];
+
 			if (!(dli.dli_fname = ast_utils_which("asterisk", asteriskpath, sizeof(asteriskpath)))) {
 				/* This will fail to find symbols */
 				ast_log(LOG_DEBUG, "Failed to find asterisk binary for debug symbols.\n");
@@ -1364,11 +1383,11 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 		}
 
 		lastslash = strrchr(dli.dli_fname, '/');
-		if (	(bfdobj = bfd_openr(dli.dli_fname, NULL)) &&
-				bfd_check_format(bfdobj, bfd_object) &&
-				(allocsize = bfd_get_symtab_upper_bound(bfdobj)) > 0 &&
-				(syms = ast_malloc(allocsize)) &&
-				(symbolcount = bfd_canonicalize_symtab(bfdobj, syms))) {
+		if ((bfdobj = bfd_openr(dli.dli_fname, NULL)) &&
+			bfd_check_format(bfdobj, bfd_object) &&
+			(allocsize = bfd_get_symtab_upper_bound(bfdobj)) > 0 &&
+			(syms = ast_malloc(allocsize)) &&
+			(symbolcount = bfd_canonicalize_symtab(bfdobj, syms))) {
 
 			if (bfdobj->flags & DYNAMIC) {
 				offset = addresses[stackfr] - dli.dli_fbase;
@@ -1377,9 +1396,9 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 			}
 
 			for (section = bfdobj->sections; section; section = section->next) {
-				if (	!bfd_get_section_flags(bfdobj, section) & SEC_ALLOC ||
-						section->vma > offset ||
-						section->size + section->vma < offset) {
+				if (!bfd_get_section_flags(bfdobj, section) & SEC_ALLOC ||
+					section->vma > offset ||
+					section->size + section->vma < offset) {
 					continue;
 				}
 
@@ -1387,14 +1406,16 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 					continue;
 				}
 
-                                /* file can possibly be null even with a success result from bfd_find_nearest_line */
-                                file = file ? file : "";
+				/* file can possibly be null even with a success result from bfd_find_nearest_line */
+				file = file ? file : "";
 
 				/* Stack trace output */
 				found++;
 				if ((lastslash = strrchr(file, '/'))) {
 					const char *prevslash;
-					for (prevslash = lastslash - 1; *prevslash != '/' && prevslash >= file; prevslash--);
+
+					for (prevslash = lastslash - 1; *prevslash != '/' && prevslash >= file; prevslash--) {
+					}
 					if (prevslash >= file) {
 						lastslash = prevslash;
 					}
@@ -1416,9 +1437,7 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 		}
 		if (bfdobj) {
 			bfd_close(bfdobj);
-			if (syms) {
-				ast_free(syms);
-			}
+			ast_free(syms);
 		}
 
 		/* Default output, if we cannot find the information within BFD */
@@ -1438,27 +1457,31 @@ char **ast_bt_get_symbols(void **addresses, size_t num_frames)
 
 		if (!ast_strlen_zero(msg)) {
 			char **tmp;
-			eachlen[stackfr] = strlen(msg);
-			if (!(tmp = ast_realloc(strings, strings_size + eachlen[stackfr] + 1))) {
-				ast_free(strings);
+
+			eachlen[stackfr] = strlen(msg) + 1;
+			if (!(tmp = ast_std_realloc(strings, strings_size + eachlen[stackfr]))) {
+				ast_std_free(strings);
 				strings = NULL;
 				break; /* out of stack frame iteration */
 			}
 			strings = tmp;
 			strings[stackfr] = (char *) strings + strings_size;
-			ast_copy_string(strings[stackfr], msg, eachlen[stackfr] + 1);
-			strings_size += eachlen[stackfr] + 1;
+			strcpy(strings[stackfr], msg);/* Safe since we just allocated the room. */
+			strings_size += eachlen[stackfr];
 		}
 	}
 
 	if (strings) {
-		/* Recalculate the offset pointers */
+		/* Recalculate the offset pointers because of the reallocs. */
 		strings[0] = (char *) strings + num_frames * sizeof(*strings);
 		for (stackfr = 1; stackfr < num_frames; stackfr++) {
-			strings[stackfr] = strings[stackfr - 1] + eachlen[stackfr - 1] + 1;
+			strings[stackfr] = strings[stackfr - 1] + eachlen[stackfr - 1];
 		}
 	}
+	ast_free(eachlen);
+
 #else /* !defined(BETTER_BACKTRACES) */
+
 	strings = backtrace_symbols(addresses, num_frames);
 #endif /* defined(BETTER_BACKTRACES) */
 	return strings;
@@ -1484,9 +1507,7 @@ void ast_backtrace(void)
 			ast_log(LOG_DEBUG, "#%d: [%p] %s\n", i - 3, bt->addresses[i], strings[i]);
 		}
 
-		/* MALLOC_DEBUG will erroneously report an error here, unless we undef the macro. */
-#undef free
-		free(strings);
+		ast_std_free(strings);
 	} else {
 		ast_debug(1, "Could not allocate memory for backtrace\n");
 	}
@@ -1513,11 +1534,11 @@ void __ast_verbose_ap(const char *file, int line, const char *func, const char *
 		now = ast_tvnow();
 		ast_localtime(&now, &tm, NULL);
 		ast_strftime(date, sizeof(date), dateformat, &tm);
-		datefmt = alloca(strlen(date) + 3 + strlen(fmt) + 1);
+		datefmt = ast_alloca(strlen(date) + 3 + strlen(fmt) + 1);
 		sprintf(datefmt, "%c[%s] %s", 127, date, fmt);
 		fmt = datefmt;
 	} else {
-		char *tmp = alloca(strlen(fmt) + 2);
+		char *tmp = ast_alloca(strlen(fmt) + 2);
 		sprintf(tmp, "%c%s", 127, fmt);
 		fmt = tmp;
 	}
@@ -1639,7 +1660,7 @@ int ast_logger_register_level(const char *name)
 
 	AST_RWLIST_UNLOCK(&logchannels);
 
-	ast_debug(1, "Registered dynamic logger level '%s' with index %d.\n", name, available);
+	ast_debug(1, "Registered dynamic logger level '%s' with index %u.\n", name, available);
 
 	update_logchannels();
 
@@ -1677,7 +1698,7 @@ void ast_logger_unregister_level(const char *name)
 		levels[x] = NULL;
 		AST_RWLIST_UNLOCK(&logchannels);
 
-		ast_debug(1, "Unregistered dynamic logger level '%s' with index %d.\n", name, x);
+		ast_debug(1, "Unregistered dynamic logger level '%s' with index %u.\n", name, x);
 
 		update_logchannels();
 	} else {

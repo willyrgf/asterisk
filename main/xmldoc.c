@@ -354,7 +354,13 @@ char *ast_xmldoc_printable(const char *bwinput, int withcolors)
 
 			/* Setup color */
 			if (withcolors) {
-				ast_term_color_code(&colorized, colorized_tags[c].colorfg, 0);
+				if (ast_opt_light_background) {
+					/* Turn off *bright* colors */
+					ast_term_color_code(&colorized, colorized_tags[c].colorfg & 0x7f, 0);
+				} else {
+					/* Turn on *bright* colors */
+					ast_term_color_code(&colorized, colorized_tags[c].colorfg | 0x80, 0);
+				}
 				if (!colorized) {
 					return NULL;
 				}
@@ -568,8 +574,11 @@ static struct ast_xml_node *xmldoc_get_node(const char *type, const char *name, 
  */
 static void __attribute__((format(printf, 4, 5))) xmldoc_reverse_helper(int reverse, int *len, char **syntax, const char *fmt, ...)
 {
-	int totlen, tmpfmtlen;
-	char *tmpfmt, tmp;
+	int totlen;
+	int tmpfmtlen;
+	char *tmpfmt;
+	char *new_syntax;
+	char tmp;
 	va_list ap;
 
 	va_start(ap, fmt);
@@ -582,12 +591,12 @@ static void __attribute__((format(printf, 4, 5))) xmldoc_reverse_helper(int reve
 	tmpfmtlen = strlen(tmpfmt);
 	totlen = *len + tmpfmtlen + 1;
 
-	*syntax = ast_realloc(*syntax, totlen);
-
-	if (!*syntax) {
+	new_syntax = ast_realloc(*syntax, totlen);
+	if (!new_syntax) {
 		ast_free(tmpfmt);
 		return;
 	}
+	*syntax = new_syntax;
 
 	if (reverse) {
 		memmove(*syntax + tmpfmtlen, *syntax, *len);
@@ -691,7 +700,9 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 
 	if (!rootnode || !ast_xml_node_get_children(rootnode)) {
 		/* If the rootnode field is not found, at least print name. */
-		ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : ""));
+		if (ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : "")) < 0) {
+			syntax = NULL;
+		}
 		return syntax;
 	}
 
@@ -731,7 +742,9 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 
 	if (!hasparams) {
 		/* This application, function, option, etc, doesn't have any params. */
-		ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : ""));
+		if (ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : "")) < 0) {
+			syntax = NULL;
+		}
 		return syntax;
 	}
 
@@ -745,6 +758,7 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 				if ((paramtype = ast_xml_get_attribute(node, "required"))) {
 					if (!ast_true(paramtype)) {
 						optmidnode = 1;
+						ast_xml_free_attr(paramtype);
 						break;
 					}
 					ast_xml_free_attr(paramtype);
@@ -803,11 +817,17 @@ static char *xmldoc_get_syntax_fun(struct ast_xml_node *rootnode, const char *ro
 					ast_free(syntax);
 				}
 				/* to give up is ok? */
-				ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : ""));
+				if (ast_asprintf(&syntax, "%s%s", (printrootname ? rootname : ""), (printparenthesis ? "()" : "")) < 0) {
+					syntax = NULL;
+				}
 				return syntax;
 			}
 			paramname = ast_strdup(paramnameattr);
 			ast_xml_free_attr(paramnameattr);
+		}
+
+		if (!paramname) {
+			return NULL;
 		}
 
 		/* Defaults to 'false'. */
@@ -1407,8 +1427,7 @@ static int xmldoc_parse_variablelist(struct ast_xml_node *node, const char *tabs
 	}
 
 	/* use this spacing (add 4 spaces) inside a variablelist node. */
-	ast_asprintf(&vartabs, "%s    ", tabs);
-	if (!vartabs) {
+	if (ast_asprintf(&vartabs, "%s    ", tabs) < 0) {
 		return ret;
 	}
 	for (tmp = ast_xml_node_get_children(node); tmp; tmp = ast_xml_node_get_next(tmp)) {
@@ -1525,7 +1544,9 @@ static int xmldoc_parse_enum(struct ast_xml_node *fixnode, const char *tabs, str
 	int ret = 0;
 	char *optiontabs;
 
-	ast_asprintf(&optiontabs, "%s    ", tabs);
+	if (ast_asprintf(&optiontabs, "%s    ", tabs) < 0) {
+		return ret;
+	}
 
 	for (node = ast_xml_node_get_children(node); node; node = ast_xml_node_get_next(node)) {
 		if ((xmldoc_parse_para(node, (ret ? tabs : " - "), "\n", buffer))) {
@@ -1591,8 +1612,7 @@ static int xmldoc_parse_option(struct ast_xml_node *fixnode, const char *tabs, s
 	int ret = 0;
 	char *optiontabs;
 
-	ast_asprintf(&optiontabs, "%s    ", tabs);
-	if (!optiontabs) {
+	if (ast_asprintf(&optiontabs, "%s    ", tabs) < 0) {
 		return ret;
 	}
 	for (node = ast_xml_node_get_children(fixnode); node; node = ast_xml_node_get_next(node)) {
@@ -1698,8 +1718,8 @@ static void xmldoc_parse_parameter(struct ast_xml_node *fixnode, const char *tab
 		return;
 	}
 
-	ast_asprintf(&internaltabs, "%s    ", tabs);
-	if (!internaltabs) {
+	if (ast_asprintf(&internaltabs, "%s    ", tabs) < 0) {
+		ast_xml_free_attr(paramname);
 		return;
 	}
 
@@ -1798,14 +1818,16 @@ static struct ast_str *xmldoc_get_formatted(struct ast_xml_node *node, int raw_o
 {
 	struct ast_xml_node *tmp;
 	const char *notcleanret, *tmpstr;
-	struct ast_str *ret = ast_str_create(128);
+	struct ast_str *ret;
 
 	if (raw_output) {
+		/* xmldoc_string_cleanup will allocate the ret object */
 		notcleanret = ast_xml_get_text(node);
 		tmpstr = notcleanret;
 		xmldoc_string_cleanup(ast_skip_blanks(notcleanret), &ret, 0);
 		ast_xml_free_text(tmpstr);
 	} else {
+		ret = ast_str_create(128);
 		for (tmp = ast_xml_node_get_children(node); tmp; tmp = ast_xml_node_get_next(tmp)) {
 			/* if found, parse a <para> element. */
 			if (xmldoc_parse_para(tmp, "", "\n", &ret)) {
@@ -1857,7 +1879,6 @@ static char *xmldoc_build_field(const char *type, const char *name, const char *
 	node = ast_xml_find_element(ast_xml_node_get_children(node), var, NULL, NULL);
 
 	if (!node || !ast_xml_node_get_children(node)) {
-		ast_log(LOG_DEBUG, "Cannot find variable '%s' in tree '%s'\n", var, name);
 		return ret;
 	}
 
@@ -1932,6 +1953,7 @@ static void xmldoc_unload_documentation(void)
 	while ((doctree = AST_RWLIST_REMOVE_HEAD(&xmldoc_tree, entry))) {
 		ast_free(doctree->filename);
 		ast_xml_close(doctree->doc);
+		ast_free(doctree);
 	}
 	AST_RWLIST_UNLOCK(&xmldoc_tree);
 
@@ -1981,12 +2003,14 @@ int ast_xmldoc_load_documentation(void)
 	globret = xml_pathmatch(xmlpattern, xmlpattern_maxlen, &globbuf);
 #else
 	/* Get every *-LANG.xml file inside $(ASTDATADIR)/documentation */
-	ast_asprintf(&xmlpattern, "%s/documentation{/thirdparty/,/}*-{%s,%.2s_??,%s}.xml", ast_config_AST_DATA_DIR,
-		documentation_language, documentation_language, default_documentation_language);
+	if (ast_asprintf(&xmlpattern, "%s/documentation{/thirdparty/,/}*-{%s,%.2s_??,%s}.xml", ast_config_AST_DATA_DIR,
+		documentation_language, documentation_language, default_documentation_language) < 0) {
+		return 1;
+	}
 	globret = glob(xmlpattern, MY_GLOB_FLAGS, NULL, &globbuf);
 #endif
 
-	ast_debug(3, "gl_pathc %zd\n", globbuf.gl_pathc);
+	ast_debug(3, "gl_pathc %zu\n", globbuf.gl_pathc);
 	if (globret == GLOB_NOSPACE) {
 		ast_log(LOG_WARNING, "XML load failure, glob expansion of pattern '%s' failed: Not enough memory\n", xmlpattern);
 		ast_free(xmlpattern);

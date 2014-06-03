@@ -1431,7 +1431,7 @@ static void aoc_d_event(const struct ast_aoc_decoded *decoded, struct ast_channe
 					decoded->unit_list[idx].amount);
 			}
 			if (decoded->unit_list[idx].valid_type) {
-				ast_str_append(msg, 0, "%s/TypeOf: %d\r\n", prefix,
+				ast_str_append(msg, 0, "%s/TypeOf: %u\r\n", prefix,
 					decoded->unit_list[idx].type);
 			}
 		}
@@ -1499,7 +1499,7 @@ static void aoc_e_event(const struct ast_aoc_decoded *decoded, struct ast_channe
 					decoded->unit_list[idx].amount);
 			}
 			if (decoded->unit_list[idx].valid_type) {
-				ast_str_append(msg, 0, "%s/TypeOf: %d\r\n", prefix,
+				ast_str_append(msg, 0, "%s/TypeOf: %u\r\n", prefix,
 					decoded->unit_list[idx].type);
 			}
 		}
@@ -1605,7 +1605,12 @@ static struct ast_cli_entry aoc_cli[] = {
 	AST_CLI_DEFINE(aoc_cli_debug_enable, "enable cli debugging of AOC messages"),
 };
 
+static void aoc_shutdown(void)
+{
+	ast_cli_unregister_multiple(aoc_cli, ARRAY_LEN(aoc_cli));
+}
 int ast_aoc_cli_init(void)
 {
+	ast_register_atexit(aoc_shutdown);
 	return ast_cli_register_multiple(aoc_cli, ARRAY_LEN(aoc_cli));
 }

@@ -169,6 +169,18 @@
 ;
 ;resetinterval = 3600
 ;
+; Assume inband audio may be present when a PROCEEDING message is received.
+; Q.931 Section 5.1.2 says the network cannot assume that the CPE side has
+; attached to the B channel at this time without explicitly sending the
+; progress indicator ie informing the CPE side to attach to the B channel
+; for audio.  However, some non-compliant ISDN switches send a PROCEEDING
+; without the progress indicator ie indicating inband audio is available and
+; assume that the CPE device has connected the media path for listening to
+; ringback and other messages.
+; Default yes in current release branches for backward compatibility.
+;
+;inband_on_proceeding=yes
+;
 ; Overlap dialing mode (sending overlap digits)
 ; Cannot be changed on a reload.
 ;
@@ -491,7 +503,8 @@ usecallerid=yes
 ; easily be re-attaching to a prior incoming call that was not yet hung up).
 ; This option changes the hangup to wait for a dialtone on the line, before
 ; marking the line as once again available for use with outgoing calls.
-;waitfordialtone=yes
+; Specified in milliseconds, not set by default.
+;waitfordialtone=1000
 ;
 ; The following option enables receiving MWI on FXO lines.  The default
 ; value is no.
@@ -931,6 +944,33 @@ pickupgroup=1
 ; buffer policy.
 ;
 ;faxbuffers=>6,full
+;
+; Configure the default number of DAHDI buffers and the transmit policy to use.
+; This can be used to eliminate data drops when scheduling jitter prevents
+; Asterisk from writing to a DAHDI channel regularly. Most users will probably
+; want "faxbuffers" instead of "buffers".
+;
+; The policies are:
+; immediate - DAHDI will immediately start sending the data to the hardware after
+;             Asterisk writes to the channel. This is the default mode. It
+;             introduces the least amount of latency but has an increased chance for
+;             hardware under runs if Asterisk is not able to keep the DAHDI write
+;             queue from going empty.
+; half      - DAHDI will wait until half of the configured buffers are full before
+;             starting to transmit. This adds latency to the audio but reduces
+;             the chance of under runs. Essentially, this is like an in-kernel jitter
+;             buffer.
+; full      - DAHDI will not start transmitting until all buffers are full.
+;             Introduces the most amount of latency and is susceptible to over
+;             runs from the Asterisk process.
+;
+; The receive policy is never changed. DAHDI will always pass up audio as soon
+; as possible.
+;
+; The default number of buffers is 4 (from jitterbuffers) and the default policy
+; is immediate.
+;
+;buffers=4,immediate
 ;
 ; This option specifies a preference for which music on hold class this channel
 ; should listen to when put on hold if the music class has not been set on the
