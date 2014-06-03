@@ -70,7 +70,7 @@ enum func_type {
 #undef vasprintf
 #undef asprintf
 
-#define FENCE_MAGIC		0xdeadbeef	/*!< Allocated memory high/low fence overwrite check. */
+#define FENCE_MAGIC		0xfeedbabe	/*!< Allocated memory high/low fence overwrite check. */
 #define FREED_MAGIC		0xdeaddead	/*!< Freed memory wipe filler. */
 #define MALLOC_FILLER	0x55		/*!< Malloced memory filler.  Must not be zero. */
 
@@ -156,6 +156,31 @@ AST_MUTEX_DEFINE_STATIC_NOTRACKING(reglock);
 			fflush(mmlog);               \
 		}                                    \
 	} while (0)
+
+void *ast_std_malloc(size_t size)
+{
+	return malloc(size);
+}
+
+void *ast_std_calloc(size_t nmemb, size_t size)
+{
+	return calloc(nmemb, size);
+}
+
+void *ast_std_realloc(void *ptr, size_t size)
+{
+	return realloc(ptr, size);
+}
+
+void ast_std_free(void *ptr)
+{
+	free(ptr);
+}
+
+void ast_free_ptr(void *ptr)
+{
+	ast_free(ptr);
+}
 
 /*!
  * \internal

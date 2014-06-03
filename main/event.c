@@ -278,7 +278,7 @@ const char *ast_event_get_type_name(const struct ast_event *event)
 	type = ast_event_get_type(event);
 
 	if (type < 0 || type >= ARRAY_LEN(event_names)) {
-		ast_log(LOG_ERROR, "Invalid event type - '%d'\n", type);
+		ast_log(LOG_ERROR, "Invalid event type - '%u'\n", type);
 		return "";
 	}
 
@@ -1175,13 +1175,17 @@ int ast_event_append_ie_raw(struct ast_event **event, enum ast_event_ie_type ie_
 	const void *data, size_t data_len)
 {
 	struct ast_event_ie *ie;
+	struct ast_event *old_event;
 	unsigned int extra_len;
 	uint16_t event_len;
 
 	event_len = ntohs((*event)->event_len);
 	extra_len = sizeof(*ie) + data_len;
 
-	if (!(*event = ast_realloc(*event, event_len + extra_len))) {
+	old_event = *event;
+	*event = ast_realloc(*event, event_len + extra_len);
+	if (!*event) {
+		ast_free(old_event);
 		return -1;
 	}
 
@@ -1207,7 +1211,7 @@ struct ast_event *ast_event_new(enum ast_event_type type, ...)
 	/* Invalid type */
 	if (type >= AST_EVENT_TOTAL) {
 		ast_log(LOG_WARNING, "Someone tried to create an event of invalid "
-			"type '%d'!\n", type);
+			"type '%u'!\n", type);
 		return NULL;
 	}
 

@@ -1631,7 +1631,7 @@ static void data_filter_destructor(void *obj)
 {
 	struct data_filter *filter = obj, *globres;
 
-	AST_LIST_TRAVERSE(&(filter->glob_list), globres, list) {
+	while ((globres = AST_LIST_REMOVE_HEAD(&(filter->glob_list), list))) {
 		ao2_ref(globres, -1);
 	}
 
@@ -2115,17 +2115,17 @@ static void data_get_xml_add_child(struct ast_data *parent_data,
 			ast_xml_set_text(child_xml, node->payload.str);
 			break;
 		case AST_DATA_TIMESTAMP:
-			snprintf(node_content, sizeof(node_content), "%d",
+			snprintf(node_content, sizeof(node_content), "%u",
 				node->payload.uint);
 			ast_xml_set_text(child_xml, node_content);
 			break;
 		case AST_DATA_SECONDS:
-			snprintf(node_content, sizeof(node_content), "%d",
+			snprintf(node_content, sizeof(node_content), "%u",
 				node->payload.uint);
 			ast_xml_set_text(child_xml, node_content);
 			break;
 		case AST_DATA_MILLISECONDS:
-			snprintf(node_content, sizeof(node_content), "%d",
+			snprintf(node_content, sizeof(node_content), "%u",
 				node->payload.uint);
 			ast_xml_set_text(child_xml, node_content);
 			break;
@@ -2754,17 +2754,17 @@ static void data_result_print_cli_node(int fd, const struct ast_data *node, uint
 				node->name);
 		break;
 	case AST_DATA_TIMESTAMP:
-		ast_str_append(&output, 0, "%s%s: %d\n", ast_str_buffer(tabs),
+		ast_str_append(&output, 0, "%s%s: %u\n", ast_str_buffer(tabs),
 				node->name,
 				node->payload.uint);
 		break;
 	case AST_DATA_SECONDS:
-		ast_str_append(&output, 0, "%s%s: %d\n", ast_str_buffer(tabs),
+		ast_str_append(&output, 0, "%s%s: %u\n", ast_str_buffer(tabs),
 				node->name,
 				node->payload.uint);
 		break;
 	case AST_DATA_MILLISECONDS:
-		ast_str_append(&output, 0, "%s%s: %d\n", ast_str_buffer(tabs),
+		ast_str_append(&output, 0, "%s%s: %u\n", ast_str_buffer(tabs),
 				node->name,
 				node->payload.uint);
 		break;
@@ -2815,6 +2815,7 @@ static void data_result_print_cli_node(int fd, const struct ast_data *node, uint
  * \param[in] root The root node of the tree.
  * \param[in] depth Actual depth.
  */
+
 static void __data_result_print_cli(int fd, const struct ast_data *root, uint32_t depth)
 {
 	struct ao2_iterator iter;
@@ -3290,6 +3291,7 @@ static void data_shutdown(void)
 	ao2_t_ref(root_data.container, -1, "Unref root_data.container in data_shutdown");
 	root_data.container = NULL;
 	ast_rwlock_destroy(&root_data.lock);
+	AST_TEST_UNREGISTER(test_data_get);
 }
 
 int ast_data_init(void)
@@ -3307,9 +3309,7 @@ int ast_data_init(void)
 
 	res |= ast_manager_register_xml("DataGet", 0, manager_data_get);
 
-#ifdef TEST_FRAMEWORK
 	AST_TEST_REGISTER(test_data_get);
-#endif
 
 	ast_register_atexit(data_shutdown);
 

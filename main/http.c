@@ -187,9 +187,7 @@ uint32_t ast_http_manid_from_vars(struct ast_variable *headers)
 			break;
 		}
 	}
-	if (cookies) {
-		ast_variables_destroy(cookies);
-	}
+	ast_variables_destroy(cookies);
 	return mngid;
 }
 
@@ -230,7 +228,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 		goto out403;
 	}
 
-	/* Disallow any funny filenames at all */
+	/* Disallow any funny filenames at all (checking first character only??) */
 	if ((uri[0] < 33) || strchr("./|~@#$%^&*() \t", uri[0])) {
 		goto out403;
 	}
@@ -245,6 +243,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 
 	if (!(mtype = ast_http_ftype2mtype(ftype))) {
 		snprintf(wkspace, sizeof(wkspace), "text/%s", S_OR(ftype, "plain"));
+		mtype = wkspace;
 	}
 
 	/* Cap maximum length */
@@ -262,12 +261,12 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 		goto out404;
 	}
 
-	fd = open(path, O_RDONLY);
-	if (fd < 0) {
+	if (strstr(path, "/private/") && !astman_is_authed(ast_http_manid_from_vars(headers))) {
 		goto out403;
 	}
 
-	if (strstr(path, "/private/") && !astman_is_authed(ast_http_manid_from_vars(headers))) {
+	fd = open(path, O_RDONLY);
+	if (fd < 0) {
 		goto out403;
 	}
 
@@ -290,6 +289,7 @@ static int static_callback(struct ast_tcptls_session_instance *ser,
 	}
 
 	if ( (http_header = ast_str_create(255)) == NULL) {
+		close(fd);
 		return -1;
 	}
 
@@ -406,7 +406,7 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 
 	/* calc content length */
 	if (out) {
-		content_length += strlen(ast_str_buffer(out));
+		content_length += ast_str_strlen(out);
 	}
 
 	if (fd) {
@@ -433,8 +433,10 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 
 	/* send content */
 	if (method != AST_HTTP_HEAD || status_code >= 400) {
-		if (out) {
-			fprintf(ser->f, "%s", ast_str_buffer(out));
+		if (out && ast_str_strlen(out)) {
+			if (fwrite(ast_str_buffer(out), ast_str_strlen(out), 1, ser->f) != 1) {
+				ast_log(LOG_ERROR, "fwrite() failed: %s\n", strerror(errno));
+			}
 		}
 
 		if (fd) {
@@ -456,8 +458,7 @@ void ast_http_send(struct ast_tcptls_session_instance *ser,
 		ast_free(out);
 	}
 
-	fclose(ser->f);
-	ser->f = 0;
+	ast_tcptls_close_session_file(ser);
 	return;
 }
 
@@ -612,6 +613,8 @@ static void http_decode(char *s)
 	ast_uri_decode(s);
 }
 
+#define MAX_POST_CONTENT 1025
+
 /*
  * get post variables from client Request Entity-Body, if content type is
  * application/x-www-form-urlencoded
@@ -641,6 +644,13 @@ struct ast_variable *ast_http_get_post_vars(
 	}
 
 	if (content_length <= 0) {
+		return NULL;
+	}
+
+	if (content_length > MAX_POST_CONTENT - 1) {
+		ast_log(LOG_WARNING, "Excessively long HTTP content. %d is greater than our max of %d\n",
+				content_length, MAX_POST_CONTENT);
+		ast_http_send(ser, AST_HTTP_POST, 413, "Request Entity Too Large", NULL, NULL, 0, 0);
 		return NULL;
 	}
 
@@ -674,7 +684,7 @@ struct ast_variable *ast_http_get_post_vars(
 			prev = v;
 		}
 	}
-	
+
 done:
 	ast_free(buf);
 	return post_vars;
@@ -813,12 +823,13 @@ static int ssl_close(void *cookie)
 }*/
 #endif	/* DO_SSL */
 
-static struct ast_variable *parse_cookies(char *cookies)
+static struct ast_variable *parse_cookies(const char *cookies)
 {
+	char *parse = ast_strdupa(cookies);
 	char *cur;
 	struct ast_variable *vars = NULL, *var;
 
-	while ((cur = strsep(&cookies, ";"))) {
+	while ((cur = strsep(&parse, ";"))) {
 		char *name, *val;
 
 		name = val = cur;
@@ -848,21 +859,19 @@ static struct ast_variable *parse_cookies(char *cookies)
 /* get cookie from Request headers */
 struct ast_variable *ast_http_get_cookies(struct ast_variable *headers)
 {
-	struct ast_variable *v, *cookies=NULL;
+	struct ast_variable *v, *cookies = NULL;
 
 	for (v = headers; v; v = v->next) {
-		if (!strncasecmp(v->name, "Cookie", 6)) {
-			char *tmp = ast_strdupa(v->value);
-			if (cookies) {
-				ast_variables_destroy(cookies);
-			}
-
-			cookies = parse_cookies(tmp);
+		if (!strcasecmp(v->name, "Cookie")) {
+			ast_variables_destroy(cookies);
+			cookies = parse_cookies(v->value);
 		}
 	}
 	return cookies;
 }
 
+/*! Limit the number of request headers in case the sender is being ridiculous. */
+#define MAX_HTTP_REQUEST_HEADERS	100
 
 static void *httpd_helper_thread(void *data)
 {
@@ -873,9 +882,26 @@ static void *httpd_helper_thread(void *data)
 	struct ast_variable *tail = headers;
 	char *uri, *method;
 	enum ast_http_method http_method = AST_HTTP_UNKNOWN;
+	int remaining_headers;
+	struct protoent *p;
 
 	if (ast_atomic_fetchadd_int(&session_count, +1) >= session_limit) {
 		goto done;
+	}
+
+	/* here we set TCP_NODELAY on the socket to disable Nagle's algorithm.
+	 * This is necessary to prevent delays (caused by buffering) as we
+	 * write to the socket in bits and pieces. */
+	p = getprotobyname("tcp");
+	if (p) {
+		int arg = 1;
+		if( setsockopt(ser->fd, p->p_proto, TCP_NODELAY, (char *)&arg, sizeof(arg) ) < 0 ) {
+			ast_log(LOG_WARNING, "Failed to set TCP_NODELAY on HTTP connection: %s\n", strerror(errno));
+			ast_log(LOG_WARNING, "Some HTTP requests may be slow to respond.\n");
+		}
+	} else {
+		ast_log(LOG_WARNING, "Failed to set TCP_NODELAY on HTTP connection, getprotobyname(\"tcp\") failed\n");
+		ast_log(LOG_WARNING, "Some HTTP requests may be slow to respond.\n");
 	}
 
 	if (!fgets(buf, sizeof(buf), ser->f)) {
@@ -907,9 +933,13 @@ static void *httpd_helper_thread(void *data)
 		if (*c) {
 			*c = '\0';
 		}
+	} else {
+		ast_http_error(ser, 400, "Bad Request", "Invalid Request");
+		goto done;
 	}
 
 	/* process "Request Headers" lines */
+	remaining_headers = MAX_HTTP_REQUEST_HEADERS;
 	while (fgets(header_line, sizeof(header_line), ser->f)) {
 		char *name, *value;
 
@@ -932,6 +962,11 @@ static void *httpd_helper_thread(void *data)
 
 		ast_trim_blanks(name);
 
+		if (!remaining_headers--) {
+			/* Too many headers. */
+			ast_http_error(ser, 413, "Request Entity Too Large", "Too many headers");
+			goto done;
+		}
 		if (!headers) {
 			headers = ast_variable_new(name, value, __FILE__);
 			tail = headers;
@@ -939,11 +974,17 @@ static void *httpd_helper_thread(void *data)
 			tail->next = ast_variable_new(name, value, __FILE__);
 			tail = tail->next;
 		}
-	}
+		if (!tail) {
+			/*
+			 * Variable allocation failure.
+			 * Try to make some room.
+			 */
+			ast_variables_destroy(headers);
+			headers = NULL;
 
-	if (!*uri) {
-		ast_http_error(ser, 400, "Bad Request", "Invalid Request");
-		goto done;
+			ast_http_error(ser, 500, "Server Error", "Out of memory");
+			goto done;
+		}
 	}
 
 	handle_uri(ser, uri, http_method, headers);
@@ -952,9 +993,7 @@ done:
 	ast_atomic_fetchadd_int(&session_count, -1);
 
 	/* clean up all the header information */
-	if (headers) {
-		ast_variables_destroy(headers);
-	}
+	ast_variables_destroy(headers);
 
 	if (ser->f) {
 		fclose(ser->f);
@@ -1076,8 +1115,17 @@ static int __ast_http_load(int reload)
 		v = ast_variable_browse(cfg, "general");
 		for (; v; v = v->next) {
 
-			/* handle tls conf */
-			if (!ast_tls_read_conf(&http_tls_cfg, &https_desc, v->name, v->value)) {
+			/* read tls config options while preventing unsupported options from being set */
+			if (strcasecmp(v->name, "tlscafile")
+				&& strcasecmp(v->name, "tlscapath")
+				&& strcasecmp(v->name, "tlscadir")
+				&& strcasecmp(v->name, "tlsverifyclient")
+				&& strcasecmp(v->name, "tlsdontverifyserver")
+				&& strcasecmp(v->name, "tlsclientmethod")
+				&& strcasecmp(v->name, "sslclientmethod")
+				&& strcasecmp(v->name, "tlscipher")
+				&& strcasecmp(v->name, "sslcipher")
+				&& !ast_tls_read_conf(&http_tls_cfg, &https_desc, v->name, v->value)) {
 				continue;
 			}
 
@@ -1218,7 +1266,25 @@ static struct ast_cli_entry cli_http[] = {
 
 static void http_shutdown(void)
 {
+	struct http_uri_redirect *redirect;
 	ast_cli_unregister_multiple(cli_http, ARRAY_LEN(cli_http));
+
+	ast_tcptls_server_stop(&http_desc);
+	if (http_tls_cfg.enabled) {
+		ast_tcptls_server_stop(&https_desc);
+	}
+	ast_free(http_tls_cfg.certfile);
+	ast_free(http_tls_cfg.pvtfile);
+	ast_free(http_tls_cfg.cipher);
+
+	ast_http_uri_unlink(&statusuri);
+	ast_http_uri_unlink(&staticuri);
+
+	AST_RWLIST_WRLOCK(&uri_redirects);
+	while ((redirect = AST_RWLIST_REMOVE_HEAD(&uri_redirects, entry))) {
+		ast_free(redirect);
+	}
+	AST_RWLIST_UNLOCK(&uri_redirects);
 }
 
 int ast_http_init(void)

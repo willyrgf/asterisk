@@ -299,7 +299,7 @@ static int printdigest(const unsigned char *d)
 	char buf[256]; /* large enough so we don't have to worry */
 
 	for (pos = 0, x = 0; x < 16; x++)
-		pos += sprintf(buf + pos, " %02x", *d++);
+		pos += sprintf(buf + pos, " %02x", (unsigned)*d++);
 
 	ast_debug(1, "Unexpected signature:%s\n", buf);
 
@@ -372,6 +372,24 @@ static struct ast_module *find_resource(const char *resource, int do_lock)
 }
 
 #ifdef LOADABLE_MODULES
+
+static void close_lib(const char *name, void *lib)
+{
+	char *error;
+
+	if (!lib) {
+		return;
+	}
+
+	/* Clear any existing error */
+	dlerror();
+	if (dlclose(lib)) {
+		error = dlerror();
+		ast_log(AST_LOG_ERROR, "Failure in dlclose for module '%s': %s\n",
+			S_OR(name, "unknown"), S_OR(error, "Unknown error"));
+	}
+}
+
 static void unload_dynamic_module(struct ast_module *mod)
 {
 	void *lib = mod->lib;
@@ -379,9 +397,7 @@ static void unload_dynamic_module(struct ast_module *mod)
 	/* WARNING: the structure pointed to by mod is going to
 	   disappear when this operation succeeds, so we can't
 	   dereference it */
-
-	if (lib)
-		while (!dlclose(lib));
+	close_lib(ast_module_name(mod), lib);
 }
 
 static enum ast_module_load_result load_resource(const char *resource_name, unsigned int global_symbols_only, struct ast_heap *resource_heap, int required);
@@ -430,7 +446,7 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 	if (resource_being_loaded != (mod = AST_LIST_LAST(&module_list))) {
 		ast_log(LOG_WARNING, "Module '%s' did not register itself during load\n", resource_in);
 		/* no, it did not, so close it and return */
-		while (!dlclose(lib));
+		close_lib(resource_in, lib);
 		/* note that the module's destructor will call ast_module_unregister(),
 		   which will free the structure we allocated in resource_being_loaded */
 		return NULL;
@@ -441,7 +457,7 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 	/* if we are being asked only to load modules that provide global symbols,
 	   and this one does not, then close it and return */
 	if (global_symbols_only && !wants_global) {
-		while (!dlclose(lib));
+		close_lib(resource_in, lib);
 		return NULL;
 	}
 
@@ -466,7 +482,7 @@ static struct ast_module *load_dynamic_module(const char *resource_in, unsigned 
 	}
 #endif
 
-	while (!dlclose(lib));
+	close_lib(resource_in, lib);
 	resource_being_loaded = NULL;
 
 	/* start the load process again */
@@ -1021,6 +1037,8 @@ static int load_resource_list(struct load_order *load_order, unsigned int global
 			break;
 		case AST_MODULE_LOAD_PRIORITY:
 			AST_LIST_REMOVE_CURRENT(entry);
+			ast_free(order->resource);
+			ast_free(order);
 			break;
 		}
 	}
@@ -1173,7 +1191,7 @@ int load_modules(unsigned int preload_only)
 		load_count++;
 
 	if (load_count)
-		ast_log(LOG_NOTICE, "%d modules will be loaded.\n", load_count);
+		ast_log(LOG_NOTICE, "%u modules will be loaded.\n", load_count);
 
 	/* first, load only modules that provide global symbols */
 	if ((res = load_resource_list(&load_order, 1, &modulecount)) < 0) {

@@ -722,6 +722,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			Check if module is loaded.
 		</synopsis>
 		<syntax>
+			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
 			<parameter name="Module" required="true">
 				<para>Asterisk module name (not including extension).</para>
 			</parameter>
@@ -1353,6 +1354,15 @@ static void session_destructor(void *obj)
 	}
 
 	if (session->f != NULL) {
+		/*
+		 * Issuing shutdown() is necessary here to avoid a race
+		 * condition where the last data written may not appear
+		 * in the the TCP stream.  See ASTERISK-23548
+		*/
+		fflush(session->f);
+		if (session->fd != -1) {
+			shutdown(session->fd, SHUT_RDWR);
+		}
 		fclose(session->f);
 	}
 	if (eqe) {
@@ -1360,13 +1370,11 @@ static void session_destructor(void *obj)
 	}
 
 	if (session->whitefilters) {
-		ao2_t_callback(session->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
-		ao2_t_ref(session->whitefilters, -1 , "decrement ref for white container, should be last one");
+		ao2_t_ref(session->whitefilters, -1, "decrement ref for white container, should be last one");
 	}
 
 	if (session->blackfilters) {
-		ao2_t_callback(session->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
-		ao2_t_ref(session->blackfilters, -1 , "decrement ref for black container, should be last one");
+		ao2_t_ref(session->blackfilters, -1, "decrement ref for black container, should be last one");
 	}
 }
 
@@ -1409,8 +1417,8 @@ static int mansession_cmp_fn(void *obj, void *arg, int flags)
 
 static void session_destroy(struct mansession_session *s)
 {
-	unref_mansession(s);
 	ao2_unlink(sessions, s);
+	unref_mansession(s);
 }
 
 
@@ -2447,7 +2455,7 @@ static int authenticate(struct mansession *s, const struct message *m)
 			MD5Update(&md5, (unsigned char *) user->secret, strlen(user->secret));
 			MD5Final(digest, &md5);
 			for (x = 0; x < 16; x++)
-				len += sprintf(md5key + len, "%2.2x", digest[x]);
+				len += sprintf(md5key + len, "%2.2x", (unsigned)digest[x]);
 			if (!strcmp(md5key, key)) {
 				error = 0;
 			} else {
@@ -3370,7 +3378,7 @@ static int action_status(struct mansession *s, const struct message *m)
 			"ConnectedLineNum: %s\r\n"
 			"ConnectedLineName: %s\r\n"
 			"Accountcode: %s\r\n"
-			"ChannelState: %d\r\n"
+			"ChannelState: %u\r\n"
 			"ChannelStateDesc: %s\r\n"
 			"Context: %s\r\n"
 			"Extension: %s\r\n"
@@ -4602,7 +4610,7 @@ static int action_coreshowchannels(struct mansession *s, const struct message *m
 			"Context: %s\r\n"
 			"Extension: %s\r\n"
 			"Priority: %d\r\n"
-			"ChannelState: %d\r\n"
+			"ChannelState: %u\r\n"
 			"ChannelStateDesc: %s\r\n"
 			"Application: %s\r\n"
 			"ApplicationData: %s\r\n"
@@ -5082,7 +5090,7 @@ static void *session_do(void *data)
 
 	/* here we set TCP_NODELAY on the socket to disable Nagle's algorithm.
 	 * This is necessary to prevent delays (caused by buffering) as we
-	 * write to the socket in bits and peices. */
+	 * write to the socket in bits and pieces. */
 	p = getprotobyname("tcp");
 	if (p) {
 		int arg = 1;
@@ -5360,7 +5368,7 @@ int ast_manager_unregister(char *action)
 		while (cur->active_count) {
 			if (5 <= time(NULL) - now) {
 				ast_debug(1,
-					"Unregister manager action %s timed out waiting for %d active instances to complete\n",
+					"Unregister manager action %s timed out waiting for %u active instances to complete\n",
 					action, cur->active_count);
 				break;
 			}
@@ -5915,12 +5923,21 @@ static void process_output(struct mansession *s, struct ast_str **out, struct as
 	}
 
 	if (s->f) {
+		/*
+		 * Issuing shutdown() is necessary here to avoid a race
+		 * condition where the last data written may not appear
+		 * in the the TCP stream.  See ASTERISK-23548
+		*/
+		if (s->fd != -1) {
+			shutdown(s->fd, SHUT_RDWR);
+		}
 		if (fclose(s->f)) {
 			ast_log(LOG_ERROR, "fclose() failed: %s\n", strerror(errno));
 		}
 		s->f = NULL;
 		s->fd = -1;
 	} else if (s->fd != -1) {
+		shutdown(s->fd, SHUT_RDWR);
 		if (close(s->fd)) {
 			ast_log(LOG_ERROR, "close() failed: %s\n", strerror(errno));
 		}
@@ -6128,12 +6145,8 @@ generic_callback_out:
 	if (method == AST_HTTP_POST && params) {
 		ast_variables_destroy(params);
 	}
-	if (http_header) {
-		ast_free(http_header);
-	}
-	if (out) {
-		ast_free(out);
-	}
+	ast_free(http_header);
+	ast_free(out);
 
 	if (session && blastaway) {
 		session_destroy(session);
@@ -6577,7 +6590,6 @@ static struct ast_http_uri amanagerxmluri = {
 	.key = __FILE__,
 };
 
-static int registered = 0;
 static int webregged = 0;
 
 /*! \brief cleanup code called at each iteration of server_root,
@@ -6704,16 +6716,14 @@ static void load_channelvars(struct ast_variable *var)
 /*! \internal \brief Free a user record.  Should already be removed from the list */
 static void manager_free_user(struct ast_manager_user *user)
 {
-	if (user->a1_hash) {
-		ast_free(user->a1_hash);
+	ast_free(user->a1_hash);
+	ast_free(user->secret);
+	if (user->whitefilters) {
+		ao2_t_ref(user->whitefilters, -1, "decrement ref for white container, should be last one");
 	}
-	if (user->secret) {
-		ast_free(user->secret);
+	if (user->blackfilters) {
+		ao2_t_ref(user->blackfilters, -1, "decrement ref for black container, should be last one");
 	}
-	ao2_t_callback(user->whitefilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all white filters");
-	ao2_t_callback(user->blackfilters, OBJ_UNLINK | OBJ_NODATA | OBJ_MULTIPLE, NULL, NULL, "unlink all black filters");
-	ao2_t_ref(user->whitefilters, -1, "decrement ref for white container, should be last one");
-	ao2_t_ref(user->blackfilters, -1, "decrement ref for black container, should be last one");
 	ast_free_ha(user->ha);
 	ast_free(user);
 }
@@ -6723,68 +6733,90 @@ static void manager_shutdown(void)
 {
 	struct ast_manager_user *user;
 
-	if (registered) {
-		ast_manager_unregister("Ping");
-		ast_manager_unregister("Events");
-		ast_manager_unregister("Logoff");
-		ast_manager_unregister("Login");
-		ast_manager_unregister("Challenge");
-		ast_manager_unregister("Hangup");
-		ast_manager_unregister("Status");
-		ast_manager_unregister("Setvar");
-		ast_manager_unregister("Getvar");
-		ast_manager_unregister("GetConfig");
-		ast_manager_unregister("GetConfigJSON");
-		ast_manager_unregister("UpdateConfig");
-		ast_manager_unregister("CreateConfig");
-		ast_manager_unregister("ListCategories");
-		ast_manager_unregister("Redirect");
-		ast_manager_unregister("Atxfer");
-		ast_manager_unregister("Originate");
-		ast_manager_unregister("Command");
-		ast_manager_unregister("ExtensionState");
-		ast_manager_unregister("AbsoluteTimeout");
-		ast_manager_unregister("MailboxStatus");
-		ast_manager_unregister("MailboxCount");
-		ast_manager_unregister("ListCommands");
-		ast_manager_unregister("SendText");
-		ast_manager_unregister("UserEvent");
-		ast_manager_unregister("WaitEvent");
-		ast_manager_unregister("CoreSettings");
-		ast_manager_unregister("CoreStatus");
-		ast_manager_unregister("Reload");
-		ast_manager_unregister("CoreShowChannels");
-		ast_manager_unregister("ModuleLoad");
-		ast_manager_unregister("ModuleCheck");
-		ast_manager_unregister("AOCMessage");
-		ast_manager_unregister("Filter");
-		ast_cli_unregister_multiple(cli_manager, ARRAY_LEN(cli_manager));
-	}
+	ast_manager_unregister("Ping");
+	ast_manager_unregister("Events");
+	ast_manager_unregister("Logoff");
+	ast_manager_unregister("Login");
+	ast_manager_unregister("Challenge");
+	ast_manager_unregister("Hangup");
+	ast_manager_unregister("Status");
+	ast_manager_unregister("Setvar");
+	ast_manager_unregister("Getvar");
+	ast_manager_unregister("GetConfig");
+	ast_manager_unregister("GetConfigJSON");
+	ast_manager_unregister("UpdateConfig");
+	ast_manager_unregister("CreateConfig");
+	ast_manager_unregister("ListCategories");
+	ast_manager_unregister("Redirect");
+	ast_manager_unregister("Atxfer");
+	ast_manager_unregister("Originate");
+	ast_manager_unregister("Command");
+	ast_manager_unregister("ExtensionState");
+	ast_manager_unregister("AbsoluteTimeout");
+	ast_manager_unregister("MailboxStatus");
+	ast_manager_unregister("MailboxCount");
+	ast_manager_unregister("ListCommands");
+	ast_manager_unregister("SendText");
+	ast_manager_unregister("UserEvent");
+	ast_manager_unregister("WaitEvent");
+	ast_manager_unregister("CoreSettings");
+	ast_manager_unregister("CoreStatus");
+	ast_manager_unregister("Reload");
+	ast_manager_unregister("CoreShowChannels");
+	ast_manager_unregister("ModuleLoad");
+	ast_manager_unregister("ModuleCheck");
+	ast_manager_unregister("AOCMessage");
+	ast_manager_unregister("Filter");
+	ast_cli_unregister_multiple(cli_manager, ARRAY_LEN(cli_manager));
 
 	ast_tcptls_server_stop(&ami_desc);
 	ast_tcptls_server_stop(&amis_desc);
 
-	if (ami_tls_cfg.certfile) {
-		ast_free(ami_tls_cfg.certfile);
-		ami_tls_cfg.certfile = NULL;
-	}
-	if (ami_tls_cfg.pvtfile) {
-		ast_free(ami_tls_cfg.pvtfile);
-		ami_tls_cfg.pvtfile = NULL;
-	}
-	if (ami_tls_cfg.cipher) {
-		ast_free(ami_tls_cfg.cipher);
-		ami_tls_cfg.cipher = NULL;
-	}
+	ast_free(ami_tls_cfg.certfile);
+	ami_tls_cfg.certfile = NULL;
+	ast_free(ami_tls_cfg.pvtfile);
+	ami_tls_cfg.pvtfile = NULL;
+	ast_free(ami_tls_cfg.cipher);
+	ami_tls_cfg.cipher = NULL;
 
-	if (sessions) {
-		ao2_ref(sessions, -1);
-		sessions = NULL;
-	}
+	/*
+	 * We cannot destroy the global sessions container.
+	 * References to it have no protection against shutdown.
+	 */
 
 	while ((user = AST_LIST_REMOVE_HEAD(&users, list))) {
 		manager_free_user(user);
 	}
+}
+
+static void manager_set_defaults(void)
+{
+	manager_enabled = DEFAULT_ENABLED;
+	webmanager_enabled = DEFAULT_WEBENABLED;
+	manager_debug = DEFAULT_MANAGERDEBUG;
+	displayconnects = DEFAULT_DISPLAYCONNECTS;
+	broken_events_action = DEFAULT_BROKENEVENTSACTION;
+	block_sockets = DEFAULT_BLOCKSOCKETS;
+	timestampevents = DEFAULT_TIMESTAMPEVENTS;
+	httptimeout = DEFAULT_HTTPTIMEOUT;
+	authtimeout = DEFAULT_AUTHTIMEOUT;
+	authlimit = DEFAULT_AUTHLIMIT;
+
+	/* default values */
+	ast_copy_string(global_realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM),
+		sizeof(global_realm));
+	ast_sockaddr_setnull(&ami_desc.local_address);
+	ast_sockaddr_setnull(&amis_desc.local_address);
+
+	ami_tls_cfg.enabled = 0;
+	ast_free(ami_tls_cfg.certfile);
+	ami_tls_cfg.certfile = ast_strdup(AST_CERTFILE);
+	ast_free(ami_tls_cfg.pvtfile);
+	ami_tls_cfg.pvtfile = ast_strdup("");
+	ast_free(ami_tls_cfg.cipher);
+	ami_tls_cfg.cipher = ast_strdup("");
+
+	free_channelvars();
 }
 
 static int __init_manager(int reload)
@@ -6802,7 +6834,9 @@ static int __init_manager(int reload)
 	struct sockaddr_in amis_desc_local_address_tmp = { 0, };
 	int tls_was_enabled = 0;
 
-	if (!registered) {
+	if (!reload) {
+		ast_register_atexit(manager_shutdown);
+
 		/* Register default actions */
 		ast_manager_register_xml("Ping", 0, action_ping);
 		ast_manager_register_xml("Events", 0, action_events);
@@ -6840,60 +6874,40 @@ static int __init_manager(int reload)
 
 		ast_cli_register_multiple(cli_manager, ARRAY_LEN(cli_manager));
 		ast_extension_state_add(NULL, NULL, manager_state_cb, NULL);
-		registered = 1;
+
 		/* Append placeholder event so master_eventq never runs dry */
-		append_event("Event: Placeholder\r\n\r\n", 0);
+		if (append_event("Event: Placeholder\r\n\r\n", 0)) {
+			return -1;
+		}
+
+		/* If you have a NULL hash fn, you only need a single bucket */
+		sessions = ao2_container_alloc(1, NULL, mansession_cmp_fn);
+		if (!sessions) {
+			return -1;
+		}
+
+		/* Initialize all settings before first configuration load. */
+		manager_set_defaults();
 	}
 
-	ast_register_atexit(manager_shutdown);
-
-	if ((cfg = ast_config_load2("manager.conf", "manager", config_flags)) == CONFIG_STATUS_FILEUNCHANGED) {
+	cfg = ast_config_load2("manager.conf", "manager", config_flags);
+	if (cfg == CONFIG_STATUS_FILEUNCHANGED) {
+		return 0;
+	} else if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
+		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf, or configuration is invalid.\n");
 		return 0;
 	}
 
-	manager_enabled = DEFAULT_ENABLED;
-	webmanager_enabled = DEFAULT_WEBENABLED;
-	manager_debug = DEFAULT_MANAGERDEBUG;
-	displayconnects = DEFAULT_DISPLAYCONNECTS;
-	broken_events_action = DEFAULT_BROKENEVENTSACTION;
-	block_sockets = DEFAULT_BLOCKSOCKETS;
-	timestampevents = DEFAULT_TIMESTAMPEVENTS;
-	httptimeout = DEFAULT_HTTPTIMEOUT;
-	authtimeout = DEFAULT_AUTHTIMEOUT;
-	authlimit = DEFAULT_AUTHLIMIT;
-
-	if (!cfg || cfg == CONFIG_STATUS_FILEINVALID) {
-		ast_log(LOG_NOTICE, "Unable to open AMI configuration manager.conf, or configuration is invalid. Asterisk management interface (AMI) disabled.\n");
-		return 0;
+	if (reload) {
+		/* Reset all settings before reloading configuration */
+		tls_was_enabled = ami_tls_cfg.enabled;
+		manager_set_defaults();
 	}
-
-	/* default values */
-	ast_copy_string(global_realm, S_OR(ast_config_AST_SYSTEM_NAME, DEFAULT_REALM), sizeof(global_realm));
-	ast_sockaddr_setnull(&ami_desc.local_address);
-	ast_sockaddr_setnull(&amis_desc.local_address);
 
 	ami_desc_local_address_tmp.sin_family = AF_INET;
 	amis_desc_local_address_tmp.sin_family = AF_INET;
 
 	ami_desc_local_address_tmp.sin_port = htons(DEFAULT_MANAGER_PORT);
-
-	tls_was_enabled = (reload && ami_tls_cfg.enabled);
-
-	ami_tls_cfg.enabled = 0;
-	if (ami_tls_cfg.certfile) {
-		ast_free(ami_tls_cfg.certfile);
-	}
-	ami_tls_cfg.certfile = ast_strdup(AST_CERTFILE);
-	if (ami_tls_cfg.pvtfile) {
-		ast_free(ami_tls_cfg.pvtfile);
-	}
-	ami_tls_cfg.pvtfile = ast_strdup("");
-	if (ami_tls_cfg.cipher) {
-		ast_free(ami_tls_cfg.cipher);
-	}
-	ami_tls_cfg.cipher = ast_strdup("");
-
-	free_channelvars();
 
 	for (var = ast_variable_browse(cfg, "general"); var; var = var->next) {
 		val = var->value;
@@ -7036,9 +7050,7 @@ static int __init_manager(int reload)
 				}
 
 				if (!ast_strlen_zero(user_secret)) {
-					if (user->secret) {
-						ast_free(user->secret);
-					}
+					ast_free(user->secret);
 					user->secret = ast_strdup(user_secret);
 				}
 
@@ -7089,6 +7101,10 @@ static int __init_manager(int reload)
 			user->writetimeout = 100;
 			user->whitefilters = ao2_container_alloc(1, NULL, NULL);
 			user->blackfilters = ao2_container_alloc(1, NULL, NULL);
+			if (!user->whitefilters || !user->blackfilters) {
+				manager_free_user(user);
+				break;
+			}
 
 			/* Insert into list */
 			AST_RWLIST_INSERT_TAIL(&users, user, list);
@@ -7105,9 +7121,7 @@ static int __init_manager(int reload)
 		var = ast_variable_browse(cfg, cat);
 		for (; var; var = var->next) {
 			if (!strcasecmp(var->name, "secret")) {
-				if (user->secret) {
-					ast_free(user->secret);
-				}
+				ast_free(user->secret);
 				user->secret = ast_strdup(var->value);
 			} else if (!strcasecmp(var->name, "deny") ||
 				       !strcasecmp(var->name, "permit")) {
@@ -7136,8 +7150,8 @@ static int __init_manager(int reload)
 					} else {
 						is_blackfilter = 0;
 					}
-					if (regcomp(new_filter, value, 0)) {
-						ao2_t_ref(new_filter, -1, "failed to make regx");
+					if (regcomp(new_filter, value, 0)) { /* XXX: the only place we use non-REG_EXTENDED */
+						ao2_t_ref(new_filter, -1, "failed to make regex");
 					} else {
 						if (is_blackfilter) {
 							ao2_t_link(user->blackfilters, new_filter, "link new filter into black user container");
@@ -7162,9 +7176,7 @@ static int __init_manager(int reload)
 			/* Calculate A1 for Digest auth */
 			snprintf(a1, sizeof(a1), "%s:%s:%s", user->username, global_realm, user->secret);
 			ast_md5_hash(a1_hash,a1);
-			if (user->a1_hash) {
-				ast_free(user->a1_hash);
-			}
+			ast_free(user->a1_hash);
 			user->a1_hash = ast_strdup(a1_hash);
 			continue;
 		}
@@ -7177,14 +7189,8 @@ static int __init_manager(int reload)
 
 	AST_RWLIST_UNLOCK(&users);
 
-	if (!reload) {
-		/* If you have a NULL hash fn, you only need a single bucket */
-		sessions = ao2_container_alloc(1, NULL, mansession_cmp_fn);
-	}
-
 	if (webmanager_enabled && manager_enabled) {
 		if (!webregged) {
-
 			ast_http_uri_link(&rawmanuri);
 			ast_http_uri_link(&manageruri);
 			ast_http_uri_link(&managerxmluri);
@@ -7211,7 +7217,11 @@ static int __init_manager(int reload)
 		httptimeout = newhttptimeout;
 	}
 
-	manager_event(EVENT_FLAG_SYSTEM, "Reload", "Module: Manager\r\nStatus: %s\r\nMessage: Manager reload Requested\r\n", manager_enabled ? "Enabled" : "Disabled");
+	manager_event(EVENT_FLAG_SYSTEM, "Reload",
+		"Module: Manager\r\n"
+		"Status: %s\r\n"
+		"Message: Manager reload Requested\r\n",
+		manager_enabled ? "Enabled" : "Disabled");
 
 	ast_tcptls_server_start(&ami_desc);
 	if (tls_was_enabled && !ami_tls_cfg.enabled) {

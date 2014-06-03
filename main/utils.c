@@ -33,13 +33,21 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <ctype.h>
 #include <sys/stat.h>
-#include <sys/stat.h>
+
+#include <sys/syscall.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#elif defined(HAVE_SYS_THR_H)
+#include <sys/thr.h>
+#endif
 
 #ifdef HAVE_DEV_URANDOM
 #include <fcntl.h>
 #endif
 
 #include "asterisk/network.h"
+#include "asterisk/ast_version.h"
 
 #define AST_API_MODULE		/* ensure that inlinable API functions will be built in lock.h if required */
 #include "asterisk/lock.h"
@@ -246,7 +254,7 @@ void ast_md5_hash(char *output, const char *input)
 	MD5Final(digest, &md5);
 	ptr = output;
 	for (x = 0; x < 16; x++)
-		ptr += sprintf(ptr, "%2.2x", digest[x]);
+		ptr += sprintf(ptr, "%2.2x", (unsigned)digest[x]);
 }
 
 /*! \brief Produce 40 char SHA1 hash of value. */
@@ -264,7 +272,7 @@ void ast_sha1_hash(char *output, const char *input)
 	SHA1Result(&sha, Message_Digest);
 	ptr = output;
 	for (x = 0; x < 20; x++)
-		ptr += sprintf(ptr, "%2.2x", Message_Digest[x]);
+		ptr += sprintf(ptr, "%2.2x", (unsigned)Message_Digest[x]);
 }
 
 /*! \brief decode BASE64 encoded text */
@@ -404,7 +412,7 @@ char *ast_uri_encode(const char *string, char *outbuf, int buflen, int do_specia
 				break;
 			}
 
-			out += sprintf(out, "%%%02X", (unsigned char) *ptr);
+			out += sprintf(out, "%%%02X", (unsigned) *ptr);
 		} else {
 			*out = *ptr;	/* Continue copying the string */
 			out++;
@@ -584,6 +592,8 @@ struct thr_lock_info {
 		enum ast_lock_type type;
 		/*! This thread is waiting on this lock */
 		int pending:2;
+		/*! A condition has suspended this lock */
+		int suspended:1;
 #ifdef HAVE_BKTR
 		struct ast_bt *backtrace;
 #endif
@@ -770,6 +780,60 @@ int ast_find_lock_info(void *lock_addr, char *filename, size_t filename_size, in
 	return 0;
 }
 
+void ast_suspend_lock_info(void *lock_addr)
+{
+	struct thr_lock_info *lock_info;
+	int i = 0;
+
+	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info)))) {
+		return;
+	}
+
+	pthread_mutex_lock(&lock_info->lock);
+
+	for (i = lock_info->num_locks - 1; i >= 0; i--) {
+		if (lock_info->locks[i].lock_addr == lock_addr)
+			break;
+	}
+
+	if (i == -1) {
+		/* Lock not found :( */
+		pthread_mutex_unlock(&lock_info->lock);
+		return;
+	}
+
+	lock_info->locks[i].suspended = 1;
+
+	pthread_mutex_unlock(&lock_info->lock);
+}
+
+void ast_restore_lock_info(void *lock_addr)
+{
+	struct thr_lock_info *lock_info;
+	int i = 0;
+
+	if (!(lock_info = ast_threadstorage_get(&thread_lock_info, sizeof(*lock_info))))
+		return;
+
+	pthread_mutex_lock(&lock_info->lock);
+
+	for (i = lock_info->num_locks - 1; i >= 0; i--) {
+		if (lock_info->locks[i].lock_addr == lock_addr)
+			break;
+	}
+
+	if (i == -1) {
+		/* Lock not found :( */
+		pthread_mutex_unlock(&lock_info->lock);
+		return;
+	}
+
+	lock_info->locks[i].suspended = 0;
+
+	pthread_mutex_unlock(&lock_info->lock);
+}
+
+
 #ifdef HAVE_BKTR
 void ast_remove_lock_info(void *lock_addr, struct ast_bt *bt)
 #else
@@ -850,7 +914,7 @@ static void append_backtrace_information(struct ast_str **str, struct ast_bt *bt
 			ast_str_append(str, 0, "\t%s\n", symbols[frame_iterator]);
 		}
 
-		free(symbols);
+		ast_std_free(symbols);
 	} else {
 		ast_str_append(str, 0, "\tCouldn't retrieve backtrace symbols\n");
 	}
@@ -863,7 +927,7 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 	ast_mutex_t *lock;
 	struct ast_lock_track *lt;
 	
-	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d)\n", 
+	ast_str_append(str, 0, "=== ---> %sLock #%d (%s): %s %d %s %s %p (%d%s)\n", 
 				   lock_info->locks[i].pending > 0 ? "Waiting for " : 
 				   lock_info->locks[i].pending < 0 ? "Tried and failed to get " : "", i,
 				   lock_info->locks[i].file, 
@@ -871,7 +935,8 @@ static void append_lock_information(struct ast_str **str, struct thr_lock_info *
 				   lock_info->locks[i].line_num,
 				   lock_info->locks[i].func, lock_info->locks[i].lock_name,
 				   lock_info->locks[i].lock_addr, 
-				   lock_info->locks[i].times_locked);
+				   lock_info->locks[i].times_locked,
+				   lock_info->locks[i].suspended ? " - suspended" : "");
 #ifdef HAVE_BKTR
 	append_backtrace_information(str, lock_info->locks[i].backtrace);
 #endif
@@ -949,9 +1014,6 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	struct thr_lock_info *lock_info;
 	struct ast_str *str;
 
-	if (!(str = ast_str_create(4096)))
-		return CLI_FAILURE;
-
 	switch (cmd) {
 	case CLI_INIT:
 		e->command = "core show locks";
@@ -965,13 +1027,17 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 		return NULL;
 	}
 
+	if (!(str = ast_str_create(4096)))
+		return CLI_FAILURE;
+
 	ast_str_append(&str, 0, "\n" 
 	               "=======================================================================\n"
-	               "=== Currently Held Locks ==============================================\n"
+	               "=== %s\n"
+	               "=== Currently Held Locks\n"
 	               "=======================================================================\n"
 	               "===\n"
 	               "=== <pending> <lock#> (<file>): <lock type> <line num> <function> <lock name> <lock addr> (times locked)\n"
-	               "===\n");
+	               "===\n", ast_get_version());
 
 	if (!str)
 		return CLI_FAILURE;
@@ -979,20 +1045,32 @@ static char *handle_show_locks(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	pthread_mutex_lock(&lock_infos_lock.mutex);
 	AST_LIST_TRAVERSE(&lock_infos, lock_info, entry) {
 		int i;
-		if (lock_info->num_locks) {
-			ast_str_append(&str, 0, "=== Thread ID: 0x%lx (%s)\n", (long) lock_info->thread_id,
-				lock_info->thread_name);
-			pthread_mutex_lock(&lock_info->lock);
-			for (i = 0; str && i < lock_info->num_locks; i++) {
-				append_lock_information(&str, lock_info, i);
+		int header_printed = 0;
+		pthread_mutex_lock(&lock_info->lock);
+		for (i = 0; str && i < lock_info->num_locks; i++) {
+			/* Don't show suspended locks */
+			if (lock_info->locks[i].suspended) {
+				continue;
 			}
-			pthread_mutex_unlock(&lock_info->lock);
-			if (!str)
-				break;
+
+			if (!header_printed) {
+				ast_str_append(&str, 0, "=== Thread ID: 0x%lx (%s)\n", (long) lock_info->thread_id,
+					lock_info->thread_name);
+				header_printed = 1;
+			}
+
+			append_lock_information(&str, lock_info, i);
+		}
+		pthread_mutex_unlock(&lock_info->lock);
+		if (!str) {
+			break;
+		}
+		if (header_printed) {
 			ast_str_append(&str, 0, "=== -------------------------------------------------------------------\n"
-			               "===\n");
-			if (!str)
-				break;
+				"===\n");
+		}
+		if (!str) {
+			break;
 		}
 	}
 	pthread_mutex_unlock(&lock_infos_lock.mutex);
@@ -2045,6 +2123,13 @@ int ast_mkdir(const char *path, int mode)
 	return 0;
 }
 
+#if defined(DEBUG_THREADS) && !defined(LOW_MEMORY)
+static void utils_shutdown(void)
+{
+	ast_cli_unregister_multiple(utils_cli, ARRAY_LEN(utils_cli));
+}
+#endif
+
 int ast_utils_init(void)
 {
 #ifdef HAVE_DEV_URANDOM
@@ -2054,6 +2139,7 @@ int ast_utils_init(void)
 #ifdef DEBUG_THREADS
 #if !defined(LOW_MEMORY)
 	ast_cli_register_multiple(utils_cli, ARRAY_LEN(utils_cli));
+	ast_register_atexit(utils_shutdown);
 #endif
 #endif
 	return 0;
@@ -2196,6 +2282,24 @@ int _ast_asprintf(char **ret, const char *file, int lineno, const char *func, co
 	return res;
 }
 #endif
+
+int ast_get_tid(void)
+{
+	int ret = -1;
+#if defined (__linux) && defined(SYS_gettid)
+	ret = syscall(SYS_gettid); /* available since Linux 1.4.11 */
+#elif defined(__sun)
+	ret = pthread_self();
+#elif defined(__APPLE__)
+	ret = mach_thread_self();
+	mach_port_deallocate(mach_task_self(), ret);
+#elif defined(__FreeBSD__) && defined(HAVE_SYS_THR_H)
+	long lwpid;
+	thr_self(&lwpid); /* available since sys/thr.h creation 2003 */
+	ret = lwpid;
+#endif
+	return ret;
+}
 
 char *ast_utils_which(const char *binary, char *fullpath, size_t fullpath_size)
 {

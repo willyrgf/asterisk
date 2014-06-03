@@ -1005,7 +1005,7 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
 	} else {
 		astman_send_ack(s, m, "Key tree deleted successfully");
 	}
-	
+
 	return 0;
 }
 
