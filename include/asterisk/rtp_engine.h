@@ -359,10 +359,16 @@ enum ast_rtp_ice_candidate_type {
 	AST_RTP_ICE_CANDIDATE_TYPE_RELAYED, /*!< ICE relayed candidate, which represents the address allocated in TURN server. */
 };
 
+/*! \brief ICE component types */
+enum ast_rtp_ice_component_type {
+	AST_RTP_ICE_COMPONENT_RTP = 1,
+	AST_RTP_ICE_COMPONENT_RTCP = 2,
+};
+
 /*! \brief Structure for an ICE candidate */
 struct ast_rtp_engine_ice_candidate {
 	char *foundation;                     /*!< Foundation identifier */
-	unsigned int id;                      /*!< Component identifier */
+	enum ast_rtp_ice_component_type id;   /*!< Component identifier */
 	char *transport;                      /*!< Transport for the media */
 	int priority;                         /*!< Priority which is used if multiple candidates can be used */
 	struct ast_sockaddr address;          /*!< Address of the candidate */
@@ -582,7 +588,9 @@ struct ast_rtp_glue {
 	enum ast_rtp_glue_result (*get_trtp_info)(struct ast_channel *chan, struct ast_rtp_instance **instance);
 	/*! Callback for updating the destination that the remote side should send RTP to */
 	int (*update_peer)(struct ast_channel *chan, struct ast_rtp_instance *instance, struct ast_rtp_instance *vinstance, struct ast_rtp_instance *tinstance, const struct ast_format_cap *cap, int nat_active);
-	/*! Callback for retrieving codecs that the channel can do.  Result returned in result_cap*/
+	/*! Callback for retrieving codecs that the channel can do.  Result returned in result_cap.
+	 * \note The channel chan will be locked during this call.
+	 */
 	void (*get_codec)(struct ast_channel *chan, struct ast_format_cap *result_cap);
 	/*! Linked list information */
 	AST_RWLIST_ENTRY(ast_rtp_glue) entry;
@@ -1677,12 +1685,12 @@ struct ast_rtp_instance *ast_rtp_instance_get_bridged(struct ast_rtp_instance *i
 /*!
  * \brief Make two channels compatible for early bridging
  *
- * \param c0 First channel part of the bridge
- * \param c1 Second channel part of the bridge
+ * \param c_dst Destination channel to copy to
+ * \param c_src Source channel to copy from
  *
  * \since 1.8
  */
-void ast_rtp_instance_early_bridge_make_compatible(struct ast_channel *c0, struct ast_channel *c1);
+void ast_rtp_instance_early_bridge_make_compatible(struct ast_channel *c_dst, struct ast_channel *c_src);
 
 /*!
  * \brief Early bridge two channels that use RTP instances

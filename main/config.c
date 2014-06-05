@@ -88,7 +88,12 @@ struct cache_file_mtime {
 	AST_LIST_ENTRY(cache_file_mtime) list;
 	AST_LIST_HEAD_NOLOCK(includes, cache_file_include) includes;
 	unsigned int has_exec:1;
-	time_t mtime;
+	/*! stat() file size */
+	unsigned long stat_size;
+	/*! stat() file modtime nanoseconds */
+	unsigned long stat_mtime_nsec;
+	/*! stat() file modtime seconds since epoc */
+	time_t stat_mtime;
 
 	/*! String stuffed in filename[] after the filename string. */
 	const char *who_asked;
@@ -119,8 +124,10 @@ static void  CB_ADD(struct ast_str **cb, const char *str)
 static void  CB_ADD_LEN(struct ast_str **cb, const char *str, int len)
 {
 	char *s = ast_alloca(len + 1);
-	ast_copy_string(s, str, len);
-	ast_str_append(cb, 0, "%s", str);
+
+	memcpy(s, str, len);
+	s[len] = '\0';
+	ast_str_append(cb, 0, "%s", s);
 }
 
 static void CB_RESET(struct ast_str *cb, struct ast_str *llb)
@@ -1107,7 +1114,7 @@ int ast_category_empty(struct ast_config *cfg, const char *category)
 	struct ast_category *cat;
 
 	for (cat = cfg->root; cat; cat = cat->next) {
-		if (!strcasecmp(cat->name, category))
+		if (strcasecmp(cat->name, category))
 			continue;
 		ast_variables_destroy(cat->root);
 		cat->root = NULL;
@@ -1180,6 +1187,65 @@ enum config_cache_attribute_enum {
 	ATTRIBUTE_EXEC = 1,
 };
 
+/*!
+ * \internal
+ * \brief Clear the stat() data in the cached file modtime struct.
+ *
+ * \param cfmtime Cached file modtime.
+ *
+ * \return Nothing
+ */
+static void cfmstat_clear(struct cache_file_mtime *cfmtime)
+{
+	cfmtime->stat_size = 0;
+	cfmtime->stat_mtime_nsec = 0;
+	cfmtime->stat_mtime = 0;
+}
+
+/*!
+ * \internal
+ * \brief Save the stat() data to the cached file modtime struct.
+ *
+ * \param cfmtime Cached file modtime.
+ * \param statbuf Buffer filled in by stat().
+ *
+ * \return Nothing
+ */
+static void cfmstat_save(struct cache_file_mtime *cfmtime, struct stat *statbuf)
+{
+	cfmtime->stat_size = statbuf->st_size;
+#if defined(HAVE_STRUCT_STAT_ST_MTIM)
+	cfmtime->stat_mtime_nsec = statbuf->st_mtim.tv_nsec;
+#elif defined(HAVE_STRUCT_STAT_ST_MTIMENSEC)
+	cfmtime->stat_mtime_nsec = statbuf->st_mtimensec;
+#elif defined(HAVE_STRUCT_STAT_ST_MTIMESPEC)
+	cfmtime->stat_mtime_nsec = statbuf->st_mtimespec.tv_nsec;
+#else
+	cfmtime->stat_mtime_nsec = 0;
+#endif
+	cfmtime->stat_mtime = statbuf->st_mtime;
+}
+
+/*!
+ * \internal
+ * \brief Compare the stat() data with the cached file modtime struct.
+ *
+ * \param cfmtime Cached file modtime.
+ * \param statbuf Buffer filled in by stat().
+ *
+ * \retval non-zero if different.
+ */
+static int cfmstat_cmp(struct cache_file_mtime *cfmtime, struct stat *statbuf)
+{
+	struct cache_file_mtime cfm_buf;
+
+	cfmstat_save(&cfm_buf, statbuf);
+
+	return cfmtime->stat_size != cfm_buf.stat_size
+		|| cfmtime->stat_mtime != cfm_buf.stat_mtime
+		|| cfmtime->stat_mtime_nsec != cfm_buf.stat_mtime_nsec;
+}
+
 static void config_cache_attribute(const char *configfile, enum config_cache_attribute_enum attrtype, const char *filename, const char *who_asked)
 {
 	struct cache_file_mtime *cfmtime;
@@ -1202,10 +1268,11 @@ static void config_cache_attribute(const char *configfile, enum config_cache_att
 		AST_LIST_INSERT_SORTALPHA(&cfmtime_head, cfmtime, list, filename);
 	}
 
-	if (!stat(configfile, &statbuf))
-		cfmtime->mtime = 0;
-	else
-		cfmtime->mtime = statbuf.st_mtime;
+	if (stat(configfile, &statbuf)) {
+		cfmstat_clear(cfmtime);
+	} else {
+		cfmstat_save(cfmtime, &statbuf);
+	}
 
 	switch (attrtype) {
 	case ATTRIBUTE_INCLUDE:
@@ -1419,14 +1486,26 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 	} else {
 		/* Just a line (variable = value) */
 		int object = 0;
+		int is_escaped;
+
 		if (!(*cat)) {
 			ast_log(LOG_WARNING,
 				"parse error: No category context for line %d of %s\n", lineno, configfile);
 			return -1;
 		}
-		c = strchr(cur, '=');
 
-		if (c && c > cur && (*(c - 1) == '+')) {
+		is_escaped = cur[0] == '\\';
+		if (is_escaped) {
+			/* First character is escaped. */
+			++cur;
+			if (cur[0] < 33) {
+				ast_log(LOG_ERROR, "Invalid escape in line %d of %s\n", lineno, configfile);
+				return -1;
+			}
+		}
+		c = strchr(cur + is_escaped, '=');
+
+		if (c && c > cur + is_escaped && (*(c - 1) == '+')) {
 			struct ast_variable *var, *replace = NULL;
 			struct ast_str **str = ast_threadstorage_get(&appendbuf, sizeof(*str));
 
@@ -1462,8 +1541,11 @@ static int process_text_line(struct ast_config *cfg, struct ast_category **cat,
 				object = 1;
 				c++;
 			}
+			cur = ast_strip(cur);
 set_new_variable:
-			if ((v = ast_variable_new(ast_strip(cur), ast_strip(c), S_OR(suggested_include_file, cfg->include_level == 1 ? "" : configfile)))) {
+			if (ast_strlen_zero(cur)) {
+				ast_log(LOG_WARNING, "No variable name in line %d of %s\n", lineno, configfile);
+			} else if ((v = ast_variable_new(cur, ast_strip(c), S_OR(suggested_include_file, cfg->include_level == 1 ? "" : configfile)))) {
 				v->lineno = lineno;
 				v->object = object;
 				*last_cat = 0;
@@ -1572,14 +1654,19 @@ static struct ast_config *config_text_file_load(const char *database, const char
 			}
 			if (!cfmtime) {
 				cfmtime = cfmtime_new(fn, who_asked);
-				if (!cfmtime)
+				if (!cfmtime) {
+					AST_LIST_UNLOCK(&cfmtime_head);
 					continue;
+				}
 				/* Note that the file mtime is initialized to 0, i.e. 1970 */
 				AST_LIST_INSERT_SORTALPHA(&cfmtime_head, cfmtime, list, filename);
 			}
 		}
 
-		if (cfmtime && (!cfmtime->has_exec) && (cfmtime->mtime == statbuf.st_mtime) && ast_test_flag(&flags, CONFIG_FLAG_FILEUNCHANGED)) {
+		if (cfmtime
+			&& !cfmtime->has_exec
+			&& !cfmstat_cmp(cfmtime, &statbuf)
+			&& ast_test_flag(&flags, CONFIG_FLAG_FILEUNCHANGED)) {
 			/* File is unchanged, what about the (cached) includes (if any)? */
 			int unchanged = 1;
 			AST_LIST_TRAVERSE(&cfmtime->includes, cfinclude, list) {
@@ -1617,6 +1704,9 @@ static struct ast_config *config_text_file_load(const char *database, const char
 				AST_LIST_UNLOCK(&cfmtime_head);
 				ast_free(comment_buffer);
 				ast_free(lline_buffer);
+#ifdef AST_INCLUDE_GLOB
+				globfree(&globbuf);
+#endif
 				return CONFIG_STATUS_FILEUNCHANGED;
 			}
 		}
@@ -1627,11 +1717,15 @@ static struct ast_config *config_text_file_load(const char *database, const char
 		if (cfg == NULL) {
 			ast_free(comment_buffer);
 			ast_free(lline_buffer);
+#ifdef AST_INCLUDE_GLOB
+				globfree(&globbuf);
+#endif
 			return NULL;
 		}
 
-		if (cfmtime)
-			cfmtime->mtime = statbuf.st_mtime;
+		if (cfmtime) {
+			cfmstat_save(cfmtime, &statbuf);
+		}
 
 		if (!(f = fopen(fn, "r"))) {
 			ast_debug(1, "No file to parse: %s\n", fn);
@@ -1693,7 +1787,7 @@ static struct ast_config *config_text_file_load(const char *database, const char
 					} else if ((comment_p >= new_buf + 2) &&
 						   (*(comment_p - 1) == COMMENT_TAG) &&
 						   (*(comment_p - 2) == COMMENT_TAG)) {
-						/* Meta-Comment end detected */
+						/* Meta-Comment end detected "--;" */
 						comment--;
 						new_buf = comment_p + 1;
 						if (!comment) {
@@ -2266,7 +2360,6 @@ int read_config_maps(void)
 		ast_log(LOG_ERROR, "Unable to allocate memory for new config\n");
 		return -1;
 	}
-	configtmp->max_include_level = 1;
 	config = ast_config_internal_load(extconfig_conf, configtmp, flags, "", "extconfig");
 	if (config == CONFIG_STATUS_FILEINVALID) {
 		return -1;
@@ -2784,7 +2877,7 @@ char *ast_realtime_decode_chunk(char *chunk)
 	char *orig = chunk;
 	for (; *chunk; chunk++) {
 		if (*chunk == '^' && strchr("0123456789ABCDEFabcdef", chunk[1]) && strchr("0123456789ABCDEFabcdef", chunk[2])) {
-			sscanf(chunk + 1, "%02hhX", chunk);
+			sscanf(chunk + 1, "%02hhX", (unsigned char *)chunk);
 			memmove(chunk + 1, chunk + 3, strlen(chunk + 3) + 1);
 		}
 	}
@@ -3158,6 +3251,10 @@ static void config_shutdown(void)
 
 	AST_LIST_LOCK(&cfmtime_head);
 	while ((cfmtime = AST_LIST_REMOVE_HEAD(&cfmtime_head, list))) {
+		struct cache_file_include *cfinclude;
+		while ((cfinclude = AST_LIST_REMOVE_HEAD(&cfmtime->includes, list))) {
+			ast_free(cfinclude);
+		}
 		ast_free(cfmtime);
 	}
 	AST_LIST_UNLOCK(&cfmtime_head);

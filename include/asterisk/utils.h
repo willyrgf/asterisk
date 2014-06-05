@@ -324,8 +324,8 @@ static force_inline void ast_slinear_saturated_add(short *input, short *value)
 	res = (int) *input + *value;
 	if (res > 32767)
 		*input = 32767;
-	else if (res < -32767)
-		*input = -32767;
+	else if (res < -32768)
+		*input = -32768;
 	else
 		*input = (short) res;
 }
@@ -337,8 +337,8 @@ static force_inline void ast_slinear_saturated_subtract(short *input, short *val
 	res = (int) *input - *value;
 	if (res > 32767)
 		*input = 32767;
-	else if (res < -32767)
-		*input = -32767;
+	else if (res < -32768)
+		*input = -32768;
 	else
 		*input = (short) res;
 }
@@ -350,8 +350,8 @@ static force_inline void ast_slinear_saturated_multiply(short *input, short *val
 	res = (int) *input * *value;
 	if (res > 32767)
 		*input = 32767;
-	else if (res < -32767)
-		*input = -32767;
+	else if (res < -32768)
+		*input = -32768;
 	else
 		*input = (short) res;
 }
@@ -459,24 +459,20 @@ char *ast_process_quotes_and_slashes(char *start, char find, char replace_with);
 long int ast_random(void);
 
 
+#ifndef __AST_DEBUG_MALLOC
+#define ast_std_malloc malloc
+#define ast_std_calloc calloc
+#define ast_std_realloc realloc
+#define ast_std_free free
+
 /*!
  * \brief free() wrapper
  *
  * ast_free_ptr should be used when a function pointer for free() needs to be passed
  * as the argument to a function. Otherwise, astmm will cause seg faults.
  */
-#ifdef __AST_DEBUG_MALLOC
-static void ast_free_ptr(void *ptr) attribute_unused;
-static void ast_free_ptr(void *ptr)
-{
-	ast_free(ptr);
-}
-#else
 #define ast_free free
 #define ast_free_ptr ast_free
-#endif
-
-#ifndef __AST_DEBUG_MALLOC
 
 #define MALLOC_FAILURE_MSG \
 	ast_log(LOG_ERROR, "Memory Allocation Failure in function %s at line %d of %s\n", func, lineno, file);

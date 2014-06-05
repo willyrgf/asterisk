@@ -286,6 +286,12 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 	} else if (!strcasecmp(sound_name, "sound_other_in_party")) {
 		ast_string_field_set(sounds, otherinparty, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_place_into_conference")) {
+		static int deprecation_warning = 1;
+		if (deprecation_warning) {
+			ast_log(LOG_WARNING, "sound_place_into_conference is deprecated"
+				" and unused. Use sound_begin for similar functionality.");
+			deprecation_warning = 0;
+		}
 		ast_string_field_set(sounds, placeintoconf, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_wait_for_leader")) {
 		ast_string_field_set(sounds, waitforleader, sound_file);
@@ -311,6 +317,8 @@ static int set_sound(const char *sound_name, const char *sound_file, struct brid
 		ast_string_field_set(sounds, participantsmuted, sound_file);
 	} else if (!strcasecmp(sound_name, "sound_participants_unmuted")) {
 		ast_string_field_set(sounds, participantsunmuted, sound_file);
+	} else if (!strcasecmp(sound_name, "sound_begin")) {
+		ast_string_field_set(sounds, begin, sound_file);
 	} else {
 		return -1;
 	}
@@ -345,6 +353,11 @@ int func_confbridge_helper(struct ast_channel *chan, const char *cmd, char *data
 		AST_APP_ARG(type);
 		AST_APP_ARG(option);
 	);
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", cmd);
+		return -1;
+	}
 
 	/* parse all the required arguments and make sure they exist. */
 	if (ast_strlen_zero(data)) {
@@ -463,7 +476,7 @@ static int add_action_to_menu_entry(struct conf_menu_entry *menu_entry, enum con
 			}
 			menu_action->data.dialplan_args.priority = 1; /* 1 by default */
 			if (!ast_strlen_zero(args.priority) &&
-				(sscanf(args.priority, "%30u", &menu_action->data.dialplan_args.priority) != 1)) {
+				(sscanf(args.priority, "%30d", &menu_action->data.dialplan_args.priority) != 1)) {
 				/* invalid priority */
 				ast_free(menu_action);
 				return -1;
@@ -730,9 +743,9 @@ static char *handle_cli_confbridge_show_user_profile(struct ast_cli_entry *e, in
 	ast_cli(a->fd,"Drop_silence:            %s\n",
 		u_profile.flags & USER_OPT_DROP_SILENCE ?
 		"enabled" : "disabled");
-	ast_cli(a->fd,"Silence Threshold:       %dms\n",
+	ast_cli(a->fd,"Silence Threshold:       %ums\n",
 		u_profile.silence_threshold);
-	ast_cli(a->fd,"Talking Threshold:       %dms\n",
+	ast_cli(a->fd,"Talking Threshold:       %ums\n",
 		u_profile.talking_threshold);
 	ast_cli(a->fd,"Denoise:                 %s\n",
 		u_profile.flags & USER_OPT_DENOISE ?
@@ -852,16 +865,17 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 
 	ast_cli(a->fd,"--------------------------------------------\n");
 	ast_cli(a->fd,"Name:                 %s\n", b_profile.name);
+	ast_cli(a->fd,"Language:             %s\n", b_profile.language);
 
 	if (b_profile.internal_sample_rate) {
-		snprintf(tmp, sizeof(tmp), "%d", b_profile.internal_sample_rate);
+		snprintf(tmp, sizeof(tmp), "%u", b_profile.internal_sample_rate);
 	} else {
 		ast_copy_string(tmp, "auto", sizeof(tmp));
 	}
 	ast_cli(a->fd,"Internal Sample Rate: %s\n", tmp);
 
 	if (b_profile.mix_interval) {
-		ast_cli(a->fd,"Mixing Interval:      %d\n", b_profile.mix_interval);
+		ast_cli(a->fd,"Mixing Interval:      %u\n", b_profile.mix_interval);
 	} else {
 		ast_cli(a->fd,"Mixing Interval:      Default 20ms\n");
 	}
@@ -875,7 +889,7 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 		b_profile.rec_file);
 
 	if (b_profile.max_members) {
-		ast_cli(a->fd,"Max Members:          %d\n", b_profile.max_members);
+		ast_cli(a->fd,"Max Members:          %u\n", b_profile.max_members);
 	} else {
 		ast_cli(a->fd,"Max Members:          No Limit\n");
 	}
@@ -923,6 +937,7 @@ static char *handle_cli_confbridge_show_bridge_profile(struct ast_cli_entry *e, 
 	ast_cli(a->fd,"sound_leave:          %s\n", conf_get_sound(CONF_SOUND_LEAVE, b_profile.sounds));
 	ast_cli(a->fd,"sound_participants_muted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_MUTED, b_profile.sounds));
 	ast_cli(a->fd,"sound_participants_unmuted:     %s\n", conf_get_sound(CONF_SOUND_PARTICIPANTS_UNMUTED, b_profile.sounds));
+	ast_cli(a->fd,"sound_begin:          %s\n", conf_get_sound(CONF_SOUND_BEGIN, b_profile.sounds));
 	ast_cli(a->fd,"\n");
 
 	conf_bridge_profile_destroy(&b_profile);
@@ -1265,6 +1280,7 @@ static int bridge_template_handler(const struct aco_option *opt, struct ast_vari
 	ast_string_field_set(sounds, leave, b_profile->sounds->leave);
 	ast_string_field_set(sounds, participantsmuted, b_profile->sounds->participantsmuted);
 	ast_string_field_set(sounds, participantsunmuted, b_profile->sounds->participantsunmuted);
+	ast_string_field_set(sounds, begin, b_profile->sounds->begin);
 
 	ao2_ref(b_profile->sounds, -1); /* sounds struct copied over to it from the template by reference only. */
 	ao2_ref(oldsounds, -1);    /* original sounds struct we don't need anymore */
@@ -1306,7 +1322,7 @@ static int verify_default_profiles(void)
 		ao2_link(cfg->bridge_profiles, bridge_profile);
 	}
 
-	user_profile = ao2_find(cfg->bridge_profiles, DEFAULT_USER_PROFILE, OBJ_KEY);
+	user_profile = ao2_find(cfg->user_profiles, DEFAULT_USER_PROFILE, OBJ_KEY);
 	if (!user_profile) {
 		user_profile = user_profile_alloc(DEFAULT_USER_PROFILE);
 		if (!user_profile) {
@@ -1320,12 +1336,10 @@ static int verify_default_profiles(void)
 	return 0;
 }
 
-int conf_load_config(int reload)
+int conf_load_config(void)
 {
-	if (!reload) {
-		if (aco_info_init(&cfg_info)) {
-			return -1;
-		}
+	if (aco_info_init(&cfg_info)) {
+		return -1;
 	}
 
 	/* User options */
@@ -1352,7 +1366,7 @@ int conf_load_config(int reload)
 	aco_option_register(&cfg_info, "denoise", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_DENOISE);
 	aco_option_register(&cfg_info, "dsp_drop_silence", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_DROP_SILENCE);
 	aco_option_register(&cfg_info, "dsp_silence_threshold", ACO_EXACT, user_types, __stringify(DEFAULT_SILENCE_THRESHOLD), OPT_UINT_T, 0, FLDSET(struct user_profile, silence_threshold));
-	aco_option_register(&cfg_info, "dsp_talking_threshold", ACO_EXACT, user_types, __stringify(DEFAULT_TALKING_THRESHOLD), OPT_UINT_T, 0, FLDSET(struct user_profile, silence_threshold));
+	aco_option_register(&cfg_info, "dsp_talking_threshold", ACO_EXACT, user_types, __stringify(DEFAULT_TALKING_THRESHOLD), OPT_UINT_T, 0, FLDSET(struct user_profile, talking_threshold));
 	aco_option_register(&cfg_info, "jitterbuffer", ACO_EXACT, user_types, "no", OPT_BOOLFLAG_T, 1, FLDSET(struct user_profile, flags), USER_OPT_JITTERBUFFER);
 	/* This option should only be used with the CONFBRIDGE dialplan function */
 	aco_option_register_custom(&cfg_info, "template", ACO_EXACT, user_types, NULL, user_template_handler, 0);
@@ -1366,6 +1380,7 @@ int conf_load_config(int reload)
 	aco_option_register_custom(&cfg_info, "video_mode", ACO_EXACT, bridge_types, NULL, video_mode_handler, 0);
 	aco_option_register(&cfg_info, "max_members", ACO_EXACT, bridge_types, "0", OPT_UINT_T, 0, FLDSET(struct bridge_profile, max_members));
 	aco_option_register(&cfg_info, "record_file", ACO_EXACT, bridge_types, NULL, OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct bridge_profile, rec_file));
+	aco_option_register(&cfg_info, "language", ACO_EXACT, bridge_types, "en", OPT_CHAR_ARRAY_T, 0, CHARFLDSET(struct bridge_profile, language));
 	aco_option_register_custom(&cfg_info, "^sound_", ACO_REGEX, bridge_types, NULL, sound_option_handler, 0);
 	/* This option should only be used with the CONFBRIDGE dialplan function */
 	aco_option_register_custom(&cfg_info, "template", ACO_EXACT, bridge_types, NULL, bridge_template_handler, 0);
@@ -1373,21 +1388,27 @@ int conf_load_config(int reload)
 	/* Menu options */
 	aco_option_register_custom(&cfg_info, "^[0-9A-D*#]+$", ACO_REGEX, menu_types, NULL, menu_option_handler, 0);
 
-	if (aco_process_config(&cfg_info, reload) == ACO_PROCESS_ERROR) {
+	if (aco_process_config(&cfg_info, 0) == ACO_PROCESS_ERROR) {
 		goto error;
 	}
 
-	if (!reload && ast_cli_register_multiple(cli_confbridge_parser, ARRAY_LEN(cli_confbridge_parser))) {
+	if (ast_cli_register_multiple(cli_confbridge_parser, ARRAY_LEN(cli_confbridge_parser))) {
 		goto error;
 	}
 
 	return 0;
 error:
-	/* On a reload, just keep the config we already have in place. */
-	if (!reload) {
-		conf_destroy_config();
-	}
+	conf_destroy_config();
 	return -1;
+}
+
+int conf_reload_config(void)
+{
+	if (aco_process_config(&cfg_info, 1) == ACO_PROCESS_ERROR) {
+		/* On a reload, just keep the config we already have in place. */
+		return -1;
+	}
+	return 0;
 }
 
 static void conf_user_profile_copy(struct user_profile *dst, struct user_profile *src)

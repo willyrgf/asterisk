@@ -31,7 +31,7 @@
 #include "conf_state.h"
 
 /* Maximum length of a conference bridge name */
-#define MAX_CONF_NAME 32
+#define MAX_CONF_NAME AST_MAX_EXTENSION
 /* Maximum length of a conference pin */
 #define MAX_PIN     80
 
@@ -160,6 +160,7 @@ enum conf_sounds {
 	CONF_SOUND_LEAVE,
 	CONF_SOUND_PARTICIPANTS_MUTED,
 	CONF_SOUND_PARTICIPANTS_UNMUTED,
+	CONF_SOUND_BEGIN,
 };
 
 struct bridge_profile_sounds {
@@ -186,11 +187,13 @@ struct bridge_profile_sounds {
 		AST_STRING_FIELD(join);
 		AST_STRING_FIELD(participantsmuted);
 		AST_STRING_FIELD(participantsunmuted);
+		AST_STRING_FIELD(begin);
 	);
 };
 
 struct bridge_profile {
 	char name[64];
+	char language[MAX_LANGUAGE];		  /*!< Language used for playback_chan */
 	char rec_file[PATH_MAX];
 	unsigned int flags;
 	unsigned int max_members;          /*!< The maximum number of participants allowed in the conference */
@@ -209,7 +212,7 @@ struct conference_bridge {
 	unsigned int markedusers;                                         /*!< Number of marked users present */
 	unsigned int waitingusers;                                        /*!< Number of waiting users present */
 	unsigned int locked:1;                                            /*!< Is this conference bridge locked? */
-	unsigned int muted:1;                                            /*!< Is this conference bridge muted? */
+	unsigned int muted:1;                                             /*!< Is this conference bridge muted? */
 	unsigned int record_state:2;                                      /*!< Whether recording is started, stopped, or should exit */
 	struct ast_channel *playback_chan;                                /*!< Channel used for playback into the conference bridge */
 	struct ast_channel *record_chan;                                  /*!< Channel used for recording the conference */
@@ -237,6 +240,7 @@ struct conference_bridge_user {
 	struct ast_bridge_features features;         /*!< Bridge features structure */
 	struct ast_bridge_tech_optimizations tech_args; /*!< Bridge technology optimizations for talk detection */
 	unsigned int suspended_moh;                  /*!< Count of active suspended MOH actions. */
+	unsigned int muted:1;                        /*!< Has the user requested to be muted? */
 	unsigned int kicked:1;                       /*!< User has been kicked from the conference */
 	unsigned int playing_moh:1;                  /*!< MOH is currently being played to the user */
 	AST_LIST_HEAD_NOLOCK(, post_join_action) post_join_list; /*!< List of sounds to play after joining */;
@@ -244,7 +248,10 @@ struct conference_bridge_user {
 };
 
 /*! \brief load confbridge.conf file */
-int conf_load_config(int reload);
+int conf_load_config(void);
+
+/*! \brief reload confbridge.conf file */
+int conf_reload_config(void);
 
 /*! \brief destroy the information loaded from the confbridge.conf file*/
 void conf_destroy_config(void);
@@ -360,6 +367,15 @@ int play_sound_file(struct conference_bridge *conference_bridge, const char *fil
 void conf_ended(struct conference_bridge *conference_bridge);
 
 /*!
+ * \brief Update the actual mute status of the user and set it on the bridge.
+ *
+ * \param user User to update the mute status.
+ *
+ * \return Nothing
+ */
+void conf_update_user_mute(struct conference_bridge_user *user);
+
+/*!
  * \brief Stop MOH for the conference user.
  *
  * \param user Conference user to stop MOH on.
@@ -381,13 +397,6 @@ void conf_moh_start(struct conference_bridge_user *user);
  * \param conference_bridge A conference bridge containing a single user
  */
 void conf_mute_only_active(struct conference_bridge *conference_bridge);
-
-/*! \brief Callback to execute any time we transition from zero to one marked users
- * \param cbu The first marked user joining the conference
- * \retval 0 success
- * \retval -1 failure
- */
-int conf_handle_first_marked_common(struct conference_bridge_user *cbu);
 
 /*! \brief Callback to execute any time we transition from zero to one active users
  * \param conference_bridge The conference bridge with a single active user joined

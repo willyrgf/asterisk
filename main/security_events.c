@@ -341,14 +341,14 @@ static const struct {
 		{ AST_EVENT_IE_SESSION_ID, SEC_EVT_FIELD(common, session_id) },
 		{ AST_EVENT_IE_LOCAL_ADDR, SEC_EVT_FIELD(common, local_addr) },
 		{ AST_EVENT_IE_REMOTE_ADDR, SEC_EVT_FIELD(common, remote_addr) },
-		{ AST_EVENT_IE_CHALLENGE, SEC_EVT_FIELD(inval_password, challenge) },
-		{ AST_EVENT_IE_RECEIVED_CHALLENGE, SEC_EVT_FIELD(inval_password, received_challenge) },
-		{ AST_EVENT_IE_RECEIVED_HASH, SEC_EVT_FIELD(inval_password, received_hash) },
 		{ AST_EVENT_IE_END, 0 }
 	},
 	.optional_ies = {
 		{ AST_EVENT_IE_MODULE, SEC_EVT_FIELD(common, module) },
 		{ AST_EVENT_IE_SESSION_TV, SEC_EVT_FIELD(common, session_tv) },
+		{ AST_EVENT_IE_CHALLENGE, SEC_EVT_FIELD(inval_password, challenge) },
+		{ AST_EVENT_IE_RECEIVED_CHALLENGE, SEC_EVT_FIELD(inval_password, received_challenge) },
+		{ AST_EVENT_IE_RECEIVED_HASH, SEC_EVT_FIELD(inval_password, received_hash) },
 		{ AST_EVENT_IE_END, 0 }
 	},
 },
@@ -564,7 +564,7 @@ static int add_ie(struct ast_event **event, const struct ast_security_event_comm
 
 		if (req && !str) {
 			ast_log(LOG_WARNING, "Required IE '%d' for security event "
-					"type '%d' not present\n", ie_type->ie_type,
+					"type '%u' not present\n", ie_type->ie_type,
 					sec->event_type);
 			res = -1;
 		}
@@ -593,7 +593,7 @@ static int add_ie(struct ast_event **event, const struct ast_security_event_comm
 
 		if (req && !addr->addr) {
 			ast_log(LOG_WARNING, "Required IE '%d' for security event "
-					"type '%d' not present\n", ie_type->ie_type,
+					"type '%u' not present\n", ie_type->ie_type,
 					sec->event_type);
 			res = -1;
 		}
@@ -611,7 +611,7 @@ static int add_ie(struct ast_event **event, const struct ast_security_event_comm
 
 		if (req && !tval) {
 			ast_log(LOG_WARNING, "Required IE '%d' for security event "
-					"type '%d' not present\n", ie_type->ie_type,
+					"type '%u' not present\n", ie_type->ie_type,
 					sec->event_type);
 			res = -1;
 		}

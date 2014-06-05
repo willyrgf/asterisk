@@ -1543,7 +1543,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				/* Fall through */
 			case AST_FRAME_TEXT:
 				if (single && ast_write(in, f)) {
-					ast_log(LOG_WARNING, "Unable to write frametype: %d\n",
+					ast_log(LOG_WARNING, "Unable to write frametype: %u\n",
 						f->frametype);
 				}
 				break;
@@ -1648,7 +1648,7 @@ static struct ast_channel *wait_for_answer(struct ast_channel *in,
 				case AST_FRAME_DTMF_BEGIN:
 				case AST_FRAME_DTMF_END:
 					if (ast_write(o->chan, f)) {
-						ast_log(LOG_WARNING, "Unable to forward frametype: %d\n",
+						ast_log(LOG_WARNING, "Unable to forward frametype: %u\n",
 							f->frametype);
 					}
 					break;
@@ -2880,8 +2880,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 					/* perform a transfer to a new extension */
 					if (strchr(macro_transfer_dest, '^')) { /* context^exten^priority*/
 						ast_replace_subargument_delimiter(macro_transfer_dest);
-						if (!ast_parseable_goto(chan, macro_transfer_dest))
-							ast_set_flag64(peerflags, OPT_GO_ON);
+					}
+					if (!ast_parseable_goto(chan, macro_transfer_dest)) {
+						ast_set_flag64(peerflags, OPT_GO_ON);
 					}
 				}
 			} else {
@@ -2961,8 +2962,9 @@ static int dial_exec_full(struct ast_channel *chan, const char *data, struct ast
 					/* perform a transfer to a new extension */
 					if (strchr(gosub_transfer_dest, '^')) { /* context^exten^priority*/
 						ast_replace_subargument_delimiter(gosub_transfer_dest);
-						if (!ast_parseable_goto(chan, gosub_transfer_dest))
-							ast_set_flag64(peerflags, OPT_GO_ON);
+					}
+					if (!ast_parseable_goto(chan, gosub_transfer_dest)) {
+						ast_set_flag64(peerflags, OPT_GO_ON);
 					}
 				}
 			} else {

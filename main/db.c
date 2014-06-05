@@ -112,6 +112,7 @@ static ast_cond_t dbcond;
 static sqlite3 *astdb;
 static pthread_t syncthread;
 static int doexit;
+static int dosync;
 
 static void db_sync(void);
 
@@ -145,12 +146,14 @@ static int init_stmt(sqlite3_stmt **stmt, const char *sql, size_t len)
  * \brief Clean up the prepared SQLite3 statement
  * \note dblock should already be locked prior to calling this method
  */
-static int clean_stmt(sqlite3_stmt *stmt, const char *sql)
+static int clean_stmt(sqlite3_stmt **stmt, const char *sql)
 {
-	if (sqlite3_finalize(stmt) != SQLITE_OK) {
+	if (sqlite3_finalize(*stmt) != SQLITE_OK) {
 		ast_log(LOG_WARNING, "Couldn't finalize statement '%s': %s\n", sql, sqlite3_errmsg(astdb));
+		*stmt = NULL;
 		return -1;
 	}
+	*stmt = NULL;
 	return 0;
 }
 
@@ -160,15 +163,15 @@ static int clean_stmt(sqlite3_stmt *stmt, const char *sql)
  */
 static void clean_statements(void)
 {
-	clean_stmt(get_stmt, get_stmt_sql);
-	clean_stmt(del_stmt, del_stmt_sql);
-	clean_stmt(deltree_stmt, deltree_stmt_sql);
-	clean_stmt(deltree_all_stmt, deltree_all_stmt_sql);
-	clean_stmt(gettree_stmt, gettree_stmt_sql);
-	clean_stmt(gettree_all_stmt, gettree_all_stmt_sql);
-	clean_stmt(showkey_stmt, showkey_stmt_sql);
-	clean_stmt(put_stmt, put_stmt_sql);
-	clean_stmt(create_astdb_stmt, create_astdb_stmt_sql);
+	clean_stmt(&get_stmt, get_stmt_sql);
+	clean_stmt(&del_stmt, del_stmt_sql);
+	clean_stmt(&deltree_stmt, deltree_stmt_sql);
+	clean_stmt(&deltree_all_stmt, deltree_all_stmt_sql);
+	clean_stmt(&gettree_stmt, gettree_stmt_sql);
+	clean_stmt(&gettree_all_stmt, gettree_all_stmt_sql);
+	clean_stmt(&showkey_stmt, showkey_stmt_sql);
+	clean_stmt(&put_stmt, put_stmt_sql);
+	clean_stmt(&create_astdb_stmt, create_astdb_stmt_sql);
 }
 
 static int init_statements(void)
@@ -937,6 +940,7 @@ static int manager_dbdeltree(struct mansession *s, const struct message *m)
  */
 static void db_sync(void)
 {
+	dosync = 1;
 	ast_cond_signal(&dbcond);
 }
 
@@ -955,8 +959,14 @@ static void *db_sync_thread(void *data)
 	ast_mutex_lock(&dblock);
 	ast_db_begin_transaction();
 	for (;;) {
-		/* We're ok with spurious wakeups, so we don't worry about a predicate */
-		ast_cond_wait(&dbcond, &dblock);
+		/* If dosync is set, db_sync() was called during sleep(1), 
+		 * and the pending transaction should be committed. 
+		 * Otherwise, block until db_sync() is called.
+		 */
+		while (!dosync) {
+			ast_cond_wait(&dbcond, &dblock);
+		}
+		dosync = 0;
 		if (ast_db_commit_transaction()) {
 			ast_db_rollback_transaction();
 		}
@@ -968,15 +978,6 @@ static void *db_sync_thread(void *data)
 		ast_mutex_unlock(&dblock);
 		sleep(1);
 		ast_mutex_lock(&dblock);
-		/* Unfortunately, it is possible for signaling to happen
-		 * when we're not waiting: in the bit when we're unlocked
-		 * above. Do the do-exit check here again. (We could do
-		 * it once, but that would impose a forced delay of 1
-		 * second always.) */
-		if (doexit) {
-			ast_mutex_unlock(&dblock);
-			break;
-		}
 	}
 
 	return NULL;
@@ -993,8 +994,8 @@ static void astdb_atexit(void)
 
 	/* Set doexit to 1 to kill thread. db_sync must be called with
 	 * mutex held. */
-	doexit = 1;
 	ast_mutex_lock(&dblock);
+	doexit = 1;
 	db_sync();
 	ast_mutex_unlock(&dblock);
 

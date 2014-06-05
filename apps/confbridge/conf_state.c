@@ -57,12 +57,11 @@ void conf_invalid_event_fn(struct conference_bridge_user *cbu)
  */
 static void conf_mute_moh_inactive_waitmarked(struct conference_bridge_user *user)
 {
-	/* Be sure we are muted so we can't talk to anybody else waiting */
-	user->features.mute = 1;
 	/* Start music on hold if needed */
 	if (ast_test_flag(&user->u_profile, USER_OPT_MUSICONHOLD)) {
 		conf_moh_start(user);
 	}
+	conf_update_user_mute(user);
 }
 
 void conf_default_join_waitmarked(struct conference_bridge_user *cbu)
@@ -75,6 +74,9 @@ void conf_default_join_waitmarked(struct conference_bridge_user *cbu)
 void conf_default_leave_waitmarked(struct conference_bridge_user *cbu)
 {
 	conf_remove_user_waiting(cbu->conference_bridge, cbu);
+	if (cbu->playing_moh) {
+		conf_moh_stop(cbu);
+	}
 }
 
 void conf_change_state(struct conference_bridge_user *cbu, struct conference_state *newstate)

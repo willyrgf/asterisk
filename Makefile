@@ -360,15 +360,19 @@ makeopts.embed_rules: menuselect.makeopts
 	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LDFLAGS)
 	+@$(SUBMAKE) $(MOD_SUBDIRS_EMBED_LIBS)
 
-$(SUBDIRS): makeopts cleantest main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
+$(SUBDIRS): makeopts .lastclean main/version.c include/asterisk/build.h include/asterisk/buildopts.h defaults.h makeopts.embed_rules
 
 ifeq ($(findstring $(OSARCH), mingw32 cygwin ),)
+  ifeq ($(shell grep ^MENUSELECT_EMBED=$$ menuselect.makeopts 2>/dev/null),)
     # Non-windows:
     # ensure that all module subdirectories are processed before 'main' during
     # a parallel build, since if there are modules selected to be embedded the
     # directories containing them must be completed before the main Asterisk
-    # binary can be built
+    # binary can be built.
+    # If MENUSELECT_EMBED is empty, we don't need this and allow 'main' to be
+    # be built without building all dependencies first.
 main: $(filter-out main,$(MOD_SUBDIRS))
+  endif
 else
     # Windows: we need to build main (i.e. the asterisk dll) first,
     # followed by res, followed by the other directories, because
@@ -386,25 +390,25 @@ $(MOD_SUBDIRS): makeopts
 $(OTHER_SUBDIRS): makeopts
 	+@_ASTCFLAGS="$(OTHER_SUBDIR_CFLAGS) $(_ASTCFLAGS)" ASTCFLAGS="$(ASTCFLAGS)" _ASTLDFLAGS="$(_ASTLDFLAGS)" ASTLDFLAGS="$(ASTLDFLAGS)" $(SUBMAKE) --no-builtin-rules -C $@ SUBDIR=$@ all
 
-defaults.h: makeopts build_tools/make_defaults_h
+defaults.h: makeopts .lastclean build_tools/make_defaults_h
 	@build_tools/make_defaults_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-main/version.c: FORCE
+main/version.c: FORCE .lastclean
 	@build_tools/make_version_c > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/buildopts.h: menuselect.makeopts
+include/asterisk/buildopts.h: menuselect.makeopts .lastclean
 	@build_tools/make_buildopts_h > $@.tmp
 	@cmp -s $@.tmp $@ || mv $@.tmp $@
 	@rm -f $@.tmp
 
-include/asterisk/build.h:
-	@build_tools/make_build_h > $@.tmp
-	@cmp -s $@.tmp $@ || mv $@.tmp $@
-	@rm -f $@.tmp
+# build.h must depend on .lastclean, or parallel make may wipe it out after it's
+# been created.
+include/asterisk/build.h: .lastclean
+	@build_tools/make_build_h > $@
 
 $(SUBDIRS_CLEAN):
 	+@$(SUBMAKE) -C $(@:-clean=) clean
@@ -458,7 +462,7 @@ datafiles: _all doc/core-en_US.xml
 	done
 	$(MAKE) -C sounds install
 
-doc/core-en_US.xml: makeopts $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+doc/core-en_US.xml: makeopts .lastclean $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
 	@printf "Building Documentation For: "
 	@echo "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" > $@
 	@echo "<!DOCTYPE docs SYSTEM \"appdocsxml.dtd\">" >> $@
@@ -472,7 +476,7 @@ doc/core-en_US.xml: makeopts $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "la
 	@echo
 	@echo "</docs>" >> $@
 
-doc/full-en_US.xml: makeopts $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
+doc/full-en_US.xml: makeopts .lastclean $(foreach dir,$(MOD_SUBDIRS),$(shell $(GREP) -l "language=\"en_US\"" $(dir)/*.c $(dir)/*.cc 2>/dev/null))
 ifeq ($(PYTHON),:)
 	@echo "--------------------------------------------------------------------------"
 	@echo "---        Please install python to build full documentation           ---"
@@ -564,6 +568,7 @@ bininstall: _all installdirs $(SUBDIRS_INSTALL) main-bininstall
 	$(INSTALL) -m 644 doc/core-*.xml "$(DESTDIR)$(ASTDATADIR)/documentation"
 	$(INSTALL) -m 644 doc/appdocsxml.dtd "$(DESTDIR)$(ASTDATADIR)/documentation"
 	$(INSTALL) -m 644 doc/asterisk.8 "$(DESTDIR)$(ASTMANDIR)/man8"
+	$(INSTALL) -m 644 doc/astdb*.8 "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -m 644 contrib/scripts/astgenkey.8 "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -m 644 contrib/scripts/autosupport.8 "$(DESTDIR)$(ASTMANDIR)/man8"
 	$(INSTALL) -m 644 contrib/scripts/safe_asterisk.8 "$(DESTDIR)$(ASTMANDIR)/man8"
@@ -822,8 +827,8 @@ sounds:
 # .cleancount is the global clean count, and .lastclean is the
 # last clean count we had
 
-cleantest:
-	@cmp -s .cleancount .lastclean || $(MAKE) clean
+.lastclean: .cleancount
+	@$(MAKE) clean
 	@[ -f "$(DESTDIR)$(ASTDBDIR)/astdb.sqlite3" ] || [ ! -f "$(DESTDIR)$(ASTDBDIR)/astdb" ] || [ ! -f menuselect.makeopts ] || grep -q MENUSELECT_UTILS=.*astdb2sqlite3 menuselect.makeopts || (sed -i.orig -e's/MENUSELECT_UTILS=\(.*\)/MENUSELECT_UTILS=\1 astdb2sqlite3/' menuselect.makeopts && echo "Updating menuselect.makeopts to include astdb2sqlite3" && echo "Original version backed up to menuselect.makeopts.orig")
 
 $(SUBDIRS_UNINSTALL):
@@ -901,19 +906,19 @@ MAKE_MENUSELECT=CC="$(BUILD_CC)" CXX="" LD="" AR="" RANLIB="" \
 		CFLAGS="$(BUILD_CFLAGS)" LDFLAGS="$(BUILD_LDFLAGS)" \
 		$(MAKE) -C menuselect CONFIGURE_SILENT="--silent"
 
-menuselect/menuselect: menuselect/makeopts cleantest
+menuselect/menuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) menuselect
 
-menuselect/cmenuselect: menuselect/makeopts cleantest
+menuselect/cmenuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) cmenuselect
 
-menuselect/gmenuselect: menuselect/makeopts cleantest
+menuselect/gmenuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) gmenuselect
 
-menuselect/nmenuselect: menuselect/makeopts cleantest
+menuselect/nmenuselect: menuselect/makeopts .lastclean
 	+$(MAKE_MENUSELECT) nmenuselect
 
-menuselect/makeopts: makeopts cleantest
+menuselect/makeopts: makeopts .lastclean
 	+$(MAKE_MENUSELECT) makeopts
 
 menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(dir)/*.c) $(wildcard $(dir)/*.cc)) build_tools/cflags.xml build_tools/cflags-devmode.xml sounds/sounds.xml build_tools/embed_modules.xml utils/utils.xml agi/agi.xml configure makeopts
@@ -944,7 +949,6 @@ menuselect-tree: $(foreach dir,$(filter-out main,$(MOD_SUBDIRS)),$(wildcard $(di
 .PHONY: full
 .PHONY: _full
 .PHONY: prereqs
-.PHONY: cleantest
 .PHONY: uninstall
 .PHONY: _uninstall
 .PHONY: uninstall-all

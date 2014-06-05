@@ -521,37 +521,40 @@ struct ast_frame *ast_translate(struct ast_trans_pvt *path, struct ast_frame *f,
 		}
 		out = p->t->frameout(p);
 	}
+	if (out) {
+		/* we have a frame, play with times */
+		if (!ast_tvzero(delivery)) {
+			/* Regenerate prediction after a discontinuity */
+			if (ast_tvzero(path->nextout)) {
+				path->nextout = ast_tvnow();
+			}
+
+			/* Use next predicted outgoing timestamp */
+			out->delivery = path->nextout;
+
+			/* Predict next outgoing timestamp from samples in this
+			   frame. */
+			path->nextout = ast_tvadd(path->nextout, ast_samp2tv(out->samples, ast_format_rate(&out->subclass.format)));
+			if (f->samples != out->samples && ast_test_flag(out, AST_FRFLAG_HAS_TIMING_INFO)) {
+				ast_debug(4, "Sample size different %d vs %d\n", f->samples, out->samples);
+				ast_clear_flag(out, AST_FRFLAG_HAS_TIMING_INFO);
+			}
+		} else {
+			out->delivery = ast_tv(0, 0);
+			ast_set2_flag(out, has_timing_info, AST_FRFLAG_HAS_TIMING_INFO);
+			if (has_timing_info) {
+				out->ts = ts;
+				out->len = len;
+				out->seqno = seqno;
+			}
+		}
+		/* Invalidate prediction if we're entering a silence period */
+		if (out->frametype == AST_FRAME_CNG) {
+			path->nextout = ast_tv(0, 0);
+		}
+	}
 	if (consume) {
 		ast_frfree(f);
-	}
-	if (out == NULL) {
-		return NULL;
-	}
-	/* we have a frame, play with times */
-	if (!ast_tvzero(delivery)) {
-		/* Regenerate prediction after a discontinuity */
-		if (ast_tvzero(path->nextout)) {
-			path->nextout = ast_tvnow();
-		}
-
-		/* Use next predicted outgoing timestamp */
-		out->delivery = path->nextout;
-
-		/* Predict next outgoing timestamp from samples in this
-		   frame. */
-		path->nextout = ast_tvadd(path->nextout, ast_samp2tv(out->samples, ast_format_rate(&out->subclass.format)));
-	} else {
-		out->delivery = ast_tv(0, 0);
-		ast_set2_flag(out, has_timing_info, AST_FRFLAG_HAS_TIMING_INFO);
-		if (has_timing_info) {
-			out->ts = ts;
-			out->len = len;
-			out->seqno = seqno;
-		}
-	}
-	/* Invalidate prediction if we're entering a silence period */
-	if (out->frametype == AST_FRAME_CNG) {
-		path->nextout = ast_tv(0, 0);
 	}
 	return out;
 }
@@ -770,7 +773,7 @@ static void matrix_rebuild(int samples)
 						matrix_get(x, z)->table_cost = newtablecost;
 						matrix_get(x, z)->multistep = 1;
 						changed++;
-						ast_debug(3, "Discovered %d cost path from %s to %s, via %s\n",
+						ast_debug(10, "Discovered %u cost path from %s to %s, via %s\n",
 							matrix_get(x, z)->table_cost,
 							ast_getformatname(ast_format_set(&tmpx, index2format(x), 0)),
 							ast_getformatname(ast_format_set(&tmpy, index2format(z), 0)),
@@ -910,7 +913,7 @@ static char *handle_show_translation_table(struct ast_cli_args *a)
 
 			if (x >= 0 && y >= 0 && matrix_get(x, y)->step) {
 				/* Actual codec output */
-				ast_str_append(&out, 0, "%*d", curlen + 1, (matrix_get(x, y)->table_cost/100));
+				ast_str_append(&out, 0, "%*u", curlen + 1, (matrix_get(x, y)->table_cost/100));
 			} else if (i == -1 && k >= 0) {
 				/* Top row - use a dynamic size */
 				ast_str_append(&out, 0, "%*s", curlen + 1, ast_getformatname(&f_list[k].format));
@@ -1396,11 +1399,27 @@ void ast_translate_available_formats(struct ast_format_cap *dest, struct ast_for
 	ast_format_cap_iter_end(src);
 }
 
+static void translate_shutdown(void)
+{
+	int x;
+	ast_cli_unregister_multiple(cli_translate, ARRAY_LEN(cli_translate));
+
+	ast_rwlock_wrlock(&tablelock);
+	for (x = 0; x < index_size; x++) {
+		ast_free(__matrix[x]);
+	}
+	ast_free(__matrix);
+	ast_free(__indextable);
+	ast_rwlock_unlock(&tablelock);
+	ast_rwlock_destroy(&tablelock);
+}
+
 int ast_translate_init(void)
 {
 	int res = 0;
 	ast_rwlock_init(&tablelock);
 	res = matrix_resize(1);
 	res |= ast_cli_register_multiple(cli_translate, ARRAY_LEN(cli_translate));
+	ast_register_atexit(translate_shutdown);
 	return res;
 }

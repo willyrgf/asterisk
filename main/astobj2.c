@@ -31,12 +31,14 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/utils.h"
 #include "asterisk/cli.h"
-#define REF_FILE "/tmp/refs"
+#include "asterisk/paths.h"
 
 #if defined(TEST_FRAMEWORK)
 /* We are building with the test framework enabled so enable AO2 debug tests as well. */
 #define AO2_DEBUG 1
 #endif	/* defined(TEST_FRAMEWORK) */
+
+static FILE *ref_log;
 
 /*!
  * astobj2 objects are always preceded by this data structure,
@@ -123,7 +125,7 @@ void ao2_bt(void)
 	for(i = 0; i < c; i++) {
 		ast_verbose("%d: %p %s\n", i, addresses[i], strings[i]);
 	}
-	free(strings);
+	ast_std_free(strings);
 }
 #endif
 
@@ -157,6 +159,7 @@ static inline struct astobj2 *INTERNAL_OBJ(void *user_data)
 				"bad magic number for object %p. Object is likely destroyed.\n",
 				user_data);
 		}
+		ast_assert(0);
 		return NULL;
 	}
 
@@ -515,22 +518,18 @@ int __ao2_ref_debug(void *user_data, int delta, const char *tag, const char *fil
 {
 	struct astobj2 *obj = INTERNAL_OBJ(user_data);
 
-	if (obj == NULL)
+	if (obj == NULL) {
 		return -1;
-
-	if (delta != 0) {
-		FILE *refo = fopen(REF_FILE, "a");
-		if (refo) {
-			fprintf(refo, "%p %s%d   %s:%d:%s (%s) [@%d]\n", user_data, (delta < 0 ? "" : "+"),
-				delta, file, line, func, tag, obj->priv_data.ref_counter);
-			fclose(refo);
-		}
 	}
-	if (obj->priv_data.ref_counter + delta == 0 && obj->priv_data.destructor_fn != NULL) { /* this isn't protected with lock; just for o/p */
-		FILE *refo = fopen(REF_FILE, "a");
-		if (refo) {
-			fprintf(refo, "%p **call destructor** %s:%d:%s (%s)\n", user_data, file, line, func, tag);
-			fclose(refo);
+
+	if (ref_log) {
+		if (obj->priv_data.ref_counter + delta == 0) {
+			fprintf(ref_log, "%p,%d,%d,%s,%d,%s,**destructor**,%s\n", user_data, delta, ast_get_tid(), file, line, func, tag);
+			fflush(ref_log);
+		} else if (delta != 0) {
+			fprintf(ref_log, "%p,%s%d,%d,%s,%d,%s,%d,%s\n", user_data, (delta < 0 ? "" : "+"),
+				delta, ast_get_tid(), file, line, func, obj ? obj->priv_data.ref_counter : -1, tag);
+			fflush(ref_log);
 		}
 	}
 	return internal_ao2_ref(user_data, delta, file, line, func);
@@ -621,15 +620,14 @@ void *__ao2_alloc_debug(size_t data_size, ao2_destructor_fn destructor_fn, unsig
 {
 	/* allocation */
 	void *obj;
-	FILE *refo;
 
 	if ((obj = internal_ao2_alloc(data_size, destructor_fn, options, file, line, func)) == NULL) {
 		return NULL;
 	}
 
-	if (ref_debug && (refo = fopen(REF_FILE, "a"))) {
-		fprintf(refo, "%p =1   %s:%d:%s (%s)\n", obj, file, line, func, tag);
-		fclose(refo);
+	if (ref_log) {
+		fprintf(ref_log, "%p,+1,%d,%s,%d,%s,**constructor**,%s\n", obj, ast_get_tid(), file, line, func, tag);
+		fflush(ref_log);
 	}
 
 	/* return a pointer to the user data */
@@ -656,7 +654,11 @@ void __ao2_global_obj_release(struct ao2_global_obj *holder, const char *tag, co
 
 	/* Release the held ao2 object. */
 	if (holder->obj) {
-		__ao2_ref_debug(holder->obj, -1, tag, file, line, func);
+		if (tag) {
+			__ao2_ref_debug(holder->obj, -1, tag, file, line, func);
+		} else {
+			__ao2_ref(holder->obj, -1);
+		}
 		holder->obj = NULL;
 	}
 
@@ -678,7 +680,11 @@ void *__ao2_global_obj_replace(struct ao2_global_obj *holder, void *obj, const c
 	}
 
 	if (obj) {
-		__ao2_ref_debug(obj, +1, tag, file, line, func);
+		if (tag) {
+			__ao2_ref_debug(obj, +1, tag, file, line, func);
+		} else {
+			__ao2_ref(obj, +1);
+		}
 	}
 	obj_old = holder->obj;
 	holder->obj = obj;
@@ -694,7 +700,11 @@ int __ao2_global_obj_replace_unref(struct ao2_global_obj *holder, void *obj, con
 
 	obj_old = __ao2_global_obj_replace(holder, obj, tag, file, line, func, name);
 	if (obj_old) {
-		__ao2_ref_debug(obj_old, -1, tag, file, line, func);
+		if (tag) {
+			__ao2_ref_debug(obj_old, -1, tag, file, line, func);
+		} else {
+			__ao2_ref(obj_old, -1);
+		}
 		return 1;
 	}
 	return 0;
@@ -717,7 +727,11 @@ void *__ao2_global_obj_ref(struct ao2_global_obj *holder, const char *tag, const
 
 	obj = holder->obj;
 	if (obj) {
-		__ao2_ref_debug(obj, +1, tag, file, line, func);
+		if (tag) {
+			__ao2_ref_debug(obj, +1, tag, file, line, func);
+		} else {
+			__ao2_ref(obj, +1);
+		}
 	}
 
 	__ast_rwlock_unlock(file, line, func, &holder->lock, name);
@@ -826,7 +840,7 @@ struct ao2_container *__ao2_container_alloc_debug(unsigned int options,
 	/* compute the container size */
 	unsigned int num_buckets = hash_fn ? n_buckets : 1;
 	size_t container_size = sizeof(struct ao2_container) + num_buckets * sizeof(struct bucket);
-	struct ao2_container *c = __ao2_alloc_debug(container_size, container_destruct_debug, options, tag, file, line, func, ref_debug);
+	struct ao2_container *c = __ao2_alloc_debug(container_size, ref_debug ? container_destruct_debug : container_destruct, options, tag, file, line, func, ref_debug);
 
 	return internal_ao2_container_alloc(c, num_buckets, hash_fn, cmp_fn);
 }
@@ -1696,11 +1710,37 @@ static struct ast_cli_entry cli_astobj2[] = {
 };
 #endif /* AO2_DEBUG */
 
+static void astobj2_cleanup(void)
+{
+#ifdef AO2_DEBUG
+	ast_cli_unregister_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
+#endif
+
+#ifdef REF_DEBUG
+	fclose(ref_log);
+	ref_log = NULL;
+#endif
+}
+
 int astobj2_init(void)
 {
+#ifdef REF_DEBUG
+	char ref_filename[1024];
+#endif
+
+#ifdef REF_DEBUG
+	snprintf(ref_filename, sizeof(ref_filename), "%s/refs", ast_config_AST_LOG_DIR);
+	ref_log = fopen(ref_filename, "w");
+	if (!ref_log) {
+		ast_log(LOG_ERROR, "Could not open ref debug log file: %s\n", ref_filename);
+	}
+#endif
+
 #ifdef AO2_DEBUG
 	ast_cli_register_multiple(cli_astobj2, ARRAY_LEN(cli_astobj2));
 #endif
+
+	ast_register_atexit(astobj2_cleanup);
 
 	return 0;
 }

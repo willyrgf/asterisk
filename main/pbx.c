@@ -822,6 +822,17 @@ static struct ast_taskprocessor *extension_state_tps;
 
 AST_THREADSTORAGE(switch_data);
 AST_THREADSTORAGE(extensionstate_buf);
+/*!
+ * \brief A thread local indicating whether the current thread can run
+ * 'dangerous' dialplan functions.
+ */
+AST_THREADSTORAGE(thread_inhibit_escalations_tl);
+
+/*!
+ * \brief Set to true (non-zero) to globally allow all dangerous dialplan
+ * functions to run.
+ */
+static int live_dangerously;
 
 /*!
    \brief ast_exten: An extension
@@ -1239,13 +1250,22 @@ static int hashtab_compare_extens(const void *ah_a, const void *ah_b)
 	}
 
 	/* but if they are the same, do the cidmatch values match? */
-	if (ac->matchcid && bc->matchcid) {
-		return strcmp(ac->cidmatch,bc->cidmatch);
-	} else if (!ac->matchcid && !bc->matchcid) {
-		return 0; /* if there's no matchcid on either side, then this is a match */
-	} else {
-		return 1; /* if there's matchcid on one but not the other, they are different */
+	/* not sure which side may be using ast_ext_matchcid_types, so check both */
+	if (ac->matchcid == AST_EXT_MATCHCID_ANY || bc->matchcid == AST_EXT_MATCHCID_ANY) {
+		return 0;
 	}
+	if (ac->matchcid == AST_EXT_MATCHCID_OFF && bc->matchcid == AST_EXT_MATCHCID_OFF) {
+		return 0;
+	}
+	if (ac->matchcid != bc->matchcid) {
+		return 1;
+	}
+	/* all other cases already disposed of, match now required on callerid string (cidmatch) */
+	/* although ast_add_extension2_lockopt() enforces non-zero ptr, caller may not have */
+	if (ast_strlen_zero(ac->cidmatch) && ast_strlen_zero(bc->cidmatch)) {
+		return 0;
+	}
+	return strcmp(ac->cidmatch, bc->cidmatch);
 }
 
 static int hashtab_compare_exten_numbers(const void *ah_a, const void *ah_b)
@@ -1273,7 +1293,7 @@ static unsigned int hashtab_hash_extens(const void *obj)
 	const struct ast_exten *ac = obj;
 	unsigned int x = ast_hashtab_hash_string(ac->exten);
 	unsigned int y = 0;
-	if (ac->matchcid)
+	if (ac->matchcid == AST_EXT_MATCHCID_ON)
 		y = ast_hashtab_hash_string(ac->cidmatch);
 	return x+y;
 }
@@ -1308,6 +1328,19 @@ static int countcalls;
 static int totalcalls;
 
 static AST_RWLIST_HEAD_STATIC(acf_root, ast_custom_function);
+
+/*!
+ * \brief Extra information for an \ref ast_custom_function holding privilege
+ * escalation information. Kept in a separate structure for ABI compatibility.
+ */
+struct ast_custom_escalating_function {
+	AST_RWLIST_ENTRY(ast_custom_escalating_function) list;
+	const struct ast_custom_function *acf;
+	unsigned int read_escalates:1;
+	unsigned int write_escalates:1;
+};
+
+static AST_RWLIST_HEAD_STATIC(escalation_root, ast_custom_escalating_function);
 
 /*! \brief Declaration of builtin applications */
 static struct pbx_builtin {
@@ -1459,7 +1492,7 @@ int check_contexts(char *file, int line )
 				ast_copy_string(dummy_name, e1->exten, sizeof(dummy_name));
 				e2 = ast_hashtab_lookup(c1->root_table, &ex);
 				if (!e2) {
-					if (e1->matchcid) {
+					if (e1->matchcid == AST_EXT_MATCHCID_ON) {
 						ast_log(LOG_NOTICE,"Called from: %s:%d: The %s context records the exten %s (CID match: %s) but it is not in its root_table\n", file, line, c2->name, dummy_name, e1->cidmatch );
 					} else {
 						ast_log(LOG_NOTICE,"Called from: %s:%d: The %s context records the exten %s but it is not in its root_table\n", file, line, c2->name, dummy_name );
@@ -1595,10 +1628,6 @@ int pbx_exec(struct ast_channel *c,	/*!< Channel */
 	ast_channel_data_set(c, saved_c_data);
 	return res;
 }
-
-
-/*! Go no deeper than this through includes (not counting loops) */
-#define AST_PBX_MAX_STACK	128
 
 /*! \brief Find application handle in linked list
  */
@@ -3590,7 +3619,7 @@ const char *ast_str_retrieve_variable(struct ast_str **str, ssize_t maxlen, stru
 	}
 	if (s == &not_found) { /* look for more */
 		if (!strcmp(var, "EPOCH")) {
-			ast_str_set(str, maxlen, "%u", (int) time(NULL));
+			ast_str_set(str, maxlen, "%d", (int) time(NULL));
 			s = ast_str_buffer(*str);
 		} else if (!strcmp(var, "SYSTEMNAME")) {
 			s = ast_config_AST_SYSTEM_NAME;
@@ -3902,6 +3931,7 @@ struct ast_custom_function *ast_custom_function_find(const char *name)
 int ast_custom_function_unregister(struct ast_custom_function *acf)
 {
 	struct ast_custom_function *cur;
+	struct ast_custom_escalating_function *cur_escalation;
 
 	if (!acf) {
 		return -1;
@@ -3918,7 +3948,63 @@ int ast_custom_function_unregister(struct ast_custom_function *acf)
 	}
 	AST_RWLIST_UNLOCK(&acf_root);
 
+	/* Remove from the escalation list */
+	AST_RWLIST_WRLOCK(&escalation_root);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&escalation_root, cur_escalation, list) {
+		if (cur_escalation->acf == acf) {
+			AST_RWLIST_REMOVE_CURRENT(list);
+			ast_free(cur_escalation);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+	AST_RWLIST_UNLOCK(&escalation_root);
+
 	return cur ? 0 : -1;
+}
+
+/*!
+ * \brief Returns true if given custom function escalates privileges on read.
+ *
+ * \param acf Custom function to query.
+ * \return True (non-zero) if reads escalate privileges.
+ * \return False (zero) if reads just read.
+ */
+static int read_escalates(const struct ast_custom_function *acf) {
+	int res = 0;
+	struct ast_custom_escalating_function *cur_escalation;
+
+	AST_RWLIST_RDLOCK(&escalation_root);
+	AST_RWLIST_TRAVERSE(&escalation_root, cur_escalation, list) {
+		if (cur_escalation->acf == acf) {
+			res = cur_escalation->read_escalates;
+			break;
+		}
+	}
+	AST_RWLIST_UNLOCK(&escalation_root);
+	return res;
+}
+
+/*!
+ * \brief Returns true if given custom function escalates privileges on write.
+ *
+ * \param acf Custom function to query.
+ * \return True (non-zero) if writes escalate privileges.
+ * \return False (zero) if writes just write.
+ */
+static int write_escalates(const struct ast_custom_function *acf) {
+	int res = 0;
+	struct ast_custom_escalating_function *cur_escalation;
+
+	AST_RWLIST_RDLOCK(&escalation_root);
+	AST_RWLIST_TRAVERSE(&escalation_root, cur_escalation, list) {
+		if (cur_escalation->acf == acf) {
+			res = cur_escalation->write_escalates;
+			break;
+		}
+	}
+	AST_RWLIST_UNLOCK(&escalation_root);
+	return res;
 }
 
 /*! \internal
@@ -4022,6 +4108,50 @@ int __ast_custom_function_register(struct ast_custom_function *acf, struct ast_m
 	return 0;
 }
 
+int __ast_custom_function_register_escalating(struct ast_custom_function *acf, enum ast_custom_function_escalation escalation, struct ast_module *mod)
+{
+	struct ast_custom_escalating_function *acf_escalation = NULL;
+	int res;
+
+	res = __ast_custom_function_register(acf, mod);
+	if (res != 0) {
+		return -1;
+	}
+
+	if (escalation == AST_CFE_NONE) {
+		/* No escalations; no need to do anything else */
+		return 0;
+	}
+
+	acf_escalation = ast_calloc(1, sizeof(*acf_escalation));
+	if (!acf_escalation) {
+		ast_custom_function_unregister(acf);
+		return -1;
+	}
+
+	acf_escalation->acf = acf;
+	switch (escalation) {
+	case AST_CFE_NONE:
+		break;
+	case AST_CFE_READ:
+		acf_escalation->read_escalates = 1;
+		break;
+	case AST_CFE_WRITE:
+		acf_escalation->write_escalates = 1;
+		break;
+	case AST_CFE_BOTH:
+		acf_escalation->read_escalates = 1;
+		acf_escalation->write_escalates = 1;
+		break;
+	}
+
+	AST_RWLIST_WRLOCK(&escalation_root);
+	AST_RWLIST_INSERT_TAIL(&escalation_root, acf_escalation, list);
+	AST_RWLIST_UNLOCK(&escalation_root);
+
+	return 0;
+}
+
 /*! \brief return a pointer to the arguments of the function,
  * and terminates the function name with '\\0'
  */
@@ -4043,6 +4173,124 @@ static char *func_args(char *function)
 	return args;
 }
 
+void pbx_live_dangerously(int new_live_dangerously)
+{
+	if (new_live_dangerously && !live_dangerously) {
+		ast_log(LOG_WARNING, "Privilege escalation protection disabled!\n"
+			"See https://wiki.asterisk.org/wiki/x/1gKfAQ for more details.\n");
+	}
+
+	if (!new_live_dangerously && live_dangerously) {
+		ast_log(LOG_NOTICE, "Privilege escalation protection enabled.\n");
+	}
+	live_dangerously = new_live_dangerously;
+}
+
+int ast_thread_inhibit_escalations(void)
+{
+	int *thread_inhibit_escalations;
+
+	thread_inhibit_escalations = ast_threadstorage_get(
+		&thread_inhibit_escalations_tl, sizeof(*thread_inhibit_escalations));
+
+	if (thread_inhibit_escalations == NULL) {
+		ast_log(LOG_ERROR, "Error inhibiting privilege escalations for current thread\n");
+		return -1;
+	}
+
+	*thread_inhibit_escalations = 1;
+	return 0;
+}
+
+/*!
+ * \brief Indicates whether the current thread inhibits the execution of
+ * dangerous functions.
+ *
+ * \return True (non-zero) if dangerous function execution is inhibited.
+ * \return False (zero) if dangerous function execution is allowed.
+ */
+static int thread_inhibits_escalations(void)
+{
+	int *thread_inhibit_escalations;
+
+	thread_inhibit_escalations = ast_threadstorage_get(
+		&thread_inhibit_escalations_tl, sizeof(*thread_inhibit_escalations));
+
+	if (thread_inhibit_escalations == NULL) {
+		ast_log(LOG_ERROR, "Error checking thread's ability to run dangerous functions\n");
+		/* On error, assume that we are inhibiting */
+		return 1;
+	}
+
+	return *thread_inhibit_escalations;
+}
+
+/*!
+ * \brief Determines whether execution of a custom function's read function
+ * is allowed.
+ *
+ * \param acfptr Custom function to check
+ * \return True (non-zero) if reading is allowed.
+ * \return False (zero) if reading is not allowed.
+ */
+static int is_read_allowed(struct ast_custom_function *acfptr)
+{
+	if (!acfptr) {
+		return 1;
+	}
+
+	if (!read_escalates(acfptr)) {
+		return 1;
+	}
+
+	if (!thread_inhibits_escalations()) {
+		return 1;
+	}
+
+	if (live_dangerously) {
+		/* Global setting overrides the thread's preference */
+		ast_debug(2, "Reading %s from a dangerous context\n",
+			acfptr->name);
+		return 1;
+	}
+
+	/* We have no reason to allow this function to execute */
+	return 0;
+}
+
+/*!
+ * \brief Determines whether execution of a custom function's write function
+ * is allowed.
+ *
+ * \param acfptr Custom function to check
+ * \return True (non-zero) if writing is allowed.
+ * \return False (zero) if writing is not allowed.
+ */
+static int is_write_allowed(struct ast_custom_function *acfptr)
+{
+	if (!acfptr) {
+		return 1;
+	}
+
+	if (!write_escalates(acfptr)) {
+		return 1;
+	}
+
+	if (!thread_inhibits_escalations()) {
+		return 1;
+	}
+
+	if (live_dangerously) {
+		/* Global setting overrides the thread's preference */
+		ast_debug(2, "Writing %s from a dangerous context\n",
+			acfptr->name);
+		return 1;
+	}
+
+	/* We have no reason to allow this function to execute */
+	return 0;
+}
+
 int ast_func_read(struct ast_channel *chan, const char *function, char *workspace, size_t len)
 {
 	char *copy = ast_strdupa(function);
@@ -4055,6 +4303,8 @@ int ast_func_read(struct ast_channel *chan, const char *function, char *workspac
 		ast_log(LOG_ERROR, "Function %s not registered\n", copy);
 	} else if (!acfptr->read && !acfptr->read2) {
 		ast_log(LOG_ERROR, "Function %s cannot be read\n", copy);
+	} else if (!is_read_allowed(acfptr)) {
+		ast_log(LOG_ERROR, "Dangerous function %s read blocked\n", copy);
 	} else if (acfptr->read) {
 		if (acfptr->mod) {
 			u = __ast_module_user_add(acfptr->mod, chan);
@@ -4092,6 +4342,8 @@ int ast_func_read2(struct ast_channel *chan, const char *function, struct ast_st
 		ast_log(LOG_ERROR, "Function %s not registered\n", copy);
 	} else if (!acfptr->read && !acfptr->read2) {
 		ast_log(LOG_ERROR, "Function %s cannot be read\n", copy);
+	} else if (!is_read_allowed(acfptr)) {
+		ast_log(LOG_ERROR, "Dangerous function %s read blocked\n", copy);
 	} else {
 		if (acfptr->mod) {
 			u = __ast_module_user_add(acfptr->mod, chan);
@@ -4131,11 +4383,13 @@ int ast_func_write(struct ast_channel *chan, const char *function, const char *v
 	char *args = func_args(copy);
 	struct ast_custom_function *acfptr = ast_custom_function_find(copy);
 
-	if (acfptr == NULL)
+	if (acfptr == NULL) {
 		ast_log(LOG_ERROR, "Function %s not registered\n", copy);
-	else if (!acfptr->write)
+	} else if (!acfptr->write) {
 		ast_log(LOG_ERROR, "Function %s cannot be written to\n", copy);
-	else {
+	} else if (!is_write_allowed(acfptr)) {
+		ast_log(LOG_ERROR, "Dangerous function %s write blocked\n", copy);
+	} else {
 		int res;
 		struct ast_module_user *u = NULL;
 		if (acfptr->mod)
@@ -4259,7 +4513,7 @@ void ast_str_substitute_variables_full(struct ast_str **buf, ssize_t maxlen, str
 						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 					}
 				}
-				ast_debug(2, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
+				ast_debug(2, "Function %s result is '%s'\n", finalvars, cp4 ? cp4 : "(null)");
 			} else {
 				/* Retrieve variable value */
 				ast_str_retrieve_variable(&substr3, 0, c, headp, finalvars);
@@ -4458,7 +4712,7 @@ void pbx_substitute_variables_helper_full(struct ast_channel *c, struct varshead
 						ast_log(LOG_ERROR, "Unable to allocate bogus channel for variable substitution.  Function results may be blank.\n");
 					}
 				}
-				ast_debug(2, "Function result is '%s'\n", cp4 ? cp4 : "(null)");
+				ast_debug(2, "Function %s result is '%s'\n", vars, cp4 ? cp4 : "(null)");
 			} else {
 				/* Retrieve variable value */
 				pbx_retrieve_variable(c, vars, &cp4, workspace, VAR_BUF_SIZE, headp);
@@ -4548,25 +4802,6 @@ void pbx_substitute_variables_varshead(struct varshead *headp, const char *cp1, 
 	pbx_substitute_variables_helper_full(NULL, headp, cp1, cp2, count, &used);
 }
 
-static void pbx_substitute_variables(char *passdata, int datalen, struct ast_channel *c, struct ast_exten *e)
-{
-	const char *tmp;
-
-	/* Nothing more to do */
-	if (!e->data) {
-		*passdata = '\0';
-		return;
-	}
-
-	/* No variables or expressions in e->data, so why scan it? */
-	if ((!(tmp = strchr(e->data, '$'))) || (!strstr(tmp, "${") && !strstr(tmp, "$["))) {
-		ast_copy_string(passdata, e->data, datalen);
-		return;
-	}
-
-	pbx_substitute_variables_helper(c, e->data, passdata, datalen - 1);
-}
-
 /*!
  * \brief The return value depends on the action:
  *
@@ -4591,6 +4826,7 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 {
 	struct ast_exten *e;
 	struct ast_app *app;
+	char *substitute = NULL;
 	int res;
 	struct pbx_find_info q = { .stacklen = 0 }; /* the rest is reset in pbx_find_extension */
 	char passdata[EXT_DATA_SIZE];
@@ -4616,6 +4852,18 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			if (!e->cached_app)
 				e->cached_app = pbx_findapp(e->app);
 			app = e->cached_app;
+			if (ast_strlen_zero(e->data)) {
+				*passdata = '\0';
+			} else {
+				const char *tmp;
+				if ((!(tmp = strchr(e->data, '$'))) || (!strstr(tmp, "${") && !strstr(tmp, "$["))) {
+					/* no variables to substitute, copy on through */
+					ast_copy_string(passdata, e->data, sizeof(passdata));
+				} else {
+					/* save e->data on stack for later processing after lock released */
+					substitute = ast_strdupa(e->data);
+				}
+			}
 			ast_unlock_contexts();
 			if (!app) {
 				ast_log(LOG_WARNING, "No application '%s' for extension (%s, %s, %d)\n", e->app, context, exten, priority);
@@ -4626,12 +4874,14 @@ static int pbx_extension_helper(struct ast_channel *c, struct ast_context *con,
 			if (ast_channel_exten(c) != exten)
 				ast_channel_exten_set(c, exten);
 			ast_channel_priority_set(c, priority);
-			pbx_substitute_variables(passdata, sizeof(passdata), c, e);
+			if (substitute) {
+				pbx_substitute_variables_helper(c, substitute, passdata, sizeof(passdata)-1);
+			}
 #ifdef CHANNEL_TRACE
 			ast_channel_trace_update(c);
 #endif
 			ast_debug(1, "Launching '%s'\n", app->name);
-			{
+			if (VERBOSITY_ATLEAST(3)) {
 				char tmp[80], tmp2[80], tmp3[EXT_DATA_SIZE];
 				ast_verb(3, "Executing [%s@%s:%d] %s(\"%s\", \"%s\") %s\n",
 					exten, context, priority,
@@ -5633,12 +5883,18 @@ static int ast_add_hint(struct ast_exten *e)
 		return -1;
 	}
 	hint_new->exten = e;
-	hint_new->laststate = ast_extension_state2(e, NULL);
-	if ((presence_state = extension_presence_state_helper(e, &subtype, &message)) > 0) {
-		hint_new->last_presence_state = presence_state;
-		hint_new->last_presence_subtype = subtype;
-		hint_new->last_presence_message = message;
-		message = subtype = NULL;
+	if (strstr(e->app, "${") && e->exten[0] == '_') {
+		/* The hint is dynamic and hasn't been evaluted yet */
+		hint_new->laststate = AST_DEVICE_INVALID;
+		hint_new->last_presence_state = AST_PRESENCE_INVALID;
+	} else {
+		hint_new->laststate = ast_extension_state2(e, NULL);
+		if ((presence_state = extension_presence_state_helper(e, &subtype, &message)) > 0) {
+			hint_new->last_presence_state = presence_state;
+			hint_new->last_presence_subtype = subtype;
+			hint_new->last_presence_message = message;
+			message = subtype = NULL;
+		}
 	}
 
 	/* Prevent multiple add hints from adding the same hint at the same time. */
@@ -6828,7 +7084,7 @@ int ast_context_remove_switch2(struct ast_context *con, const char *sw, const ch
 /*! \note This function will lock conlock. */
 int ast_context_remove_extension(const char *context, const char *extension, int priority, const char *registrar)
 {
-	return ast_context_remove_extension_callerid(context, extension, priority, NULL, 0, registrar);
+	return ast_context_remove_extension_callerid(context, extension, priority, NULL, AST_EXT_MATCHCID_ANY, registrar);
 }
 
 int ast_context_remove_extension_callerid(const char *context, const char *extension, int priority, const char *callerid, int matchcallerid, const char *registrar)
@@ -6858,7 +7114,7 @@ int ast_context_remove_extension_callerid(const char *context, const char *exten
  */
 int ast_context_remove_extension2(struct ast_context *con, const char *extension, int priority, const char *registrar, int already_locked)
 {
-	return ast_context_remove_extension_callerid2(con, extension, priority, NULL, 0, registrar, already_locked);
+	return ast_context_remove_extension_callerid2(con, extension, priority, NULL, AST_EXT_MATCHCID_ANY, registrar, already_locked);
 }
 
 int ast_context_remove_extension_callerid2(struct ast_context *con, const char *extension, int priority, const char *callerid, int matchcallerid, const char *registrar, int already_locked)
@@ -6874,10 +7130,6 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 	if (!already_locked)
 		ast_wrlock_context(con);
 
-	/* Handle this is in the new world */
-
-	/* FIXME For backwards compatibility, if callerid==NULL, then remove ALL
-	 * peers, not just those matching the callerid. */
 #ifdef NEED_DEBUG
 	ast_verb(3,"Removing %s/%s/%d%s%s from trees, registrar=%s\n", con->name, extension, priority, matchcallerid ? "/" : "", matchcallerid ? callerid : "", registrar);
 #endif
@@ -6886,7 +7138,7 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 #endif
 	/* find this particular extension */
 	ex.exten = dummy_name;
-	ex.matchcid = matchcallerid && !ast_strlen_zero(callerid); /* don't say match if there's no callerid */
+	ex.matchcid = matchcallerid;
 	ex.cidmatch = callerid;
 	ast_copy_string(dummy_name, extension, sizeof(dummy_name));
 	exten = ast_hashtab_lookup(con->root_table, &ex);
@@ -6909,7 +7161,6 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 			ex.priority = priority;
 			exten2 = ast_hashtab_lookup(exten->peer_table, &ex);
 			if (exten2) {
-
 				if (exten2->label) { /* if this exten has a label, remove that, too */
 					exten3 = ast_hashtab_remove_this_object(exten->peer_label_table,exten2);
 					if (!exten3)
@@ -6970,10 +7221,11 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 
 	/* scan the priority list to remove extension with exten->priority == priority */
 	for (peer = exten, next_peer = exten->peer ? exten->peer : exten->next;
-		 peer && !strcmp(peer->exten, extension) && (!matchcallerid || (!ast_strlen_zero(callerid) && !ast_strlen_zero(peer->cidmatch) && !strcmp(peer->cidmatch,callerid)) || (ast_strlen_zero(callerid) && ast_strlen_zero(peer->cidmatch)));
+		 peer && !strcmp(peer->exten, extension) &&
+			(!callerid || (!matchcallerid && !peer->matchcid) || (matchcallerid && peer->matchcid && !strcmp(peer->cidmatch, callerid))) ;
 			peer = next_peer, next_peer = next_peer ? (next_peer->peer ? next_peer->peer : next_peer->next) : NULL) {
+
 		if ((priority == 0 || peer->priority == priority) &&
-				(!callerid || !matchcallerid || (matchcallerid && !strcmp(peer->cidmatch, callerid))) &&
 				(!registrar || !strcmp(peer->registrar, registrar) )) {
 			found = 1;
 
@@ -7003,6 +7255,7 @@ int ast_context_remove_extension_callerid2(struct ast_context *con, const char *
 			} else { /* easy, we are not first priority in extension */
 				previous_peer->peer = peer->peer;
 			}
+
 
 			/* now, free whole priority extension */
 			destroy_exten(peer);
@@ -7635,7 +7888,11 @@ static int show_dialplan_helper(int fd, const char *context, const char *exten, 
 		struct ast_exten *e;
 		struct ast_include *i;
 		struct ast_ignorepat *ip;
+#ifndef LOW_MEMORY
+		char buf[1024], buf2[1024];
+#else
 		char buf[256], buf2[256];
+#endif
 		int context_info_printed = 0;
 
 		if (context && strcmp(ast_get_context_name(c), context))
@@ -7683,7 +7940,7 @@ static int show_dialplan_helper(int fd, const char *context, const char *exten, 
 			dpc->total_prio++;
 
 			/* write extension name and first peer */
-			if (e->matchcid)
+			if (e->matchcid == AST_EXT_MATCHCID_ON)
 				snprintf(buf, sizeof(buf), "'%s' (CID match '%s') => ", ast_get_extension_name(e), e->cidmatch);
 			else
 				snprintf(buf, sizeof(buf), "'%s' =>", ast_get_extension_name(e));
@@ -8673,6 +8930,16 @@ void ast_merge_contexts_and_delete(struct ast_context **extcontexts, struct ast_
 	begintime = ast_tvnow();
 	ast_mutex_lock(&context_merge_lock);/* Serialize ast_merge_contexts_and_delete */
 	ast_wrlock_contexts();
+
+	if (!contexts_table) {
+		/* Well, that's odd. There are no contexts. */
+		contexts_table = exttable;
+		contexts = *extcontexts;
+		ast_unlock_contexts();
+		ast_mutex_unlock(&context_merge_lock);
+		return;
+	}
+
 	iter = ast_hashtab_start_traversal(contexts_table);
 	while ((tmp = ast_hashtab_next(iter))) {
 		context_merge(extcontexts, exttable, tmp, registrar);
@@ -9031,6 +9298,8 @@ int ast_build_timing(struct ast_timing *i, const char *info_in)
 	char *info;
 	int j, num_fields, last_sep = -1;
 
+	i->timezone = NULL;
+
 	/* Check for empty just in case */
 	if (ast_strlen_zero(info_in)) {
 		return 0;
@@ -9050,8 +9319,6 @@ int ast_build_timing(struct ast_timing *i, const char *info_in)
 	/* save the timezone, if it is specified */
 	if (num_fields == 5) {
 		i->timezone = ast_strdup(info + last_sep + 1);
-	} else {
-		i->timezone = NULL;
 	}
 
 	/* Assume everything except time */
@@ -9853,10 +10120,10 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 	/* Blank callerid and NULL callerid are two SEPARATE things.  Do NOT confuse the two!!! */
 	if (callerid) {
 		p += ext_strncpy(p, callerid, strlen(callerid) + 1) + 1;
-		tmp->matchcid = 1;
+		tmp->matchcid = AST_EXT_MATCHCID_ON;
 	} else {
 		*p++ = '\0';
-		tmp->matchcid = 0;
+		tmp->matchcid = AST_EXT_MATCHCID_OFF;
 	}
 	tmp->app = p;
 	strcpy(p, application);
@@ -9873,7 +10140,7 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 								an extension, and the trie exists, then we need to incrementally add this pattern to it. */
 		ast_copy_string(dummy_name, extension, sizeof(dummy_name));
 		dummy_exten.exten = dummy_name;
-		dummy_exten.matchcid = 0;
+		dummy_exten.matchcid = AST_EXT_MATCHCID_OFF;
 		dummy_exten.cidmatch = 0;
 		tmp2 = ast_hashtab_lookup(con->root_table, &dummy_exten);
 		if (!tmp2) {
@@ -9886,11 +10153,11 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 	for (e = con->root; e; el = e, e = e->next) {   /* scan the extension list */
 		res = ext_cmp(e->exten, tmp->exten);
 		if (res == 0) { /* extension match, now look at cidmatch */
-			if (!e->matchcid && !tmp->matchcid)
+			if (e->matchcid == AST_EXT_MATCHCID_OFF && tmp->matchcid == AST_EXT_MATCHCID_OFF)
 				res = 0;
-			else if (tmp->matchcid && !e->matchcid)
+			else if (tmp->matchcid == AST_EXT_MATCHCID_ON && e->matchcid == AST_EXT_MATCHCID_OFF)
 				res = 1;
-			else if (e->matchcid && !tmp->matchcid)
+			else if (e->matchcid == AST_EXT_MATCHCID_ON && tmp->matchcid == AST_EXT_MATCHCID_OFF)
 				res = -1;
 			else
 				res = ext_cmp(e->cidmatch, tmp->cidmatch);
@@ -9967,7 +10234,7 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 		}
 	}
 	if (option_debug) {
-		if (tmp->matchcid) {
+		if (tmp->matchcid == AST_EXT_MATCHCID_ON) {
 			ast_debug(1, "Added extension '%s' priority %d (CID match '%s') to %s (%p)\n",
 					  tmp->exten, tmp->priority, tmp->cidmatch, con->name, con);
 		} else {
@@ -9976,7 +10243,7 @@ static int ast_add_extension2_lockopt(struct ast_context *con,
 		}
 	}
 
-	if (tmp->matchcid) {
+	if (tmp->matchcid == AST_EXT_MATCHCID_ON) {
 		ast_verb(3, "Added extension '%s' priority %d (CID match '%s') to %s\n",
 				 tmp->exten, tmp->priority, tmp->cidmatch, con->name);
 	} else {
@@ -10503,6 +10770,7 @@ static void __ast_internal_context_destroy( struct ast_context *con)
 	}
 	tmp->root = NULL;
 	ast_rwlock_destroy(&tmp->lock);
+	ast_mutex_destroy(&tmp->macrolock);
 	ast_free(tmp);
 }
 
@@ -10597,12 +10865,11 @@ void __ast_context_destroy(struct ast_context *list, struct ast_hashtab *context
 						}
 						ast_verb(3, "Remove %s/%s/%d, registrar=%s; con=%s(%p); con->root=%p\n",
 								 tmp->name, prio_item->exten, prio_item->priority, registrar, con? con->name : "<nil>", con, con? con->root_table: NULL);
-						/* set matchcid to 1 to insure we get a direct match, and NULL registrar to make sure no wildcarding is done */
 						ast_copy_string(extension, prio_item->exten, sizeof(extension));
 						if (prio_item->cidmatch) {
 							ast_copy_string(cidmatch, prio_item->cidmatch, sizeof(cidmatch));
 						}
-						end_traversal &= ast_context_remove_extension_callerid2(tmp, extension, prio_item->priority, prio_item->cidmatch ? cidmatch : NULL, 1, NULL, 1);
+						end_traversal &= ast_context_remove_extension_callerid2(tmp, extension, prio_item->priority, cidmatch, prio_item->matchcid, NULL, 1);
 					}
 					/* Explanation:
 					 * ast_context_remove_extension_callerid2 will destroy the extension that it comes across. This
@@ -11331,10 +11598,9 @@ void pbx_builtin_pushvar_helper(struct ast_channel *chan, const char *name, cons
 		headp = &globals;
 	}
 
-	if (value) {
+	if (value && (newvariable = ast_var_assign(name, value))) {
 		if (headp == &globals)
 			ast_verb(2, "Setting global variable '%s' to '%s'\n", name, value);
-		newvariable = ast_var_assign(name, value);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 	}
 
@@ -11381,10 +11647,9 @@ int pbx_builtin_setvar_helper(struct ast_channel *chan, const char *name, const 
 	}
 	AST_LIST_TRAVERSE_SAFE_END;
 
-	if (value) {
+	if (value && (newvariable = ast_var_assign(name, value))) {
 		if (headp == &globals)
 			ast_verb(2, "Setting global variable '%s' to '%s'\n", name, value);
-		newvariable = ast_var_assign(name, value);
 		AST_LIST_INSERT_HEAD(headp, newvariable, entries);
 		/*** DOCUMENTATION
 			<managerEventInstance>
@@ -12173,6 +12438,10 @@ static void pbx_shutdown(void)
 		ao2_ref(statecbs, -1);
 		statecbs = NULL;
 	}
+	if (contexts_table) {
+		ast_hashtab_destroy(contexts_table, NULL);
+	}
+	pbx_builtin_clear_globals();
 }
 
 int ast_pbx_init(void)

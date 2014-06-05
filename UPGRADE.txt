@@ -20,12 +20,131 @@
 ===
 ===========================================================
 
+from 11.9 to 11.10
+ - The asterisk command line -I option and the asterisk.conf internal_timing
+   option are removed and always enabled if any timing module is loaded.
+
+ - Added a new Compiler Flag, REF_DEBUG. When enabled, reference counted
+   objects will emit additional debug information to the refs log file located
+   in the standard Asterisk log file directory. This log file is useful in
+   tracking down object leaks and other reference counting issues. Prior to
+   this version, this option was only available by modifying the source code
+   directly. This change also includes a new script, refcounter.py, in the
+   contrib folder that will process the refs log file.
+
+from 11.8 to 11.9
+- res_fax now returns the correct rates for V.27ter (4800 or 9600 bit/s).
+  Because of this the default settings would not load, so the minrate (minimum
+  transmission rate) option was changed to default to 4800 since that is the
+  minimum rate for v.27 which is included in the default modem options.
+
+- The sound_place_into_conference sound used in Confbridge is now deprecated
+  and is no longer functional since it has been broken since its inception
+  and the fix involved using a different method to achieve the same goal. The
+  new method to achieve this functionality is by using sound_begin to play
+  a sound to the conference when waitmarked users are moved into the conference.
+
+- When communicating with a peer on an Asterisk 1.4 or earlier system, the
+  chan_iax2 parameter 'connectedline' must be set to "no" in iax.conf. This
+  prevents an incompatible connected line frame from an Astersik 1.8 or later
+  system from causing a hangup in an Asterisk 1.4 or earlier system. Note that
+  this particular incompatibility has always existed between 1.4 and 1.8 and
+  later versions; this upgrade note is simply informing users of its existance.
+
+- A compatibility setting, allow_empty_string_in_nontext, has been added to
+  res_odbc.conf. When enabled (default behavior), empty column values are
+  stored as empty strings during realtime updates. Disabling this option
+  causes empty column values to be stored as NULLs for non-text columns.
+
+  Disable it for PostgreSQL backends in order to avoid errors caused by
+  updating integer columns with an empty string instead of NULL
+  (sippeers, sipregs, ..).
+
+From 11.7 to 11.8:
+- The per console verbose level feature as previously implemented caused a
+  large performance penalty.  The fix required some minor incompatibilities
+  if the new rasterisk is used to connect to an earlier version.  If the new
+  rasterisk connects to an older Asterisk version then the root console verbose
+  level is always affected by the "core set verbose" command of the remote
+  console even though it may appear to only affect the current console.  If
+  an older version of rasterisk connects to the new version then the
+  "core set verbose" command will have no effect.
+
+CLI commands:
+ - "core show settings" now lists the current console verbosity in addition
+   to the root console verbosity.
+
+ - "core set verbose" has not been able to support the by module verbose
+   logging levels since verbose logging levels were made per console.  That
+   syntax is now removed and a silence option added in its place.
+
+Configuration Files:
+ - The 'verbose' setting in logger.conf still takes an optional argument,
+   specifying the verbosity level for each logging destination.  However,
+   the default is now to once again follow the current root console level.
+   As a result, using the AMI Command action with "core set verbose" could
+   again set the root console verbose level and affect the verbose level
+   logged.
+
+From 11.6 to 11.7:
+ConfBridge
+ - ConfBridge now has the ability to set the language of announcements to the
+   conference.  The language can be set on a bridge profile in confbridge.conf
+   or by the dialplan function CONFBRIDGE(bridge,language)=en.
+chan_sip - Clarify The "sip show peers" Forcerport Column And Add Comedia
+ - Under the "Forcerport" column, the "N" used to mean NAT (i.e. Yes).  With
+   the additon of auto_* NAT settings, the meaning changed and there was a
+   certain combination of letters added to indicate the current setting. The
+   combination of using "Y", "N", "A" or "a", can be confusing.  Therefore, we
+   now display clearly what the current Forcerport setting is: "Yes", "No",
+   "Auto (Yes)", "Auto (No)".
+ - Since we are clarifying the Forcerport column, we have added a column to
+   display the Comedia setting since this is useful information as well.  We
+   no longer have a simple "NAT" setting like other versions before 11.
+
+* Certain dialplan functions have been marked as 'dangerous', and may only be
+  executed from the dialplan. Execution from extenal sources (AMI's GetVar and
+  SetVar actions; etc.) may be inhibited by setting live_dangerously in the
+  [options] section of asterisk.conf to no. SHELL(), channel locking, and direct
+  file read/write functions are marked as dangerous. DB_DELETE() and
+  REALTIME_DESTROY() are marked as dangerous for reads, but can now safely
+  accept writes (which ignore the provided value).
+
+From 11.5 to 11.6:
+* res_agi will now properly indicate if there was an error in streaming an
+  audio file.  The result code will be -1 and the result returned from the
+  the function will be RESULT_FAILURE instead of the prior behavior of always
+  returning RESULT_SUCCESS even if there was an error.
+* The libuuid development library is now optional for res_rtp_asterisk. If the
+  library is not present when building ICE and TURN support will not be present.
+* The option "register_retry_403" has been added to chan_sip to work around
+  servers that are known to erroneously send 403 in response to valid
+  REGISTER requests and allows Asterisk to continue attepmting to connect.
+  Due to a failed merge, this option is present, but non-functional until 11.8.0.
+
+From 11.4 to 11.5:
+* The default settings for chan_sip are now overriden properly by the general
+  settings in sip.conf.  Please look over your settings upon upgrading.
+
+* It is now possible to play the Queue prompts to the first user waiting in a call queue.
+  Note that this may impact the ability for agents to talk with users, as a prompt may
+  still be playing when an agent connects to the user. This ability is disabled by
+  default but can be enabled on an individual queue using the 'announce-to-first-user'
+  option.
+
+* The libuuid development library is now required for res_rtp_asterisk. Consult
+  your distribution for the appropriate development library name.
+
 From 11.3 to 11.4:
 * Added the 'n' option to MeetMe to prevent application of the DENOISE function
   to a channel joining a conference. Some channel drivers that vary the number
   of audio samples in a voice frame will experience significant quality problems
   if a denoiser is attached to the channel; this option gives them the ability
   to remove the denoiser without having to unload func_speex.
+
+* The Registry AMI event for SIP registrations will now always include the
+  Username field. A previous bug fix missed an instance where it was not
+  included; that has been corrected in this release.
 
 From 11.2.0 to 11.2.1:
 * Asterisk would previously not output certain error messages when a remote
@@ -171,7 +290,7 @@ SIP
    configuration option. Symptoms of this include one way media or no media flow.
 
 chan_unistim
- - Due to massive update in chan_unistim phone keys functions and on-screen 
+ - Due to massive update in chan_unistim phone keys functions and on-screen
    information changed.
 
 users.conf:
@@ -243,10 +362,10 @@ Manager:
    unchanged.
 
 Module Support Level
- - All modules in the addons, apps, bridge, cdr, cel, channels, codecs, 
+ - All modules in the addons, apps, bridge, cdr, cel, channels, codecs,
    formats, funcs, pbx, and res have been updated to include MODULEINFO data
    that includes <support_level> tags with a value of core, extended, or deprecated.
-   More information is available on the Asterisk wiki at 
+   More information is available on the Asterisk wiki at
    https://wiki.asterisk.org/wiki/display/AST/Asterisk+Module+Support+States
 
    Deprecated modules are now marked to not build by default and must be explicitly

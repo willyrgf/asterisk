@@ -606,28 +606,34 @@ const char *ast_msg_get_var(struct ast_msg *msg, const char *name)
 }
 
 struct ast_msg_var_iterator {
-	struct ao2_iterator i;
+	struct ao2_iterator iter;
 	struct msg_data *current_used;
 };
 
 struct ast_msg_var_iterator *ast_msg_var_iterator_init(const struct ast_msg *msg)
 {
-	struct ast_msg_var_iterator *i;
-	if (!(i = ast_calloc(1, sizeof(*i)))) {
+	struct ast_msg_var_iterator *iter;
+
+	iter = ast_calloc(1, sizeof(*iter));
+	if (!iter) {
 		return NULL;
 	}
 
-	i->i = ao2_iterator_init(msg->vars, 0);
+	iter->iter = ao2_iterator_init(msg->vars, 0);
 
-	return i;
+	return iter;
 }
 
-int ast_msg_var_iterator_next(const struct ast_msg *msg, struct ast_msg_var_iterator *i, const char **name, const char **value)
+int ast_msg_var_iterator_next(const struct ast_msg *msg, struct ast_msg_var_iterator *iter, const char **name, const char **value)
 {
 	struct msg_data *data;
 
+	if (!iter) {
+		return 0;
+	}
+
 	/* Skip any that aren't marked for sending out */
-	while ((data = ao2_iterator_next(&i->i)) && !data->send) {
+	while ((data = ao2_iterator_next(&iter->iter)) && !data->send) {
 		ao2_ref(data, -1);
 	}
 
@@ -642,22 +648,24 @@ int ast_msg_var_iterator_next(const struct ast_msg *msg, struct ast_msg_var_iter
 
 	/* Leave the refcount to be cleaned up by the caller with
 	 * ast_msg_var_unref_current after they finish with the pointers to the data */
-	i->current_used = data;
+	iter->current_used = data;
 
 	return 1;
 }
 
-void ast_msg_var_unref_current(struct ast_msg_var_iterator *i) {
-	if (i->current_used) {
-		ao2_ref(i->current_used, -1);
-	}
-	i->current_used = NULL;
+void ast_msg_var_unref_current(struct ast_msg_var_iterator *iter)
+{
+	ao2_cleanup(iter->current_used);
+	iter->current_used = NULL;
 }
 
-void ast_msg_var_iterator_destroy(struct ast_msg_var_iterator *i)
+void ast_msg_var_iterator_destroy(struct ast_msg_var_iterator *iter)
 {
-	ao2_iterator_destroy(&i->i);
-	ast_free(i);
+	if (iter) {
+		ao2_iterator_destroy(&iter->iter);
+		ast_msg_var_unref_current(iter);
+		ast_free(iter);
+	}
 }
 
 static struct ast_channel *create_msg_q_chan(void)
@@ -867,6 +875,11 @@ static int msg_func_read(struct ast_channel *chan, const char *function,
 	struct ast_datastore *ds;
 	struct ast_msg *msg;
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
 	ast_channel_lock(chan);
 
 	if (!(ds = ast_channel_datastore_find(chan, &msg_datastore, NULL))) {
@@ -902,6 +915,11 @@ static int msg_func_write(struct ast_channel *chan, const char *function,
 {
 	struct ast_datastore *ds;
 	struct ast_msg *msg;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
 
 	ast_channel_lock(chan);
 
@@ -959,6 +977,11 @@ static int msg_data_func_read(struct ast_channel *chan, const char *function,
 	struct ast_msg *msg;
 	const char *val;
 
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
+
 	ast_channel_lock(chan);
 
 	if (!(ds = ast_channel_datastore_find(chan, &msg_datastore, NULL))) {
@@ -988,6 +1011,11 @@ static int msg_data_func_write(struct ast_channel *chan, const char *function,
 {
 	struct ast_datastore *ds;
 	struct ast_msg *msg;
+
+	if (!chan) {
+		ast_log(LOG_WARNING, "No channel was provided to %s function.\n", function);
+		return -1;
+	}
 
 	ast_channel_lock(chan);
 
@@ -1041,6 +1069,27 @@ static int msg_tech_cmp(void *obj, void *arg, int flags)
 	return res;
 }
 
+static struct ast_msg_tech_holder *msg_find_by_tech(const struct ast_msg_tech *msg_tech, int ao2_flags)
+{
+	struct ast_msg_tech_holder *tech_holder;
+	struct ast_msg_tech_holder tmp_tech_holder = {
+		.tech = msg_tech,
+	};
+
+	ast_rwlock_init(&tmp_tech_holder.tech_lock);
+	tech_holder = ao2_find(msg_techs, &tmp_tech_holder, ao2_flags);
+	ast_rwlock_destroy(&tmp_tech_holder.tech_lock);
+	return tech_holder;
+}
+
+static struct ast_msg_tech_holder *msg_find_by_tech_name(const char *tech_name, int ao2_flags)
+{
+	struct ast_msg_tech tmp_msg_tech = {
+		.name = tech_name,
+	};
+	return msg_find_by_tech(&tmp_msg_tech, ao2_flags);
+}
+
 /*!
  * \internal
  * \brief MessageSend() application
@@ -1089,16 +1138,7 @@ static int msg_send_exec(struct ast_channel *chan, const char *data)
 	tech_name = ast_strdupa(args.to);
 	tech_name = strsep(&tech_name, ":");
 
-	{
-		struct ast_msg_tech tmp_msg_tech = {
-			.name = tech_name,
-		};
-		struct ast_msg_tech_holder tmp_tech_holder = {
-			.tech = &tmp_msg_tech,
-		};
-
-		tech_holder = ao2_find(msg_techs, &tmp_tech_holder, OBJ_POINTER);
-	}
+	tech_holder = msg_find_by_tech_name(tech_name, OBJ_POINTER);
 
 	if (!tech_holder) {
 		ast_log(LOG_WARNING, "No message technology '%s' found.\n", tech_name);
@@ -1159,16 +1199,8 @@ static int action_messagesend(struct mansession *s, const struct message *m)
 
 	tech_name = ast_strdupa(to);
 	tech_name = strsep(&tech_name, ":");
-	{
-		struct ast_msg_tech tmp_msg_tech = {
-			.name = tech_name,
-		};
-		struct ast_msg_tech_holder tmp_tech_holder = {
-			.tech = &tmp_msg_tech,
-		};
 
-		tech_holder = ao2_find(msg_techs, &tmp_tech_holder, OBJ_POINTER);
-	}
+	tech_holder = msg_find_by_tech_name(tech_name, OBJ_POINTER);
 
 	if (!tech_holder) {
 		astman_send_error(s, m, "Message technology not found.");
@@ -1219,16 +1251,8 @@ int ast_msg_send(struct ast_msg *msg, const char *to, const char *from)
 
 	tech_name = ast_strdupa(to);
 	tech_name = strsep(&tech_name, ":");
-	{
-		struct ast_msg_tech tmp_msg_tech = {
-			.name = tech_name,
-		};
-		struct ast_msg_tech_holder tmp_tech_holder = {
-			.tech = &tmp_msg_tech,
-		};
 
-		tech_holder = ao2_find(msg_techs, &tmp_tech_holder, OBJ_POINTER);
-	}
+	tech_holder = msg_find_by_tech_name(tech_name, OBJ_POINTER);
 
 	if (!tech_holder) {
 		ao2_ref(msg, -1);
@@ -1249,12 +1273,9 @@ int ast_msg_send(struct ast_msg *msg, const char *to, const char *from)
 
 int ast_msg_tech_register(const struct ast_msg_tech *tech)
 {
-	struct ast_msg_tech_holder tmp_tech_holder = {
-		.tech = tech,
-	};
 	struct ast_msg_tech_holder *tech_holder;
 
-	if ((tech_holder = ao2_find(msg_techs, &tmp_tech_holder, OBJ_POINTER))) {
+	if ((tech_holder = msg_find_by_tech(tech, OBJ_POINTER))) {
 		ao2_ref(tech_holder, -1);
 		ast_log(LOG_ERROR, "Message technology already registered for '%s'\n",
 				tech->name);
@@ -1280,12 +1301,9 @@ int ast_msg_tech_register(const struct ast_msg_tech *tech)
 
 int ast_msg_tech_unregister(const struct ast_msg_tech *tech)
 {
-	struct ast_msg_tech_holder tmp_tech_holder = {
-		.tech = tech,
-	};
 	struct ast_msg_tech_holder *tech_holder;
 
-	tech_holder = ao2_find(msg_techs, &tmp_tech_holder, OBJ_POINTER | OBJ_UNLINK);
+	tech_holder = msg_find_by_tech(tech, OBJ_POINTER | OBJ_UNLINK);
 
 	if (!tech_holder) {
 		ast_log(LOG_ERROR, "No '%s' message technology found.\n", tech->name);
@@ -1311,10 +1329,14 @@ void ast_msg_shutdown(void)
 	}
 }
 
-/*! \internal \brief Clean up other resources on Asterisk shutdown
+/*!
+ * \internal
+ * \brief Clean up other resources on Asterisk shutdown
+ *
  * \note This does not include the msg_q_tp object, which must be disposed
  * of prior to Asterisk checking for channel destruction in its shutdown
- * sequence.  The atexit handlers are executed after this occurs. */
+ * sequence.  The atexit handlers are executed after this occurs.
+ */
 static void message_shutdown(void)
 {
 	ast_custom_function_unregister(&msg_function);

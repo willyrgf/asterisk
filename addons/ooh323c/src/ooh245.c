@@ -713,8 +713,8 @@ int ooSendTermCapMsg(OOH323CallData *call)
          memset(entry, 0, sizeof(H245CapabilityTableEntry));
          entry->m.capabilityPresent = 1;
 
-         entry->capability.t = T_H245Capability_receiveUserInputCapability;
-         entry->capability.u.receiveUserInputCapability = userInputCap;
+         entry->capability.t = T_H245Capability_receiveAndTransmitUserInputCapability;
+         entry->capability.u.receiveAndTransmitUserInputCapability = userInputCap;
       
          entry->capabilityTableEntryNumber = i+1;
          dListAppend(pctxt , &(termCap->capabilityTable), entry);
@@ -749,8 +749,8 @@ int ooSendTermCapMsg(OOH323CallData *call)
          memset(entry, 0, sizeof(H245CapabilityTableEntry));
          entry->m.capabilityPresent = 1;
 
-         entry->capability.t = T_H245Capability_receiveUserInputCapability;
-         entry->capability.u.receiveUserInputCapability = userInputCap;
+         entry->capability.t = T_H245Capability_receiveAndTransmitUserInputCapability;
+         entry->capability.u.receiveAndTransmitUserInputCapability = userInputCap;
       
          entry->capabilityTableEntryNumber = i+1;
          dListAppend(pctxt , &(termCap->capabilityTable), entry);
@@ -3259,8 +3259,8 @@ int ooOnReceivedTerminalCapabilitySet(OOH323CallData *call, H245Message *pmsg)
       OOTRACEDBGC3("Empty TCS found.  (%s, %s)\n",
                     call->callType, call->callToken);
 
-      ooH245AcknowledgeTerminalCapabilitySet(call);
       call->remoteTermCapSeqNo = tcs->sequenceNumber;
+      ooH245AcknowledgeTerminalCapabilitySet(call);
 
 /* close all transmit chans */
 

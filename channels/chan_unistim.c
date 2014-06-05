@@ -847,7 +847,7 @@ static const char *ustmtext(const char *str, struct unistimsession *pte)
 static void display_last_error(const char *sz_msg)
 {
 	/* Display the error message */
-	ast_log(LOG_WARNING, "%s : (%u) %s\n", sz_msg, errno, strerror(errno));
+	ast_log(LOG_WARNING, "%s : (%d) %s\n", sz_msg, errno, strerror(errno));
 }
 
 static unsigned int get_tick_count(void)
@@ -937,7 +937,7 @@ static void send_client(int size, const unsigned char *data, struct unistimsessi
 
 /*#ifdef DUMP_PACKET */
 	if (unistimdebug) {
-		ast_verb(6, "Sending datas with seq #0x%.4x Using slot #%d :\n", pte->seq_server, buf_pos);
+		ast_verb(6, "Sending datas with seq #0x%.4x Using slot #%d :\n", (unsigned)pte->seq_server, buf_pos);
 	}
 /*#endif */
 	send_raw_client(pte->wsabufsend[buf_pos].len, pte->wsabufsend[buf_pos].buf, &(pte->sin),
@@ -1093,7 +1093,7 @@ static void send_icon(unsigned char pos, unsigned char status, struct unistimses
 {
 	BUFFSEND;
 	if (unistimdebug) {
-		ast_verb(0, "Sending icon pos %d with status 0x%.2x\n", pos, status);
+		ast_verb(0, "Sending icon pos %d with status 0x%.2x\n", pos, (unsigned)status);
 	}
 	memcpy(buffsend + SIZE_HEADER, packet_send_icon, sizeof(packet_send_icon));
 	buffsend[9] = pos;
@@ -1165,7 +1165,7 @@ send_favorite(unsigned char pos, unsigned char status, struct unistimsession *pt
 	int i;
 
 	if (unistimdebug) {
-		ast_verb(0, "Sending favorite pos %d with status 0x%.2x\n", pos, status);
+		ast_verb(0, "Sending favorite pos %d with status 0x%.2x\n", pos, (unsigned)status);
 	}
 	memcpy(buffsend + SIZE_HEADER, packet_send_favorite, sizeof(packet_send_favorite));
 	buffsend[10] = pos;
@@ -1377,7 +1377,7 @@ static void close_client(struct unistimsession *s)
 					ast_queue_hangup_with_cause(sub->owner, AST_CAUSE_NETWORK_OUT_OF_ORDER);
 				} else {
 					if (unistimdebug) {
-						ast_debug(1, "Released sub %d of channel %s@%s\n", sub->subtype, sub->parent->name, s->device->name);
+						ast_debug(1, "Released sub %u of channel %s@%s\n", sub->subtype, sub->parent->name, s->device->name);
 					}
 					AST_LIST_REMOVE_CURRENT(list);
 					unistim_free_sub(sub);
@@ -1431,7 +1431,7 @@ static int send_retransmit(struct unistimsession *pte)
 		if (i < 0) {
 			ast_log(LOG_WARNING,
 					"Asked to retransmit an ACKed slot ! last_buf_available=%d, seq_server = #0x%.4x last_seq_ack = #0x%.4x\n",
-					pte->last_buf_available, pte->seq_server, pte->last_seq_ack);
+					pte->last_buf_available, (unsigned)pte->seq_server, (unsigned)pte->last_seq_ack);
 			continue;
 		}
 
@@ -1441,7 +1441,7 @@ static int send_retransmit(struct unistimsession *pte)
 
 			seq = ntohs(sbuf[1]);
 			ast_verb(0, "Retransmit slot #%d (seq=#0x%.4x), last ack was #0x%.4x\n", i,
-						seq, pte->last_seq_ack);
+						(unsigned)seq, (unsigned)pte->last_seq_ack);
 		}
 		send_raw_client(pte->wsabufsend[i].len, pte->wsabufsend[i].buf, &pte->sin,
 					  &pte->sout);
@@ -1522,7 +1522,7 @@ static void send_led_update(struct unistimsession *pte, unsigned char led)
 {
 	BUFFSEND;
 	if (unistimdebug) {
-		ast_verb(0, "Sending led_update (%x)\n", led);
+		ast_verb(0, "Sending led_update (%x)\n", (unsigned)led);
 	}
 	memcpy(buffsend + SIZE_HEADER, packet_send_led_update, sizeof(packet_send_led_update));
 	buffsend[9] = led;
@@ -1538,8 +1538,8 @@ send_select_output(struct unistimsession *pte, unsigned char output, unsigned ch
 {
 	BUFFSEND;
 	if (unistimdebug) {
-		ast_verb(0, "Sending select output packet output=%x volume=%x mute=%x\n", output,
-					volume, mute);
+		ast_verb(0, "Sending select output packet output=%x volume=%x mute=%x\n",
+			(unsigned)output, (unsigned)volume, (unsigned)mute);
 	}
 	memcpy(buffsend + SIZE_HEADER, packet_send_select_output,
 		   sizeof(packet_send_select_output));
@@ -1843,7 +1843,7 @@ static struct unistim_line *unistim_line_alloc(void)
 
 static int unistim_free_sub(struct unistim_subchannel *sub) {
 	if (unistimdebug) {
-		ast_debug(1, "Released sub %d of channel %s@%s\n", sub->subtype, sub->parent->name, sub->parent->parent->name);
+		ast_debug(1, "Released sub %u of channel %s@%s\n", sub->subtype, sub->parent->name, sub->parent->parent->name);
 	}
 	ast_mutex_destroy(&sub->lock);
 	ast_free(sub);
@@ -1942,7 +1942,7 @@ static void rcv_mac_addr(struct unistimsession *pte, const unsigned char *buf)
 	char addrmac[19];
 	int res = 0;
 	for (tmp = 15; tmp < 15 + SIZE_HEADER; tmp++) {
-		sprintf(&addrmac[i], "%.2x", (unsigned char) buf[tmp]);
+		sprintf(&addrmac[i], "%.2x", (unsigned) buf[tmp]);
 		i += 2;
 	}
 	if (unistimdebug) {
@@ -2035,7 +2035,7 @@ static void rcv_mac_addr(struct unistimsession *pte, const unsigned char *buf)
 			pte->state = STATE_AUTHDENY;
 			break;
 		default:
-			ast_log(LOG_WARNING, "Internal error : unknown autoprovisioning value = %d\n",
+			ast_log(LOG_WARNING, "Internal error : unknown autoprovisioning value = %u\n",
 					autoprovisioning);
 		}
 	}
@@ -2088,7 +2088,7 @@ static void rcv_mac_addr(struct unistimsession *pte, const unsigned char *buf)
 			pte->state = STATE_MAINPAGE;
 			break;
 		default:
-			ast_log(LOG_WARNING, "Internal error, extension value unknown : %d\n",
+			ast_log(LOG_WARNING, "Internal error, extension value unknown : %u\n",
 					pte->device->extension);
 			pte->state = STATE_AUTHDENY;
 			break;
@@ -2825,12 +2825,9 @@ static void send_dial_tone(struct unistimsession *pte)
 		ind = ast_strdupa(ts->data);
 		s = strsep(&ind, ",");
 		ast_tone_zone_part_parse(s, &tone_data);
-		if (tone_data.modulate) {
-			tone_data.freq2 = 0;
-		}
 		send_tone(pte, tone_data.freq1, tone_data.freq2);
 		if (unistimdebug) {
-			ast_verb(0, "Country code found (%s), freq1=%d freq2=%d\n",
+			ast_verb(0, "Country code found (%s), freq1=%u freq2=%u\n",
 							pte->device->tz->country, tone_data.freq1, tone_data.freq2);
 		}
 		ts = ast_tone_zone_sound_unref(ts);
@@ -2903,7 +2900,11 @@ static void handle_dial_page(struct unistimsession *pte)
 			send_text(TEXT_LINE0, TEXT_NORMAL, pte, ustmtext("Enter the number to dial", pte));
 			send_text(TEXT_LINE1, TEXT_NORMAL, pte, ustmtext("and press Call", pte));
 		}
-		send_text_status(pte, ustmtext("Call   Redial BackSp Erase", pte));
+		if (ast_strlen_zero(pte->device->redial_number)) {
+			send_text_status(pte, ustmtext("Call          BackSp Erase", pte));
+		} else {
+			send_text_status(pte, ustmtext("Call   Redial BackSp Erase", pte));
+		}
 	}
 
 	pte->device->size_phone_number = 0;
@@ -3063,7 +3064,7 @@ static void handle_call_outgoing(struct unistimsession *s)
 			return;
 		}
 		if (unistimdebug) {
-			ast_verb(0, "Started three way call on channel %p (%s) subchan %d\n",
+			ast_verb(0, "Started three way call on channel %p (%s) subchan %u\n",
 				 sub_trans->owner, ast_channel_name(sub_trans->owner), sub_trans->subtype);
 		}
 		return;
@@ -3188,6 +3189,11 @@ static void handle_call_incoming(struct unistimsession *s)
 		ast_verb(0, "Handle Call Incoming for %s@%s\n", sub->parent->name,
 					s->device->name);
 	}
+	start_rtp(sub);
+	if (!sub->rtp) {
+		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", sub->parent->name, s->device->name);
+		return;
+	}
 	if (sub->owner) {
 		ast_queue_control(sub->owner, AST_CONTROL_ANSWER);
 	}
@@ -3298,6 +3304,8 @@ static void handle_key_fav(struct unistimsession *pte, char keycode)
 static void key_call(struct unistimsession *pte, char keycode)
 {
 	struct unistim_subchannel *sub = get_sub(pte->device, SUB_REAL);
+	struct unistim_subchannel *sub_3way = get_sub(pte->device, SUB_THREEWAY);
+
 	if ((keycode >= KEY_0) && (keycode <= KEY_SHARP)) {
 		if (keycode == KEY_SHARP) {
 			keycode = '#';
@@ -3312,23 +3320,21 @@ static void key_call(struct unistimsession *pte, char keycode)
 	switch (keycode) {
 	case KEY_FUNC1:
 		if (ast_channel_state(sub->owner) == AST_STATE_UP) {
-			if (get_sub(pte->device, SUB_THREEWAY)) {
+			if (sub_3way) {
 				close_call(pte);
 			}
 		}
 		break;
 	case KEY_FUNC2:
-		if (ast_channel_state(sub->owner) == AST_STATE_UP) {
-			if (get_sub(pte->device, SUB_THREEWAY)) {
-				transfer_cancel_step2(pte);
-			} else {
-				transfer_call_step1(pte);
-			}
+		if (sub_3way) {
+			transfer_cancel_step2(pte);
+		} else if (ast_channel_state(sub->owner) == AST_STATE_UP) {
+			transfer_call_step1(pte);
 		}
 		break;
 	case KEY_HANGUP:
 	case KEY_FUNC4:
-		if (!get_sub(pte->device, SUB_THREEWAY)) {
+		if (!sub_3way) {
 			close_call(pte);
 		}
 		break;
@@ -4010,13 +4016,24 @@ static void show_main_page(struct unistimsession *pte)
 			send_text(TEXT_LINE1, TEXT_NORMAL, pte, pte->device->call_forward);
 		}
 		send_icon(TEXT_LINE0, FAV_ICON_REFLECT + FAV_BLINK_SLOW, pte);
-		send_text_status(pte, ustmtext("Dial   Redial NoFwd  ", pte));
-	} else {
-		if ((pte->device->extension == EXTENSION_ASK) ||
-			(pte->device->extension == EXTENSION_TN)) {
-			send_text_status(pte, ustmtext("Dial   Redial Fwd    Unregis", pte));
+		if (ast_strlen_zero(pte->device->redial_number)) {
+			send_text_status(pte, ustmtext("Dial          NoFwd  ", pte));
 		} else {
-			send_text_status(pte, ustmtext("Dial   Redial Fwd    Pickup", pte));
+			send_text_status(pte, ustmtext("Dial   Redial NoFwd  ", pte));
+		}
+	} else {
+		if ((pte->device->extension == EXTENSION_ASK) || (pte->device->extension == EXTENSION_TN)) {
+			if (ast_strlen_zero(pte->device->redial_number)) {
+				send_text_status(pte, ustmtext("Dial          Fwd    Unregis", pte));
+			} else {
+				send_text_status(pte, ustmtext("Dial   Redial Fwd    Unregis", pte));
+			}
+		} else {
+			if (ast_strlen_zero(pte->device->redial_number)) {
+				send_text_status(pte, ustmtext("Dial          Fwd    Pickup", pte));
+			} else {
+				send_text_status(pte, ustmtext("Dial   Redial Fwd    Pickup", pte));
+			}
 		}
 		send_text(TEXT_LINE1, TEXT_NORMAL, pte, pte->device->maintext1);
 		if (pte->device->missed_call == 0) {
@@ -4358,7 +4375,7 @@ static void process_request(int size, unsigned char *buf, struct unistimsession 
 		char keycode = buf[13];
 
 		if (unistimdebug) {
-			ast_verb(0, "Key pressed: keycode = 0x%.2x - current state: %s\n", keycode,
+			ast_verb(0, "Key pressed: keycode = 0x%.2x - current state: %s\n", (unsigned)keycode,
 						ptestate_tostr(pte->state));
 		}
 		switch (pte->state) {
@@ -4406,7 +4423,7 @@ static void process_request(int size, unsigned char *buf, struct unistimsession 
 	}
 	if (memcmp(buf + SIZE_HEADER, packet_recv_pick_up, sizeof(packet_recv_pick_up)) == 0) {
 		if (unistimdebug) {
-			ast_verb(0, "Handset off hook\n");
+			ast_verb(0, "Handset off hook, current state: %s\n", ptestate_tostr(pte->state));
 		}
 		if (!pte->device) {	       /* We are not yet registered (asking for a TN in AUTOPROVISIONING_TN) */
 			return;
@@ -4432,7 +4449,7 @@ static void process_request(int size, unsigned char *buf, struct unistimsession 
 	}
 	if (memcmp(buf + SIZE_HEADER, packet_recv_hangup, sizeof(packet_recv_hangup)) == 0) {
 		if (unistimdebug) {
-			ast_verb(0, "Handset on hook\n");
+			ast_verb(0, "Handset on hook, current state: %s\n", ptestate_tostr(pte->state));
 		}
 		if (!pte->device) {
 			return;
@@ -4524,14 +4541,14 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 	}
 	if (buf[5] != 2) {
 		ast_log(LOG_NOTICE, "%s Wrong direction : got 0x%.2x expected 0x02\n", tmpbuf,
-				buf[5]);
+				(unsigned)buf[5]);
 		return;
 	}
 	seq = ntohs(sbuf[1]);
 	if (buf[4] == 1) {
 		ast_mutex_lock(&pte->lock);
 		if (unistimdebug) {
-			ast_verb(6, "ACK received for packet #0x%.4x\n", seq);
+			ast_verb(6, "ACK received for packet #0x%.4x\n", (unsigned)seq);
 		}
 		pte->nb_retransmit = 0;
 
@@ -4548,7 +4565,7 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 			} else {
 				ast_log(LOG_NOTICE,
 						"%s Warning : ACK received for an already ACKed packet : #0x%.4x we are at #0x%.4x\n",
-						tmpbuf, seq, pte->last_seq_ack);
+						tmpbuf, (unsigned)seq, (unsigned)pte->last_seq_ack);
 			}
 			ast_mutex_unlock(&pte->lock);
 			return;
@@ -4556,13 +4573,13 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 		if (pte->seq_server < seq) {
 			ast_log(LOG_NOTICE,
 					"%s Error : ACK received for a non-existent packet : #0x%.4x\n",
-					tmpbuf, pte->seq_server);
+					tmpbuf, (unsigned)pte->seq_server);
 			ast_mutex_unlock(&pte->lock);
 			return;
 		}
 		if (unistimdebug) {
 			ast_verb(0, "%s ACK gap : Received ACK #0x%.4x, previous was #0x%.4x\n",
-						tmpbuf, seq, pte->last_seq_ack);
+						tmpbuf, (unsigned)seq, (unsigned)pte->last_seq_ack);
 		}
 		pte->last_seq_ack = seq;
 		check_send_queue(pte);
@@ -4586,7 +4603,7 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 		if (pte->seq_phone > seq) {
 			ast_log(LOG_NOTICE,
 					"%s Warning : received a retransmitted packet : #0x%.4x (we are at #0x%.4x)\n",
-					tmpbuf, seq, pte->seq_phone);
+					tmpbuf, (unsigned)seq, (unsigned)pte->seq_phone);
 			/* BUG ? pte->device->seq_phone = seq; */
 			/* Send ACK */
 			buf[4] = 1;
@@ -4596,28 +4613,28 @@ static void parsing(int size, unsigned char *buf, struct unistimsession *pte,
 		}
 		ast_log(LOG_NOTICE,
 				"%s Warning : we lost a packet : received #0x%.4x (we are at #0x%.4x)\n",
-				tmpbuf, seq, pte->seq_phone);
+				tmpbuf, (unsigned)seq, (unsigned)pte->seq_phone);
 		return;
 	}
 	if (buf[4] == 0) {
-		ast_log(LOG_NOTICE, "%s Retransmit request for packet #0x%.4x\n", tmpbuf, seq);
+		ast_log(LOG_NOTICE, "%s Retransmit request for packet #0x%.4x\n", tmpbuf, (unsigned)seq);
 		if (pte->last_seq_ack > seq) {
 			ast_log(LOG_NOTICE,
 					"%s Error : received a request for an already ACKed packet : #0x%.4x\n",
-					tmpbuf, pte->last_seq_ack);
+					tmpbuf, (unsigned)pte->last_seq_ack);
 			return;
 		}
 		if (pte->seq_server < seq) {
 			ast_log(LOG_NOTICE,
 					"%s Error : received a request for a non-existent packet : #0x%.4x\n",
-					tmpbuf, pte->seq_server);
+					tmpbuf, (unsigned)pte->seq_server);
 			return;
 		}
 		send_retransmit(pte);
 		return;
 	}
 	ast_log(LOG_NOTICE, "%s Unknown request : got 0x%.2x expected 0x00,0x01 or 0x02\n",
-			tmpbuf, buf[4]);
+			tmpbuf, (unsigned)buf[4]);
 	return;
 }
 
@@ -4777,7 +4794,7 @@ static int unistim_hangup(struct ast_channel *ast)
 	struct unistim_line *l;
 	struct unistim_device *d;
 	struct unistimsession *s;
-	int i;
+	int i,end_call = 1;
 
 	s = channel_to_session(ast);
 	sub = ast_channel_tech_pvt(ast);
@@ -4792,8 +4809,8 @@ static int unistim_hangup(struct ast_channel *ast)
 		ast_verb(0, "unistim_hangup(%s) on %s@%s (STATE_%s)\n", ast_channel_name(ast), l->name, l->parent->name, ptestate_tostr(s->state));
 	}
 	sub_trans = get_sub(d, SUB_THREEWAY);
-	if (sub_trans && (sub_trans->owner) && (sub->subtype == SUB_REAL) &&
-		(sub->alreadygone == 0)) {
+	sub_real = get_sub(d, SUB_REAL);
+	if (sub_trans && (sub_trans->owner) && (sub->subtype == SUB_REAL)) { /* 3rd party busy or congested and transfer_cancel_step2 does not called */
 		if (unistimdebug) {
 			ast_verb(0, "Threeway call disconnected, switching to real call\n");
 		}
@@ -4803,16 +4820,13 @@ static int unistim_hangup(struct ast_channel *ast)
 		sub_trans->moh = 0;
 		sub_trans->subtype = SUB_REAL;
 		swap_subs(sub_trans, sub);
-
 		send_text_status(s, ustmtext("       Transf        Hangup", s));
 		send_callerid_screen(s, sub_trans);
 		unistim_hangup_clean(ast, sub);
 		unistim_unalloc_sub(d, sub);
 		return 0;
 	}
-	sub_real = get_sub(d, SUB_REAL);
-	if (sub_real && (sub_real->owner) && (sub->subtype == SUB_THREEWAY) &&
-		(sub->alreadygone == 0)) {
+	if (sub_real && (sub_real->owner) && (sub->subtype == SUB_THREEWAY) && (s->state == STATE_CALL)) { /* 3way call cancelled by softkey pressed */
 		if (unistimdebug) {
 			ast_verb(0, "Real call disconnected, stay in call\n");
 		}
@@ -4822,10 +4836,8 @@ static int unistim_hangup(struct ast_channel *ast)
 		unistim_unalloc_sub(d, sub);
 		return 0;
 	}
-
 	if (sub->subtype == SUB_REAL) {
 		sub_stop_silence(s, sub);
-		send_end_call(s); /* Send end call packet only if ending active call, in other way sound should be loosed */
 	} else if (sub->subtype == SUB_RING) {
 		send_no_ring(s);
 		for (i = 0; i < FAVNUM; i++) {
@@ -4836,8 +4848,15 @@ static int unistim_hangup(struct ast_channel *ast)
 			if (is_key_line(d, i) && !strcmp(l->name, d->sline[i]->name)) {
 				send_favorite_short(i, FAV_LINE_ICON, s);
 				d->ssub[i] = NULL;
+				continue;
+			}
+			if (d->ssub[i] != NULL) { /* Found other subchannel active other then hangup'ed one */
+				end_call = 0;
 			}
 		}
+	}
+	if (end_call) {
+		send_end_call(s); /* Send end call packet only if ending active call, in other way sound should be loosed */
 	}
 	sub->moh = 0;
 	if (sub->softkey >= 0) {
@@ -4850,7 +4869,7 @@ static int unistim_hangup(struct ast_channel *ast)
 			break;
 		}
 	}
-	refresh_all_favorite(s); /* Update favicons in case of DND keys */
+	/*refresh_all_favorite(s); */ /* TODO: Update favicons in case of DND keys */
 	if (s->state == STATE_RINGING && sub->subtype == SUB_RING) {
 		send_no_ring(s);
 		if (ast_channel_hangupcause(ast) != AST_CAUSE_ANSWERED_ELSEWHERE) {
@@ -4859,6 +4878,13 @@ static int unistim_hangup(struct ast_channel *ast)
 		}
 		if (!sub_real) {
 			show_main_page(s);
+		} else { /* hangup on a ringing line: reset status to reflect that we're still on an active call */
+				s->state = STATE_CALL;
+				send_callerid_screen(s, sub_real);
+				send_text(TEXT_LINE2, TEXT_NORMAL, s, ustmtext("is on-line", s));
+				send_text_status(s, ustmtext("       Transf        Hangup", s));
+				send_favorite_short(sub->softkey, FAV_ICON_OFFHOOK_BLACK, s);
+			
 		}
 	}
 	if (s->state == STATE_CALL && sub->subtype == SUB_REAL) {
@@ -4888,9 +4914,6 @@ static int unistim_answer(struct ast_channel *ast)
 	l = sub->parent;
 	d = l->parent;
 
-	if ((!sub->rtp) && (!get_sub(d, SUB_THREEWAY))) {
-		start_rtp(sub);
-	}
 	if (unistimdebug) {
 		ast_verb(0, "unistim_answer(%s) on %s@%s-%d\n", ast_channel_name(ast), l->name,
 					l->parent->name, sub->softkey);
@@ -4981,7 +5004,7 @@ static struct ast_frame *unistim_rtp_read(const struct ast_channel *ast,
 	}
 
 	if (!sub->rtp) {
-		ast_log(LOG_WARNING, "RTP handle NULL while reading on subchannel %d\n",
+		ast_log(LOG_WARNING, "RTP handle NULL while reading on subchannel %u\n",
 				sub->subtype);
 		return &ast_null_frame;
 	}
@@ -5038,7 +5061,7 @@ static int unistim_write(struct ast_channel *ast, struct ast_frame *frame)
 		if (frame->frametype == AST_FRAME_IMAGE) {
 			return 0;
 		} else {
-			ast_log(LOG_WARNING, "Can't send %d type frames with unistim_write\n",
+			ast_log(LOG_WARNING, "Can't send %u type frames with unistim_write\n",
 					frame->frametype);
 			return 0;
 		}
@@ -5073,7 +5096,7 @@ static int unistim_fixup(struct ast_channel *oldchan, struct ast_channel *newcha
 
 	ast_mutex_lock(&p->lock);
 
-	ast_debug(1, "New owner for channel USTM/%s@%s-%d is %s\n", l->name,
+	ast_debug(1, "New owner for channel USTM/%s@%s-%u is %s\n", l->name,
 			l->parent->name, p->subtype, ast_channel_name(newchan));
 
 	if (p->owner != oldchan) {
@@ -5216,9 +5239,12 @@ static int unistim_indicate(struct ast_channel *ast, int ind, const void *data,
 		if (sub->subtype == SUB_REAL) {
 			send_callerid_screen(s, sub);
 		}
+	case AST_CONTROL_UPDATE_RTP_PEER:
 		break;
 	case AST_CONTROL_SRCCHANGE:
-		ast_rtp_instance_change_source(sub->rtp);
+		if (sub->rtp) {
+			ast_rtp_instance_change_source(sub->rtp);
+		}
 		break;
 	default:
 		ast_log(LOG_WARNING, "Don't know how to indicate condition %d\n", ind);
@@ -5552,7 +5578,7 @@ static struct ast_channel *unistim_new(struct unistim_subchannel *sub, int state
 	tmp = ast_channel_alloc(1, state, l->cid_num, NULL, l->accountcode, l->exten,
 		l->parent->context, linkedid, l->amaflags, "USTM/%s@%s-%p", l->name, l->parent->name, sub);
 	if (unistimdebug) {
-		ast_verb(0, "unistim_new sub=%d (%p) chan=%p line=%s\n", sub->subtype, sub, tmp, l->name);
+		ast_verb(0, "unistim_new sub=%u (%p) chan=%p line=%s\n", sub->subtype, sub, tmp, l->name);
 	}
 	if (!tmp) {
 		ast_log(LOG_WARNING, "Unable to allocate channel structure\n");
@@ -5798,6 +5824,15 @@ static struct ast_channel *unistim_request(const char *type, struct ast_format_c
 		*cause = AST_CAUSE_BUSY;
 		return NULL;
 	}
+	if (d->session->state == STATE_DIALPAGE) {
+		if (unistimdebug) {
+			ast_verb(0, "Can't create channel, user on dialpage: Busy!\n");
+		}
+		unistim_unalloc_sub(d, sub);
+		*cause = AST_CAUSE_BUSY;
+		return NULL;
+	}
+
         if (get_avail_softkey(d->session, sub->parent->name) == -1) {
 		if (unistimdebug) {
 			ast_verb(0, "Can't create channel for line %s, all lines busy\n", sub->parent->name);
@@ -5816,14 +5851,7 @@ static struct ast_channel *unistim_request(const char *type, struct ast_format_c
 	if (unistimdebug) {
 		ast_verb(0, "unistim_request owner = %p\n", sub->owner);
 	}
-	start_rtp(sub);
-	if (!sub->rtp) {
-		ast_log(LOG_WARNING, "Unable to create channel for %s@%s\n", sub->parent->name, d->name);
-                                    return NULL;
-	}
-
 	restart_monitor();
-
 	/* and finish */
 	return tmpc;
 }
@@ -5895,7 +5923,7 @@ static char *unistim_show_info(struct ast_cli_entry *e, int cmd, struct ast_cli_
 				continue;
 			}
 			ast_cli(a->fd, "==> %d. dev=%s icon=%#-4x label=%-10s number=%-5s sub=%p line=%p\n",
-				i, device->softkeydevice[i], device->softkeyicon[i], device->softkeylabel[i], device->softkeynumber[i],
+				i, device->softkeydevice[i], (unsigned)device->softkeyicon[i], device->softkeylabel[i], device->softkeynumber[i],
 				device->ssub[i], device->sline[i]);
 		}
 		device = device->next;
@@ -5906,7 +5934,7 @@ static char *unistim_show_info(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	s = sessions;
 	while (s) {
 		ast_cli(a->fd,
-				"sin=%s timeout=%u state=%s macaddr=%s device=%p session=%p\n",
+				"sin=%s timeout=%d state=%s macaddr=%s device=%p session=%p\n",
 				ast_inet_ntoa(s->sin.sin_addr), s->timeout, ptestate_tostr(s->state), s->macaddr,
 				s->device, s);
 		s = s->next;
@@ -6116,7 +6144,7 @@ static int parse_bookmark(const char *text, struct unistim_device *d)
 			return 0;
 		}
 		if (d->softkeyicon[p] != 0) {
-			ast_log(LOG_WARNING, "Invalid position %d for bookmark : already used\n:", p);
+			ast_log(LOG_WARNING, "Invalid position %d for bookmark : already used:\n", p);
 			return 0;
 		}
 		memmove(line, line + 2, sizeof(line) - 2);
@@ -6172,7 +6200,7 @@ static int parse_bookmark(const char *text, struct unistim_device *d)
 	ast_copy_string(d->softkeynumber[p], number, sizeof(d->softkeynumber[p]));
 	if (unistimdebug) {
 		ast_verb(0, "New bookmark at pos %d label='%s' number='%s' icon=%#x\n",
-					p, d->softkeylabel[p], d->softkeynumber[p], d->softkeyicon[p]);
+					p, d->softkeylabel[p], d->softkeynumber[p], (unsigned)d->softkeyicon[p]);
 	}
 	return 1;
 }
@@ -6248,16 +6276,23 @@ static struct unistim_device *build_device(const char *cat, const struct ast_var
 		}
 		d = d->next;
 	}
+	ast_mutex_unlock(&devicelock);
 	if (!(lt = ast_calloc(1, sizeof(*lt)))) {
 		return NULL;
 	}
-	ast_mutex_unlock(&devicelock);
 	if (create) {
 		if (!(d = ast_calloc(1, sizeof(*d)))) {
 			return NULL;
 		}
 		ast_mutex_init(&d->lock);
 		ast_copy_string(d->name, cat, sizeof(d->name));
+		d->contrast = -1;
+		d->output = OUTPUT_HANDSET;
+		d->previous_output = OUTPUT_HANDSET;
+		d->volume = VOLUME_LOW;
+		d->mute = MUTE_OFF;
+		d->height = DEFAULTHEIGHT;
+		d->selected = -1;
 	} else {
 		/* Delete existing line information */
 		AST_LIST_LOCK(&d->lines);
@@ -6277,14 +6312,7 @@ static struct unistim_device *build_device(const char *cat, const struct ast_var
 		memset(d->sline, 0, sizeof(d->sline));
 		memset(d->sp, 0, sizeof(d->sp));
 	}
-
 	ast_copy_string(d->context, DEFAULTCONTEXT, sizeof(d->context));
-	d->contrast = -1;
-	d->output = OUTPUT_HANDSET;
-	d->previous_output = OUTPUT_HANDSET;
-	d->volume = VOLUME_LOW;
-	d->mute = MUTE_OFF;
-	d->height = DEFAULTHEIGHT;
 	d->selected = -1;
 	d->interdigit_timer = DEFAULT_INTERDIGIT_TIMER;
 	linelabel[0] = '\0';
@@ -6816,15 +6844,51 @@ static enum ast_rtp_glue_result unistim_get_rtp_peer(struct ast_channel *chan, s
 {
 	struct unistim_subchannel *sub = ast_channel_tech_pvt(chan);
 
+	if (!sub) {
+		return AST_RTP_GLUE_RESULT_FORBID;
+	}
+	if (!sub->rtp) {
+		return AST_RTP_GLUE_RESULT_FORBID;
+	}
+
 	ao2_ref(sub->rtp, +1);
 	*instance = sub->rtp;
 
 	return AST_RTP_GLUE_RESULT_LOCAL;
 }
 
+static int unistim_set_rtp_peer(struct ast_channel *chan, struct ast_rtp_instance *rtp, struct ast_rtp_instance *vrtp, struct ast_rtp_instance *trtp, const struct ast_format_cap *codecs, int nat_active)
+{
+	struct unistim_subchannel *sub;
+	struct sockaddr_in them = { 0, };
+	struct sockaddr_in us = { 0, };
+
+	if (!rtp) {
+		return 0;
+	}
+	
+	sub = ast_channel_tech_pvt(chan);
+	if (!sub) {
+		ast_log(LOG_ERROR, "No Private Structure, this is bad\n");
+		return -1;
+	}
+	{
+		struct ast_sockaddr tmp;
+		ast_rtp_instance_get_remote_address(rtp, &tmp);
+		ast_sockaddr_to_sin(&tmp, &them);
+		ast_rtp_instance_get_local_address(rtp, &tmp);
+		ast_sockaddr_to_sin(&tmp, &us);
+	}
+	
+	/* TODO: Set rtp on phone in case of direct rtp (not implemented) */
+	
+	return 0;
+}
+
 static struct ast_rtp_glue unistim_rtp_glue = {
 	.type = channel_type,
 	.get_rtp_info = unistim_get_rtp_peer,
+	.update_peer = unistim_set_rtp_peer,
 };
 
 /*--- load_module: PBX load module - initialization ---*/
