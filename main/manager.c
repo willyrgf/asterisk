@@ -1927,6 +1927,12 @@ static struct ast_variable *man_do_variable_value(struct ast_variable *head, con
 
 struct ast_variable *astman_get_variables(const struct message *m)
 {
+	return astman_get_variables_order(m, ORDER_REVERSE);
+}
+
+struct ast_variable *astman_get_variables_order(const struct message *m,
+	enum variable_orders order)
+{
 	int varlen;
 	int x;
 	struct ast_variable *head = NULL;
@@ -1940,6 +1946,10 @@ struct ast_variable *astman_get_variables(const struct message *m)
 			continue;
 		}
 		head = man_do_variable_value(head, m->headers[x] + varlen);
+	}
+
+	if (order == ORDER_NATURAL) {
+		head = ast_variables_reverse(head);
 	}
 
 	return head;
