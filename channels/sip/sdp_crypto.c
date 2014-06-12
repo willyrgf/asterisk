@@ -230,6 +230,13 @@ a=crypto:2 F8_128_HMAC_SHA1_80
 SNOM sends without lifetime or MKI:
 a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3vZ
 
+If we are getting an offer with one key using MKI and one key that is not using MKI,
+we should select the key without MKI
+	a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:PS1uQCVeeCFCanVmcjkpPywjNWhcYD0mXXtxaVBR|2^20|1:32
+	a=crypto:2 AES_CM_128_HMAC_SHA1_80 inline:SS1uQCVeeCFCaRRmcjkpPywjNWhcYD0mXXtxaVBR|2^20
+
+In this case, we should use crypto:2
+
 	*/
 
 	if (!ast_rtp_engine_srtp_is_registered()) {
@@ -295,7 +302,9 @@ a=crypto:1 AES_CM_128_HMAC_SHA1_80 inline:H5Yen2gCtRLey/IBGPjHeLLpbnivJDg6IjzvV3
 					mki = strsep(&info, "|");
 				}
 				/* At this point we do not support multiple keys, sorry */
-				if (mki != NULL && *mki != '1') {
+				//if (mki != NULL && *mki != '1') {
+				//If there's an MKI, give up.
+				if (mki != NULL) {
 					ast_log(LOG_ERROR, "Crypto mki handling not implemented. MKI = %s \n", mki);
 					continue;
 				}
