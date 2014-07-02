@@ -1238,9 +1238,14 @@ static int ast_rtp_raw_write(struct ast_rtp_instance *instance, struct ast_frame
 		rtp->lastdigitts = rtp->lastts;
 	}
 
+#ifdef MAYBE_BROKEN_CODE
+	/* This means that we strictly follow the timestamps of the incoming stream, which may
+	   be unrelated to our send stream. I think it's a bad idea. /OEJ 
+         */
 	if (ast_test_flag(frame, AST_FRFLAG_HAS_TIMING_INFO)) {
 		rtp->lastts = frame->ts * rate;
 	}
+#endif
 
 	ast_rtp_instance_get_remote_address(instance, &remote_address);
 
