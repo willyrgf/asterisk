@@ -2738,7 +2738,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
 			ast_debug(2, "DEACTIVATING Comfort Noise \n");
 			ast_clear_flag(rtp, FLAG_CN_ACTIVE);
-			f = ast_frdup(&cngoff);
+			f = ast_frisolate(&cngoff);
 			AST_LIST_INSERT_TAIL(&frames, f, frame_list);
 			f = NULL;
 		}
@@ -2774,7 +2774,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
 		ast_debug(2, "DEACTIVATING Comfort Noise \n");
 		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
-		f = ast_frdup(&cngoff);
+		f = ast_frisolate(&cngoff);
 		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
 		f = NULL;
 	}
