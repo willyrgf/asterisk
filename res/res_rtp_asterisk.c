@@ -2522,15 +2522,6 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		ast_log(LOG_WARNING, "RTP Read too short (%d expecting %d)\n", res, hdrlen);
 		return &ast_null_frame;
 	}
-	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
-		struct ast_frame *f = NULL;
-		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
-		ast_debug(2, "DEACTIVATING Comfort Noise \n");
-		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
-		f = ast_frdup(&cngoff);
-		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
-		f = NULL;
-	}
 
 	/* Get fields and verify this is an RTP packet */
 	seqno = ntohl(rtpheader[0]);
@@ -2625,6 +2616,15 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 	ssrc = ntohl(rtpheader[2]);
 
 	AST_LIST_HEAD_INIT_NOLOCK(&frames);
+
+	if (ast_test_flag(rtp, FLAG_CN_ACTIVE)) {
+		struct ast_frame *f = NULL;
+		struct ast_frame cngoff = { AST_FRAME_CONTROL, { AST_CONTROL_CNG_END, } };
+		ast_debug(2, "DEACTIVATING Comfort Noise \n");
+		ast_clear_flag(rtp, FLAG_CN_ACTIVE);
+		f = ast_frisolate(&cngoff);
+		AST_LIST_INSERT_TAIL(&frames, f, frame_list);
+	}
 	/* Force a marker bit and change SSRC if the SSRC changes */
 	if (rtp->rxssrc && rtp->rxssrc != ssrc) {
 		struct ast_frame *f, srcupdate = {
