@@ -9621,7 +9621,7 @@ static int process_sdp(struct sip_pvt *p, struct sip_request *req, int t38action
 				if (audio) {
 					if (process_sdp_a_sendonly(value, &sendonly)) {
 						processed = TRUE;
-					} else if (!processed_crypto && process_crypto(p, p->rtp, &p->srtp, value)) {
+					} else if (secure_audio && !processed_crypto && process_crypto(p, p->rtp, &p->srtp, value)) {
 						processed_crypto = TRUE;
 						processed = TRUE;
 					} else if (process_sdp_a_audio(value, p, &newaudiortp, &last_rtpmap_codec)) {
