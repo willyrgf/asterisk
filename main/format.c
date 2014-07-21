@@ -58,7 +58,6 @@ struct interface_ao2_wrapper {
 	const struct ast_format_attr_interface *interface;
 };
 
-/* BUGBUG v--- This may benefit from the global ao2 object enhancements. */
 /*! \brief Format List container, This container is never directly accessed outside
  * of this file, and It only exists for building the format_list_array. */
 static struct ao2_container *format_list;
@@ -69,7 +68,6 @@ static struct ast_format_list *format_list_array;
 static size_t format_list_array_len = 0;
 /*! \brief Locks the format list array so a reference can be taken safely. */
 static ast_rwlock_t format_list_array_lock;
-/* BUGBUG ^--- This may benefit from the global ao2 object enhancements. */
 
 static int interface_cmp_cb(void *obj, void *arg, int flags)
 {
