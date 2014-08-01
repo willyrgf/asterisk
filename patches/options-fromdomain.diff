@@ -1,0 +1,14 @@
+Index: channels/chan_sip.c
+===================================================================
+--- channels/chan_sip.c	(revision 419883)
++++ channels/chan_sip.c	(working copy)
+@@ -27279,6 +27279,9 @@
+ 	if (!ast_strlen_zero(peer->fromuser)) {
+ 		ast_string_field_set(p, fromuser, peer->fromuser);
+ 	}
++	if (!ast_strlen_zero(peer->fromdomain)) {
++		ast_string_field_set(p, fromdomain, peer->fromdomain);
++	}
+ 
+ 	if (!ast_strlen_zero(peer->tohost)) {
+ 		ast_string_field_set(p, tohost, peer->tohost);

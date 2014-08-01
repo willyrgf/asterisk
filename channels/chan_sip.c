@@ -27707,6 +27707,9 @@ static int sip_poke_peer(struct sip_peer *peer, int force)
 	if (!ast_strlen_zero(peer->fromuser)) {
 		ast_string_field_set(p, fromuser, peer->fromuser);
 	}
+	if (!ast_strlen_zero(peer->fromdomain)) {
+		ast_string_field_set(p, fromdomain, peer->fromdomain);
+	}
 
 	if (!ast_strlen_zero(peer->tohost)) {
 		ast_string_field_set(p, tohost, peer->tohost);
