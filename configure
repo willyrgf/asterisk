@@ -24321,10 +24321,10 @@ fi
 
 { echo "$as_me:$LINENO: checking for _FORTIFY_SOURCE support" >&5
 echo $ECHO_N "checking for _FORTIFY_SOURCE support... $ECHO_C" >&6; }
-if $(${CC} -D_FORTIFY_SOURCE=2 -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
+if $(${CC} -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2 -S -o /dev/null -xc /dev/null > /dev/null 2>&1); then
 	{ echo "$as_me:$LINENO: result: yes" >&5
 echo "${ECHO_T}yes" >&6; }
-	AST_FORTIFY_SOURCE=-D_FORTIFY_SOURCE=2
+	AST_FORTIFY_SOURCE="-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
 else
 	{ echo "$as_me:$LINENO: result: no" >&5
 echo "${ECHO_T}no" >&6; }
