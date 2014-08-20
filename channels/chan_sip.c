@@ -31260,7 +31260,8 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 	int addrs_cnt;
 	int i;
 
-	addrs_cnt = ast_sockaddr_resolve_ttl(&addrs, name, flag, family);
+	//OEJ - CHECK::: addrs_cnt = ast_sockaddr_resolve_ttl(&addrs, name, flag, family);
+	addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
 	if (addrs_cnt <= 0) {
 		return 1;
 	}
