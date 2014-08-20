@@ -18325,18 +18325,19 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  DTMFmode     : %s\n", dtmfmode2str(ast_test_flag(&peer->flags[0], SIP_DTMF)));
 		ast_cli(fd, "  Timer T1     : %d\n", peer->timer_t1);
 		ast_cli(fd, "  Timer B      : %d\n", peer->timer_b);
-		ast_cli(fd, "  Domain       : %s\n", ast_strlen_zero(peer->srvdomain) ? "N/A" : peer->srvdomain);
-		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
 		ast_cli(fd, "  Addr->IP     : %s\n", ast_sockaddr_stringify(&peer->addr));
 		ast_cli(fd, "  Defaddr->IP  : %s\n", ast_sockaddr_stringify(&peer->defaddr));
-		if (!(AST_LIST_EMPTY(&peer->peer_shadows)) {
+		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
+		ast_cli(fd, "  Domain       : %s\n", ast_strlen_zero(peer->srvdomain) ? "N/A" : peer->srvdomain);
+		if (!AST_LIST_EMPTY(&peer->peer_shadows)) {
 			struct sip_shadow_peer *shadow;
 			int id = 0;
-			ast_cli,fd, "  SRV entries for domain %s:\n", peer->srvdomain);
+			ast_cli(fd, "  SRV entries for domain %s:\n", peer->srvdomain);
 			AST_LIST_TRAVERSE_SAFE_BEGIN(&peer->peer_shadows, shadow, entry) {
 				id++;
-				ast_cli(fd, "    %-2.2d : %s %s:%u\n", id, shadow->peer->tohost, ast_sockaddr_stringify(&shadow->peer->defaddr));
+				ast_cli(fd, "    %-2.2d : %s %s Peer: %s\n", id, shadow->hostname, ast_sockaddr_stringify(&shadow->peer->addr), shadow->peer->name);
 			}
+			AST_LIST_TRAVERSE_SAFE_END;
 		}
 		ast_cli(fd, "  Prim.Transp. : %s\n", get_transport(peer->socket.type));
 		ast_cli(fd, "  Allowed.Trsp : %s\n", get_transport_list(peer->transports));
@@ -18519,6 +18520,7 @@ static char *complete_sip_user(const char *word, int state)
 	ao2_iterator_destroy(&user_iter);
 	return result;
 }
+
 /*! \brief Support routine for 'sip show user' CLI */
 static char *complete_sip_show_user(const char *line, const char *word, int pos, int state)
 {
