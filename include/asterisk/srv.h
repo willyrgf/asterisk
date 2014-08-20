@@ -133,6 +133,18 @@ int ast_srv_get_next_record(struct srv_context *context, const char **host,
 		unsigned short *port, unsigned short *priority, unsigned short *weight);
 
 /*!
+ * \brief Get the minimum TTL for all records in an SRV record set 
+ */
+struct timeval *ast_srv_get_min_ttl(struct srv_context *context);
+
+/*!
+ * \brief Check if a context is expired (DNS TTL exceeded)
+ * \retval 0 (FALSE) The context is expired and needs to be updated
+ * \retval 1 (TRUE)  The context is still valid
+ */
+int ast_srv_context_valid(struct srv_context *context);
+
+/*!
  * \brief Print out the complete data in the SRV list
  */
 void ast_srv_debug_print(struct srv_context *context);

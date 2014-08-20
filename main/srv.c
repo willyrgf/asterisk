@@ -52,6 +52,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/srv.h"
 #include "asterisk/dns.h"
 #include "asterisk/utils.h"
+#include "asterisk/time.h"
 #include "asterisk/linkedlists.h"
 
 #ifdef __APPLE__
@@ -398,11 +399,26 @@ int ast_get_srv(struct ast_channel *chan, char *host, int hostlen, int *port, co
 	return res;
 }
 
+struct timeval *ast_srv_get_min_ttl(struct srv_context *context) 
+{
+	return &context->min_ttl_expire;
+}
+
 
 unsigned int ast_srv_get_record_count(struct srv_context *context)
 {
 	return context->num_records;
 }
+
+int ast_srv_context_valid(struct srv_context *context)
+{
+	if (ast_tvcmp(ast_tvnow(), context->min_ttl_expire) > 0) {
+		return 1;
+	}
+
+	return 0;
+}
+
 
 int ast_srv_get_next_record(struct srv_context *context, const char **host,
 		unsigned short *port, unsigned short *priority, unsigned short *weight)

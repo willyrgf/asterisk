@@ -29132,7 +29132,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 			unsigned short prio, weight;
 			const char *hostname;
 
-			ast_debug(3, "   ==> DNS SRV lookup of %s returned %d entries. \n", transport, ast_srv_get_record_count(peer->srvcontext));
+			ast_debug(3, "   ==> DNS SRV lookup of %s returned %d entries. Next expiry in %d secs\n", transport, ast_srv_get_record_count(peer->srvcontext), (int) ast_tvdiff_sec(*(ast_srv_get_min_ttl(peer->srvcontext)),ast_tvnow()));
 			/* Try all candidates until we find one that fits our address family 
   			 * Note that the SRV code lists the candidates in order of weight and priority.
 			 */
@@ -29159,8 +29159,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				/* Get host name */
 				res = ast_srv_get_nth_record(peer->srvcontext, rec, &hostname, &tportno, &prio, &weight);
 				if (!res) {
+					unsigned int ttl=0;
 					/* We need to test every address in the SRV record set. */
-					res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
+					res = ast_sockaddr_resolve_first_transport_ttl(&ip, &ttl, hostname, 0, peer->socket.type);
 					if (ast_sockaddr_isnull(&ip) || res ) {
 						ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
 					} else {
@@ -31257,7 +31258,7 @@ static int ast_sockaddr_resolve_first_af(struct ast_sockaddr *addr,
 	int addrs_cnt;
 	int i;
 
-	addrs_cnt = ast_sockaddr_resolve(&addrs, name, flag, family);
+	addrs_cnt = ast_sockaddr_resolve_ttl(&addrs, name, flag, family);
 	if (addrs_cnt <= 0) {
 		return 1;
 	}
