@@ -18329,6 +18329,15 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  ToHost       : %s\n", peer->tohost);
 		ast_cli(fd, "  Addr->IP     : %s\n", ast_sockaddr_stringify(&peer->addr));
 		ast_cli(fd, "  Defaddr->IP  : %s\n", ast_sockaddr_stringify(&peer->defaddr));
+		if (!(AST_LIST_EMPTY(&peer->peer_shadows)) {
+			struct sip_shadow_peer *shadow;
+			int id = 0;
+			ast_cli,fd, "  SRV entries for domain %s:\n", peer->srvdomain);
+			AST_LIST_TRAVERSE_SAFE_BEGIN(&peer->peer_shadows, shadow, entry) {
+				id++;
+				ast_cli(fd, "    %-2.2d : %s %s:%u\n", id, shadow->peer->tohost, ast_sockaddr_stringify(&shadow->peer->defaddr));
+			}
+		}
 		ast_cli(fd, "  Prim.Transp. : %s\n", get_transport(peer->socket.type));
 		ast_cli(fd, "  Allowed.Trsp : %s\n", get_transport_list(peer->transports));
 		if (!ast_strlen_zero(sip_cfg.regcontext))
