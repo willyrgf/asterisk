@@ -170,7 +170,7 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 	}
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&c->entries, current, list) {
-		ast_debug(3, "         ===> (%d) Looking at you, %s \n", current->host, c->num_records);
+		ast_debug(3, "         ===> (%d) Looking at you, %s \n", c->num_records, current->host);
 		/* insert this entry just before the first existing
 	   	entry with a higher priority */
 		if (current->priority <= entry->priority) {
@@ -343,7 +343,7 @@ int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, cons
 	ret = ast_search_dns(context, service, C_IN, T_SRV, srv_callback);
 
 	if (ret > 0) {
-		struct srv_entry *cur;
+		//struct srv_entry *cur;
 
 		if(context->have_weights) {
 			process_weights(context);
@@ -442,7 +442,7 @@ int ast_srv_get_next_record(struct srv_context *context, const char **host,
 	*weight = entry->weight;
 	res = 0;
 	context->current = entry;
-	ast_debug(3, "   ==> DNS SRV select next host: %s port %hu \n", *host, (int) port);
+	ast_debug(3, "   ==> DNS SRV select next host: %s port %hu \n", *host, (int) *port);
 
 	return res;
 }
