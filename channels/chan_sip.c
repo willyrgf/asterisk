@@ -29161,7 +29161,9 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 				if (!res) {
 					unsigned int ttl=0;
 					/* We need to test every address in the SRV record set. */
-					res = ast_sockaddr_resolve_first_transport_ttl(&ip, &ttl, hostname, 0, peer->socket.type);
+					// Why add a ttl here? Think, man, think
+					//res = ast_sockaddr_resolve_first_transport_ttl(&ip, &ttl, hostname, 0, peer->socket.type);
+					res = ast_sockaddr_resolve_first_transport(&ip, hostname, 0, peer->socket.type);
 					if (ast_sockaddr_isnull(&ip) || res ) {
 						ast_debug(3, " ==> Bad IP, could not resolve hostname %s to proper family. \n", hostname);
 					} else {
