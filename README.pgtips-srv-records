@@ -188,3 +188,12 @@ Todo:
 16. De-install GDB. GDB is for weak developers.
 17. Do not write any documentation, regardless of what people say. It's a SEP.
 18. Stay calm and carry on.
+
+Random notes:
+-------------
+- If record-route is a name - use SRV lookup on it and keep that set for the dialog
+- Record-route overrides primary SRV set - should we remove primary set for dialog?
+  - When do we remove SRV set - when we get response over 100 and !5xx ?
+- Check send_request() - some work started there
+- proxy_update()
+- 
