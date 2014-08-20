@@ -615,7 +615,7 @@ int ast_get_ip_or_srv(struct ast_sockaddr *addr, const char *hostname, const cha
 		}
 	}
 
-	ast_debug(3, "==> Resolving %s \n", hostname);
+	ast_debug(3, "==> Resolving %s Using port %d\n", hostname, tportno);
 	if (resolve_first(addr, hostname, PARSE_PORT_FORBID, addr->ss.ss_family) != 0) {
 		return -1;
 	}

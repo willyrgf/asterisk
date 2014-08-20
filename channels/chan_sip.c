@@ -13837,7 +13837,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	if (r->dnsmgr == NULL) {
 		char transport[MAXHOSTNAMELEN];
 		peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0);
-		snprintf(transport, sizeof(transport), "_%s._%s",get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
+		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
 		r->us.ss.ss_family = get_address_family_filter(r->transport); /* Filter address family */
 
 		/* No point in doing a DNS lookup of the register hostname if we're just going to
@@ -13890,6 +13890,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* Use port number specified if no SRV record was found */
 		if (!ast_sockaddr_isnull(&r->us)) {
 			if (!ast_sockaddr_port(&r->us) && r->portno) {
+				ast_debug(3, "  --- Changing port to %d from %d \n", r->portno, ast_sockaddr_port(&r->us));
 				ast_sockaddr_set_port(&r->us, r->portno);
 			}
 
@@ -13931,6 +13932,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		if (!r->dnsmgr && r->portno) {
 			ast_sockaddr_set_port(&p->sa, r->portno);
 			ast_sockaddr_set_port(&p->recv, r->portno);
+			ast_debug(2, "Confusing code set port to %d\n", r->portno);
 		}
 		if (!ast_strlen_zero(p->fromdomain)) {
 			portno = (p->fromdomainport) ? p->fromdomainport : STANDARD_SIP_PORT;

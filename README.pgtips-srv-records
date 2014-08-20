@@ -94,9 +94,9 @@ deleted when a peer is deleted.
 
 How this works in combination with realtime is still to be explored.
 
-Failover
-========
-I see two situation for failover to the next host/ip in the SRV list:
+Failover on outbound requests
+=============================
+I see two situations for failover to the next host/ip in the SRV list:
 - sip_xmit fails (no destination, icmp unreachable etc)
 - timeout on Timer B
 
@@ -109,6 +109,14 @@ and currently there's nothing to do about it.
 
 We do need a function in main/srv.c to switch to the next entry and
 move the "current" pointer.
+
+Registrations
+=============
+First time registration selects a working server. If no response
+or a 5xx response, move to next server. (what to do with 3xx?)
+Stay with that server until it fails, which means re-registrations
+will stay on the same server. If server fails, restart with full
+SRV list and try from the top until a working server is found.
 
 Realtime out of scope
 =====================
