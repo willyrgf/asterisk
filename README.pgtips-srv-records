@@ -2,7 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: 2013-04-18
-Update:        2013-11-25
+Update:        201l-08-20
 
 
 
@@ -175,15 +175,20 @@ Todo:
 7. Add multiple peers (shadowpeers), one for each SRv entry/IP address
 	- delete existing ones if needed
 	- Done.
-8. Make sure the shadowpeers are deleted when masterpeer is deleted
+8. Make sure the shadow peers are deleted when masterpeer is deleted
 	- Done
-9. Add a configuration option to enable shadow peer functionality
-10. Make sure the Contact ACL list is updated by DNS manager
-11. Test registrations so they fail over properly
-12. Tie calling to registred host (IMS Fix)
+9. Make sure that shadow peers are listed in "sip show peers"
+	- Done
+10. List shadow peers in "sip show peer <master>"
+	- Done
+11. Add a configuration option to enable shadow peer functionality
+12. Make sure the Contact ACL list is updated by DNS manager
+13. Test registrations so they fail over properly
+	- Not implemented
+14. Tie calling to registred host (IMS Fix)
 	- Flag implemented, code missing
-13. Make sure that calling a peer where the primary host is UNREACHABLE in qualify fails over
-14. Avoid testing. Real developers don't test.
+15. Make sure that calling a peer where the primary host is UNREACHABLE in qualify fails over
+16. Avoid testing. Real developers don't test.
 15. Don't open a bug tracker issue on this project.
 16. De-install GDB. GDB is for weak developers.
 17. Do not write any documentation, regardless of what people say. It's a SEP.
