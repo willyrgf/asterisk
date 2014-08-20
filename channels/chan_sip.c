@@ -28251,7 +28251,6 @@ static void shadow_peer_delete_all(struct sip_peer *masterpeer)
 	}
 	ast_debug(2, "=== Deleting all shadow peers for peer %s\n", masterpeer->name);
 
-	//AST_LIST_TRAVERSE_SAFE_BEGIN(&masterpeer->peer_shadows, shadow, entry) {
 	while ((shadow = AST_LIST_REMOVE_HEAD(&masterpeer->peer_shadows, entry))) {
 		/* remove shadow peer from IP list */
 		ast_debug(3, "Removing shadow peer %s from tables\n", shadow->peer->name);
@@ -28261,7 +28260,6 @@ static void shadow_peer_delete_all(struct sip_peer *masterpeer)
 		ast_free(shadow);
 		deletedshadows++;
 	}
-	//AST_LIST_TRAVERSE_SAFE_END;
 	ast_debug(2, "---> Deleted %d shadows from peer %s\n", deletedshadows, masterpeer->name);
 }
 

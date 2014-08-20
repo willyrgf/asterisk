@@ -170,7 +170,7 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 	}
 
 	AST_LIST_TRAVERSE_SAFE_BEGIN(&c->entries, current, list) {
-		ast_debug(3, "         ===> Looking at you, %s \n", current->host);
+		ast_debug(3, "         ===> (%d) Looking at you, %s \n", current->host, c->num_records);
 		/* insert this entry just before the first existing
 	   	entry with a higher priority */
 		if (current->priority <= entry->priority) {
@@ -186,8 +186,10 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 
 	/* if we didn't find a place to insert the entry before an existing
 	   entry, then just add it to the end */
-	if (entry)
+	if (entry) {
 		AST_LIST_INSERT_TAIL(&c->entries, entry, list);
+		c->num_records++;
+	}
 
 	return 0;
 }
@@ -346,9 +348,9 @@ int ast_get_srv_list(struct srv_context *context, struct ast_channel *chan, cons
 		if(context->have_weights) {
 			process_weights(context);
 		}
-		AST_LIST_TRAVERSE(&context->entries, cur, list) {
-			++(context->num_records);
-		}
+		//AST_LIST_TRAVERSE(&context->entries, cur, list) {
+			//++(context->num_records);
+		//}
 	}
 
 	if (chan) {
