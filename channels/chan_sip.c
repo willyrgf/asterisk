@@ -17571,14 +17571,16 @@ static struct sip_peer *_sip_show_peers_one(int fd, struct mansession *s, struct
 		return unref_peer(peer, "toss iterator peer ptr no match");
 	}
 
-	if (!ast_strlen_zero(peer->username) && !s) {
-		snprintf(name, sizeof(name), "%s/%s", peer->name, peer->username);
-	} else {
-		ast_copy_string(name, peer->name, sizeof(name));
-	}
-
 	if (peer->type & SIP_TYPE_PEERSHADOW) {
 		cont->peershadows++;
+		/* Shadow peer */
+		snprintf(name, sizeof(name), "- %s", peer->name);
+	} else {
+		if (!ast_strlen_zero(peer->username) && !s) {
+			snprintf(name, sizeof(name), "%s/%s", peer->name, peer->username);
+		} else {
+			ast_copy_string(name, peer->name, sizeof(name));
+		}
 	}
 
 	pstatus = peer_status(peer, status, sizeof(status));
