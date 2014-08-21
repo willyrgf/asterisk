@@ -5809,6 +5809,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 			ast_sockaddr_set_port(&dialog->sa, ast_sockaddr_port(addr));
 		}
 	} else {
+		ast_debug(4, "DNS Lookup : Going to find something with the name %s \n", peername);
 
 		/* Let's see if we can find the host in DNS. First try DNS SRV records,
 		   then hostname lookup */
@@ -5820,6 +5821,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 		 * an A record lookup should be used instead of SRV.
 		 */
 		if (!dialog->portinuri && sip_cfg.srvlookup) {
+			ast_debug(4, "DNS SRV Lookup : Going to find something with the name %s \n", peername);
 			if (dialog->srvcontext) {
 				ast_srv_context_free_list(dialog->srvcontext);
 			}
@@ -5867,9 +5869,10 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 			}
 			
 		} else {
+			ast_debug(4, "DNS A/AAAA Lookup : Going to find something with the name %s \n", hostn);
 
 			if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
-				ast_log(LOG_WARNING, "No such host: %s\n", peername);
+				ast_log(LOG_WARNING, "DNS giving up: No such host: %s\n", peername);
 				return -1;
 			}
 		}
