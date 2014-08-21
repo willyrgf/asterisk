@@ -4445,7 +4445,6 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 	if (p->outboundproxy) {
 		p->sa = p->outboundproxy->ip;
 		/* We need the SRV context as well */
-		
 	}
 
 	finalize_content(req);
@@ -4464,12 +4463,14 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 		deinit_req(&tmp);
 	}
 	if (p->srvcontext) {
+		int tryagain = TRUE;
 		/* We have an SRV record set. If we get transmit errors, retry on the next directly. */
-		while (res != -1 && res != XMIT_ERROR) {
+		while (tryagain) {
 			res = (reliable) ?
 				__sip_reliable_xmit(p, seqno, 0, req->data, (reliable == XMIT_CRITICAL), req->method) :
 				__sip_xmit(p, req->data);
 			if (res == -1 || res == XMIT_ERROR) {
+				ast_debug(3, "====>> SRV failover loop. Looking for next host \n");
 				char hostname[MAXHOSTNAMELEN];
 				const char *host = &hostname[0];
 				unsigned short port, prio, weight;
@@ -4479,10 +4480,18 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 					ast_log(LOG_WARNING, "No more hosts: %s\n", p->srvdomain);
 					res = -1;
 				} else  {
+					if (!ast_sockaddr_resolve_first_transport(&p->sa, hostname, 0, p->socket.type ? p->socket.type : SIP_TRANSPORT_UDP)) {
+						/* We found a host to try on */
+						break;
+					}
+					/* Make sure we set the port */
+					ast_sockaddr_set_port(&dialog->sa, port);
 					ast_debug(3, "====>> SRV failover. Changing to host %s port %d\n", hostname, port);
-					/* Select IP address */
-					/* Change IP in p */
+					res = 0;		/* Fail over */
 				}
+			} else {
+				ast_debug(3, "====>> sip_xmit success \n");
+				tryagain = FALSE;
 			}
 		}
 	} else {
@@ -5756,6 +5765,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 	if (hostport.port) {
 		dialog->portinuri = TRUE;
 	}
+	ast_debug(4, "Going to find something with the name %s \n", peername);
 
 	dialog->timer_t1 = global_t1; /* Default SIP retransmission timer T1 (RFC 3261) */
 	dialog->timer_b = global_timer_b; /* Default SIP transaction timer B (RFC 3261) */
@@ -5824,9 +5834,9 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 				unsigned short port, prio, weight;
 				const char *srvhost;
 
-				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. First %s \n", service, ast_srv_get_record_count(dialog->srvcontext), hostn);
+				ast_debug(3, "   ==> DNS lookup of %s returned %d entries. \n", service, ast_srv_get_record_count(dialog->srvcontext));
 				hostn = host;
-				for (rec = 0; rec < ast_srv_get_record_count(dialog->srvcontext); rec++) {
+				for (rec = 1; rec <= ast_srv_get_record_count(dialog->srvcontext); rec++) {
 					if(ast_srv_get_nth_record(dialog->srvcontext, rec, &srvhost, &port, &prio, &weight)) {
 						ast_log(LOG_WARNING, "No more SRV records for: %s\n", peername);
 						return -1;
@@ -5840,10 +5850,12 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 						/* We found a host to try on */
 						break;
 					}
+					/* Make sure we set the port */
+					ast_sockaddr_set_port(&dialog->sa, port);
 		
 				}
 
-				ast_debug(3, "   ==> Settling with SRV entry %d:   %s\n", rec, hostn);
+				ast_debug(3, "   ==> Settling with SRV entry %d:   %s Port %d\n", rec, hostn, port);
 			}
 		} else {
 
@@ -5851,10 +5863,6 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 				ast_log(LOG_WARNING, "No such host: %s\n", peername);
 				return -1;
 			}
-		}
-
-		if (srv_ret > 0) {
-			ast_sockaddr_set_port(&dialog->sa, tportno);
 		}
 	}
 

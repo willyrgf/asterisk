@@ -149,7 +149,9 @@ static int srv_callback(void *context, unsigned char *answer, int len, unsigned 
 	ast_debug(3, " ==> Callback received ttl= %u\n", ttl);
 
 	expiry.tv_sec =  (long) ttl;
-	expiry = ast_tvadd(expiry, ast_tvnow());
+	if (ttl > 0) {
+		expiry = ast_tvadd(expiry, ast_tvnow());
+	}
 
 	if (c == NULL) {
 		ast_debug(3, "   ==> Callback with no context ?? \n");
