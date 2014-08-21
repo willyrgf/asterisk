@@ -5858,6 +5858,14 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 
 				ast_debug(3, "   ==> Settling with SRV entry %d:   %s Port %d\n", rec, hostn, port);
 			}
+			/* If we didn't find SRV records, just go on with it and look for host names (A and AAAA records) . */
+			if (srv_ret == 0) {
+				if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
+					ast_log(LOG_WARNING, "No such host or domain: %s\n", peername);
+					return -1;
+				}
+			}
+			
 		} else {
 
 			if (ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
@@ -13910,6 +13918,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			ast_log(LOG_WARNING, "Unable to allocate registration transaction (memory or socket error)\n");
 			return 0;
 		}
+		/* If we have a port configured, do not activate SRV record lookup for this host */
+		p->portinuri = r->portconfigured;
+
 		if (r->srvcontext) {
 			char hostname[MAXHOSTNAMELEN];
 			const char *host = &hostname[0];
@@ -13929,7 +13940,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				/* Let's try with another host */
 				ast_string_field_set(r, hostname, host);
 				dosrvlookup = FALSE;
-				ast_sockaddr_set_port(&p->sa, port);
+				p->portinuri = TRUE;		/* Prevents DNS SRV lookup in create_addr */
+				p->socket.port = port;
 				r->srvattempts++;
 				ast_debug(3, "  ---> REGISTER SRV failover #%d on domain %s to host %s port %d \n", r->srvattempts, r->regdomain, host, port);
 			}
@@ -13940,8 +13952,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* reset tag to consistent value from registry */
 		ast_string_field_set(p, tag, r->localtag);
 
-		/* If we have a port configured, do not activate SRV record lookup for this host */
-		p->portinuri = r->portconfigured;
 
 		if (p->do_history) {
 			append_history(p, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
