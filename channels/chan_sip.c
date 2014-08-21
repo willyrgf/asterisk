@@ -13971,7 +13971,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 		/* Find address to hostname */
 		ast_debug(3, "  --- Going to find address for domain %s - host/peer %s\n", r->regdomain, S_OR(r->peername, r->hostname));
-		if (create_addr(p, S_OR(r->peername, r->hostname), dosrvlookup ? NULL : &r->us, 0)) {
+		//if (create_addr(p, S_OR(r->peername, r->hostname), dosrvlookup ? NULL : &r->us, 0)) {
+		/* Only send r->us if DNS manager manages it */
+		if (create_addr(p, S_OR(r->peername, r->hostname), r->dnsmgr ? &r->us : NULL, 0)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
 			dialog_unlink_all(p);
