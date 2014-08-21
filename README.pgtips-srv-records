@@ -172,14 +172,18 @@ Todo:
 =====
 1. Expose SRV records to the SIP channel. Remove when response is received (1xx or higher).
 	- The API is changed to support a module accessing SRV records.
+	- Done.
 2. Make sure SIP channel selects right with IPv4/IPv6. 
 	- Done for [peers] in the sip.conf file.
 	- Not done for calling a DNS name in the dial string (some code is there though)
 3. Provide hooks for happy earballs if server is dual stack and we're dual stack
+	- Postponed, not part of this project
 4. Implement failover to next server in list if transaction fails.
 	- Started
 5. Make sure we use the DNS TTL properly
+	- Needs further work
 6. Use SRV for outbound proxys too, with failover
+	- Needs check
 7. Add multiple peers (shadowpeers), one for each SRv entry/IP address
 	- delete existing ones if needed
 	- Done.

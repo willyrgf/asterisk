@@ -4445,6 +4445,7 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 	if (p->outboundproxy) {
 		p->sa = p->outboundproxy->ip;
 		/* We need the SRV context as well */
+		
 	}
 
 	finalize_content(req);
@@ -4474,7 +4475,6 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 				unsigned short port, prio, weight;
 				ast_debug(3, "====>> SRV failover. Changing to next SRV record in the list\n");
 				/* XXX SRV FAILOVER HERE XXX */
-				/* Hmm. If this is a peer - should we use the peer srvcontext? */
 				if(ast_srv_get_next_record(p->srvcontext, &host, &port, &prio, &weight)) {
 					ast_log(LOG_WARNING, "No more hosts: %s\n", p->srvdomain);
 					res = -1;
@@ -5794,6 +5794,9 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 	if (addr) {
 		/* This address should be updated using dnsmgr */
 		ast_sockaddr_copy(&dialog->sa, addr);
+		if (ast_sockaddr_port(addr)) {
+			ast_sockaddr_set_port(&dialog->sa, ast_sockaddr_port(addr));
+		}
 	} else {
 
 		/* Let's see if we can find the host in DNS. First try DNS SRV records,
@@ -13859,6 +13862,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				/*dnsmgr refresh disabled, no reference added! */
 				registry_unref(r, "remove reg ref, dnsmgr disabled");
 			}
+			ast_debug(3, "  --- Address set to %s port %d \n", ast_sockaddr_stringify_host(&r->us), ast_sockaddr_port(&r->us));
 		}
 		if (peer) {
 			peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
@@ -13924,7 +13928,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			p->socket.port =
 			    htons(ast_sockaddr_port(&sip_tcp_desc.local_address));
 		}
-		if (!r->dnsmgr && r->portno) {
+		if (!ast_sockaddr_port(&r->us) && !r->dnsmgr && r->portno) {
 			ast_sockaddr_set_port(&p->sa, r->portno);
 			ast_sockaddr_set_port(&p->recv, r->portno);
 			ast_debug(2, "Confusing code set port to %d\n", r->portno);
@@ -13949,6 +13953,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			r->regattempts++;
 			return 0;
 		}
+		ast_debug(3, "  --- 2. Address (p->sa) set to %s port %d \n", ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
 
 		/* Copy back Call-ID in case create_addr changed it */
 		ast_string_field_set(r, callid, p->callid);
@@ -13994,6 +13999,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		  internal network so we can register through nat
 		 */
 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
+		ast_debug(3, "  --- 3. Address (p->sa) set to %s port %d \n", ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
 		build_contact(p);
 	}
 
