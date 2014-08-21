@@ -13903,24 +13903,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 		p->socket.type = r->transport;
 
-		/* Use port number specified if no SRV record was found */
-		if (!ast_sockaddr_isnull(&r->us)) {
-			if (!ast_sockaddr_port(&r->us) && r->portno) {
-				ast_debug(3, "  --- Changing port to %d from %d \n", r->portno, ast_sockaddr_port(&r->us));
-				ast_sockaddr_set_port(&r->us, r->portno);
-			}
-
-			/* It is possible that DNS was unavailable at the time the peer was created.
-			 * Here, if we've updated the address in the registry via manually calling
-			 * ast_dnsmgr_lookup_cb() above, then we call the same function that dnsmgr would
-			 * call if it was updating a peer's address */
-			if ((peer = find_peer(S_OR(r->peername, r->hostname), NULL, TRUE, FINDPEERS, FALSE, 0))) {
-				if (ast_sockaddr_cmp(&peer->addr, &r->us)) {
-					on_dns_update_peer(&peer->addr, &r->us, peer);
-				}
-				peer = unref_peer(peer, "unref after find_peer");
-			}
-		}
 
 		/* Set transport and port so the correct contact is built */
 		set_socket_transport(&p->socket, r->transport);
@@ -13928,13 +13910,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			p->socket.port =
 			    htons(ast_sockaddr_port(&sip_tcp_desc.local_address));
 		}
-		if (!ast_sockaddr_port(&r->us) && !r->dnsmgr && r->portno) {
-			ast_sockaddr_set_port(&p->sa, r->portno);
-			ast_sockaddr_set_port(&p->recv, r->portno);
-			ast_debug(2, "Confusing code set port to %d\n", r->portno);
-		}
 
 		/* Find address to hostname */
+		ast_debug(3, "  --- Going to find address for %s\n", S_OR(r->peername, r->hostname));
 		if (create_addr(p, S_OR(r->peername, r->hostname), &r->us, 0)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
@@ -13953,7 +13931,32 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			r->regattempts++;
 			return 0;
 		}
+
+		if (!ast_sockaddr_port(&r->us) && !r->dnsmgr && r->portno) {
+			ast_sockaddr_set_port(&p->sa, r->portno);
+			ast_sockaddr_set_port(&p->recv, r->portno);
+			ast_debug(2, "Confusing code set port to %d\n", r->portno);
+		}
 		ast_debug(3, "  --- 2. Address (p->sa) set to %s port %d \n", ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
+
+		/* Use port number specified if no SRV record was found */
+		if (!ast_sockaddr_isnull(&r->us)) {
+			if (!ast_sockaddr_port(&r->us) && r->portno) {
+				ast_debug(3, "  --- Changing port to %d from %d \n", r->portno, ast_sockaddr_port(&r->us));
+				ast_sockaddr_set_port(&r->us, r->portno);
+			}
+
+			/* It is possible that DNS was unavailable at the time the peer was created.
+			 * Here, if we've updated the address in the registry via manually calling
+			 * ast_dnsmgr_lookup_cb() above, then we call the same function that dnsmgr would
+			 * call if it was updating a peer's address */
+			if ((peer = find_peer(S_OR(r->peername, r->hostname), NULL, TRUE, FINDPEERS, FALSE, 0))) {
+				if (ast_sockaddr_cmp(&peer->addr, &r->us)) {
+					on_dns_update_peer(&peer->addr, &r->us, peer);
+				}
+				peer = unref_peer(peer, "unref after find_peer");
+			}
+		}
 
 		/* Copy back Call-ID in case create_addr changed it */
 		ast_string_field_set(r, callid, p->callid);
