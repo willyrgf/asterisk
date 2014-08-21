@@ -5847,11 +5847,11 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 					ast_debug(3, "   ==> Trying SRV entry %d (prio %d weight %d): %s\n", rec, prio, weight, hostn);
 					/* XXX We need to try all IP addresses if there are multiple A / AAAA records*/
 					if (!ast_sockaddr_resolve_first_transport(&dialog->sa, hostn, 0, dialog->socket.type ? dialog->socket.type : SIP_TRANSPORT_UDP)) {
+						/* Make sure we set the port */
+						ast_sockaddr_set_port(&dialog->sa, port);
 						/* We found a host to try on */
 						break;
 					}
-					/* Make sure we set the port */
-					ast_sockaddr_set_port(&dialog->sa, port);
 		
 				}
 
@@ -13941,7 +13941,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			return 0;
 		}
 
-		if (!ast_sockaddr_port(&r->us) && !r->dnsmgr && r->portno) {
+		if (!ast_sockaddr_port(&p->sa) && !r->dnsmgr && r->portno) {
 			ast_sockaddr_set_port(&p->sa, r->portno);
 			ast_sockaddr_set_port(&p->recv, r->portno);
 			ast_debug(2, "Confusing code set port to %d\n", r->portno);
