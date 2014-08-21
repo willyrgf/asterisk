@@ -210,21 +210,17 @@ static int reload(void);
 #define mohclass_unref(class,string) _mohclass_unref(class, string, __FILE__,__LINE__,__PRETTY_FUNCTION__)
 static struct mohclass *_mohclass_unref(struct mohclass *class, const char *tag, const char *file, int line, const char *funcname)
 {
-	struct mohclass *dup;
-	if ((dup = ao2_find(mohclasses, class, OBJ_POINTER))) {
+	struct mohclass *dup = ao2_callback(mohclasses, OBJ_POINTER, ao2_match_by_addr, class);
+
+	if (dup) {
 		if (__ao2_ref_debug(dup, -1, (char *) tag, (char *) file, line, funcname) == 2) {
-			FILE *ref = fopen("/tmp/refs", "a");
-			if (ref) {
-				fprintf(ref, "%p =1   %s:%d:%s (%s) BAD ATTEMPT!\n", class, file, line, funcname, tag);
-				fclose(ref);
-			}
 			ast_log(LOG_WARNING, "Attempt to unref mohclass %p (%s) when only 1 ref remained, and class is still in a container! (at %s:%d (%s))\n",
 				class, class->name, file, line, funcname);
 		} else {
 			ao2_ref(class, -1);
 		}
 	} else {
-		ao2_t_ref(class, -1, (char *) tag);
+		__ao2_ref_debug(class, -1, (char *) tag, (char *) file, line, funcname);
 	}
 	return NULL;
 }
