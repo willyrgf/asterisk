@@ -13829,6 +13829,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	struct sip_peer *peer = NULL;
 	int res;
 	int portno = 0;
+	int dosrvlookup = FALSE;
 
 	/* exit if we are already in process with this registrar ?*/
 	if (r == NULL || ((auth == NULL) && (r->regstate == REG_STATE_REGSENT || r->regstate == REG_STATE_AUTHSENT))) {
@@ -13837,18 +13838,16 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		}
 		return 0;
 	}
+	if (!r->portconfigured && sip_cfg.srvlookup) {
+		dosrvlookup = TRUE;
+	}
 
 	if (r->dnsmgr == NULL) {
-		char transport[MAXHOSTNAMELEN];
+		//char transport[MAXHOSTNAMELEN];
 		peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0);
-		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
+		//snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
 		r->us.ss.ss_family = get_address_family_filter(r->transport); /* Filter address family */
 
-#ifdef DISABLE_DUAL_LOOKUP
-		/* OEJ: Disabling this lookup, since create_addr is better at using DNS SRV records for
-		   now. Remind me wy we do the SRV here instead of in the dialog, since we keep the dialog
-		   anyway.
-		*/
 		/* No point in doing a DNS lookup of the register hostname if we're just going to
 		 * end up using an outbound proxy. obproxy_get is safe to call with either of r->call
 		 * or peer NULL. Since we're only concerned with its existence, we're not going to
@@ -13856,8 +13855,11 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		if (!obproxy_get(r->call, peer)) {
 			/* Why are we doing this when create_addr is doing it for us? */
 			registry_addref(r, "add reg ref for dnsmgr");
-			/* If we have a configured port number, do not do SRV lookups */
-			ast_dnsmgr_lookup_cb(peer ? peer->tohost : r->hostname, &r->us, &r->dnsmgr, sip_cfg.srvlookup ? transport : NULL, on_dns_update_registry, r);
+			/* If we neeed SRV lookups, we hand that over to create_addr() below */
+			if (!dosrvlookup) {
+				/* Only activate DNSmgr for non-SRV lookups */
+				ast_dnsmgr_lookup_cb(peer ? peer->tohost : r->hostname, &r->us, &r->dnsmgr, NULL, on_dns_update_registry, r);
+			}
 			if (!r->dnsmgr) {
 				/*dnsmgr refresh disabled, no reference added! */
 				registry_unref(r, "remove reg ref, dnsmgr disabled");
@@ -13868,7 +13870,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
 		}
 	}
-#endif
 
 	if (r->call) {	/* We have a registration */
 		if (!auth) {
@@ -13913,7 +13914,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 		/* Find address to hostname */
 		ast_debug(3, "  --- Going to find address for %s\n", S_OR(r->peername, r->hostname));
-		if (create_addr(p, S_OR(r->peername, r->hostname), &r->us, 0)) {
+		if (create_addr(p, S_OR(r->peername, r->hostname), dosrvlookup ? NULL : &r->us, 0)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
 			dialog_unlink_all(p);
@@ -13956,6 +13957,10 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				}
 				peer = unref_peer(peer, "unref after find_peer");
 			}
+		} 
+		if (ast_sockaddr_isnull(&r->us)) {
+			/* We have no addres to send to */
+			ast_debug(3, "  --- Address (p->us) is null. Null. Null. \n");
 		}
 
 		/* Copy back Call-ID in case create_addr changed it */
