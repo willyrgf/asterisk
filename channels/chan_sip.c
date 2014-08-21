@@ -3763,6 +3763,7 @@ static int retrans_pkt(const void *data)
 	 * check in case the scheduler gets behind or the clock is changed. */
 	if ((diff <= 0) || (diff > pkt->retrans_stop_time)) {
 		pkt->retrans_stop = 1;
+		ast_debug(4, "--- Retransmission stops here and now. Time limit exceeded\n");
 	}
 
 	/* Lock channel PVT */
@@ -6079,6 +6080,11 @@ static void sip_registry_destroy(struct sip_registry *reg)
 {
 	/* Really delete */
 	ast_debug(3, "Destroying registry entry for %s@%s\n", reg->username, reg->hostname);
+
+	if (reg->srvcontext) {		/* Free the list of SRV entries used by this registration */
+		ast_srv_context_free_list(reg->srvcontext);
+		ast_free(reg->srvcontext);
+	}
 
 	if (reg->call) {
 		/* Clear registry before destroying to ensure
@@ -13776,6 +13782,7 @@ static int sip_reg_timeout(const void *data)
 	 * Otherwise destroy it, as we have a timeout so we don't want it.
 	 */
 	if (r->call) {
+		ast_debug(3, "  -- Removing dialog from registry entry %s\n", r->hostname);
 		/* Unlink us, destroy old call.  Locking is not relevant here because all this happens
 		   in the single SIP manager thread. */
 		p = r->call;
@@ -13783,6 +13790,9 @@ static int sip_reg_timeout(const void *data)
 		pvt_set_needdestroy(p, "registration timeout");
 		/* Pretend to ACK anything just in case */
 		__sip_pretend_ack(p);
+		/* Save away the DNS srv list so we don't forget where we are */
+		r->srvcontext = p->srvcontext;
+		p->srvcontext = NULL;
 		sip_pvt_unlock(p);
 
 		/* decouple the two objects */
@@ -13802,8 +13812,8 @@ static int sip_reg_timeout(const void *data)
 		r->regstate = REG_STATE_FAILED;
 	} else {
 		r->regstate = REG_STATE_UNREGISTERED;
-		transmit_register(r, SIP_REGISTER, NULL, NULL);
 		ast_log(LOG_NOTICE, "   -- Registration for '%s@%s' timed out, trying again (Attempt #%d)\n", r->username, r->hostname, r->regattempts);
+		transmit_register(r, SIP_REGISTER, NULL, NULL);
 	}
 	manager_event(EVENT_FLAG_SYSTEM, "Registry", "ChannelType: SIP\r\nUsername: %s\r\nDomain: %s\r\nStatus: %s\r\n", r->username, r->hostname, regstate2str(r->regstate));
 	registry_unref(r, "unreffing registry_unref r");
@@ -13898,6 +13908,31 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		if (!(p = sip_alloc( r->callid, NULL, 0, SIP_REGISTER, NULL))) {
 			ast_log(LOG_WARNING, "Unable to allocate registration transaction (memory or socket error)\n");
 			return 0;
+		}
+		if (r->srvcontext) {
+			char hostname[MAXHOSTNAMELEN];
+			const char *host = &hostname[0];
+			unsigned short port, prio, weight;
+
+			/* We have an existing SRV list from a previously failed attempt. Let's reuse that one */
+			/* This time we test the next SRV entry. */
+			if(ast_srv_get_next_record(p->srvcontext, &host, &port, &prio, &weight)) {
+				/* No more hosts to try. Let's give up and retry DNS again. */
+				ast_srv_context_free_list(r->srvcontext);
+				ast_free(r->srvcontext);
+				dialog_unlink_all(p);
+				p = dialog_unref(p, "unref dialog after unlink_all");
+				ast_debug(3, " ---> No more SRV entries to play with. Giving up on REGISTER\n");
+				return 0;
+			} else {
+				/* Let's try with another host */
+				ast_string_field_set(p, hostname, host);
+				dosrvlookup = FALSE;
+				ast_sockaddr_set_port(&p->sa, port);
+				ast_debug(3, "  ---> REGISTER SRV failover on domain %s to host %s port %d \n", r->hostname, host, port);
+			}
+			//p->srvcontext = r->srvcontext;
+			//r->srvcontext = NULL;
 		}
 
 		/* reset tag to consistent value from registry */
@@ -29160,7 +29195,7 @@ static struct sip_peer *build_peer(const char *name, struct ast_variable *v, str
 		if (!ast_strlen_zero(peer->srvdomain)) {
 			if (peer->srvcontext) {
 				ast_srv_context_free_list(peer->srvcontext);
-				free(peer->srvcontext);
+				ast_free(peer->srvcontext);
 			}
 			peer->srvcontext = ast_srv_context_new();
 			if (peer->srvcontext == NULL) {
