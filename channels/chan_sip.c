@@ -5753,8 +5753,9 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
 	peername2 = ast_strdupa(opeer);
 	AST_NONSTANDARD_RAW_ARGS(hostport, peername2, ':');
 
-	if (hostport.port)
-		dialog->portinuri = 1;
+	if (hostport.port) {
+		dialog->portinuri = TRUE;
+	}
 
 	dialog->timer_t1 = global_t1; /* Default SIP retransmission timer T1 (RFC 3261) */
 	dialog->timer_b = global_timer_b; /* Default SIP transaction timer B (RFC 3261) */
@@ -5804,7 +5805,7 @@ static int create_addr(struct sip_pvt *dialog, const char *opeer, struct ast_soc
  		/* Section 4.2 of RFC 3263 specifies that if a port number is specified, then
 		 * an A record lookup should be used instead of SRV.
 		 */
-		if (!hostport.port && sip_cfg.srvlookup) {
+		if (!dialog->portinuri && sip_cfg.srvlookup) {
 			if (dialog->srvcontext) {
 				ast_srv_context_free_list(dialog->srvcontext);
 			}
@@ -13840,12 +13841,19 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		snprintf(transport, sizeof(transport), "_%s._%s", get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
 		r->us.ss.ss_family = get_address_family_filter(r->transport); /* Filter address family */
 
+#ifdef DISABLE_DUAL_LOOKUP
+		/* OEJ: Disabling this lookup, since create_addr is better at using DNS SRV records for
+		   now. Remind me wy we do the SRV here instead of in the dialog, since we keep the dialog
+		   anyway.
+		*/
 		/* No point in doing a DNS lookup of the register hostname if we're just going to
 		 * end up using an outbound proxy. obproxy_get is safe to call with either of r->call
 		 * or peer NULL. Since we're only concerned with its existence, we're not going to
 		 * bother getting a ref to the proxy*/
 		if (!obproxy_get(r->call, peer)) {
+			/* Why are we doing this when create_addr is doing it for us? */
 			registry_addref(r, "add reg ref for dnsmgr");
+			/* If we have a configured port number, do not do SRV lookups */
 			ast_dnsmgr_lookup_cb(peer ? peer->tohost : r->hostname, &r->us, &r->dnsmgr, sip_cfg.srvlookup ? transport : NULL, on_dns_update_registry, r);
 			if (!r->dnsmgr) {
 				/*dnsmgr refresh disabled, no reference added! */
@@ -13856,6 +13864,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
 		}
 	}
+#endif
 
 	if (r->call) {	/* We have a registration */
 		if (!auth) {
@@ -13880,6 +13889,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 		/* reset tag to consistent value from registry */
 		ast_string_field_set(p, tag, r->localtag);
+
+		/* If we have a port configured, do not activate SRV record lookup for this host */
+		p->portinuri = r->portconfigured;
 
 		if (p->do_history) {
 			append_history(p, "RegistryInit", "Account: %s@%s", r->username, r->hostname);
@@ -13906,6 +13918,18 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			}
 		}
 
+		/* Set transport and port so the correct contact is built */
+		set_socket_transport(&p->socket, r->transport);
+		if (r->transport == SIP_TRANSPORT_TLS || r->transport == SIP_TRANSPORT_TCP) {
+			p->socket.port =
+			    htons(ast_sockaddr_port(&sip_tcp_desc.local_address));
+		}
+		if (!r->dnsmgr && r->portno) {
+			ast_sockaddr_set_port(&p->sa, r->portno);
+			ast_sockaddr_set_port(&p->recv, r->portno);
+			ast_debug(2, "Confusing code set port to %d\n", r->portno);
+		}
+
 		/* Find address to hostname */
 		if (create_addr(p, S_OR(r->peername, r->hostname), &r->us, 0)) {
 			/* we have what we hope is a temporary network error,
@@ -13929,11 +13953,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* Copy back Call-ID in case create_addr changed it */
 		ast_string_field_set(r, callid, p->callid);
 
-		if (!r->dnsmgr && r->portno) {
-			ast_sockaddr_set_port(&p->sa, r->portno);
-			ast_sockaddr_set_port(&p->recv, r->portno);
-			ast_debug(2, "Confusing code set port to %d\n", r->portno);
-		}
 		if (!ast_strlen_zero(p->fromdomain)) {
 			portno = (p->fromdomainport) ? p->fromdomainport : STANDARD_SIP_PORT;
 		} else if (!ast_strlen_zero(r->regdomain)) {
@@ -13968,12 +13987,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			ast_string_field_set(p, exten, r->callback);
 		}
 
-		/* Set transport and port so the correct contact is built */
-		set_socket_transport(&p->socket, r->transport);
-		if (r->transport == SIP_TRANSPORT_TLS || r->transport == SIP_TRANSPORT_TCP) {
-			p->socket.port =
-			    htons(ast_sockaddr_port(&sip_tcp_desc.local_address));
-		}
 
 		/*
 		  check which address we should use in our contact header
@@ -14065,11 +14078,11 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 	initialize_initreq(p, &req);
 	if (sip_debug_test_pvt(p)) {
-		ast_verbose("REGISTER %d headers, %d lines\n", p->initreq.headers, p->initreq.lines);
+		ast_verbose("SIP REGISTER %d headers, %d lines\n", p->initreq.headers, p->initreq.lines);
 	}
 	r->regstate = auth ? REG_STATE_AUTHSENT : REG_STATE_REGSENT;
 	r->regattempts++;	/* Another attempt */
-	ast_debug(4, "REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
+	ast_debug(4, "SIP REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
 	res = send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 	dialog_unref(p, "p is finished here at the end of transmit_register");
 	return res;

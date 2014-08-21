@@ -704,6 +704,7 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; to use a port here. That is, you must explicitly provide a "secret" and "authuser" even if
 ; they are blank. See the third example below for an illustration.
 ;
+; If a port number is specified for the host, no SRV lookup will be done. 
 ;
 ; Examples:
 ;

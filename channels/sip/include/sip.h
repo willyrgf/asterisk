@@ -1352,6 +1352,7 @@ struct sip_registry {
 	);
 	enum sip_transport transport;   /*!< Transport for this registration UDP, TCP or TLS */
 	int portno;                     /*!< Optional port override */
+	int portconfigured;		/*!< If port is configured, disable SRV lookups. */
 	int regdomainport;              /*!< Port override for domainport */
 	int expire;                     /*!< Sched ID of expiration */
 	int configured_expiry;          /*!< Configured value to use for the Expires header */

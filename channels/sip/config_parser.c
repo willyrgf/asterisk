@@ -244,11 +244,16 @@ int sip_parse_register_line(struct sip_registry *reg, int default_expiry, const 
 
 	/* if no portnum specified, set default for transport */
 	if (!portnum) {
+		reg->portconfigured = FALSE;
 		if (transport == SIP_TRANSPORT_TLS) {
 			portnum = STANDARD_TLS_PORT;
 		} else {
 			portnum = STANDARD_SIP_PORT;
 		}
+	} else {
+		/* If any port (including 5060/5061) was configured we should avoid
+		   doing SRV lookups - just like for SIP URI's */
+		reg->portconfigured = TRUE;
 	}
 
 	/* copy into sip_registry object */
