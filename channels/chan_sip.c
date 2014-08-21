@@ -4486,7 +4486,7 @@ static int send_request(struct sip_pvt *p, struct sip_request *req, enum xmittyp
 						break;
 					}
 					/* Make sure we set the port */
-					ast_sockaddr_set_port(&dialog->sa, port);
+					ast_sockaddr_set_port(&p->sa, port);
 					ast_debug(3, "====>> SRV failover. Changing to host %s port %d\n", hostname, port);
 					res = 0;		/* Fail over */
 				}
@@ -13852,12 +13852,13 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	/* exit if we are already in process with this registrar ?*/
 	if (r == NULL || ((auth == NULL) && (r->regstate == REG_STATE_REGSENT || r->regstate == REG_STATE_AUTHSENT))) {
 		if (r) {
-			ast_log(LOG_NOTICE, "Strange, trying to register %s@%s when registration already pending\n", r->username, r->hostname);
+			ast_log(LOG_NOTICE, "Strange, trying to register %s@%s when registration already pending\n", r->username, r->regdomain);
 		}
 		return 0;
 	}
 	if (!r->portconfigured && sip_cfg.srvlookup) {
 		dosrvlookup = TRUE;
+		r->srvattempts++;
 	}
 
 	if (r->dnsmgr == NULL) {
@@ -13882,7 +13883,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				/*dnsmgr refresh disabled, no reference added! */
 				registry_unref(r, "remove reg ref, dnsmgr disabled");
 			}
-			ast_debug(3, "  --- Address set to %s port %d \n", ast_sockaddr_stringify_host(&r->us), ast_sockaddr_port(&r->us));
+			ast_debug(3, "  --- Address for %s set to %s port %d \n", r->regdomain, ast_sockaddr_stringify_host(&r->us), ast_sockaddr_port(&r->us));
 		}
 		if (peer) {
 			peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
@@ -13891,7 +13892,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 	if (r->call) {	/* We have a registration */
 		if (!auth) {
-			ast_log(LOG_WARNING, "Already have a REGISTER going on to %s@%s?? \n", r->username, r->hostname);
+			ast_log(LOG_WARNING, "Already have a REGISTER going on to %s@%s for %s?? \n", r->username, r->hostname, r->regdomain);
 			return 0;
 		} else {
 			p = dialog_ref(r->call, "getting a copy of the r->call dialog in transmit_register");
@@ -13916,20 +13917,21 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 			/* We have an existing SRV list from a previously failed attempt. Let's reuse that one */
 			/* This time we test the next SRV entry. */
-			if(ast_srv_get_next_record(p->srvcontext, &host, &port, &prio, &weight)) {
+			if(ast_srv_get_next_record(r->srvcontext, &host, &port, &prio, &weight)) {
 				/* No more hosts to try. Let's give up and retry DNS again. */
 				ast_srv_context_free_list(r->srvcontext);
 				ast_free(r->srvcontext);
 				dialog_unlink_all(p);
 				p = dialog_unref(p, "unref dialog after unlink_all");
-				ast_debug(3, " ---> No more SRV entries to play with. Giving up on REGISTER\n");
+				ast_debug(3, " ---> No more SRV entries to play with. Giving up on REGISTER for %s after trying %d servers.\n", r->regdomain, r->srvattempts);
 				return 0;
 			} else {
 				/* Let's try with another host */
-				ast_string_field_set(p, hostname, host);
+				ast_string_field_set(r, hostname, host);
 				dosrvlookup = FALSE;
 				ast_sockaddr_set_port(&p->sa, port);
-				ast_debug(3, "  ---> REGISTER SRV failover on domain %s to host %s port %d \n", r->hostname, host, port);
+				r->srvattempts++;
+				ast_debug(3, "  ---> REGISTER SRV failover #%d on domain %s to host %s port %d \n", r->srvattempts, r->regdomain, host, port);
 			}
 			//p->srvcontext = r->srvcontext;
 			//r->srvcontext = NULL;
@@ -13951,12 +13953,11 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		/* Set transport and port so the correct contact is built */
 		set_socket_transport(&p->socket, r->transport);
 		if (r->transport == SIP_TRANSPORT_TLS || r->transport == SIP_TRANSPORT_TCP) {
-			p->socket.port =
-			    htons(ast_sockaddr_port(&sip_tcp_desc.local_address));
+			p->socket.port = htons(ast_sockaddr_port(&sip_tcp_desc.local_address));
 		}
 
 		/* Find address to hostname */
-		ast_debug(3, "  --- Going to find address for %s\n", S_OR(r->peername, r->hostname));
+		ast_debug(3, "  --- Going to find address for domain %s - host/peer %s\n", r->regdomain, S_OR(r->peername, r->hostname));
 		if (create_addr(p, S_OR(r->peername, r->hostname), dosrvlookup ? NULL : &r->us, 0)) {
 			/* we have what we hope is a temporary network error,
 			 * probably DNS.  We need to reschedule a registration try */
@@ -13970,7 +13971,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				ast_log(LOG_WARNING, "Still have a registration timeout for %s@%s (create_addr() error), %d\n", r->username, r->hostname, r->timeout);
 			} else {
 				r->timeout = ast_sched_add(sched, global_reg_timeout * 1000, sip_reg_timeout, registry_addref(r, "add for REPLACE registry ptr"));
-				ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@%s, trying REGISTER again (after %d seconds)\n", r->username, r->hostname, global_reg_timeout);
+				ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@% (host %s)s, trying REGISTER again (after %d seconds)\n", r->username, r->regdomain, r->hostname, global_reg_timeout);
 			}
 			r->regattempts++;
 			return 0;
@@ -14001,10 +14002,6 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				peer = unref_peer(peer, "unref after find_peer");
 			}
 		} 
-		if (ast_sockaddr_isnull(&r->us)) {
-			/* We have no addres to send to */
-			ast_debug(3, "  --- Address (p->us) is null. Null. Null. \n");
-		}
 
 		/* Copy back Call-ID in case create_addr changed it */
 		ast_string_field_set(r, callid, p->callid);
@@ -14050,7 +14047,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		  internal network so we can register through nat
 		 */
 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
-		ast_debug(3, "  --- 3. Address (p->sa) set to %s port %d \n", ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
+		ast_debug(3, "  --- 3. REGISTER DOMAIN %s Host %s - Address (p->sa) set to %s port %d \n", r->regdomain, r->hostname, ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
 		build_contact(p);
 	}
 
@@ -14125,7 +14122,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		if(!build_reply_digest(p, sipmethod, digest, sizeof(digest))) {
 			add_header(&req, "Authorization", digest);
 		} else {
-			ast_log(LOG_NOTICE, "No authorization available for authentication of registration to %s@%s\n", r->username, r->hostname);
+			ast_log(LOG_NOTICE, "No authorization available for authentication of registration to %s@%s\n", r->username, r->regdomain);
 		}
 	}
 
@@ -14139,7 +14136,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	}
 	r->regstate = auth ? REG_STATE_AUTHSENT : REG_STATE_REGSENT;
 	r->regattempts++;	/* Another attempt */
-	ast_debug(4, "SIP REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
+	ast_debug(4, "SIP REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->regdomain);
 	res = send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 	dialog_unref(p, "p is finished here at the end of transmit_register");
 	return res;

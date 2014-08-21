@@ -1358,6 +1358,7 @@ struct sip_registry {
 	int configured_expiry;          /*!< Configured value to use for the Expires header */
 	int expiry;             /*!< Negotiated value used for the Expires header */
 	int regattempts;        /*!< Number of attempts (since the last success) */
+	int srvattempts;	/*!< Number of hosts used */
 	int timeout;            /*!< sched id of sip_reg_timeout */
 	int refresh;            /*!< How often to refresh */
 	struct sip_pvt *call;   /*!< create a sip_pvt structure for each outbound "registration dialog" in progress */
