@@ -90,6 +90,10 @@ static pj_status_t ws_destroy(pjsip_transport *transport)
 
 	pjsip_endpt_release_pool(wstransport->transport.endpt, wstransport->transport.pool);
 
+	if (wstransport->rdata.tp_info.pool) {
+		pjsip_endpt_release_pool(wstransport->transport.endpt, wstransport->rdata.tp_info.pool);
+	}
+
 	return PJ_SUCCESS;
 }
 
@@ -162,6 +166,15 @@ static int transport_create(void *data)
 
 	pjsip_transport_register(newtransport->transport.tpmgr, (pjsip_transport *)newtransport);
 
+	newtransport->rdata.tp_info.transport = &newtransport->transport;
+	newtransport->rdata.tp_info.pool = pjsip_endpt_create_pool(endpt, "rtd%p",
+		PJSIP_POOL_RDATA_LEN, PJSIP_POOL_RDATA_INC);
+	if (!newtransport->rdata.tp_info.pool) {
+		ast_log(LOG_ERROR, "Failed to allocate WebSocket rdata.\n");
+		pjsip_endpt_release_pool(endpt, pool);
+		return -1;
+	}
+
 	create_data->transport = newtransport;
 	return 0;
 }
@@ -185,9 +198,6 @@ static int transport_read(void *data)
 	int recvd;
 	pj_str_t buf;
 
-	rdata->tp_info.pool = newtransport->transport.pool;
-	rdata->tp_info.transport = &newtransport->transport;
-
 	pj_gettimeofday(&rdata->pkt_info.timestamp);
 
 	pj_memcpy(rdata->pkt_info.packet, read_data->payload, sizeof(rdata->pkt_info.packet));
@@ -203,6 +213,8 @@ static int transport_read(void *data)
 	rdata->pkt_info.src_port = ast_sockaddr_port(ast_websocket_remote_address(session));
 
 	recvd = pjsip_tpmgr_receive_packet(rdata->tp_info.transport->tpmgr, rdata);
+
+	pj_pool_reset(rdata->tp_info.pool);
 
 	return (read_data->payload_len == recvd) ? 0 : -1;
 }
@@ -300,6 +312,8 @@ static void websocket_cb(struct ast_websocket *session, struct ast_variable *par
  */
 static pj_bool_t websocket_on_rx_msg(pjsip_rx_data *rdata)
 {
+	static const pj_str_t STR_WS = { "ws", 2 };
+	static const pj_str_t STR_WSS = { "wss", 3 };
 	pjsip_contact_hdr *contact;
 
 	long type = rdata->tp_info.transport->key.type;
@@ -314,6 +328,7 @@ static pj_bool_t websocket_on_rx_msg(pjsip_rx_data *rdata)
 
 		pj_cstr(&uri->host, rdata->pkt_info.src_name);
 		uri->port = rdata->pkt_info.src_port;
+		pj_strdup(rdata->tp_info.pool, &uri->transport_param, (type == (long)transport_type_ws) ? &STR_WS : &STR_WSS);
 	}
 
 	rdata->msg_info.via->rport_param = 0;
