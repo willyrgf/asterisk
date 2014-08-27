@@ -58,6 +58,7 @@
 #define DEFAULT_MWI_EXPIRY           3600
 #define DEFAULT_REGISTRATION_TIMEOUT 20
 #define DEFAULT_MAX_FORWARDS         70
+#define DEFAULT_REG_BEFORE_CALL	     FALSE
 
 #define DEFAULT_AUTHLIMIT            100
 #define DEFAULT_AUTHTIMEOUT          30
@@ -364,9 +365,10 @@
 
 #define SIP_PAGE3_SNOM_AOC               (1 << 0)  /*!< DPG: Allow snom aoc messages */
 #define SIP_PAGE3_DIRECT_MEDIA_OUTGOING  (1 << 1)  /*!< DP: Only send direct media reinvites on outgoing calls */
+#define SIP_PAGE3_REG_BEFORE_CALL  	(1 << 2)  /*!< PG: Only call peers we're registred with */
 
 #define SIP_PAGE3_FLAGS_TO_COPY \
-	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING)
+	(SIP_PAGE3_SNOM_AOC | SIP_PAGE3_DIRECT_MEDIA_OUTGOING | SIP_PAGE3_REG_BEFORE_CALL)
 
 /*@}*/
 
