@@ -13698,6 +13698,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 
 	if (r->dnsmgr == NULL) {
 		char transport[MAXHOSTNAMELEN];
+		ast_debug(2, "Looking for peer with hostname %s\n", r->hostname);
 		peer = find_peer(r->hostname, NULL, TRUE, FINDPEERS, FALSE, 0);
 		snprintf(transport, sizeof(transport), "_%s._%s",get_srv_service(r->transport), get_srv_protocol(r->transport)); /* have to use static get_transport function */
 		r->us.ss.ss_family = get_address_family_filter(r->transport); /* Filter address family */
@@ -13707,29 +13708,14 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		 * or peer NULL. Since we're only concerned with its existence, we're not going to
 		 * bother getting a ref to the proxy*/
 		/* If we need to register before call, we disregard the outbound proxy setting */
-		if (ast_test_flag(&peer->flags[2], SIP_PAGE3_REG_BEFORE_CALL) || !obproxy_get(r->call, peer)) {
+		if ((peer && ast_test_flag(&peer->flags[2], SIP_PAGE3_REG_BEFORE_CALL)) || !obproxy_get(r->call, peer)) {
 			registry_addref(r, "add reg ref for dnsmgr");
 			ast_dnsmgr_lookup_cb(peer ? peer->tohost : r->hostname, &r->us, &r->dnsmgr, sip_cfg.srvlookup ? transport : NULL, on_dns_update_registry, r);
 			if (!r->dnsmgr) {
 				/*dnsmgr refresh disabled, no reference added! */
 				registry_unref(r, "remove reg ref, dnsmgr disabled");
+				ast_debug(2, "   --> No DNS manager used \n");
 			}
-		}
-		if (ast_test_flag(&peer->flags[2], SIP_PAGE3_REG_BEFORE_CALL))  {
-			/* Make an outbound proxy config string */
-			snprintf(transport, sizeof(transport), "%s://%s:%d", get_srv_protocol(r->transport), ast_sockaddr_stringify_remote(&r->us), r->portno);
-			ast_debug(" ==> Setting outbound proxy based on reg for peer %s to %s\n", peer->name, transport);
-			/* We need to set the IP we register to  as the outbound proxy SKREP 	
-			*/
-			/* If there's a configured outbound proxy, just remove it */
-			if (peer->outboundproxy) {
-				ao2_ref(peer->outboundproxy, -1);
-			}
-
-			peer->outboundproxy = proxy_from_config(transport, 0, NULL);
-		}
-		if (peer) {
-			peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
 		}
 	}
 
@@ -13773,12 +13759,14 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 			 * Here, if we've updated the address in the registry via manually calling
 			 * ast_dnsmgr_lookup_cb() above, then we call the same function that dnsmgr would
 			 * call if it was updating a peer's address */
+#ifdef DISABLED_CODE
 			if ((peer = find_peer(S_OR(r->peername, r->hostname), NULL, TRUE, FINDPEERS, FALSE, 0))) {
 				if (ast_sockaddr_cmp(&peer->addr, &r->us)) {
 					on_dns_update_peer(&peer->addr, &r->us, peer);
 				}
 				peer = unref_peer(peer, "unref after find_peer");
 			}
+#endif
 		}
 
 		/* Find address to hostname */
@@ -13798,7 +13786,30 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 				ast_log(LOG_WARNING, "Probably a DNS error for registration to %s@%s, trying REGISTER again (after %d seconds)\n", r->username, r->hostname, global_reg_timeout);
 			}
 			r->regattempts++;
+			if (peer) {
+				peer = unref_peer(peer, "removing peer ref for dnsmgr_lookup");
+			}
 			return 0;
+		}
+		ast_debug(3, "  --- 2. Address (p->sa) set to %s port %d \n", ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
+		if (peer && ast_test_flag(&peer->flags[2], SIP_PAGE3_REG_BEFORE_CALL))  {
+			char regstring[512];
+			/* Make an outbound proxy config string */
+			snprintf(regstring, sizeof(regstring), "%s://%s", get_srv_protocol(r->transport), ast_sockaddr_stringify_remote(&p->sa));
+			ast_debug(2, " ==> Setting outbound proxy based on reg for peer %s to %s\n", peer->name, regstring);
+			/* We need to set the IP we register to  as the outbound proxy SKREP 	
+			*/
+			/* If there's a configured outbound proxy, just remove it */
+			if (peer->outboundproxy) {
+				ao2_ref(peer->outboundproxy, -1);
+			}
+
+			/* Add a new outbound proxy */
+			peer->outboundproxy = proxy_from_config(regstring, 0, NULL);
+		}
+		/* Time to delete our peer */
+		if (peer) {
+			peer = unref_peer(peer, "removing peer ref for transmit_register");
 		}
 
 		/* Copy back Call-ID in case create_addr changed it */
@@ -13944,6 +13955,7 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	r->regstate = auth ? REG_STATE_AUTHSENT : REG_STATE_REGSENT;
 	r->regattempts++;	/* Another attempt */
 	ast_debug(4, "REGISTER attempt %d to %s@%s\n", r->regattempts, r->username, r->hostname);
+	ast_debug(3, "  --- 3. Address (p->sa) set to %s port %d \n", ast_sockaddr_stringify_host(&p->sa), ast_sockaddr_port(&p->sa));
 	res = send_request(p, &req, XMIT_CRITICAL, p->ocseq);
 	dialog_unref(p, "p is finished here at the end of transmit_register");
 	return res;
