@@ -1103,7 +1103,7 @@ int astdb_init(void)
 	/* If you have multiple systems using the same database, set the systemname in asterisk.conf */
 	db_rt_sysname = S_OR(ast_config_AST_SYSTEM_NAME, "asterisk");
 	
-	pthread_t dont_care;
+	//pthread_t dont_care;
 
 	ast_cond_init(&dbcond, NULL);
 	if (ast_pthread_create_background(&syncthread, NULL, db_sync_thread, NULL)) {
