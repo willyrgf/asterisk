@@ -817,7 +817,7 @@ static void *do_notify(void *data)
 	}
 
 	ast_verb(3, "Dialing %s for notification on calendar %s\n", event->owner->notify_channel, event->owner->name);
-	res = ast_dial_run(dial, chan, 0);
+	res = ast_dial_run(dial, chan, 0, 0);
 
 	if (res != AST_DIAL_RESULT_ANSWERED) {
 		ast_verb(3, "Notification call for %s was not completed\n", event->owner->name);

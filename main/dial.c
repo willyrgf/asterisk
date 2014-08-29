@@ -905,7 +905,7 @@ static void *async_dial(void *data)
  * \note Dials channels in a dial structure.
  * \return Returns dial result code. (TRYING/INVALID/FAILED/ANSWERED/TIMEOUT/UNANSWERED).
  */
-enum ast_dial_result ast_dial_run(struct ast_dial *dial, struct ast_channel *chan, int async)
+enum ast_dial_result ast_dial_run(struct ast_dial *dial, struct ast_channel *chan, int async, int immediate)
 {
 	enum ast_dial_result res = AST_DIAL_RESULT_TRYING;
 
@@ -936,6 +936,9 @@ enum ast_dial_result ast_dial_run(struct ast_dial *dial, struct ast_channel *cha
 			ast_dial_hangup(dial);
 			res = AST_DIAL_RESULT_FAILED;
 		}
+	} else if (immediate) {
+		set_state(dial, AST_DIAL_RESULT_ANSWERED);
+		res = AST_DIAL_RESULT_ANSWERED;
 	} else {
 		res = monitor_dial(dial, chan);
 	}

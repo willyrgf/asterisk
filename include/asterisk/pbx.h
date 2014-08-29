@@ -1129,6 +1129,7 @@ int ast_async_goto_by_name(const char *chan, const char *context, const char *ex
  *        and reference bumped.
  * \param early_media If non-zero the channel "answers" when progress is indicated.
  * \param assignedids Optional. The uniqueid(s) to assign the channel(s) that are created.
+ * \param immediate Send the channel to the extension immediately without answering.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -1137,7 +1138,7 @@ int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, const c
 	int timeout, const char *context, const char *exten, int priority, int *reason,
 	int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars,
 	const char *account, struct ast_channel **locked_channel, int early_media,
-	const struct ast_assigned_ids *assignedids);
+	const struct ast_assigned_ids *assignedids, int immediate);
 
 /*!
  * \brief Synchronously or asynchronously make an outbound call and execute an
@@ -1164,6 +1165,7 @@ int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, const c
  *        is returned.  Otherwise it is set to NULL.  This is returned both locked
  *        and reference bumped.
  * \param assignedids Optional. The uniqueid(s) to assign the channel(s) that are created.
+ * \param immediate Send the channel to the application immediately without answering.
  *
  * \retval 0 on success
  * \retval -1 on failure
@@ -1172,7 +1174,7 @@ int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const cha
 	int timeout, const char *app, const char *appdata, int *reason, int synchronous,
 	const char *cid_num, const char *cid_name, struct ast_variable *vars,
 	const char *account, struct ast_channel **locked_channel,
-	const struct ast_assigned_ids *assignedids);
+	const struct ast_assigned_ids *assignedids, int immediate);
 
 /*!
  * \brief Evaluate a condition

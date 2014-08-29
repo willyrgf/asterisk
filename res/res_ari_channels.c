@@ -148,6 +148,10 @@ int ast_ari_channels_originate_parse_body(
 	if (field) {
 		args->other_channel_id = ast_json_string_get(field);
 	}
+	field = ast_json_object_get(body, "immediate");
+	if (field) {
+		args->immediate = ast_json_is_true(field);
+	}
 	return 0;
 }
 
@@ -201,6 +205,9 @@ static void ast_ari_channels_originate_cb(
 		} else
 		if (strcmp(i->name, "otherChannelId") == 0) {
 			args.other_channel_id = (i->value);
+		} else
+		if (strcmp(i->name, "immediate") == 0) {
+			args.immediate = ast_true(i->value);
 		} else
 		{}
 	}
@@ -354,6 +361,10 @@ int ast_ari_channels_originate_with_id_parse_body(
 	if (field) {
 		args->other_channel_id = ast_json_string_get(field);
 	}
+	field = ast_json_object_get(body, "immediate");
+	if (field) {
+		args->immediate = ast_json_is_true(field);
+	}
 	return 0;
 }
 
@@ -404,6 +415,9 @@ static void ast_ari_channels_originate_with_id_cb(
 		} else
 		if (strcmp(i->name, "otherChannelId") == 0) {
 			args.other_channel_id = (i->value);
+		} else
+		if (strcmp(i->name, "immediate") == 0) {
+			args.immediate = ast_true(i->value);
 		} else
 		{}
 	}

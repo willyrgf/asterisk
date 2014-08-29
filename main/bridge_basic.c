@@ -2407,7 +2407,7 @@ static int recalling_enter(struct attended_transfer_properties *props)
 	ao2_ref(props, +1);
 	ast_dial_set_user_data(props->dial, props);
 
-	if (ast_dial_run(props->dial, NULL, 1) == AST_DIAL_RESULT_FAILED) {
+	if (ast_dial_run(props->dial, NULL, 1, 0) == AST_DIAL_RESULT_FAILED) {
 		ao2_ref(props, -1);
 		return -1;
 	}

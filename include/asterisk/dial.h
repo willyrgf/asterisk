@@ -87,7 +87,7 @@ int ast_dial_prerun(struct ast_dial *dial, struct ast_channel *chan, struct ast_
  * \note Dials channels in a dial structure.
  * \return Returns dial result code. (TRYING/INVALID/FAILED/ANSWERED/TIMEOUT/UNANSWERED).
  */
-enum ast_dial_result ast_dial_run(struct ast_dial *dial, struct ast_channel *chan, int async);
+enum ast_dial_result ast_dial_run(struct ast_dial *dial, struct ast_channel *chan, int async, int immediate);
 
 /*! \brief Return channel that answered
  * \note Returns the Asterisk channel that answered

@@ -10186,6 +10186,8 @@ struct pbx_outgoing {
 	int priority;
 	/*! \brief Result of the dial operation when dialed is set */
 	int dial_res;
+	/*! \brief Whether to send the channel to the extension or application immediately */
+	int immediate;
 	/*! \brief Set when dialing is completed */
 	unsigned int dialed:1;
 	/*! \brief Set when execution is completed */
@@ -10213,7 +10215,7 @@ static void *pbx_outgoing_exec(void *data)
 	enum ast_dial_result res;
 
 	/* Notify anyone interested that dialing is complete */
-	res = ast_dial_run(outgoing->dial, NULL, 0);
+	res = ast_dial_run(outgoing->dial, NULL, 0, outgoing->immediate);
 	ao2_lock(outgoing);
 	outgoing->dial_res = res;
 	outgoing->dialed = 1;
@@ -10338,7 +10340,7 @@ static int pbx_outgoing_attempt(const char *type, struct ast_format_cap *cap,
 	const char *app, const char *appdata, int *reason, int synchronous,
 	const char *cid_num, const char *cid_name, struct ast_variable *vars,
 	const char *account, struct ast_channel **locked_channel, int early_media,
-	const struct ast_assigned_ids *assignedids)
+	const struct ast_assigned_ids *assignedids, int immediate)
 {
 	RAII_VAR(struct pbx_outgoing *, outgoing, NULL, ao2_cleanup);
 	struct ast_channel *dialed;
@@ -10443,6 +10445,8 @@ static int pbx_outgoing_attempt(const char *type, struct ast_format_cap *cap,
 		}
 	}
 
+	outgoing->immediate = immediate;
+
 	ao2_ref(outgoing, +1);
 	if (ast_pthread_create_detached(&thread, NULL, pbx_outgoing_exec, outgoing)) {
 		ast_log(LOG_WARNING, "Unable to spawn dialing thread for '%s/%s'\n", type, addr);
@@ -10499,7 +10503,7 @@ int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, const c
 	int timeout, const char *context, const char *exten, int priority, int *reason,
 	int synchronous, const char *cid_num, const char *cid_name, struct ast_variable *vars,
 	const char *account, struct ast_channel **locked_channel, int early_media,
-	const struct ast_assigned_ids *assignedids)
+	const struct ast_assigned_ids *assignedids, int immediate)
 {
 	int res;
 	int my_reason;
@@ -10514,7 +10518,7 @@ int ast_pbx_outgoing_exten(const char *type, struct ast_format_cap *cap, const c
 
 	res = pbx_outgoing_attempt(type, cap, addr, timeout, context, exten, priority,
 		NULL, NULL, reason, synchronous, cid_num, cid_name, vars, account, locked_channel,
-		early_media, assignedids);
+		early_media, assignedids, immediate);
 
 	if (res < 0 /* Call failed to get connected for some reason. */
 		&& 1 < synchronous
@@ -10553,7 +10557,7 @@ int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const cha
 	int timeout, const char *app, const char *appdata, int *reason, int synchronous,
 	const char *cid_num, const char *cid_name, struct ast_variable *vars,
 	const char *account, struct ast_channel **locked_channel,
-	const struct ast_assigned_ids *assignedids)
+	const struct ast_assigned_ids *assignedids, int immediate)
 {
 	if (reason) {
 		*reason = 0;
@@ -10567,7 +10571,7 @@ int ast_pbx_outgoing_app(const char *type, struct ast_format_cap *cap, const cha
 
 	return pbx_outgoing_attempt(type, cap, addr, timeout, NULL, NULL, 0, app, appdata,
 		reason, synchronous, cid_num, cid_name, vars, account, locked_channel, 0,
-		assignedids);
+		assignedids, immediate);
 }
 
 /* this is the guts of destroying a context --

@@ -377,7 +377,7 @@ static int page_exec(struct ast_channel *chan, const char *data)
 		ast_dial_set_user_data(dial, &options);
 
 		/* Run this dial in async mode */
-		ast_dial_run(dial, chan, 1);
+		ast_dial_run(dial, chan, 1, 0);
 
 		/* Put in our dialing array */
 		dial_list[pos++] = dial;

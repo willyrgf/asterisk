@@ -734,6 +734,7 @@ static void ari_channels_handle_originate_with_id(const char *args_endpoint,
 	struct ast_variable *variables,
 	const char *args_channel_id,
 	const char *args_other_channel_id,
+	int args_immediate,
 	struct ast_ari_response *response)
 {
 	char *dialtech;
@@ -814,13 +815,13 @@ static void ari_channels_handle_originate_with_id(const char *args_endpoint,
 		}
 
 		/* originate a channel, putting it into an application */
-		if (ast_pbx_outgoing_app(dialtech, cap, dialdevice, timeout, app, ast_str_buffer(appdata), NULL, 0, cid_num, cid_name, variables, NULL, &chan, &assignedids)) {
+		if (ast_pbx_outgoing_app(dialtech, cap, dialdevice, timeout, app, ast_str_buffer(appdata), NULL, 0, cid_num, cid_name, variables, NULL, &chan, &assignedids, args_immediate)) {
 			ast_ari_response_alloc_failed(response);
 			return;
 		}
 	} else if (!ast_strlen_zero(args_extension)) {
 		/* originate a channel, sending it to an extension */
-		if (ast_pbx_outgoing_exten(dialtech, cap, dialdevice, timeout, S_OR(args_context, "default"), args_extension, args_priority ? args_priority : 1, NULL, 0, cid_num, cid_name, variables, NULL, &chan, 0, &assignedids)) {
+		if (ast_pbx_outgoing_exten(dialtech, cap, dialdevice, timeout, S_OR(args_context, "default"), args_extension, args_priority ? args_priority : 1, NULL, 0, cid_num, cid_name, variables, NULL, &chan, 0, &assignedids, args_immediate)) {
 			ast_ari_response_alloc_failed(response);
 			return;
 		}
@@ -883,6 +884,7 @@ void ast_ari_channels_originate_with_id(struct ast_variable *headers,
 		variables,
 		args->channel_id,
 		args->other_channel_id,
+		args->immediate,
 		response);
 }
 
@@ -919,6 +921,7 @@ void ast_ari_channels_originate(struct ast_variable *headers,
 		variables,
 		args->channel_id,
 		args->other_channel_id,
+		args->immediate,
 		response);
 }
 
