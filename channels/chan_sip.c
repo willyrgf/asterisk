@@ -13881,11 +13881,12 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		ast_debug(1, "Scheduled a registration timeout for %s id  #%d \n", r->hostname, r->timeout);
 	}
 
-	snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, S_OR(r->regdomain, sip_sanitized_host(p->tohost)), p->tag);
+	/* If the peer has a fromdomain setting, it should be used. */
+	snprintf(from, sizeof(from), "<sip:%s@%s>;tag=%s", r->username, S_OR(p->fromdomain,S_OR(r->regdomain, sip_sanitized_host(p->tohost))), p->tag);
 	if (!ast_strlen_zero(p->theirtag)) {
-		snprintf(to, sizeof(to), "<sip:%s@%s>;tag=%s", r->username, S_OR(r->regdomain, sip_sanitized_host(p->tohost)), p->theirtag);
+		snprintf(to, sizeof(to), "<sip:%s@%s>;tag=%s", r->username, S_OR(p->fromdomain,S_OR(r->regdomain, sip_sanitized_host(p->tohost))), p->theirtag);
 	} else {
-		snprintf(to, sizeof(to), "<sip:%s@%s>", r->username, S_OR(r->regdomain, sip_sanitized_host(p->tohost)));
+		snprintf(to, sizeof(to), "<sip:%s@%s>", r->username, S_OR(p->fromdomain,S_OR(r->regdomain, sip_sanitized_host(p->tohost))));
 	}
 
 	/* Fromdomain is what we are registering to, regardless of actual
