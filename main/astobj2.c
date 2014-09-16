@@ -99,6 +99,46 @@ struct astobj2_rwlock {
 	void *user_data[0];
 };
 
+/*! \brief An item in a memory pool */
+struct ao2_memory_pool_item {
+	/*! Pointer to the next free item in the pool. When this item is removed
+	 * from the pool, this pointer will be NULL. */
+	struct ao2_memory_pool_item *next;
+	/*! Pointer/reference to the pool. When the item is removed, the reference
+	 * to the pool is bumped. When not requested, this pointer should not be
+	 * used. */
+	struct ao2_memory_pool *pool;
+#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
+	/*! Debug information populated when this object is requested */
+	struct {
+		const char *tag;
+		const char *file;
+		const char *func;
+		int line;
+	} debug;
+#endif
+	/*! The actual ao2 object, with lock */
+	struct astobj2_lock ao2_obj;
+};
+
+/*! \brief A pool of ao2 objects */
+struct ao2_memory_pool {
+	/*! Constructor function for each item in the pool */
+	ao2_constructor_fn constructor_fn;
+	/*! Size (number of items) in the pool */
+	size_t pool_size;
+	/*! Size of the user data in each item in the pool */
+	size_t obj_size;
+	/*! A memory pool to be used if this one is exhausted. */
+	struct ao2_memory_pool *reserve_pool;
+	/*! Pointer to the next free item in the pool */
+	struct ao2_memory_pool_item *first_free_item;
+	/*! Pointer to the last free item in the pool */
+	struct ao2_memory_pool_item *last_free_item;
+	/*! The actual items in the memory pool */
+	struct ao2_memory_pool_item *items[0];
+};
+
 #if defined(AST_DEVMODE)
 #define AO2_DEVMODE_STAT(stat)	stat
 #else
@@ -146,8 +186,29 @@ void ao2_bt(void)
 #define INTERNAL_OBJ_RWLOCK(user_data) \
 	((struct astobj2_rwlock *) (((char *) (user_data)) - sizeof(struct astobj2_rwlock)))
 
-#define INTERNAL_OBJ_MEMORY_POOL(user_data) \
-	(struct ao2_memory_pool_item *) (((char *) (user_data)) - sizeof(struct ao2_memory_pool_item))
+static inline struct ao2_memory_pool_item *INTERNAL_OBJ_MEMORY_POOL(void *user_data)
+{
+	struct ao2_memory_pool_item *p;
+
+	if (!user_data) {
+		ast_log(AST_LOG_ERROR, "user_data is NULL\n");
+		ast_do_crash();
+		return NULL;
+	}
+	p = (struct ao2_memory_pool_item *) (((char *) (user_data)) - sizeof(struct ao2_memory_pool_item));
+	if (AO2_MAGIC != p->ao2_obj.priv_data.magic) {
+		if (!p->ao2_obj.priv_data.magic) {
+			ast_log(AST_LOG_ERROR, "Bad magic number for object %p; object is likely destroyed\n", user_data);
+		} else {
+			ast_log(AST_LOG_ERROR, "Bad magic number 0x%x for object %p\n",
+				p->ao2_obj.priv_data.magic, user_data);
+		}
+		ast_do_crash();
+		return NULL;
+	}
+
+	return p;
+}	
 
 /*!
  * \brief convert from a pointer _p to a user-defined object
@@ -437,46 +498,6 @@ void *ao2_object_get_lockaddr(void *user_data)
 	return NULL;
 }
 
-/*! \brief An item in a memory pool */
-struct ao2_memory_pool_item {
-	/*! Pointer to the next free item in the pool. When this item is removed
-	 * from the pool, this pointer will be NULL. */
-	struct ao2_memory_pool_item *next;
-	/*! Pointer/reference to the pool. When the item is removed, the reference
-	 * to the pool is bumped. When not requested, this pointer should not be
-	 * used. */
-	struct ao2_memory_pool *pool;
-#if defined(REF_DEBUG) || defined(__AST_DEBUG_MALLOC)
-	/*! Debug information populated when this object is requested */
-	struct {
-		const char *tag;
-		const char *file;
-		const char *func;
-		int line;
-	} debug;
-#endif
-	/*! The actual ao2 object, with lock */
-	struct astobj2_lock ao2_obj;
-};
-
-/*! \brief A pool of ao2 objects */
-struct ao2_memory_pool {
-	/*! Constructor function for each item in the pool */
-	ao2_constructor_fn constructor_fn;
-	/*! Size (number of items) in the pool */
-	size_t pool_size;
-	/*! Size of the user data in each item in the pool */
-	size_t obj_size;
-	/*! A memory pool to be used if this one is exhausted. */
-	struct ao2_memory_pool *reserve_pool;
-	/*! Pointer to the next free item in the pool */
-	struct ao2_memory_pool_item *first_free_item;
-	/*! Pointer to the last free item in the pool */
-	struct ao2_memory_pool_item *last_free_item;
-	/*! The actual items in the memory pool */
-	struct ao2_memory_pool_item *items[0];
-};
-
 static int internal_ao2_ref(void *user_data, int delta, const char *file, int line, const char *func)
 {
 	struct astobj2 *obj = INTERNAL_OBJ(user_data);
@@ -721,8 +742,38 @@ void *__ao2_alloc(size_t data_size, ao2_destructor_fn destructor_fn, unsigned in
 }
 
 /*! \brief Compute where in a memory pool an item exists, based on its index */
-#define MEMORY_POOL_ITEM(pool, index) \
-	((struct ao2_memory_pool_item *)((char *)((pool)->items) + (index) * ((pool)->obj_size + sizeof(struct ao2_memory_pool_item))))
+static inline struct ao2_memory_pool_item *MEMORY_POOL_ITEM(struct ao2_memory_pool *pool, size_t index)
+{
+	struct ao2_memory_pool_item *item;
+
+	if (!pool) {
+		ast_log(AST_LOG_ERROR, "memory pool is NULL\n");
+		ast_do_crash();
+		return NULL;		
+	}
+	item = ((struct ao2_memory_pool_item *)((char *)((pool)->items) + (index) * ((pool)->obj_size + sizeof(struct ao2_memory_pool_item))));
+	if (!item) {
+		ast_log(AST_LOG_ERROR, "item in pool %p is NULL\n", pool);
+		ast_do_crash();
+		return NULL;
+	}
+	/* If pool is not yet set, we haven't been initialized. Pass on the magic
+	 * checks in that one case.
+	 */
+	if (item->pool && AO2_MAGIC != item->ao2_obj.priv_data.magic) {
+		if (!item->ao2_obj.priv_data.magic) {
+			ast_log(AST_LOG_ERROR, "Bad magic number for object %p in pool %p; object is likely destroyed\n", item, pool);
+		} else {
+			ast_log(AST_LOG_ERROR, "Bad magic number 0x%x for object %p in pool %p\n",
+				item->ao2_obj.priv_data.magic, item, pool);
+		}
+		ast_do_crash();
+		return NULL;
+	}
+
+	return item;
+}
+
 
 /*!
  * \brief Destructor for a memory pool
