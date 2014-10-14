@@ -1216,6 +1216,7 @@ static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *d
 	if (reserved) {
 		s = reserved;
 		ao2_ref(reserved, +1);
+		ao2_unlink(faxregistry.container, reserved);
 
 		/* NOTE: we don't consume the reference to the reserved
 		 * session. The session returned from fax_session_new() is a
@@ -1281,6 +1282,10 @@ static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *d
 			}
 			ast_debug(4, "Requesting a new FAX session from '%s'.\n", faxmod->tech->description);
 			ast_module_ref(faxmod->tech->module);
+			if (reserved) {
+				/* Balance module ref from reserved session */
+				ast_module_unref(reserved->tech->module);
+			}
 			s->tech = faxmod->tech;
 			break;
 		}
