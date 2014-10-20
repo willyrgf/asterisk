@@ -458,6 +458,28 @@ char *ast_escape_quoted(const char *string, char *outbuf, int buflen)
 	return outbuf;
 }
 
+void ast_unescape_quoted(char *quote_str)
+{
+	int esc_pos;
+	int unesc_pos;
+	int quote_str_len = strlen(quote_str);
+
+	for (esc_pos = 0, unesc_pos = 0;
+		esc_pos < quote_str_len;
+		esc_pos++, unesc_pos++) {
+		if (quote_str[esc_pos] == '\\') {
+			/* at least one more char and current is \\ */
+			esc_pos++;
+			if (esc_pos >= quote_str_len) {
+				break;
+			}
+		}
+
+		quote_str[unesc_pos] = quote_str[esc_pos];
+	}
+	quote_str[unesc_pos] = '\0';
+}
+
 /*! \brief  ast_uri_decode: Decode SIP URI, URN, URL (overwrite the string)  */
 void ast_uri_decode(char *s) 
 {
@@ -1384,11 +1406,18 @@ int ast_careful_fwrite(FILE *f, int fd, const char *src, size_t len, int timeout
 		}
 	}
 
+	errno = 0;
 	while (fflush(f)) {
 		if (errno == EAGAIN || errno == EINTR) {
+			/* fflush() does not appear to reset errno if it flushes
+			 * and reaches EOF at the same time. It returns EOF with
+			 * the last seen value of errno, causing a possible loop.
+			 * Also usleep() to reduce CPU eating if it does loop */
+			errno = 0;
+			usleep(1);
 			continue;
 		}
-		if (!feof(f)) {
+		if (errno && !feof(f)) {
 			/* Don't spam the logs if it was just that the connection is closed. */
 			ast_log(LOG_ERROR, "fflush() returned error: %s\n", strerror(errno));
 		}
@@ -1906,6 +1935,7 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 	size_t needed;
 	size_t available;
 	size_t space = (*pool_head)->size - (*pool_head)->used;
+	int res;
 	ssize_t grow;
 	char *target;
 
@@ -1924,10 +1954,19 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 		 * so we don't need to re-align anything here.
 		 */
 		target = (*pool_head)->base + (*pool_head)->used + ast_alignof(ast_string_field_allocation);
-		available = space - ast_alignof(ast_string_field_allocation);
+		if (space > ast_alignof(ast_string_field_allocation)) {
+			available = space - ast_alignof(ast_string_field_allocation);
+		} else {
+			available = 0;
+		}
 	}
 
-	needed = vsnprintf(target, available, format, ap1) + 1;
+	res = vsnprintf(target, available, format, ap1);
+	if (res < 0) {
+		/* Are we out of memory? */
+		return;
+	}
+	needed = (size_t)res + 1; /* NUL byte */
 
 	if (needed > available) {
 		/* the allocation could not be satisfied using the field's current allocation
@@ -1946,7 +1985,8 @@ void __ast_string_field_ptr_build_va(struct ast_string_field_mgr *mgr,
 		*/
 		__ast_string_field_release_active(*pool_head, *ptr);
 		mgr->last_alloc = *ptr = target;
-		AST_STRING_FIELD_ALLOCATION(target) = needed;
+	        ast_assert(needed < (ast_string_field_allocation)-1);
+		AST_STRING_FIELD_ALLOCATION(target) = (ast_string_field_allocation)needed;
 		(*pool_head)->used += ast_make_room_for(needed, ast_string_field_allocation);
 		(*pool_head)->active += needed;
 	} else if ((grow = (needed - AST_STRING_FIELD_ALLOCATION(*ptr))) > 0) {

@@ -190,7 +190,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
-			<parameter name="Channel" required="true">
+			<parameter name="Channel" required="false">
 				<para>The name of the channel to query for status.</para>
 			</parameter>
 			<parameter name="Variables">
@@ -204,7 +204,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 	</manager>
 	<manager name="Setvar" language="en_US">
 		<synopsis>
-			Set a channel variable.
+			Sets a channel variable or function value.
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
@@ -212,22 +212,23 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<para>Channel to set variable for.</para>
 			</parameter>
 			<parameter name="Variable" required="true">
-				<para>Variable name.</para>
+				<para>Variable name, function or expression.</para>
 			</parameter>
 			<parameter name="Value" required="true">
-				<para>Variable value.</para>
+				<para>Variable or function value.</para>
 			</parameter>
 		</syntax>
 		<description>
-			<para>Set a global or local channel variable.</para>
+			<para>This command can be used to set the value of channel variables or dialplan
+			functions.</para>
 			<note>
-				<para>If a channel name is not provided then the variable is global.</para>
+				<para>If a channel name is not provided then the variable is considered global.</para>
 			</note>
 		</description>
 	</manager>
 	<manager name="Getvar" language="en_US">
 		<synopsis>
-			Gets a channel variable.
+			Gets a channel variable or function value.
 		</synopsis>
 		<syntax>
 			<xi:include xpointer="xpointer(/docs/manager[@name='Login']/syntax/parameter[@name='ActionID'])" />
@@ -235,13 +236,13 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<para>Channel to read variable from.</para>
 			</parameter>
 			<parameter name="Variable" required="true">
-				<para>Variable name.</para>
+				<para>Variable name, function or expression.</para>
 			</parameter>
 		</syntax>
 		<description>
-			<para>Get the value of a global or local channel variable.</para>
+			<para>Get the value of a channel variable or function return.</para>
 			<note>
-				<para>If a channel name is not provided then the variable is global.</para>
+				<para>If a channel name is not provided then the variable is considered global.</para>
 			</note>
 		</description>
 	</manager>
@@ -1060,6 +1061,8 @@ static AST_RWLIST_HEAD_STATIC(actions, manager_action);
 static AST_RWLIST_HEAD_STATIC(manager_hooks, manager_custom_hook);
 
 static void free_channelvars(void);
+
+static int match_filter(struct mansession *s, char *eventdata);
 
 /*!
  * \internal
@@ -2744,7 +2747,11 @@ static enum error_type handle_updates(struct mansession *s, const struct message
 			if (ast_strlen_zero(match)) {
 				ast_category_append(cfg, category);
 			} else {
-				ast_category_insert(cfg, category, match);
+				if (ast_category_insert(cfg, category, match)) {
+					result = FAILURE_NEWCAT;
+					ast_category_destroy(category);
+					break;
+				}
 			}
 		} else if (!strcasecmp(action, "renamecat")) {
 			if (ast_strlen_zero(value)) {
@@ -3018,8 +3025,9 @@ static int action_waitevent(struct mansession *s, const struct message *m)
 		struct eventqent *eqe = s->session->last_ev;
 		astman_send_response(s, m, "Success", "Waiting for Event completed.");
 		while ((eqe = advance_event(eqe))) {
-			if (((s->session->readperm & eqe->category) == eqe->category) &&
-			    ((s->session->send_events & eqe->category) == eqe->category)) {
+			if (((s->session->readperm & eqe->category) == eqe->category)
+				&& ((s->session->send_events & eqe->category) == eqe->category)
+				&& match_filter(s, eqe->eventdata)) {
 				astman_append(s, "%s", eqe->eventdata);
 			}
 			s->session->last_ev = eqe;
@@ -3127,6 +3135,7 @@ static int action_login(struct mansession *s, const struct message *m)
 	}
 	astman_send_ack(s, m, "Authentication accepted");
 	if ((s->session->send_events & EVENT_FLAG_SYSTEM)
+		&& (s->session->readperm & EVENT_FLAG_SYSTEM)
 		&& ast_test_flag(&ast_options, AST_OPT_FLAG_FULLY_BOOTED)) {
 		struct ast_str *auth = ast_str_alloca(80);
 		const char *cat_str = authority_to_str(EVENT_FLAG_SYSTEM, &auth);

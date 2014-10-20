@@ -219,23 +219,30 @@ void *ao2_object_get_lockaddr(void *obj)
 int __ao2_ref_debug(void *user_data, const int delta, const char *tag, const char *file, int line, const char *funcname)
 {
 	struct astobj2 *obj = INTERNAL_OBJ(user_data);
+	int old_refcount = -1;
+
+	if (obj) {
+		old_refcount = internal_ao2_ref(user_data, delta);
+	}
 
 	if (ref_log && user_data) {
-		if (obj && obj->priv_data.ref_counter + delta == 0) {
-			fprintf(ref_log, "%p,%d,%d,%s,%d,%s,**destructor**,%s\n", user_data, delta, ast_get_tid(), file, line, funcname, tag);
+		if (!obj) {
+			/* Invalid object: Bad magic number. */
+			fprintf(ref_log, "%p,%d,%d,%s,%d,%s,**invalid**,%s\n",
+				user_data, delta, ast_get_tid(), file, line, funcname, tag);
+			fflush(ref_log);
+		} else if (old_refcount + delta == 0) {
+			fprintf(ref_log, "%p,%d,%d,%s,%d,%s,**destructor**,%s\n",
+				user_data, delta, ast_get_tid(), file, line, funcname, tag);
 			fflush(ref_log);
 		} else if (delta != 0) {
 			fprintf(ref_log, "%p,%s%d,%d,%s,%d,%s,%d,%s\n", user_data, (delta < 0 ? "" : "+"),
-				delta, ast_get_tid(), file, line, funcname, obj ? obj->priv_data.ref_counter : -1, tag);
+				delta, ast_get_tid(), file, line, funcname, old_refcount, tag);
 			fflush(ref_log);
 		}
 	}
 
-	if (obj == NULL) {
-		return -1;
-	}
-
-	return internal_ao2_ref(user_data, delta);
+	return old_refcount;
 }
 
 int __ao2_ref(void *user_data, const int delta)
@@ -616,7 +623,7 @@ static void *internal_ao2_callback(struct ao2_container *c,
 		 * is destroyed, the container will be automatically
 		 * destroyed as well.
 		 */
-		if (!(multi_container = __ao2_container_alloc(1, NULL, NULL))) {
+		if (!(multi_container = ao2_container_alloc(1, NULL, NULL))) {
 			return NULL;
 		}
 		if (!(multi_iterator = ast_calloc(1, sizeof(*multi_iterator)))) {

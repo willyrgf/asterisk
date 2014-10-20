@@ -727,24 +727,28 @@ void ast_category_append(struct ast_config *config, struct ast_category *categor
 	config->current = category;
 }
 
-void ast_category_insert(struct ast_config *config, struct ast_category *cat, const char *match)
+int ast_category_insert(struct ast_config *config, struct ast_category *cat, const char *match)
 {
 	struct ast_category *cur_category;
 
-	if (!cat || !match)
-		return;
+	if (!config || !cat || !match) {
+		return -1;
+	}
 	if (!strcasecmp(config->root->name, match)) {
 		cat->next = config->root;
 		config->root = cat;
-		return;
-	} 
-	for (cur_category = config->root; cur_category; cur_category = cur_category->next) {
+		return 0;
+	}
+	for (cur_category = config->root; cur_category && cur_category->next;
+		cur_category = cur_category->next) {
 		if (!strcasecmp(cur_category->next->name, match)) {
 			cat->next = cur_category->next;
 			cur_category->next = cat;
-			break;
+			return 0;
 		}
 	}
+
+	return -1;
 }
 
 static void ast_destroy_template_list(struct ast_category *cat)
@@ -1859,21 +1863,27 @@ static void inclfile_destroy(void *obj)
 	ast_free(o->fname);
 }
 
+static void make_fn(char *fn, size_t fn_size, const char *file, const char *configfile)
+{
+	if (ast_strlen_zero(file)) {
+		if (configfile[0] == '/') {
+			ast_copy_string(fn, configfile, fn_size);
+		} else {
+			snprintf(fn, fn_size, "%s/%s", ast_config_AST_CONFIG_DIR, configfile);
+		}
+	} else if (file[0] == '/') {
+		ast_copy_string(fn, file, fn_size);
+	} else {
+		snprintf(fn, fn_size, "%s/%s", ast_config_AST_CONFIG_DIR, file);
+	}
+}
 
-static struct inclfile *set_fn(char *fn, int fn_size, const char *file, const char *configfile, struct ao2_container *fileset)
+static struct inclfile *set_fn(char *fn, size_t fn_size, const char *file, const char *configfile, struct ao2_container *fileset)
 {
 	struct inclfile lookup;
 	struct inclfile *fi;
 
-	if (ast_strlen_zero(file)) {
-		if (configfile[0] == '/')
-			ast_copy_string(fn, configfile, fn_size);
-		else
-			snprintf(fn, fn_size, "%s/%s", ast_config_AST_CONFIG_DIR, configfile);
-	} else if (file[0] == '/')
-		ast_copy_string(fn, file, fn_size);
-	else
-		snprintf(fn, fn_size, "%s/%s", ast_config_AST_CONFIG_DIR, file);
+	make_fn(fn, fn_size, file, configfile);
 	lookup.fname = fn;
 	fi = ao2_find(fileset, &lookup, OBJ_POINTER);
 	if (fi) {
@@ -1982,10 +1992,28 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 		return -1;
 	}
 
-	/* reset all the output flags, in case this isn't our first time saving this data */
+	/* Check all the files for write access before attempting to modify any of them */
 	for (incl = cfg->includes; incl; incl = incl->next) {
+		/* reset all the output flags in case this isn't our first time saving this data */
 		incl->output = 0;
+		/* now make sure we have write access */
+		if (!incl->exec) {
+			make_fn(fn, sizeof(fn), incl->included_file, configfile);
+			if (access(fn, R_OK | W_OK)) {
+				ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
+				return -1;
+			}
+		}
 	}
+
+	/* now make sure we have write access to the main config file */
+	make_fn(fn, sizeof(fn), 0, configfile);
+	if (access(fn, R_OK | W_OK)) {
+		ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
+		return -1;
+	}
+
+	/* Now that we know we have write access to all files, it's safe to start truncating them */
 
 	/* go thru all the inclusions and make sure all the files involved (configfile plus all its inclusions)
 	   are all truncated to zero bytes and have that nice header*/
@@ -1998,8 +2026,7 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 				gen_header(f, configfile, fn, generator);
 				fclose(f); /* this should zero out the file */
 			} else {
-				ast_debug(1, "Unable to open for writing: %s\n", fn);
-				ast_verb(2, "Unable to write %s (%s)", fn, strerror(errno));
+				ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
 			}
 			if (fi) {
 				ao2_ref(fi, -1);
@@ -2032,8 +2059,7 @@ int ast_config_text_file_save(const char *configfile, const struct ast_config *c
 			fi = set_fn(fn, sizeof(fn), cat->file, configfile, fileset);
 			f = fopen(fn, "a");
 			if (!f) {
-				ast_debug(1, "Unable to open for writing: %s\n", fn);
-				ast_verb(2, "Unable to write %s (%s)", fn, strerror(errno));
+				ast_log(LOG_ERROR, "Unable to write %s (%s)\n", fn, strerror(errno));
 				if (fi) {
 					ao2_ref(fi, -1);
 				}

@@ -467,7 +467,7 @@ static int update_modem_bits(enum ast_fax_modems *bits, const char *value)
 		m[i] = NULL;
 	} else {
 		tok = strtok(v, ", ");
-		while (tok && (i < 5)) {
+		while (tok && i < ARRAY_LEN(m) - 1) {
 			m[i++] = tok;
 			tok = strtok(NULL, ", ");
 		}
@@ -873,6 +873,10 @@ static struct ast_fax_session *fax_session_new(struct ast_fax_session_details *d
 			}
 			ast_debug(4, "Requesting a new FAX session from '%s'.\n", faxmod->tech->description);
 			ast_module_ref(faxmod->tech->module);
+			if (reserved) {
+				/* Balance module ref from reserved session */
+				ast_module_unref(reserved->tech->module);
+			}
 			s->tech = faxmod->tech;
 			break;
 		}
