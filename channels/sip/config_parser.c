@@ -250,6 +250,10 @@ int sip_parse_register_line(struct sip_registry *reg, int default_expiry, const 
 			portnum = STANDARD_SIP_PORT;
 		}
 	}
+	reg->bnc = FALSE;
+	if (!strncasecmp(host2.extension, "-bnc-", 5)) {
+		reg->bnc = TRUE;
+	}
 
 	/* copy into sip_registry object */
 	ast_string_field_set(reg, callback, ast_strip_quoted(S_OR(host2.extension, "s"), "\"", "\""));

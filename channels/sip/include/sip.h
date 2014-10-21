@@ -1326,6 +1326,7 @@ struct sip_registry {
 	int regattempts;        /*!< Number of attempts (since the last success) */
 	int timeout;            /*!< sched id of sip_reg_timeout */
 	int refresh;            /*!< How often to refresh */
+	int bnc;		/*!< Bulk number contact (RFC 6140) */
 	struct sip_pvt *call;   /*!< create a sip_pvt structure for each outbound "registration dialog" in progress */
 	enum sipregistrystate regstate; /*!< Registration state (see above) */
 	struct timeval regtime;         /*!< Last successful registration time */

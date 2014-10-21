@@ -1532,6 +1532,7 @@ static int copy_via_headers(struct sip_pvt *p, struct sip_request *req, const st
 static void set_destination(struct sip_pvt *p, char *uri);
 static void append_date(struct sip_request *req);
 static void build_contact(struct sip_pvt *p);
+static void build_contact_param(struct sip_pvt *p, const char *param);
 
 /*------Request handling functions */
 static int handle_incoming(struct sip_pvt *p, struct sip_request *req, struct ast_sockaddr *addr, int *recount, int *nounlock);
@@ -12328,16 +12329,33 @@ static void extract_uri(struct sip_pvt *p, struct sip_request *req)
 /*! \brief Build contact header - the contact header we send out */
 static void build_contact(struct sip_pvt *p)
 {
+	build_contact_param(p, NULL);
+}
+
+/*! \brief Build contact header and add contact URI parameter.
+	URI parameter needs to start with ";" and be separated by ";"'s */
+static void build_contact_param(struct sip_pvt *p, const char *param)
+{
 	char tmp[SIPBUFSIZE];
+	char params[SIPBUFSIZE];
 	char *user = ast_uri_encode(p->exten, tmp, sizeof(tmp), 0);
 
-	if (p->socket.type == SIP_TRANSPORT_UDP) {
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s>", user,
-			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip));
+	params[0] = '\0';
+	if(ast_strlen_zero(param)) {
+		if (p->socket.type != SIP_TRANSPORT_UDP) {
+			snprintf(params, sizeof(params), ";transport=%s", get_transport(p->socket.type));
+		}
 	} else {
-		ast_string_field_build(p, our_contact, "<sip:%s%s%s;transport=%s>", user,
+		if (p->socket.type != SIP_TRANSPORT_UDP) {
+			snprintf(params, sizeof(params), ";transport=%s%s", get_transport(p->socket.type), param);
+		} else {
+			snprintf(params, sizeof(params), ";%s", param);
+		}
+	}
+
+	ast_string_field_build(p, our_contact, "<sip:%s%s%s%s>", user,
 			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip),
-			get_transport(p->socket.type));
+			params);
 	}
 }
 
@@ -13830,7 +13848,9 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		}
 		/* Save extension in packet */
 		if (!ast_strlen_zero(r->callback)) {
-			ast_string_field_set(p, exten, r->callback);
+			if (!r->bnc) {
+				ast_string_field_set(p, exten, r->callback);
+			}
 		}
 
 		/* Set transport and port so the correct contact is built */
@@ -13846,7 +13866,11 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 		  internal network so we can register through nat
 		 */
 		ast_sip_ouraddrfor(&p->sa, &p->ourip, p);
-		build_contact(p);
+		if (r->bnc) {
+			build_contact_param(p, ";bnc");
+		} else {
+			build_contact(p);
+		}
 	}
 
 	/* set up a timeout */
@@ -13927,6 +13951,13 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	snprintf(tmp, sizeof(tmp), "%d", r->expiry);
 	add_header(&req, "Expires", tmp);
 	add_header(&req, "Contact", p->our_contact);
+
+	if (r->bnc) {
+		/* RFC 6140 headers required */
+		add_header(&req, "Supported", "path");
+		add_header(&req, "Require", "gin");
+		add_header(&req, "Proxy-Require", "gin");
+	}
 
 	initialize_initreq(p, &req);
 	if (sip_debug_test_pvt(p)) {
