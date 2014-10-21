@@ -12349,14 +12349,13 @@ static void build_contact_param(struct sip_pvt *p, const char *param)
 		if (p->socket.type != SIP_TRANSPORT_UDP) {
 			snprintf(params, sizeof(params), ";transport=%s%s", get_transport(p->socket.type), param);
 		} else {
-			snprintf(params, sizeof(params), ";%s", param);
+			snprintf(params, sizeof(params), "%s", param);
 		}
 	}
 
 	ast_string_field_build(p, our_contact, "<sip:%s%s%s%s>", user,
 			ast_strlen_zero(user) ? "" : "@", ast_sockaddr_stringify_remote(&p->ourip),
 			params);
-	}
 }
 
 /*! \brief Initiate new SIP request to peer/user */
@@ -13917,6 +13916,8 @@ static int transmit_register(struct sip_registry *r, int sipmethod, const char *
 	add_header(&req, "To", to);
 	add_header(&req, "Call-ID", p->callid);
 	add_header(&req, "CSeq", tmp);
+	add_header(&req, "Allow", ALLOWED_METHODS);
+
 	if (!ast_strlen_zero(global_useragent))
 		add_header(&req, "User-Agent", global_useragent);
 

@@ -693,6 +693,12 @@ srvlookup=yes                   ; Enable DNS SRV lookups on outbound calls
 ; and more readable because you don't have to write the parameters in two places
 ; (note that the "port" is ignored - this is a bug that should be fixed).
 ;
+; If you use the extension "-bnc-" Asterisk will activate RFC 6140 Bulk Number Contact
+; support used in SIP Connect trunks. Asterisk will register without a username part
+; in the Contact: header and calls will be addressed to the DID you have with the
+; server. Your dialplan needs to support these numbers. This is a SIP extension
+; that has to be supported by the server for it to work.
+;
 ; Note that a register= line doesn't mean that we will match the incoming call in any
 ; other way than described above. If you want to control where the call enters your
 ; dialplan, which context, you want to define a peer with the hostname of the provider's
