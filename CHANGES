@@ -14,6 +14,8 @@
 
 chan_sip
 -----------
+ * Added the -bnc- extension in register= statements in sip.conf to
+   enable bulk number contacts - RFC 6140
  * SIP peers can now specify 'trust_id_outbound' which affects RPID/PAI
    fields for prohibited callingpres information. Values are legacy, no, and
    yes. By default, legacy is used.

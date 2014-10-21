@@ -25,13 +25,13 @@ register => matt.jordan:jordan.matt@siptrunkprovider.example.net/-bnc-
 
 Implementation:
 ---------------
-Still under discussion. Code will come
+Registration works. Tested with one SIPConnect-compliant service provider at least.
 
 Previous work:
 --------------
 * https://reviewboard.asterisk.org/r/1515/
 
 This work included a lot of things, including SIP bnc registration. It was contributed
-to the Asterisk project and some code from that patch *may* be included here.
+to the Asterisk project and no code from that patch was included here.
 
 
