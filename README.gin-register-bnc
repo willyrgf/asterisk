@@ -1,0 +1,37 @@
+Edvina AB
+Olle E. Johansson
+
+2014-10-21
+
+
+
+
+
+
+GIN - Bulk Number Contact support (client-side)
+===============================================
+
+This branch will try to implement the GIN standard (RFC 6140) for outbound registrations,
+not server side. GIN is part of SIP Connect.
+
+Architecture:
+-------------
+- Asterisk will have to send a register without a username in the contact header. 
+- Invites will come with phone numbers in the R-Uri, which is fine for Asterisk.
+- The register line will have a magic keyword "-bnc-" for registred extension 
+  to activate this feature
+
+register => matt.jordan:jordan.matt@siptrunkprovider.example.net/-bnc-
+
+Implementation:
+---------------
+Still under discussion. Code will come
+
+Previous work:
+--------------
+* https://reviewboard.asterisk.org/r/1515/
+
+This work included a lot of things, including SIP bnc registration. It was contributed
+to the Asterisk project and some code from that patch *may* be included here.
+
+
