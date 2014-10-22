@@ -69,6 +69,11 @@ int ast_tts_register(struct ast_tts_engine *engine)
 {
 	int res = 0;
 
+	if (!engine->speak) {
+		ast_log(LOG_WARNING, "TTS engine '%s' did not meet minimum API requirements.\n", engine->name);
+		return -1;
+	}
+
 	/* If an engine is already loaded with this name, error out */
 	if (find_engine(engine->name)) {
 		ast_log(LOG_WARNING, "TTS engine '%s' already exists.\n", engine->name);

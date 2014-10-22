@@ -30,6 +30,12 @@ extern "C" {
 struct ast_tts_engine {
 	/*! Name of TTS engine */
 	char *name;
+	/*! Render the specified text to the specified channel */
+	int (*speak)(const struct ast_channel *channel, const char *text);
+	/*! Change an engine specific setting */
+	int (*setting_write)(const char *name, const char *value);
+	/*! Get an engine specific setting */
+        int (*setting_read)(const char *name, char *buf, size_t len);
 	AST_LIST_ENTRY(ast_tts_engine) list;
 };
 

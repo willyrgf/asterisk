@@ -109,7 +109,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 			and ${SPEECH_SCORE(1)}.</para>
 			<para>The first argument is the sound file and the second is the timeout integer in seconds.</para>
 			<para>Hangs up the channel on failure. If this is not desired, use TryExec.</para>
-			
 		</description>
 	</application>
 	<application name="SpeechDeactivateGrammar" language="en_US">
@@ -174,6 +173,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$");
 		<description>
 			<para>Unload a grammar.</para>
 			<para>Hangs up the channel on failure. If this is not desired, use TryExec.</para>
+		</description>
+	</application>
+	<application name="SpeechSay" language="en_US">
+		<synopsis>
+			Say something.
+		</synopsis>
+		<syntax>
+			<parameter name="engine" required="false" />
+			<parameter name="text" required="true" />
+		</syntax>
+		<description>
+			<para>Takes some text, turns it into speech.</para>
 		</description>
 	</application>
 	<function name="SPEECH_SCORE" language="en_US">
@@ -955,10 +966,16 @@ static int speech_destroy(struct ast_channel *chan, const char *data)
 	return speech_datastore_destroy(chan);
 }
 
+static int speech_say(struct ast_channel *chan, const char *data)
+{
+	return 0;
+}
+
 static int unload_module(void)
 {
 	int res = 0;
 
+	/* Speech Recognition */
 	res = ast_unregister_application("SpeechCreate");
 	res |= ast_unregister_application("SpeechLoadGrammar");
 	res |= ast_unregister_application("SpeechUnloadGrammar");
@@ -975,13 +992,17 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&speech_engine_function);
 	res |= ast_custom_function_unregister(&speech_results_type_function);
 
-	return res;	
+	/* Text-To-Speech */
+	res |= ast_unregister_application("SpeechSay");
+
+	return res;
 }
 
 static int load_module(void)
 {
 	int res = 0;
 
+	/* Speech Recognition */
 	res = ast_register_application_xml("SpeechCreate", speech_create);
 	res |= ast_register_application_xml("SpeechLoadGrammar", speech_load);
 	res |= ast_register_application_xml("SpeechUnloadGrammar", speech_unload);
@@ -997,6 +1018,9 @@ static int load_module(void)
 	res |= ast_custom_function_register(&speech_grammar_function);
 	res |= ast_custom_function_register(&speech_engine_function);
 	res |= ast_custom_function_register(&speech_results_type_function);
+
+	/* Text-To-Speech */
+	res |= ast_register_application_xml("SpeechSay", speech_say);
 
 	return res;
 }
