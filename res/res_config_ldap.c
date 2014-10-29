@@ -41,6 +41,7 @@
  */
 
 /*** MODULEINFO
+	<provides>realtime</provides>
 	<depend>ldap</depend>
 	<support_level>extended</support_level>
  ***/

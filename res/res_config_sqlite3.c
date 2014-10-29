@@ -39,6 +39,7 @@
  */
 
 /*** MODULEINFO
+	<provides>realtime</provides>
 	<depend>sqlite3</depend>
 	<support_level>core</support_level>
  ***/

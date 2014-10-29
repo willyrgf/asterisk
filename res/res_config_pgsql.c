@@ -23,6 +23,7 @@
  */
 
 /*** MODULEINFO
+	<provides>realtime</provides>
 	<depend>pgsql</depend>
 	<support_level>extended</support_level>
  ***/

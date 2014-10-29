@@ -24,6 +24,7 @@
  */
 
 /*** MODULEINFO
+	<provides>timing</provides>
 	<depend>dahdi</depend>
 	<support_level>core</support_level>
  ***/

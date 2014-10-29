@@ -27,6 +27,7 @@
  */
 
 /*** MODULEINFO
+	<provides>realtime</provides>
 	<depend>curl</depend>
 	<support_level>core</support_level>
  ***/

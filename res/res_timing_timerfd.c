@@ -24,6 +24,7 @@
  */
 
 /*** MODULEINFO
+	<provides>timing</provides>
 	<depend>timerfd</depend>
 	<support_level>core</support_level>
  ***/

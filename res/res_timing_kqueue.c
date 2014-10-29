@@ -26,6 +26,7 @@
  */
 
 /*** MODULEINFO
+	<provides>timing</provides>
 	<depend>kqueue</depend>
 	<conflict>launchd</conflict>
 	<support_level>extended</support_level>

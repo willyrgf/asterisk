@@ -29,6 +29,7 @@
  */
 
 /*** MODULEINFO
+	<provides>realtime</provides>
 	<depend>res_odbc</depend>
 	<support_level>core</support_level>
  ***/

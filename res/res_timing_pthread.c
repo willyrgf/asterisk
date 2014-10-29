@@ -24,6 +24,7 @@
  */
 
 /*** MODULEINFO
+	<provides>timing</provides>
 	<support_level>extended</support_level>
  ***/
 

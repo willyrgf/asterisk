@@ -81,6 +81,7 @@
  */
 
 /*** MODULEINFO
+	<provides>realtime</provides>
 	<depend>sqlite</depend>
 	<support_level>extended</support_level>
  ***/

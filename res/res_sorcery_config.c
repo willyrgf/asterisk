@@ -25,6 +25,7 @@
  */
 
 /*** MODULEINFO
+	<provides>sorcery</provides>
 	<support_level>core</support_level>
  ***/
 
