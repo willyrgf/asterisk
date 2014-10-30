@@ -21077,6 +21077,8 @@ static void handle_response_invite(struct sip_pvt *p, int resp, const char *rest
 		}
 		break;
 
+	case 414: /* Bad request URI */
+	case 493: /* Undecipherable */
 	case 404: /* Not found */
 		xmitres = transmit_request(p, SIP_ACK, seqno, XMIT_UNRELIABLE, FALSE);
 		if (p->owner && !req->ignore) {
@@ -21299,12 +21301,16 @@ static void handle_response_subscribe(struct sip_pvt *p, int resp, const char *r
 		ASTOBJ_UNREF(p->mwi, sip_subscribe_mwi_destroy);
 		pvt_set_needdestroy(p, "received 481 response");
 		break;
+
+	case 400: /* Bad Request */
+	case 414: /* Request URI too long */
+	case 493: /* Undecipherable */
 	case 500:
 	case 501:
 		ast_log(LOG_WARNING, "Subscription failed for MWI. The remote side may have suffered a heart attack.\n");
 		p->mwi->call = NULL;
 		ASTOBJ_UNREF(p->mwi, sip_subscribe_mwi_destroy);
-		pvt_set_needdestroy(p, "received 500/501 response");
+		pvt_set_needdestroy(p, "received serious error (500/501/493/414/400) response");
 		break;
 	}
 }
@@ -21478,11 +21484,14 @@ static int handle_response_register(struct sip_pvt *p, int resp, const char *res
 		}
 		manager_event(EVENT_FLAG_SYSTEM, "Registry", "ChannelType: SIP\r\nUsername: %s\r\nDomain: %s\r\nStatus: %s\r\n", r->username, r->hostname, regstate2str(r->regstate));
 		break;
-	case 479:	/* SER: Not able to process the URI - address is wrong in register*/
-		ast_log(LOG_WARNING, "Got error 479 on register to %s@%s, giving up (check config)\n", p->registry->username, p->registry->hostname);
-		pvt_set_needdestroy(p, "received 479 response");
+	case 400:	/* Bad request */
+	case 414:	/* Request URI too long */
+	case 493:	/* Undecipherable */
+	case 479:	/* Kamailio/OpenSIPS: Not able to process the URI - address is wrong in register*/
+		ast_log(LOG_WARNING, "Got error %d on register to %s@%s, giving up (check config)\n", resp, p->registry->username, p->registry->hostname);
+		pvt_set_needdestroy(p, "received 4xx response");
 		if (r->call)
-			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 479");
+			r->call = dialog_unref(r->call, "unsetting registry->call pointer-- case 4xx");
 		r->regstate = REG_STATE_REJECTED;
 		AST_SCHED_DEL_UNREF(sched, r->timeout, registry_unref(r, "reg ptr unref from handle_response_register 479"));
 		break;
@@ -21898,6 +21907,9 @@ static void handle_response(struct sip_pvt *p, int resp, const char *rest, struc
 				pvt_set_needdestroy(p, "received 403 response");
 			}
 			break;
+		case 400: /* Bad Request */
+		case 414: /* Request URI too long */
+		case 493: /* Undecipherable */
 		case 404: /* Not found */
 			if (p->registry && sipmethod == SIP_REGISTER)
 				handle_response_register(p, resp, rest, req, seqno);
@@ -23146,7 +23158,9 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 	int reinvite = 0;
 	struct ast_party_redirecting redirecting;
 	struct ast_set_party_redirecting update_redirecting;
-
+	int supported_start = 0;
+	int require_start = 0;
+	char unsupported[256] = { 0, };
 	struct {
 		char exten[AST_MAX_EXTENSION];
 		char context[AST_MAX_CONTEXT];
@@ -23156,30 +23170,36 @@ static int handle_request_invite(struct sip_pvt *p, struct sip_request *req, int
 
 	/* Find out what they support */
 	if (!p->sipoptions) {
-		const char *supported = get_header(req, "Supported");
-		if (!ast_strlen_zero(supported)) {
-			p->sipoptions = parse_sip_options(supported, NULL, 0);
-		}
+		const char *supported = NULL;
+		do {
+			supported = __get_header(req, "Supported", &supported_start);
+			if (!ast_strlen_zero(supported)) {
+				p->sipoptions |= parse_sip_options(supported, NULL, 0);
+			}
+		} while (!ast_strlen_zero(supported));
 	}
 
 	/* Find out what they require */
-	required = get_header(req, "Require");
-	if (!ast_strlen_zero(required)) {
-		char unsupported[256] = { 0, };
-		required_profile = parse_sip_options(required, unsupported, ARRAY_LEN(unsupported));
-
-		/* If there are any options required that we do not support,
-		 * then send a 420 with only those unsupported options listed */
-		if (!ast_strlen_zero(unsupported)) {
-			transmit_response_with_unsupported(p, "420 Bad extension (unsupported)", req, unsupported);
-			ast_log(LOG_WARNING, "Received SIP INVITE with unsupported required extension: required:%s unsupported:%s\n", required, unsupported);
-			p->invitestate = INV_COMPLETED;
-			if (!p->lastinvite)
-				sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
-			res = -1;
-			goto request_invite_cleanup;
+	do {
+		required = __get_header(req, "Require", &require_start);
+		if (!ast_strlen_zero(required)) {
+			required_profile |= parse_sip_options(required, unsupported, ARRAY_LEN(unsupported));
 		}
+	} while (!ast_strlen_zero(required));
+
+	/* If there are any options required that we do not support,
+	 * then send a 420 with only those unsupported options listed */
+	if (!ast_strlen_zero(unsupported)) {
+		transmit_response_with_unsupported(p, "420 Bad extension (unsupported)", req, unsupported);
+		ast_log(LOG_WARNING, "Received SIP INVITE with unsupported required extension: required:%s unsupported:%s\n", required, unsupported);
+		p->invitestate = INV_COMPLETED;
+		if (!p->lastinvite) {
+			sip_scheddestroy(p, DEFAULT_TRANS_TIMEOUT);
+		}
+		res = -1;
+		goto request_invite_cleanup;
 	}
+
 
 	/* The option tags may be present in Supported: or Require: headers.
 	Include the Require: option tags for further processing as well */
