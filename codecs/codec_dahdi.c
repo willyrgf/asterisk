@@ -28,7 +28,7 @@
 
 /*** MODULEINFO
 	<support_level>core</support_level>
-	<depend>dahdi</depend>
+	<depend type="external" scope="build">dahdi</depend>
  ***/
 
 #include "asterisk.h"

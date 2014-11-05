@@ -27,10 +27,10 @@
 
 /*** MODULEINFO
 	<support_level>core</support_level>
-	<depend>app_chanspy</depend>
-	<depend>func_cut</depend>
-	<depend>func_groupcount</depend>
-	<depend>func_uri</depend>
+	<depend type="module">app_chanspy</depend>
+	<depend type="module">func_cut</depend>
+	<depend type="module">func_groupcount</depend>
+	<depend type="module">func_uri</depend>
  ***/
 
 #include "asterisk.h"

@@ -26,8 +26,8 @@
 */
 
 /*** MODULEINFO
-	<depend>vorbis</depend>
-	<depend>ogg</depend>
+	<depend type="external" scope="build">vorbis</depend>
+	<depend type="external" scope="build">ogg</depend>
 	<support_level>core</support_level>
  ***/
 

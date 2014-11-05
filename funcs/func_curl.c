@@ -31,7 +31,7 @@
  */
  
 /*** MODULEINFO
-	<depend>curl</depend>
+	<depend type="external" scope="build">curl</depend>
 	<support_level>core</support_level>
  ***/
 

@@ -25,7 +25,7 @@
  */
 
 /*** MODULEINFO
-	<depend>iconv</depend>
+	<depend type="external" scope="build">iconv</depend>
 	<support_level>core</support_level>
  ***/
 

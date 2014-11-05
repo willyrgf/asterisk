@@ -23,7 +23,7 @@
  */
 
 /*** MODULEINFO
-	<depend>res_ael_share</depend>
+	<depend type="module">res_ael_share</depend>
 	<support_level>extended</support_level>
  ***/
 

@@ -31,8 +31,8 @@
  */
 
 /*** MODULEINFO
-	<depend>speex</depend>
-	<depend>speex_preprocess</depend>
+	<depend type="external" scope="build">speex</depend>
+	<depend type="external" scope="build">speex_preprocess</depend>
 	<use type="external">speexdsp</use>
 	<support_level>core</support_level>
  ***/

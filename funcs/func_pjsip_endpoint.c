@@ -28,8 +28,8 @@
 
 /*** MODULEINFO
 	<support_level>core</support_level>
-	<depend>pjproject</depend>
-	<depend>res_pjsip</depend>
+	<depend type="external" scope="build">pjproject</depend>
+	<depend type="module">res_pjsip</depend>
  ***/
 
 #include "asterisk.h"

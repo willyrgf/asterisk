@@ -31,7 +31,7 @@
  */
 
 /*** MODULEINFO
-	<depend>zlib</depend>
+	<depend type="external" scope="build">zlib</depend>
 	<use type="external">crypto</use>
 	<support_level>extended</support_level>
  ***/

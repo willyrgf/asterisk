@@ -25,7 +25,7 @@
  */
 
 /*** MODULEINFO
-	<depend>lua</depend>
+	<depend type="external" scope="build">lua</depend>
 	<support_level>extended</support_level>
  ***/
 

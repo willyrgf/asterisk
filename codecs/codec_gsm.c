@@ -27,7 +27,7 @@
  */
 
 /*** MODULEINFO
-	<depend>gsm</depend>
+	<depend type="external" scope="build">gsm</depend>
 	<support_level>core</support_level>
  ***/
 
