@@ -27,7 +27,7 @@
  */
 
 /*** MODULEINFO
-	<depend>res_odbc</depend>
+	<depend type="module" scope="runtime">res_odbc</depend>
 	<support_level>core</support_level>
  ***/
 

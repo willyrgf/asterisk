@@ -27,7 +27,7 @@
  */
 
 /*** MODULEINFO
-	<depend>radius</depend>
+	<depend type="external" scope="build">radius</depend>
 	<support_level>extended</support_level>
  ***/
 

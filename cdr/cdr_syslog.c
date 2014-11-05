@@ -37,7 +37,7 @@
  */
 
 /*** MODULEINFO
-	<depend>syslog</depend>
+	<depend type="external" scope="build">syslog</depend>
 	<support_level>core</support_level>
 ***/
 

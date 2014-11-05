@@ -35,7 +35,7 @@
  */
 
 /*** MODULEINFO
-	<depend>sqlite3</depend>
+	<depend type="external" scope="build">sqlite3</depend>
 	<support_level>extended</support_level>
  ***/
 

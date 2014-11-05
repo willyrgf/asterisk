@@ -35,7 +35,7 @@
  */
 
 /*** MODULEINFO
-	<depend>bluetooth</depend>
+	<depend type="external" scope="build">bluetooth</depend>
 	<defaultenabled>no</defaultenabled>
 	<support_level>extended</support_level>
  ***/

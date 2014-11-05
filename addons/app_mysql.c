@@ -27,13 +27,13 @@
  * \addtogroup configuration_file Configuration Files
  */
 
-/*! 
+/*!
  * \page app_mysql.conf app_mysql.conf
  * \verbinclude app_mysql.conf.sample
  */
 
 /*** MODULEINFO
-	<depend>mysqlclient</depend>
+	<depend type="external" scope="build">mysqlclient</depend>
 	<defaultenabled>no</defaultenabled>
 	<support_level>deprecated</support_level>
 	<replacement>func_odbc</replacement>

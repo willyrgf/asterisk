@@ -43,7 +43,7 @@
  */
 
 /*** MODULEINFO
-	<depend>pgsql</depend>
+	<depend type="external" scope="build">pgsql</depend>
 	<support_level>extended</support_level>
  ***/
 

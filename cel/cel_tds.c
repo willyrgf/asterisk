@@ -55,7 +55,7 @@ CREATE TABLE [dbo].[cel] (
 */
 
 /*** MODULEINFO
-	<depend>freetds</depend>
+	<depend type="external" scope="build">freetds</depend>
 	<support_level>extended</support_level>
  ***/
 

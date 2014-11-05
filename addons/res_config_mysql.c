@@ -23,7 +23,7 @@
  */
 
 /*** MODULEINFO
-	<depend>mysqlclient</depend>
+	<depend type="external" scope="build">mysqlclient</depend>
 	<defaultenabled>no</defaultenabled>
 	<support_level>extended</support_level>
  ***/
