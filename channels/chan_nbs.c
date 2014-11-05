@@ -26,7 +26,7 @@
  */
 
 /*** MODULEINFO
-	<depend>nbs</depend>
+	<depend type="external" scope="build">nbs</depend>
 	<support_level>extended</support_level>	
  ***/
 

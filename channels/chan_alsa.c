@@ -33,7 +33,7 @@
  */
 
 /*** MODULEINFO
-	<depend>alsa</depend>
+	<depend type="external" scope="build">alsa</depend>
 	<support_level>extended</support_level>
  ***/
 

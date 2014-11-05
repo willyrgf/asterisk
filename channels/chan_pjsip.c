@@ -26,9 +26,9 @@
  */
 
 /*** MODULEINFO
-	<depend>pjproject</depend>
-	<depend>res_pjsip</depend>
-	<depend>res_pjsip_session</depend>
+	<depend type="external" scope="build">pjproject</depend>
+	<depend type="module">res_pjsip</depend>
+	<depend type="module">res_pjsip_session</depend>
 	<support_level>core</support_level>
  ***/
 

@@ -56,7 +56,7 @@
  */
 
 /*** MODULEINFO
-	<depend>portaudio</depend>
+	<depend type="external" scope="build">portaudio</depend>
 	<support_level>extended</support_level>
  ***/
 

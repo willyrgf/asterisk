@@ -73,9 +73,9 @@
  */
 
 /*** MODULEINFO
-	<depend>isdnnet</depend>
-	<depend>misdn</depend>
-	<depend>suppserv</depend>
+	<depend type="external" scope="build">isdnnet</depend>
+	<depend type="external" scope="build">misdn</depend>
+	<depend type="external" scope="build">suppserv</depend>
 	<support_level>extended</support_level>
  ***/
 

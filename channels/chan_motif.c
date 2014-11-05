@@ -36,8 +36,8 @@
  */
 
 /*** MODULEINFO
-	<depend>iksemel</depend>
-	<depend>res_xmpp</depend>
+	<depend type="external" scope="build">iksemel</depend>
+	<depend type="module">res_xmpp</depend>
 	<use type="external">openssl</use>
 	<support_level>core</support_level>
  ***/

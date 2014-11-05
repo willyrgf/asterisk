@@ -48,7 +48,7 @@
  */
 
 /*** MODULEINFO
-	<depend>vpb</depend>
+	<depend type="external" scope="build">vpb</depend>
 	<defaultenabled>no</defaultenabled>
 	<support_level>extended</support_level>
  ***/

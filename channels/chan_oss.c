@@ -39,7 +39,7 @@
  */
 
 /*** MODULEINFO
-	<depend>oss</depend>
+	<depend type="external" scope="build">oss</depend>
 	<support_level>extended</support_level>
  ***/
 

@@ -34,7 +34,7 @@
  */
 
 /*** MODULEINFO
-	<depend>ixjuser</depend>
+	<depend type="external" scope="build">ixjuser</depend>
 	<support_level>extended</support_level>
  ***/
 

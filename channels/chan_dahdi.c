@@ -44,8 +44,8 @@
 
 /*** MODULEINFO
 	<use type="module">res_smdi</use>
-	<depend>dahdi</depend>
-	<depend>tonezone</depend>
+	<depend type="external" scope="build">dahdi</depend>
+	<depend type="external" scope="build">tonezone</depend>
 	<use type="external">pri</use>
 	<use type="external">ss7</use>
 	<use type="external">openr2</use>
