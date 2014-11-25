@@ -549,6 +549,27 @@ int __ast_cond_destroy(const char *filename, int lineno, const char *func,
 	return pthread_cond_destroy(cond);
 }
 
+static void restore_lock_tracking(struct ast_lock_track *lt, struct ast_lock_track *lt_saved)
+{
+	ast_reentrancy_lock(lt);
+
+	/*
+	 * The following code must match the struct ast_lock_track
+	 * definition with the explicit exception of the reentr_mutex
+	 * member.
+	 */
+	memcpy(lt->file, lt_saved->file, sizeof(lt->file));
+	memcpy(lt->lineno, lt_saved->lineno, sizeof(lt->lineno));
+	lt->reentrancy = lt_saved->reentrancy;
+	memcpy(lt->func, lt_saved->func, sizeof(lt->func));
+	memcpy(lt->thread, lt_saved->thread, sizeof(lt->thread));
+#ifdef HAVE_BKTR
+	memcpy(lt->backtrace, lt_saved->backtrace, sizeof(lt->backtrace));
+#endif
+
+	ast_reentrancy_unlock(lt);
+}
+
 int __ast_cond_wait(const char *filename, int lineno, const char *func,
 				  const char *cond_name, const char *mutex_name,
 				  ast_cond_t *cond, ast_mutex_t *t)
@@ -613,17 +634,7 @@ int __ast_cond_wait(const char *filename, int lineno, const char *func,
 				   filename, lineno, func, strerror(res));
 		DO_THREAD_CRASH;
 	} else if (lt) {
-		pthread_mutex_t reentr_mutex_orig;
-
-		ast_reentrancy_lock(lt);
-		/* Restore lock tracking to what it was prior to the wait */
-/* BUGBUG doing this to lt->reentr_mutex is bad the struct/union can change at any time. */
-		reentr_mutex_orig = lt->reentr_mutex;
-		*lt = lt_orig;
-		/* un-trash the mutex we just copied over */
-		lt->reentr_mutex = reentr_mutex_orig;
-		ast_reentrancy_unlock(lt);
-
+		restore_lock_tracking(lt, &lt_orig);
 		ast_restore_lock_info(t);
 	}
 #endif /* DEBUG_THREADS */
@@ -695,17 +706,7 @@ int __ast_cond_timedwait(const char *filename, int lineno, const char *func,
 				   filename, lineno, func, strerror(res));
 		DO_THREAD_CRASH;
 	} else if (lt) {
-		pthread_mutex_t reentr_mutex_orig;
-
-		ast_reentrancy_lock(lt);
-		/* Restore lock tracking to what it was prior to the wait */
-/* BUGBUG doing this to lt->reentr_mutex is bad the struct/union can change at any time. */
-		reentr_mutex_orig = lt->reentr_mutex;
-		*lt = lt_orig;
-		/* un-trash the mutex we just copied over */
-		lt->reentr_mutex = reentr_mutex_orig;
-		ast_reentrancy_unlock(lt);
-
+		restore_lock_tracking(lt, &lt_orig);
 		ast_restore_lock_info(t);
 	}
 #endif /* DEBUG_THREADS */

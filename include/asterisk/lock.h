@@ -101,6 +101,12 @@
 
 struct ast_channel;
 
+/*!
+ * \brief Lock tracking information.
+ *
+ * \note Any changes to this struct MUST be reflected in the
+ * lock.c:restore_lock_tracking() function.
+ */
 struct ast_lock_track {
 	const char *file[AST_MAX_REENTRANCY];
 	int lineno[AST_MAX_REENTRANCY];
