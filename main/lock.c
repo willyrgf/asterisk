@@ -521,6 +521,7 @@ int __ast_cond_destroy(const char *filename, int lineno, const char *func,
 	return pthread_cond_destroy(cond);
 }
 
+#ifdef DEBUG_THREADS
 static void restore_lock_tracking(struct ast_lock_track *lt, struct ast_lock_track *lt_saved)
 {
 	ast_reentrancy_lock(lt);
@@ -541,6 +542,7 @@ static void restore_lock_tracking(struct ast_lock_track *lt, struct ast_lock_tra
 
 	ast_reentrancy_unlock(lt);
 }
+#endif /* DEBUG_THREADS */
 
 int __ast_cond_wait(const char *filename, int lineno, const char *func,
 				  const char *cond_name, const char *mutex_name,
