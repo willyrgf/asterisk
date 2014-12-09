@@ -131,14 +131,12 @@ int __ast_pthread_mutex_init(int tracking, const char *filename, int lineno, con
 #ifdef DEBUG_THREADS
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS) && defined(CAN_COMPARE_MUTEX_TO_INIT_VALUE)
 	if ((t->mutex) != ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
-/*
 		int canlog = tracking && strcmp(filename, "logger.c");
 
 		__ast_mutex_logger("%s line %d (%s): NOTICE: mutex '%s' is already initialized.\n",
 				   filename, lineno, func, mutex_name);
 		DO_THREAD_CRASH;
-*/
-		return 0;
+		return EBUSY;
 	}
 #endif /* AST_MUTEX_INIT_W_CONSTRUCTORS */
 
@@ -173,6 +171,7 @@ int __ast_pthread_mutex_destroy(const char *filename, int lineno, const char *fu
 		 */
 		__ast_mutex_logger("%s line %d (%s): NOTICE: mutex '%s' is uninitialized.\n",
 				   filename, lineno, func, mutex_name);
+		DO_THREAD_CRASH;
 		res = EINVAL;
 		goto lt_cleanup;
 	}
@@ -692,6 +691,7 @@ int __ast_rwlock_init(int tracking, const char *filename, int lineno, const char
 
 		__ast_mutex_logger("%s line %d (%s): Warning: rwlock '%s' is already initialized.\n",
 				filename, lineno, func, rwlock_name);
+		DO_THREAD_CRASH;
 		return EBUSY;
 	}
 #endif /* AST_MUTEX_INIT_W_CONSTRUCTORS */
@@ -722,6 +722,7 @@ int __ast_rwlock_destroy(const char *filename, int lineno, const char *func, con
 	if (t->lock == ((pthread_rwlock_t) __AST_RWLOCK_INIT_VALUE)) {
 		__ast_mutex_logger("%s line %d (%s): Warning: rwlock '%s' is uninitialized.\n",
 				   filename, lineno, func, rwlock_name);
+		DO_THREAD_CRASH;
 		res = EINVAL;
 		goto lt_cleanup;
 	}
