@@ -163,11 +163,11 @@ int __ast_pthread_mutex_destroy(const char *filename, int lineno, const char *fu
 
 #if defined(AST_MUTEX_INIT_W_CONSTRUCTORS) && defined(CAN_COMPARE_MUTEX_TO_INIT_VALUE)
 	if ((t->mutex) == ((pthread_mutex_t) PTHREAD_MUTEX_INITIALIZER)) {
-		/* Don't try to uninitialize non initialized mutex
+		/* Don't try to uninitialize an uninitialized mutex
 		 * This may have no effect on linux
-		 * And always ganerate core on *BSD with
-		 * linked libpthread
-		 * This not error condition if the mutex created on the fly.
+		 * but it always generates a core on *BSD when
+		 * linked with libpthread.
+		 * This is not an error condition if the mutex is created on the fly.
 		 */
 		__ast_mutex_logger("%s line %d (%s): NOTICE: mutex '%s' is uninitialized.\n",
 				   filename, lineno, func, mutex_name);
