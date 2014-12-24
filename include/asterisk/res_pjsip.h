@@ -609,6 +609,8 @@ struct ast_sip_endpoint {
 	enum ast_sip_session_redirect redirect_method;
 	/*! Variables set on channel creation */
 	struct ast_variable *channel_vars;
+	/*! Whether to place a 'user=phone' parameter into the request URI if user is a number */
+	unsigned int usereqphone;
 };
 
 /*!
@@ -1487,6 +1489,15 @@ void ast_copy_pj_str(char *dest, const pj_str_t *src, size_t size);
 struct ast_sip_endpoint *ast_pjsip_rdata_get_endpoint(pjsip_rx_data *rdata);
 
 /*!
+ * \brief Add 'user=phone' parameter to URI if enabled and user is a phone number.
+ *
+ * \param endpoint The endpoint to use for configuration
+ * \param pool The memory pool to allocate the parameter from
+ * \param uri The URI to check for user and to add parameter to
+ */
+void ast_sip_add_usereqphone(const struct ast_sip_endpoint *endpoint, pj_pool_t *pool, pjsip_uri *uri);
+
+/*!
  * \brief Retrieve any endpoints available to sorcery.
  *
  * \retval Endpoints available to sorcery, NULL if no endpoints found.
@@ -1955,5 +1966,12 @@ char *ast_sip_get_debug(void);
 			return AST_MODULE_LOAD_DECLINE;		\
 		}						\
 	} while(0)
+
+/*!
+ * \brief Retrieve the system keep alive interval setting.
+ *
+ * \retval the keep alive interval.
+ */
+unsigned int ast_sip_get_keep_alive_interval(void);
 
 #endif /* _RES_PJSIP_H */
