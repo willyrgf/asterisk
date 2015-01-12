@@ -222,6 +222,7 @@ static void curlds_free(void *data)
 		ast_free(setting);
 	}
 	AST_LIST_HEAD_DESTROY(list);
+	ast_free(list);
 }
 
 enum optiontype {
