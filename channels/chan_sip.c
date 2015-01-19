@@ -8402,7 +8402,6 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 		}
 		return NULL;	/* Invalid packet */
 	}
-	ast_debug(2, " ===> Not invalid, all headers there \n");
 
 	if (sip_cfg.pedanticsipchecking) {
 		/* In principle Call-ID's uniquely identify a call, but with a forking SIP proxy
@@ -8440,7 +8439,6 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 			}
 		}
 	}
-	ast_debug(2, " ===> Not invalid, all tags there \n");
 
 	if (!sip_cfg.pedanticsipchecking) {
 		struct sip_pvt tmp_dialog = {
@@ -8516,11 +8514,9 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 		free_via(via);
 	} /* end of pedantic mode Request/Reponse to Dialog matching */
 
-	ast_debug(2, " ===> Not in current dialog.\n");
 
 	/* See if the method is capable of creating a dialog */
 	if (sip_methods[intended_method].can_create == CAN_CREATE_DIALOG) {
-		ast_debug(2, " ===> Able to create dialog.\n");
 		struct sip_pvt *p = NULL;
 
 		if (intended_method == SIP_REFER) {
@@ -8542,12 +8538,10 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 		}
 		return p; /* can be NULL */
 	} else if( sip_methods[intended_method].can_create == CAN_CREATE_DIALOG_UNSUPPORTED_METHOD) {
-		ast_debug(2, " ===> Not supported message.\n");
 		/* A method we do not support, let's take it on the volley */
 		transmit_response_using_temp(callid, addr, 1, intended_method, req, "501 Method Not Implemented");
 		ast_debug(2, "Got a request with unsupported SIP method.\n");
 	} else if (intended_method != SIP_RESPONSE && intended_method != SIP_ACK) {
-		ast_debug(2, " ===> Request unknown .\n");
 		/* This is a request outside of a dialog that we don't know about */
 		transmit_response_using_temp(callid, addr, 1, intended_method, req, "481 Call leg/transaction does not exist");
 		ast_debug(2, "That's odd...  Got a request in unknown dialog. Callid %s\n", callid ? callid : "<unknown>");
@@ -8557,7 +8551,6 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 	if (intended_method == SIP_RESPONSE)
 		ast_debug(2, "That's odd...  Got a response on a call we don't know about. Callid %s\n", callid ? callid : "<unknown>");
 
-	ast_debug(2, " ===> We have no idea.  Returning NULL.\n");
 	return NULL;
 }
 
