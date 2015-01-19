@@ -8435,12 +8435,24 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 		/* All messages must always have From: tag */
 		if (ast_strlen_zero(fromtag)) {
 			ast_debug(5, "%s request has no from tag, dropping callid: %s from: %s\n", sip_methods[req->method].text , callid, from );
+			/* Try to respond nevertheless */
+			transmit_response_using_temp(callid, addr, 1, intended_method,
+						     req, "400 Bad Request");
 			return NULL;
 		}
 		/* reject requests that must always have a To: tag */
-		if (ast_strlen_zero(totag) && (req->method == SIP_ACK || req->method == SIP_BYE || req->method == SIP_INFO )) {
-			ast_debug(5, "%s must have a to tag. dropping callid: %s from: %s\n", sip_methods[req->method].text , callid, from );
-			return NULL;
+		if (ast_strlen_zero(totag)) {
+ 			if  (req->method == SIP_ACK) {
+				ast_debug(5, "%s must have a to tag. dropping callid: %s from: %s\n", sip_methods[req->method].text , callid, from );
+				return NULL;
+			}
+			if (req->method == SIP_BYE || req->method == SIP_INFO ) {
+				/* We have to respond */
+				ast_debug(5, "%s must have a to tag. dropping callid: %s from: %s\n", sip_methods[req->method].text , callid, from );
+				transmit_response_using_temp(callid, addr, 1, intended_method,
+						     req, "400 Bad Request");
+				return NULL;
+			}
 		}
 	}
 
@@ -8517,6 +8529,7 @@ static struct sip_pvt *find_call(struct sip_request *req, struct ast_sockaddr *a
 
 		free_via(via);
 	} /* end of pedantic mode Request/Reponse to Dialog matching */
+
 
 	/* See if the method is capable of creating a dialog */
 	if (sip_methods[intended_method].can_create == CAN_CREATE_DIALOG) {

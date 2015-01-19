@@ -3394,7 +3394,7 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 	} else if (rtp_debug_test_addr(&remote_address)) {
 		ast_verbose("Sent Comfort Noise RTP packet to %s (type %-2.2d, seq %-6.6d, ts %-6.6u, len %-6.6d)\n",
 				ast_sockaddr_stringify(&remote_address),
-				AST_RTP_CN, rtp->seqno, rtp->lastdigitts, res - hdrlen);
+				payload, rtp->seqno, rtp->lastdigitts, res - hdrlen);
 	}
 
 	rtp->seqno++;
