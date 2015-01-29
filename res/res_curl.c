@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 static const char *dependents[] = {
 	"func_curl.so",
 	"res_config_curl.so",
+	"res_http_media_cache.so",
 };
 
 static int unload_module(void)
