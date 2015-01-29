@@ -248,6 +248,7 @@ int daemon(int, int);  /* defined in libresolv of all places */
 #include "asterisk/endpoints.h"
 #include "asterisk/codec.h"
 #include "asterisk/format_cache.h"
+#include "asterisk/media_cache.h"
 
 #include "../defaults.h"
 
@@ -4457,6 +4458,11 @@ int main(int argc, char *argv[])
 
 	if (ast_presence_state_engine_init()) {
 		printf("Failed: ast_presence_state_engine_init\n%s", term_quit());
+		exit(1);
+	}
+
+	if (ast_media_cache_init()) {
+		printf("%s", term_quit());
 		exit(1);
 	}
 
