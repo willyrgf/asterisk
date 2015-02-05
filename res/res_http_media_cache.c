@@ -44,52 +44,57 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define GLOBAL_USERAGENT "asterisk-libcurl-agent/1.0"
 
+#define MAX_HEADER_LENGTH 1023
+
+/*! \brief Data passed to cURL callbacks */
 struct curl_bucket_file_data {
+	/*! The \c ast_bucket_file object that caused the operation */
 	struct ast_bucket_file *bucket_file;
+	/*! File to write data to */
 	FILE *out_file;
 };
 
+/*!
+ * \internal \brief The cURL header callback function
+ */
 static size_t curl_header_callback(char *buffer, size_t size, size_t nitems, void *data)
 {
 	struct curl_bucket_file_data *cb_data = data;
 	size_t realsize;
-	size_t offset;
-	size_t value_len;
 	char *value;
-	char *dupd_value;
-	char *clean_value;
+	char *header;
 
 	realsize = size * nitems;
 
+	if (realsize > MAX_HEADER_LENGTH) {
+		ast_log(LOG_WARNING, "cURL header length of '%zu' is too large: max %d\n",
+			realsize, MAX_HEADER_LENGTH);
+		return 0;
+	}
+
 	/* buffer may not be NULL terminated */
-	value = memchr(buffer, ':', realsize);
+	header = ast_alloca(realsize + 1);
+	memcpy(header, buffer, realsize);
+	header[realsize] = '\0';
+
+	value = strchr(header, ':');
 	if (!value) {
 		ast_log(LOG_WARNING, "Failed to split received header in cURL request\n");
 		return 0;
 	}
-	offset = value - buffer;
-	value_len = realsize - offset;
 	*value++ = '\0';
 
-	if (strcmp(buffer, "ETag")
-		&& strcmp(buffer, "Cache-Control")
-		&& strcmp(buffer, "Last-Modified")) {
+	if (strcasecmp(header, "ETag")
+		&& strcasecmp(header, "Cache-Control")
+		&& strcasecmp(header, "Last-Modified")
+		&& strcasecmp(header, "Expires")) {
 		return realsize;
 	}
 
-	dupd_value = ast_malloc(value_len + 1);
-	if (!dupd_value) {
-		return 0;
-	}
-	strncpy(dupd_value, value, value_len);
-	dupd_value[value_len] = '\0';
-	clean_value = dupd_value;
-	clean_value = ast_skip_blanks(clean_value);
-	clean_value = ast_trim_blanks(clean_value);
+	value = ast_trim_blanks(ast_skip_blanks(value));
 
-	ast_bucket_file_metadata_set(cb_data->bucket_file, buffer, clean_value);
+	ast_bucket_file_metadata_set(cb_data->bucket_file, header, value);
 
-	ast_free(dupd_value);
 	return realsize;
 }
 
@@ -103,29 +108,72 @@ static size_t curl_body_callback(void *ptr, size_t size, size_t nitems, void *da
 	return realsize;
 }
 
-static int bucket_http_wizard_create(const struct ast_sorcery *sorcery, void *data,
-	void *object)
+static void bucket_file_set_expiration(struct ast_bucket_file *bucket_file)
 {
-	char curl_errbuf[CURL_ERROR_SIZE + 1]; /* add one to be safe */
-	struct ast_bucket_file *bucket_file = object;
+	struct ast_bucket_metadata *metadata;
+	char time_buf[32];
+	struct timeval actual_expires = ast_tvnow();
+
+	metadata = ast_bucket_file_metadata_get(bucket_file, "cache-control");
+	if (metadata) {
+		char *str_max_age;
+
+		str_max_age = strstr(metadata->value, "s-maxage");
+		if (!str_max_age) {
+			str_max_age = strstr(metadata->value, "max-age");
+		}
+
+		if (str_max_age) {
+			unsigned int max_age;
+			char *equal = strchr(str_max_age, '=');
+			if (equal && (sscanf(equal + 1, "%30u", &max_age) == 1)) {
+				actual_expires.tv_sec += max_age;
+			}
+		}
+		ao2_ref(metadata, -1);
+	} else {
+		metadata = ast_bucket_file_metadata_get(bucket_file, "expires");
+		if (metadata) {
+			struct tm expires_time;
+
+			strptime(metadata->value, "%a, %d %b %Y %T %z", &expires_time);
+			actual_expires.tv_sec = mktime(&expires_time);
+
+			ao2_ref(metadata, -1);
+		}
+	}
+
+	/* Use 'now' if we didn't get an expiration time */
+	snprintf(time_buf, sizeof(time_buf), "%30lu", actual_expires.tv_sec);
+
+	ast_bucket_file_metadata_set(bucket_file, "__actual_expires", time_buf);
+}
+
+
+
+static long bucket_file_execute_curl(struct ast_bucket_file *bucket_file,
+	void (* const pre_exec)(struct ast_bucket_file *, CURL *, void *),
+	void *arg)
+{
+	char curl_errbuf[CURL_ERROR_SIZE + 1];
 	const char *uri = ast_sorcery_object_get_id(bucket_file);
-	CURL *curl;
+	long http_code = -1;
 	struct curl_bucket_file_data cb_data = {
 		.bucket_file = bucket_file,
 	};
+	CURL *curl;
 
 	cb_data.out_file = fopen(bucket_file->path, "wb");
 	if (!cb_data.out_file) {
+		ast_log(LOG_WARNING, "Failed to open file '%s' for writing\n",
+			bucket_file->path);
 		return -1;
 	}
 
-	/* TODO:
-	 * -- force a refresh by pulling down the URI
-	 * -- populate the object
-	 */	
 	curl = curl_easy_init();
 	if (!curl) {
 		fclose(cb_data.out_file);
+		unlink(bucket_file->path);
 		return -1;
 	}
 
@@ -140,42 +188,164 @@ static int bucket_http_wizard_create(const struct ast_sorcery *sorcery, void *da
 	curl_errbuf[CURL_ERROR_SIZE] = '\0';
 	curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, curl_errbuf);
 
-	if (curl_easy_perform(curl)) {
-		ast_log(LOG_WARNING, "%s ('%s')\n", curl_errbuf, uri);
+	if (pre_exec) {
+		pre_exec(bucket_file, curl, arg);
 	}
 
-	fclose(cb_data.out_file);
-	return -1;
+	if (curl_easy_perform(curl)) {
+		fclose(cb_data.out_file);
+		unlink(bucket_file->path);
+		ast_log(LOG_WARNING, "%s ('%s')\n", curl_errbuf, uri);
+		return -1;
+	}
+
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+	curl_easy_cleanup(curl);
+
+	return http_code;
+}
+
+static int bucket_http_wizard_create(const struct ast_sorcery *sorcery, void *data,
+	void *object)
+{
+	struct ast_bucket_file *bucket_file = object;
+	long http_code;
+	int res = -1;
+
+	http_code = bucket_file_execute_curl(bucket_file, NULL, NULL);
+
+	if (http_code / 100 == 2) {
+		bucket_file_set_expiration(bucket_file);
+		res = 0;
+	}
+
+	return res;
+}
+
+static int bucket_file_always_revalidate(struct ast_bucket_file *bucket_file)
+{
+	RAII_VAR(struct ast_bucket_metadata *, metadata,
+		ast_bucket_file_metadata_get(bucket_file, "cache-control"),
+		ao2_cleanup);
+
+	if (!metadata) {
+		return 0;
+	}
+
+	if (strstr(metadata->value, "no-cache")
+		|| strstr(metadata->value, "must-revalidate")) {
+		return 1;
+	}
+
+	return 0;
+}
+
+/*! \internal
+ * \brief Return whether or not the item has expired
+ */
+static int bucket_file_expired(struct ast_bucket_file *bucket_file)
+{
+	RAII_VAR(struct ast_bucket_metadata *, metadata,
+		ast_bucket_file_metadata_get(bucket_file, "__actual_expires"),
+		ao2_cleanup);
+	struct timeval current_time = ast_tvnow();
+	struct timeval expires = { .tv_sec = 0, .tv_usec = 0 };
+
+	if (!metadata) {
+		return 1;
+	}
+
+	if (sscanf(metadata->value, "%lu", &expires.tv_sec) != 1) {
+		return 1;
+	}
+
+	return ast_tvcmp(current_time, expires) == 1 ? 1 : 0;
+}
+
+static void update_pre_exec(struct ast_bucket_file *bucket_file, CURL *curl, void *obj)
+{
+	struct ast_bucket_metadata *metadata;
+	struct curl_slist **header_list = obj;
+
+	metadata = ast_bucket_file_metadata_get(bucket_file, "etag");
+	if (metadata) {
+		char etag_buf[256];
+
+		snprintf(etag_buf, sizeof(etag_buf), "If-None-Match: %s", metadata->value);
+		(*header_list) = curl_slist_append(*header_list, etag_buf);
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, *header_list);
+		ao2_ref(metadata, -1);
+	}
 }
 
 static int bucket_http_wizard_update(const struct ast_sorcery *sorcery, void *data,
 	void *object)
 {
-	/*if (!strcmp(ast_sorcery_object_get_id(object), VALID_RESOURCE)) {
-		return 0;
-	}*/
+	struct ast_bucket_file *bucket_file = object;
+	struct curl_slist *header_list = NULL;
+	long http_code;
+	int res = -1;
 
-	return -1;
+	if (!bucket_file_expired(bucket_file) && !bucket_file_always_revalidate(bucket_file)) {
+		return 0;
+	}
+
+	http_code = bucket_file_execute_curl(bucket_file, &update_pre_exec, &header_list);
+
+	if (header_list) {
+		curl_slist_free_all(header_list);
+	}
+
+	if (http_code / 100 == 2) {
+		bucket_file_set_expiration(bucket_file);
+		res = 0;
+	}
+
+	return res;
 }
 
 static void *bucket_http_wizard_retrieve_id(const struct ast_sorcery *sorcery,
 	void *data, const char *type, const char *id)
 {
-	/* TODO:
-	 * -- hit the provided URI and see if we need to download it
-	 *   -- if we do, pull it down and update the resource
-	 *   -- if not, simply return what's there
-	 */
+	struct ast_bucket_file *bucket_file;
+
 	if (strcmp(type, "file")) {
+		ast_log(LOG_WARNING, "Failed to create storage: invalid bucket type '%s'\n", type);
 		return NULL;
 	}
-	return NULL;
+
+	if (ast_strlen_zero(id)) {
+		ast_log(LOG_WARNING, "Failed to create storage: no URI\n");
+		return NULL;
+	}
+
+	bucket_file = ast_bucket_file_alloc(id);
+	if (!bucket_file) {
+		ast_log(LOG_WARNING, "Failed to create storage for '%s'\n", id);
+		return NULL;
+	}
+
+	if (ast_bucket_file_temporary_create(bucket_file)) {
+		ast_log(LOG_WARNING, "Failed to create temporary storage for '%s'\n", id);
+		ao2_ref(bucket_file, -1);
+		return NULL;
+	}
+
+	if (bucket_http_wizard_update(sorcery, data, bucket_file)) {
+		ast_log(LOG_WARNING, "Failed to retrieve resource at '%s'\n'", id);
+		ao2_ref(bucket_file, -1);
+		return NULL;
+	}
+
+	return bucket_file;
 }
 
 static int bucket_http_wizard_delete(const struct ast_sorcery *sorcery, void *data,
 	void *object)
 {
-	return -1;
+	/* Nothing to delete here, move along! */
+	return 0;
 }
 
 static struct ast_sorcery_wizard bucket_wizard = {

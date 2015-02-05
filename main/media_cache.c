@@ -108,7 +108,7 @@ static void metadata_sync_to_astdb(struct ast_bucket_file *bucket_file,
 	if (metadata) {
 		ast_db_put(hash, metadata->name, metadata->value);
 		ao2_ref(metadata, -1);
-	}	
+	}
 }
 
 static void media_cache_item_sync_to_astdb(struct ast_bucket_file *bucket_file)
