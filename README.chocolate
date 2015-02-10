@@ -1,0 +1,50 @@
+Edvina AB
+Olle E. Johansson
+
+Project start: Feb 1, 2015
+
+
+
+
+
+
+
+
+Chocolate - support and generate AVPF feedback in RTCP
+=======================================================
+If we observe bad reports in RTCP we need to tell the sender of VP8 video
+that we are observing issues and that it needs to adjust properties of the
+video in order to try to fix these issues. This is done in RTCP Feedback
+messages, which are enabled by SDP negotiation.
+
+Tasks
+-----
+* Implement infrastructure
+  - Parse feedback message in RTCP
+  - ENUMs for feedback messages
+* Add SDP parameters for rtcp-fb
+* Add sip.conf options for rtcp-fb enabling
+* Send feedback based on RTCP
+* Forward incoming feedback across bridge and send out on other side
+  for optimal video pass through
+
+References
+------------
+* RTP/AVPF - RFC 4585 
+	https://tools.ietf.org/html/rfc4585
+* RTCP message for Receiver Estimated Maximum Bitrate
+	https://tools.ietf.org/html/draft-alvestrand-rmcat-remb-03
+* A Google congestion control algorithm for real-time communication
+	https://tools.ietf.org/html/draft-alvestrand-rmcat-congestion-02
+* RTP - RFC 3550
+	https://tools.ietf.org/html/rfc3550
+SDP example:
+------------
+Chrome:
+
+	a=rtpmap:100 VP8/90000
+	a=rtcp-fb:100 ccm fir
+	a=rtcp-fb:100 nack
+	a=rtcp-fb:100 nack pli
+	a=rtcp-fb:100 goog-remb
+
