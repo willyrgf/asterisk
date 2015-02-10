@@ -89,12 +89,34 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define TURN_STATE_WAIT_TIME 2000
 
-#define RTCP_PT_FUR     192
-#define RTCP_PT_SR      200
-#define RTCP_PT_RR      201
-#define RTCP_PT_SDES    202
-#define RTCP_PT_BYE     203
-#define RTCP_PT_APP     204
+#define RTCP_PT_FUR     192             /*!< FIR  - Full Intra-frame request (h.261) */
+#define RTCP_PT_NACK    193             /*!< NACK - Negative acknowledgement (h.261) */
+#defien RTCP_SMPTETC	194		/*!> SMTPETC - time code mapping RFC 5484 */
+#define RTCP_PT_IJ      195             /*!< IJ   - RFC 5450 Extended Inter-arrival jitter report */
+#define RTCP_PT_SR      200             /*!< SR   - RFC 3550 Sender report */
+#define RTCP_PT_RR      201             /*!< RR   - RFC 3550 Receiver report */
+#define RTCP_PT_SDES    202             /*!< SDES - Source Description */
+#define RTCP_PT_BYE     203             /*!< BYE  - Goodbye */
+#define RTCP_PT_APP     204             /*!< APP  - Application defined */
+#define RTCP_PT_RTPFB   205             /*!< RTPFB - Generic RTP feedback RFC 4585 */
+#define RTCP_PT_PSFB    206             /*!< PSFB - Payload specific data  RFC 4585 */
+#define RTCP_PT_XR      207             /*!< XR   - Extended report - RFC3611 */
+#define RTCP_PT_AVB     208             /*!< ACB RTCP Packet */
+#define RTCP_PT_RSI     209             /*!< Receiver summary information */
+#define RTCP_PT_TOKEN   210             /*!< Port mapping, RFC 6284 */
+#define RTCP_PT_IDMS    211             /*!< IDMS Settings, RFC 7272 */
+
+/* RTCP AVPF - Payload specific feedback messages (PSFB) */
+#define RTCP_FMT_PLI	1		/*!< Picture Loss indication */
+#define RTCP_FMT_SLI	2		/*!< Slice loss indication */
+#define RTCP_FMT_RPSI	3		/*!< Reference Picture Selection Information */
+#define RTCP_FMT_FIR	4		/*!< Full Intra Request Command RFC 5104 */
+#define RTCP_FMT_TSTR	5		/*!< Temporal-Spatial Trade-off Request RFC 5104 */
+#define RTCP_FMT_TSTN	6		/*!< Temporal-Spatial Trade-off Notification RFC 5104 */
+#define RTCP_FMT_VBCM	7		/*!< Video back channel message RFC 5104 */
+#define RTCP_FMT_PSLEI	8		/*!< Payload-specific Third-Party Loss Early Indication RFC 6642 */
+/* 4-14 unassigned in RFC 4585 */
+#define RTCP_FMT_AFB	15		/* Application Layer Feedback message */
 
 #define RTP_MTU		1200
 #define DTMF_SAMPLE_RATE_MS    8 /*!< DTMF samples per millisecond */
@@ -4005,10 +4027,60 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 					    ast_sockaddr_stringify(&rtp->rtcp->them));
 			break;
 		case RTCP_PT_BYE:
-			if (rtcp_debug_test_addr(&addr))
+			if (rtcp_debug_test_addr(&addr)) {
 				ast_verbose("Received a BYE from %s\n",
 					    ast_sockaddr_stringify(&rtp->rtcp->them));
+			}
 			break;
+
+		case RTCP_PT_RTPFB:	/* RTP feedback */
+			int fmt = 0;
+			int version = 0;
+			int length = 0;
+			int pt;
+
+			
+
+			/* From RFC 4585, section 6.1
+ 			0                   1                   2                   3
+    			0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   			+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   			|V=2|P|   FMT   |       PT      |          length               |
+   			+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   			|                  SSRC of packet sender                        |
+   			+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   			|                  SSRC of media source                         |
+   			+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   			:            Feedback Control Information (FCI)                 :
+   			:                                                               :
+			
+				V = 2 (RTP version 2)
+				P = Padding indication (included in length)
+				FMT = 5 bits
+				PT = 8 bits
+				Length = 16 bits length in 32-bit words minus one, including header and padding
+				SSRC for orignator
+				SSRC media src
+				FCI - specificed per specific FMTs (required)
+			
+			*/
+			version = ntohl(rtcpheader[i]);	/* Only need first two bits */
+			length = (version & 0xffff);
+			fmt = (version & 0xff0000) >> 16;
+			if (rtcp_debug_test_addr(&addr)) {
+				ast_verbose("Received a RTCP Feedback (205) from %s FMT %d Length %d\n",
+					    ast_sockaddr_stringify(&rtp->rtcp->them), fmt, length);
+			}
+			
+			break;
+
+		case RTCP_PT_PSFB:	/* Payload specific data */
+			if (rtcp_debug_test_addr(&addr)) {
+				ast_verbose("Received RTCP Payload specific data (206) from %s\n",
+					    ast_sockaddr_stringify(&rtp->rtcp->them));
+			}
+			break;
+
 		default:
 			ast_debug(1, "Unknown RTCP packet (pt=%d) received from %s\n",
 				  pt, ast_sockaddr_stringify(&rtp->rtcp->them));
