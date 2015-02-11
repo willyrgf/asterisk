@@ -11058,6 +11058,7 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 	unsigned int sample_rate;
 	int debug = sip_debug_test_pvt(p);
 	char fmtp_string[256];
+	char rtcpfb_string[256];
 
 	if (sscanf(a, "rtpmap: %30u %127[^/]/%30u", &codec, mimeSubtype, &sample_rate) == 3) {
 		/* We have a rtpmap to handle */
@@ -11090,6 +11091,30 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 				ast_rtp_codecs_payloads_unset(newvideortp, NULL, codec);
 			}
 		}
+	} else if (sscanf(a, "rctp-fb: %3u %255[^\t\n]", &codec, rtcfb_string) == 2) {
+		/*  AVPF RTCP feedback. We need to check if we really have AVPF, if not ignore these options.
+		Examples:
+ 		 	a=rtcp-fb:100 ccm fir
+			a=rtcp-fb:100 nack
+			a=rtcp-fb:100 nack pli
+			a=rtcp-fb:100 goog-remb
+
+		First level choices (RFC 4585, IANA SDP parameters)
+			ack
+			nack
+			trr-int
+			app
+			ccm (RFC 5104)
+
+		Nack can have one of the the following parameters
+			sli, pli, rpsi, app, rai, tllei, pslei, ecn
+
+		Ack can have the following parameters
+			rpsi, app
+		*/
+		ast_debug(2, " Got RTCP-FB parameter for codec %d : %s \n", codec, rtcfb_string);
+		/* Do something clever with this information */
+		/* FInd out if there's a parameter */
 	}
 
 	return found;

@@ -48,3 +48,10 @@ Chrome:
 	a=rtcp-fb:100 nack pli
 	a=rtcp-fb:100 goog-remb
 
+Mozilla nightly:
+
+	a=rtcp-fb:120 nack
+	a=rtcp-fb:120 nack pli
+	a=rtcp-fb:120 ccm fir
+
+No "goog-remb" support

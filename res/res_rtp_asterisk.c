@@ -91,7 +91,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #define RTCP_PT_FUR     192             /*!< FIR  - Full Intra-frame request (h.261) */
 #define RTCP_PT_NACK    193             /*!< NACK - Negative acknowledgement (h.261) */
-#defien RTCP_SMPTETC	194		/*!> SMTPETC - time code mapping RFC 5484 */
+#define RTCP_SMPTETC	194		/*!> SMTPETC - time code mapping RFC 5484 */
 #define RTCP_PT_IJ      195             /*!< IJ   - RFC 5450 Extended Inter-arrival jitter report */
 #define RTCP_PT_SR      200             /*!< SR   - RFC 3550 Sender report */
 #define RTCP_PT_RR      201             /*!< RR   - RFC 3550 Receiver report */
