@@ -11112,7 +11112,7 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 		Ack can have the following parameters
 			rpsi, app
 		*/
-		ast_debug(2, " Got RTCP-FB parameter for codec %d : %s \n", codec, rtcfb_string);
+		ast_debug(2, " Got RTCP-FB parameter for codec %d : %s \n", codec, rtcpfb_string);
 		/* Do something clever with this information */
 		/* FInd out if there's a parameter */
 	}
