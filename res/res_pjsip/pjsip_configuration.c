@@ -144,7 +144,7 @@ static int prack_handler(const struct aco_option *opt, struct ast_variable *var,
 	if (ast_true(var->value)) {
 		endpoint->extensions.flags |= PJSIP_INV_SUPPORT_100REL;
 	} else if (ast_false(var->value)) {
-		endpoint->extensions.flags &= PJSIP_INV_SUPPORT_100REL;
+		endpoint->extensions.flags &= ~PJSIP_INV_SUPPORT_100REL;
 	} else if (!strcasecmp(var->value, "required")) {
 		endpoint->extensions.flags |= PJSIP_INV_REQUIRE_100REL;
 	} else {
@@ -646,15 +646,15 @@ static int dtls_handler(const struct aco_option *opt,
 {
 	struct ast_sip_endpoint *endpoint = obj;
 	char *name = ast_strdupa(var->name);
-	char *front, *buf = name;
+	char *front, *back, *buf = name;
 
 	/* strip out underscores in the name */
-	front = strtok(buf, "_");
+	front = strtok_r(buf, "_", &back);
 	while (front) {
 		int size = strlen(front);
 		ast_copy_string(buf, front, size + 1);
 		buf += size;
-		front = strtok(NULL, "_");
+		front = strtok_r(NULL, "_", &back);
 	}
 
 	return ast_rtp_dtls_cfg_parse(&endpoint->media.rtp.dtls_cfg, name, var->value);

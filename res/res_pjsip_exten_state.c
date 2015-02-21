@@ -212,7 +212,7 @@ static struct notify_task_data *alloc_notify_task_data(char *exten, struct exten
 
 	if ((info->exten_state == AST_EXTENSION_DEACTIVATED) ||
 	    (info->exten_state == AST_EXTENSION_REMOVED)) {
-		ast_log(LOG_WARNING, "Watcher for hint %s %s\n", exten, info->exten_state
+		ast_verb(2, "Watcher for hint %s %s\n", exten, info->exten_state
 			 == AST_EXTENSION_REMOVED ? "removed" : "deactivated");
 		task_data->terminate = 1;
 	}
@@ -334,7 +334,8 @@ static int new_subscribe(struct ast_sip_endpoint *endpoint,
 		const char *resource)
 {
 	if (!ast_exists_extension(NULL, endpoint->context, resource, PRIORITY_HINT, NULL)) {
-		ast_log(LOG_NOTICE, "Extension %s does not exist or has no associated hint\n", resource);
+		ast_log(LOG_NOTICE, "Extension state subscription failed: Extension %s does not exist in context '%s' or has no associated hint\n",
+			endpoint->context, resource);
 		return 404;
 	}
 

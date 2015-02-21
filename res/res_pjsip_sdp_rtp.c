@@ -397,7 +397,6 @@ static void add_ice_to_stream(struct ast_sip_session *session, struct ast_sip_se
 
 	ao2_iterator_destroy(&it_candidates);
 	ao2_ref(candidates, -1);
-
 }
 
 /*! \brief Function which processes ICE attributes in an audio stream */
@@ -1245,6 +1244,7 @@ static void stream_destroy(struct ast_sip_session_media *session_media)
 		ast_rtp_instance_stop(session_media->rtp);
 		ast_rtp_instance_destroy(session_media->rtp);
 	}
+	session_media->rtp = NULL;
 }
 
 /*! \brief SDP handler for 'audio' media stream */
@@ -1269,14 +1269,17 @@ static struct ast_sip_session_sdp_handler video_sdp_handler = {
 
 static int video_info_incoming_request(struct ast_sip_session *session, struct pjsip_rx_data *rdata)
 {
-	struct pjsip_transaction *tsx = pjsip_rdata_get_tsx(rdata);
+	struct pjsip_transaction *tsx;
 	pjsip_tx_data *tdata;
 
-	if (!ast_sip_is_content_type(&rdata->msg_info.msg->body->content_type,
-				     "application",
-				     "media_control+xml")) {
+	if (!session->channel
+		|| !ast_sip_is_content_type(&rdata->msg_info.msg->body->content_type,
+			"application",
+			"media_control+xml")) {
 		return 0;
 	}
+
+	tsx = pjsip_rdata_get_tsx(rdata);
 
 	ast_queue_control(session->channel, AST_CONTROL_VIDUPDATE);
 

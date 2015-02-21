@@ -37,6 +37,7 @@
 #include "asterisk/framehook.h"
 #include "asterisk/stasis_bridges.h"
 #include "asterisk/stasis_channels.h"
+#include "asterisk/causes.h"
 
 /*! \brief REFER Progress structure */
 struct refer_progress {
@@ -242,15 +243,15 @@ static struct ast_frame *refer_progress_framehook(struct ast_channel *chan, stru
 
 	/* If a notification is due to be sent push it to the thread pool */
 	if (notification) {
-		if (ast_sip_push_task(progress->serializer, refer_progress_notify, notification)) {
-			ao2_cleanup(notification);
-		}
-
 		/* If the subscription is being terminated we don't need the frame hook any longer */
 		if (notification->state == PJSIP_EVSUB_STATE_TERMINATED) {
 			ast_debug(3, "Detaching REFER progress monitoring hook from '%s' as subscription is being terminated\n",
 				ast_channel_name(chan));
 			ast_framehook_detach(chan, progress->framehook);
+		}
+
+		if (ast_sip_push_task(progress->serializer, refer_progress_notify, notification)) {
+			ao2_cleanup(notification);
 		}
 	}
 
@@ -418,8 +419,9 @@ static void refer_attended_destroy(void *obj)
 	struct refer_attended *attended = obj;
 
 	ao2_cleanup(attended->transferer);
-	ast_channel_unref(attended->transferer_chan);
+	ast_channel_cleanup(attended->transferer_chan);
 	ao2_cleanup(attended->transferer_second);
+	ao2_cleanup(attended->progress);
 }
 
 /*! \brief Allocator for attended transfer task */
@@ -673,7 +675,7 @@ static int refer_incoming_attended_request(struct ast_sip_session *session, pjsi
 
 		return 200;
 	} else {
-		const char *context = (session->channel ? pbx_builtin_getvar_helper(session->channel, "TRANSFER_CONTEXT") : "");
+		const char *context = pbx_builtin_getvar_helper(session->channel, "TRANSFER_CONTEXT");
 		struct refer_blind refer = { 0, };
 
 		if (ast_strlen_zero(context)) {
@@ -706,8 +708,6 @@ static int refer_incoming_attended_request(struct ast_sip_session *session, pjsi
 
 		return 503;
 	}
-
-	return 0;
 }
 
 static int refer_incoming_blind_request(struct ast_sip_session *session, pjsip_rx_data *rdata, pjsip_sip_uri *target,
@@ -716,10 +716,6 @@ static int refer_incoming_blind_request(struct ast_sip_session *session, pjsip_r
 	const char *context;
 	char exten[AST_MAX_EXTENSION];
 	struct refer_blind refer = { 0, };
-
-	if (!session->channel) {
-		return 404;
-	}
 
 	/* If no explicit transfer context has been provided use their configured context */
 	context = pbx_builtin_getvar_helper(session->channel, "TRANSFER_CONTEXT");
@@ -795,8 +791,9 @@ static int refer_incoming_invite_request(struct ast_sip_session *session, struct
 	/* If a Replaces header is present make sure it is valid */
 	if (pjsip_replaces_verify_request(rdata, &other_dlg, PJ_TRUE, &packet) != PJ_SUCCESS) {
 		response = packet->msg->line.status.code;
+		ast_assert(response != 0);
 		pjsip_tx_data_dec_ref(packet);
-		goto end;
+		goto inv_replace_failed;
 	}
 
 	/* If no other dialog exists then this INVITE request does not have a Replaces header */
@@ -810,21 +807,21 @@ static int refer_incoming_invite_request(struct ast_sip_session *session, struct
 	/* Don't accept an in-dialog INVITE with Replaces as it does not make much sense */
 	if (session->inv_session->dlg->state == PJSIP_DIALOG_STATE_ESTABLISHED) {
 		response = 488;
-		goto end;
+		goto inv_replace_failed;
 	}
 
 	if (!other_session) {
-		response = 481;
 		ast_debug(3, "INVITE with Replaces received on channel '%s' from endpoint '%s', but requested session does not exist\n",
 			ast_channel_name(session->channel), ast_sorcery_object_get_id(session->endpoint));
-		goto end;
+		response = 481;
+		goto inv_replace_failed;
 	}
 
 	invite.session = other_session;
 
 	if (ast_sip_push_task_synchronous(other_session->serializer, invite_replaces, &invite)) {
 		response = 481;
-		goto end;
+		goto inv_replace_failed;
 	}
 
 	ast_channel_lock(session->channel);
@@ -832,48 +829,69 @@ static int refer_incoming_invite_request(struct ast_sip_session *session, struct
 	ast_channel_unlock(session->channel);
 	ast_raw_answer(session->channel);
 
+	ast_debug(3, "INVITE with Replaces being attempted.  '%s' --> '%s'\n",
+		ast_channel_name(session->channel), ast_channel_name(invite.channel));
+
 	if (!invite.bridge) {
 		struct ast_channel *chan = session->channel;
 
-		/* This will use a synchronous task but we aren't operating in the serializer at this point in time, so it
-		 * won't deadlock */
-		if (!ast_channel_move(invite.channel, session->channel)) {
+		/*
+		 * This will use a synchronous task but we aren't operating in
+		 * the serializer at this point in time, so it won't deadlock.
+		 */
+		if (!ast_channel_move(invite.channel, chan)) {
+			/*
+			 * We can't directly use session->channel because ast_channel_move()
+			 * does a masquerade which changes session->channel to a different
+			 * channel.  To ensure we work on the right channel we store a
+			 * pointer locally before we begin so it remains valid.
+			 */
 			ast_hangup(chan);
 		} else {
-			response = 500;
+			response = AST_CAUSE_FAILURE;
 		}
 	} else {
 		if (ast_bridge_impart(invite.bridge, session->channel, invite.channel, NULL,
 			AST_BRIDGE_IMPART_CHAN_INDEPENDENT)) {
-			response = 500;
+			response = AST_CAUSE_FAILURE;
 		}
-	}
-
-	if (!response) {
-		ast_debug(3, "INVITE with Replaces successfully completed on channels '%s' and '%s'\n",
-			ast_channel_name(session->channel), ast_channel_name(invite.channel));
 	}
 
 	ast_channel_unref(invite.channel);
 	ao2_cleanup(invite.bridge);
 
-end:
-	if (response) {
-		if (session->inv_session->dlg->state != PJSIP_DIALOG_STATE_ESTABLISHED) {
-			ast_debug(3, "INVITE with Replaces failed on channel '%s', sending response of '%d'\n",
-				ast_channel_name(session->channel), response);
-			session->defer_terminate = 1;
-			ast_hangup(session->channel);
-			session->channel = NULL;
+	if (!response) {
+		/*
+		 * On success we cannot use session->channel in the debug message.
+		 * This thread either no longer has a ref to session->channel or
+		 * session->channel is no longer the original channel.
+		 */
+		ast_debug(3, "INVITE with Replaces successfully completed.\n");
+	} else {
+		ast_debug(3, "INVITE with Replaces failed on channel '%s', hanging up with cause '%d'\n",
+			ast_channel_name(session->channel), response);
+		ast_channel_lock(session->channel);
+		ast_channel_hangupcause_set(session->channel, response);
+		ast_channel_unlock(session->channel);
+		ast_hangup(session->channel);
+	}
 
-			if (pjsip_inv_end_session(session->inv_session, response, NULL, &packet) == PJ_SUCCESS) {
-				ast_sip_session_send_response(session, packet);
-			}
-		} else {
-			ast_debug(3, "INVITE with Replaces in-dialog on channel '%s', hanging up\n",
-				ast_channel_name(session->channel));
-			ast_queue_hangup(session->channel);
+	return 1;
+
+inv_replace_failed:
+	if (session->inv_session->dlg->state != PJSIP_DIALOG_STATE_ESTABLISHED) {
+		ast_debug(3, "INVITE with Replaces failed on channel '%s', sending response of '%d'\n",
+			ast_channel_name(session->channel), response);
+		session->defer_terminate = 1;
+		ast_hangup(session->channel);
+
+		if (pjsip_inv_end_session(session->inv_session, response, NULL, &packet) == PJ_SUCCESS) {
+			ast_sip_session_send_response(session, packet);
 		}
+	} else {
+		ast_debug(3, "INVITE with Replaces in-dialog on channel '%s', hanging up\n",
+			ast_channel_name(session->channel));
+		ast_queue_hangup(session->channel);
 	}
 
 	return 1;
@@ -891,6 +909,14 @@ static int refer_incoming_refer_request(struct ast_sip_session *session, struct 
 
 	static const pj_str_t str_refer_to = { "Refer-To", 8 };
 	static const pj_str_t str_replaces = { "Replaces", 8 };
+
+	if (!session->channel) {
+		/* No channel to refer.  Likely because the call was just hung up. */
+		pjsip_dlg_respond(session->inv_session->dlg, rdata, 404, NULL, NULL, NULL);
+		ast_debug(3, "Received a REFER on a session with no channel from endpoint '%s'.\n",
+			ast_sorcery_object_get_id(session->endpoint));
+		return 0;
+	}
 
 	if (!session->endpoint->allowtransfer) {
 		pjsip_dlg_respond(session->inv_session->dlg, rdata, 603, NULL, NULL, NULL);

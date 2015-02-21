@@ -2430,7 +2430,7 @@ static int __messagecount(const char *context, const char *mailbox, const char *
 	/* We have to get the user before we can open the stream! */
 	vmu = find_user(&vmus, context, mailbox);
 	if (!vmu) {
-		ast_log(AST_LOG_ERROR, "Couldn't find mailbox %s in context %s\n", mailbox, context);
+		ast_log(AST_LOG_WARNING, "Couldn't find mailbox %s in context %s\n", mailbox, context);
 		return -1;
 	} else {
 		/* No IMAP account available */
@@ -3334,7 +3334,7 @@ static char *get_header_by_tag(char *header, char *tag, char *buf, size_t len)
 	if (taglen < 1)
 		return NULL;
 
-	if (!(start = strstr(header, tag)))
+	if (!(start = strcasestr(header, tag)))
 		return NULL;
 
 	/* Since we can be called multiple times we should clear our buffer */
