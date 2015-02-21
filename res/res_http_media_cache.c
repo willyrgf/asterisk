@@ -76,11 +76,10 @@ static size_t curl_header_callback(char *buffer, size_t size, size_t nitems, voi
 	header = ast_alloca(realsize + 1);
 	memcpy(header, buffer, realsize);
 	header[realsize] = '\0';
-
 	value = strchr(header, ':');
 	if (!value) {
-		ast_log(LOG_WARNING, "Failed to split received header in cURL request\n");
-		return 0;
+		/* Not a header we care about; bail */
+		return realsize;
 	}
 	*value++ = '\0';
 
@@ -260,7 +259,7 @@ static int bucket_file_expired(struct ast_bucket_file *bucket_file)
 		return 1;
 	}
 
-	return ast_tvcmp(current_time, expires) == 1 ? 1 : 0;
+	return ast_tvcmp(current_time, expires) == -1 ? 0 : 1;
 }
 
 static void update_pre_exec(struct ast_bucket_file *bucket_file, CURL *curl, void *obj)
@@ -348,14 +347,14 @@ static int bucket_http_wizard_delete(const struct ast_sorcery *sorcery, void *da
 	return 0;
 }
 
-static struct ast_sorcery_wizard bucket_wizard = {
+static struct ast_sorcery_wizard http_bucket_wizard = {
 	.name = "http",
 	.create = bucket_http_wizard_create,
 	.retrieve_id = bucket_http_wizard_retrieve_id,
 	.delete = bucket_http_wizard_delete,
 };
 
-static struct ast_sorcery_wizard bucket_file_wizard = {
+static struct ast_sorcery_wizard http_bucket_file_wizard = {
 	.name = "http",
 	.create = bucket_http_wizard_create,
 	.update = bucket_http_wizard_update,
@@ -363,6 +362,20 @@ static struct ast_sorcery_wizard bucket_file_wizard = {
 	.delete = bucket_http_wizard_delete,
 };
 
+static struct ast_sorcery_wizard https_bucket_wizard = {
+	.name = "https",
+	.create = bucket_http_wizard_create,
+	.retrieve_id = bucket_http_wizard_retrieve_id,
+	.delete = bucket_http_wizard_delete,
+};
+
+static struct ast_sorcery_wizard https_bucket_file_wizard = {
+	.name = "https",
+	.create = bucket_http_wizard_create,
+	.update = bucket_http_wizard_update,
+	.retrieve_id = bucket_http_wizard_retrieve_id,
+	.delete = bucket_http_wizard_delete,
+};
 
 static int unload_module(void)
 {
@@ -371,9 +384,15 @@ static int unload_module(void)
 
 static int load_module(void)
 {
-	if (ast_bucket_scheme_register("http", &bucket_wizard, &bucket_file_wizard,
+	if (ast_bucket_scheme_register("http", &http_bucket_wizard, &http_bucket_file_wizard,
 			NULL, NULL)) {
 		ast_log(LOG_ERROR, "Failed to register Bucket HTTP wizard scheme implementation\n");
+		return AST_MODULE_LOAD_FAILURE;
+	}
+
+	if (ast_bucket_scheme_register("https", &https_bucket_wizard, &https_bucket_file_wizard,
+			NULL, NULL)) {
+		ast_log(LOG_ERROR, "Failed to register Bucket HTTPS wizard scheme implementation\n");
 		return AST_MODULE_LOAD_FAILURE;
 	}
 
