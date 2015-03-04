@@ -32,6 +32,7 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/linkedlists.h"
+#include "asterisk/vector.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_naptr.h"
 #include "asterisk/dns_srv.h"
@@ -40,6 +41,82 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 AST_RWLIST_HEAD_STATIC(resolvers, ast_dns_resolver);
 
+/*! \brief Generic DNS record information */
+struct ast_dns_record {
+	/*! \brief Resource record type */
+	int rr_type;
+	/*! \brief Resource record class */
+	int rr_class;
+	/*! \brief Time-to-live of the record */
+	int ttl;
+	/*! \brief The raw DNS record */
+	char *data;
+	/*! \brief The size of the raw DNS record */
+	size_t data_len;
+	/*! \brief Linked list information */
+	AST_LIST_ENTRY(ast_dns_record) list;
+};
+
+/*! \brief An SRV record */
+struct ast_dns_srv_record {
+	/*! \brief Generic DNS record information */
+	struct ast_dns_record generic;
+	/*! \brief The hostname in the SRV record */
+	const char *host;
+	/*! \brief The priority of the SRV record */
+	unsigned short priority;
+	/*! \brief The weight of the SRV record */
+	unsigned short weight;
+	/*! \brief The port in the SRV record */
+	unsigned short port;
+};
+
+/*! \brief A NAPTR record */
+struct ast_dns_naptr_record {
+	/*! \brief Generic DNS record information */
+	struct ast_dns_record generic;
+	/*! \brief The flags from the NAPTR record */
+	const char *flags;
+	/*! \brief The service from the NAPTR record */
+	const char *service;
+	/*! \brief The regular expression from the NAPTR record */
+	const char *regexp;
+	/*! \brief The replacement from the NAPTR record */
+	const char *replacement;
+	/*! \brief The order for the NAPTR record */
+	unsigned short order;
+	/*! \brief The preference of the NAPTR record */
+	unsigned short preference;
+};
+
+/*! \brief The result of a DNS query */
+struct ast_dns_result {
+	/*! \brief Whether the domain was not found */
+	unsigned int nxdomain;
+	/*! \brief Whether the result is secure */
+	unsigned int secure;
+	/*! \brief Whether the result is bogus */
+	unsigned int bogus;
+	/*! \brief The canonical name */
+	const char *canonical;
+	/*! \brief Records returned */
+	AST_LIST_HEAD_NOLOCK(, ast_dns_record) records;
+};
+
+/*! \brief A DNS query */
+struct ast_dns_query {
+	/*! \brief Callback to invoke upon completion */
+	ast_dns_resolve_callback callback;
+	/*! \brief User-specific data */
+	void *user_data;
+	/*! \brief Resolver-specific data */
+	void *resolver_data;
+	/*! \brief Result of the DNS query */
+	struct ast_dns_result *result;
+	/*! \brief Timer for recurring resolution */
+	int timer;
+};
+
 const char *ast_dns_query_get_name(const struct ast_dns_query *query)
 {
 	return NULL;
@@ -47,7 +124,7 @@ const char *ast_dns_query_get_name(const struct ast_dns_query *query)
 
 int ast_dns_query_get_rr_type(const struct ast_dns_query *query)
 {
-		return 0;
+	return 0;
 }
 
 int ast_dns_query_get_rr_class(const struct ast_dns_query *query)
@@ -62,37 +139,37 @@ int ast_dns_query_get_rcode(const struct ast_dns_query *query)
 
 void *ast_dns_query_get_data(const struct ast_dns_query *query)
 {
-	return NULL;
+	return query->user_data;
 }
 
 struct ast_dns_result *ast_dns_query_get_result(const struct ast_dns_query *query)
 {
-	return NULL;
+	return query->result;
 }
 
 unsigned int ast_dns_result_get_nxdomain(const struct ast_dns_result *result)
 {
-	return 0;
+	return result->nxdomain;
 }
 
 unsigned int ast_dns_result_get_secure(const struct ast_dns_result *result)
 {
-	return 0;
+	return result->secure;
 }
 
 unsigned int ast_dns_result_get_bogus(const struct ast_dns_result *result)
 {
-	return 0;
+	return result->bogus;
 }
 
 const char *ast_dns_result_get_canonical(const struct ast_dns_result *result)
 {
-	return NULL;
+	return result->canonical;
 }
 
 const struct ast_dns_record *ast_dns_result_get_records(const struct ast_dns_result *result)
 {
-	return NULL;
+	return AST_LIST_FIRST(&result->records);
 }
 
 void ast_dns_result_free(struct ast_dns_result *result)
@@ -101,27 +178,27 @@ void ast_dns_result_free(struct ast_dns_result *result)
 
 int ast_dns_record_get_rr_type(const struct ast_dns_record *record)
 {
-	return 0;
+	return record->rr_type;
 }
 
 int ast_dns_record_get_rr_class(const struct ast_dns_record *record)
 {
-	return 0;
+	return record->rr_class;
 }
 
 int ast_dns_record_get_ttl(const struct ast_dns_record *record)
 {
-	return 0;
+	return record->ttl;
 }
 
 const char *ast_dns_record_get_data(const struct ast_dns_record *record)
 {
-	return NULL;
+	return record->data;
 }
 
 struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *record)
 {
-	return NULL;
+	return AST_LIST_NEXT(record, list);
 }
 
 struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
@@ -216,11 +293,12 @@ const char *ast_dns_tlsa_get_association_data(const struct ast_dns_record *recor
 
 void ast_dns_resolver_set_data(struct ast_dns_query *query, void *data)
 {
+	query->resolver_data = data;
 }
 
 void *ast_dns_resolver_get_data(const struct ast_dns_query *query)
 {
-	return NULL;
+	return query->resolver_data;
 }
 
 void ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,

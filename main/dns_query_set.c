@@ -31,8 +31,22 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/vector.h"
+#include "asterisk/astobj2.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_query_set.h"
+
+/*! \brief A set of DNS queries */
+struct ast_dns_query_set {
+	/*! \brief DNS queries */
+	AST_VECTOR(, struct ast_dns_query *) queries;
+	/*! \brief The total number of completed queries */
+	unsigned int queries_completed;
+	/*! \brief Callback to invoke upon completion */
+	ast_dns_query_set_callback callback;
+	/*! \brief User-specific data */
+	void *user_data;
+};
 
 struct ast_dns_query_set *ast_dns_query_set_create(void)
 {
@@ -56,11 +70,13 @@ struct ast_dns_query *ast_dns_query_set_get(const struct ast_dns_query_set *quer
 
 void *ast_dns_query_set_get_data(const struct ast_dns_query_set *query_set)
 {
-	return NULL;
+	return query_set->user_data;
 }
 
 void ast_dns_query_set_resolve_async(struct ast_dns_query_set *query_set, ast_dns_query_set_callback callback, void *data)
 {
+	query_set->callback = callback;
+	query_set->user_data = ao2_bump(data);
 }
 
 void ast_query_set_resolve(struct ast_dns_query_set *query_set)
