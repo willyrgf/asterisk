@@ -34,6 +34,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/linkedlists.h"
 #include "asterisk/vector.h"
 #include "asterisk/astobj2.h"
+#include "asterisk/strings.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_naptr.h"
 #include "asterisk/dns_srv.h"
@@ -210,17 +211,23 @@ struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *reco
 	return AST_LIST_NEXT(record, list);
 }
 
-/*! \brief Destructor for a DNS query */
+/*! \brief \brief Destructor for a DNS query */
 static void dns_query_destroy(void *data)
 {
 	struct ast_dns_query *query = data;
 
 	ao2_cleanup(query->user_data);
+	ast_assert(query->resolver_data != NULL);
+	ast_dns_result_free(query->result);
 }
 
 struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
 {
 	struct ast_dns_query *query;
+
+	if (ast_strlen_zero(name) || !callback) {
+		return NULL;
+	}
 
 	query = ao2_alloc_options(sizeof(*query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!query) {
@@ -263,9 +270,70 @@ int ast_dns_resolve_cancel(struct ast_dns_query *query)
 	return query->resolver->cancel(query);
 }
 
+/*! \brief Structure used for signaling back for synchronous resolution completion */
+struct dns_synchronous_resolve {
+	/*! \brief Lock used for signaling */
+	ast_mutex_t lock;
+	/*! \brief Condition used for signaling */
+	ast_cond_t cond;
+	/*! \brief Whether the query has completed */
+	unsigned int completed;
+	/*! \brief The result from the query */
+	struct ast_dns_result *result;
+};
+
+/*! \brief Destructor for synchronous resolution structure */
+static void dns_synchronous_resolve_destroy(void *data)
+{
+	struct dns_synchronous_resolve *synchronous = data;
+
+	ast_mutex_destroy(&synchronous->lock);
+	ast_cond_destroy(&synchronous->cond);
+
+	/* This purposely does not unref result as it has been passed to the caller */
+}
+
+/*! \brief Callback used to implement synchronous resolution */
+static void dns_synchronous_resolve_callback(const struct ast_dns_query *query)
+{
+	struct dns_synchronous_resolve *synchronous = ast_dns_query_get_data(query);
+
+	synchronous->result = ao2_bump(ast_dns_query_get_result(query));
+
+	ast_mutex_lock(&synchronous->lock);
+	synchronous->completed = 1;
+	ast_cond_signal(&synchronous->cond);
+	ast_mutex_unlock(&synchronous->lock);
+}
+
 int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_result **result)
 {
-	return 0;
+	struct dns_synchronous_resolve *synchronous;
+	struct ast_dns_query *query;
+
+	synchronous = ao2_alloc_options(sizeof(*synchronous), dns_synchronous_resolve_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!synchronous) {
+		return -1;
+	}
+
+	ast_mutex_init(&synchronous->lock);
+	ast_cond_init(&synchronous->cond, NULL);
+
+	query = ast_dns_resolve_async(name, rr_type, rr_class, dns_synchronous_resolve_callback, synchronous);
+	if (query) {
+		/* Wait for resolution to complete */
+		ast_mutex_lock(&synchronous->lock);
+		while (!synchronous->completed) {
+			ast_cond_wait(&synchronous->cond, &synchronous->lock);
+		}
+		ast_mutex_unlock(&synchronous->lock);
+		ao2_ref(query, -1);
+	}
+
+	*result = synchronous->result;
+	ao2_ref(synchronous, -1);
+
+	return *result ? 0 : -1;
 }
 
 const char *ast_dns_naptr_get_flags(const struct ast_dns_record *record)
@@ -351,21 +419,46 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query)
 void ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
 	const char *canonical)
 {
+	if (query->result) {
+		ast_dns_result_free(query->result);
+	}
+
+	query->result = NULL;
 }
 
 int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr_class, int ttl, char *data, size_t size)
 {
+	if (!query->result) {
+		return -1;
+	}
+
 	return -1;
 }
 
 void ast_dns_resolver_completed(const struct ast_dns_query *query)
 {
+	query->callback(query);
 }
 
 int ast_dns_resolver_register(struct ast_dns_resolver *resolver)
 {
 	struct ast_dns_resolver *iter;
 	int inserted = 0;
+
+	if (!resolver) {
+		return -1;
+	} else if (ast_strlen_zero(resolver->name)) {
+		ast_log(LOG_ERROR, "Registration of DNS resolver failed as it does not have a name\n");
+		return -1;
+	} else if (!resolver->resolve) {
+		ast_log(LOG_ERROR, "DNS resolver '%s' does not implement the resolve callback which is required\n",
+			resolver->name);
+		return -1;
+	} else if (!resolver->cancel) {
+		ast_log(LOG_ERROR, "DNS resolver '%s' does not implement the cancel callback which is required\n",
+			resolver->name);
+		return -1;
+	}
 
 	AST_RWLIST_WRLOCK(&resolvers);
 
@@ -400,6 +493,10 @@ int ast_dns_resolver_register(struct ast_dns_resolver *resolver)
 void ast_dns_resolver_unregister(struct ast_dns_resolver *resolver)
 {
 	struct ast_dns_resolver *iter;
+
+	if (!resolver) {
+		return;
+	}
 
 	AST_RWLIST_WRLOCK(&resolvers);
 	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&resolvers, iter, next) {
