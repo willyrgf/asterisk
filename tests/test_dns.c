@@ -609,7 +609,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolver_set_result);
 	AST_TEST_UNREGISTER(resolver_set_result_off_nominal);
 	AST_TEST_UNREGISTER(resolver_add_record);
-	AST_TEST_REGISTER(resolver_add_record_off_nominal);
+	AST_TEST_UNREGISTER(resolver_add_record_off_nominal);
 
 	return 0;
 }
