@@ -103,7 +103,7 @@ void ast_dns_resolver_completed(const struct ast_dns_query *query);
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_dns_resolver_register(const struct ast_core_dns_resolver *resolver);
+int ast_dns_resolver_register(const struct ast_dns_resolver *resolver);
 
 /*!
  * \brief Unregister a DNS resolver
@@ -113,7 +113,7 @@ int ast_dns_resolver_register(const struct ast_core_dns_resolver *resolver);
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_dns_resolver_unregister(const struct ast_core_dns_resolver *resolver);
+int ast_dns_resolver_unregister(const struct ast_dns_resolver *resolver);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }
