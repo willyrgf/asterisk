@@ -38,6 +38,8 @@ struct ast_dns_resolver {
     int (*resolve)(struct ast_dns_query *query);
     /*! \brief Cancel resolution of a DNS query */
     int (*cancel)(struct ast_dns_query *query);
+    /*! \brief Linked list information */
+    AST_RWLIST_ENTRY(ast_dns_resolver) next;
 };
 
 /*!
@@ -103,17 +105,14 @@ void ast_dns_resolver_completed(const struct ast_dns_query *query);
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_dns_resolver_register(const struct ast_dns_resolver *resolver);
+int ast_dns_resolver_register(struct ast_dns_resolver *resolver);
 
 /*!
  * \brief Unregister a DNS resolver
  *
  * \param resolver A DNS resolver implementation
- *
- * \retval 0 success
- * \retval -1 failure
  */
-int ast_dns_resolver_unregister(const struct ast_dns_resolver *resolver);
+void ast_dns_resolver_unregister(struct ast_dns_resolver *resolver);
 
 #if defined(__cplusplus) || defined(c_plusplus)
 }

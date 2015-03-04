@@ -31,11 +31,14 @@
 
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
+#include "asterisk/linkedlists.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_naptr.h"
 #include "asterisk/dns_srv.h"
 #include "asterisk/dns_tlsa.h"
 #include "asterisk/dns_resolver.h"
+
+AST_RWLIST_HEAD_STATIC(resolvers, ast_dns_resolver);
 
 const char *ast_dns_query_get_name(const struct ast_dns_query *query)
 {
@@ -234,12 +237,54 @@ void ast_dns_resolver_completed(const struct ast_dns_query *query)
 {
 }
 
-int ast_dns_resolver_register(const struct ast_dns_resolver *resolver)
+int ast_dns_resolver_register(struct ast_dns_resolver *resolver)
 {
-	return -1;
+	struct ast_dns_resolver *iter;
+	int inserted = 0;
+
+	AST_RWLIST_WRLOCK(&resolvers);
+
+	AST_LIST_TRAVERSE(&resolvers, iter, next) {
+		if (!strcmp(iter->name, resolver->name)) {
+			ast_log(LOG_ERROR, "A DNS resolver with the name '%s' is already registered\n", resolver->name);
+			AST_RWLIST_UNLOCK(&resolvers);
+			return -1;
+		}
+	}
+
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&resolvers, iter, next) {
+		if (iter->priority > resolver->priority) {
+			AST_RWLIST_INSERT_BEFORE_CURRENT(resolver, next);
+			inserted = 1;
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+
+	if (!inserted) {
+		AST_RWLIST_INSERT_TAIL(&resolvers, resolver, next);
+	}
+
+	AST_RWLIST_UNLOCK(&resolvers);
+
+	ast_verb(2, "Registered DNS resolver '%s' with priority '%d'\n", resolver->name, resolver->priority);
+
+	return 0;
 }
 
-int ast_dns_resolver_unregister(const struct ast_dns_resolver *resolver)
+void ast_dns_resolver_unregister(struct ast_dns_resolver *resolver)
 {
-	return -1;
+	struct ast_dns_resolver *iter;
+
+	AST_RWLIST_WRLOCK(&resolvers);
+	AST_RWLIST_TRAVERSE_SAFE_BEGIN(&resolvers, iter, next) {
+		if (resolver == iter) {
+			AST_RWLIST_REMOVE_CURRENT(next);
+			break;
+		}
+	}
+	AST_RWLIST_TRAVERSE_SAFE_END;
+	AST_RWLIST_UNLOCK(&resolvers);
+
+	ast_verb(2, "Unregistered DNS resolver '%s'\n", resolver->name);
 }
