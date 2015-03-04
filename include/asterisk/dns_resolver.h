@@ -86,7 +86,7 @@ void ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdom
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr_class, int ttl, char *data, size_t size);
+int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr_class, int ttl, const char *data, const size_t size);
 
 /*!
  * \brief Mark a DNS query as having been completed

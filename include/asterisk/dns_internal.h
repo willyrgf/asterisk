@@ -1,0 +1,109 @@
+/*
+ * Asterisk -- An open source telephony toolkit.
+ *
+ * Copyright (C) 2015, Digium, Inc.
+ *
+ * Joshua Colp <jcolp@digium.com>
+ *
+ * See http://www.asterisk.org for more information about
+ * the Asterisk project. Please do not directly contact
+ * any of the maintainers of this project for assistance;
+ * the project provides a web site, mailing lists and IRC
+ * channels for your use.
+ *
+ * This program is free software, distributed under the terms of
+ * the GNU General Public License Version 2. See the LICENSE file
+ * at the top of the source tree.
+ */
+
+/*! \file
+ *
+ * \brief Internal DNS structure definitions
+ *
+ * \author Joshua Colp <jcolp@digium.com>
+ */
+
+/*! \brief Generic DNS record information */
+struct ast_dns_record {
+	/*! \brief Resource record type */
+	int rr_type;
+	/*! \brief Resource record class */
+	int rr_class;
+	/*! \brief Time-to-live of the record */
+	int ttl;
+	/*! \brief The raw DNS record */
+	char *data;
+	/*! \brief The size of the raw DNS record */
+	size_t data_len;
+	/*! \brief Linked list information */
+	AST_LIST_ENTRY(ast_dns_record) list;
+};
+
+/*! \brief An SRV record */
+struct ast_dns_srv_record {
+	/*! \brief Generic DNS record information */
+	struct ast_dns_record generic;
+	/*! \brief The hostname in the SRV record */
+	const char *host;
+	/*! \brief The priority of the SRV record */
+	unsigned short priority;
+	/*! \brief The weight of the SRV record */
+	unsigned short weight;
+	/*! \brief The port in the SRV record */
+	unsigned short port;
+};
+
+/*! \brief A NAPTR record */
+struct ast_dns_naptr_record {
+	/*! \brief Generic DNS record information */
+	struct ast_dns_record generic;
+	/*! \brief The flags from the NAPTR record */
+	const char *flags;
+	/*! \brief The service from the NAPTR record */
+	const char *service;
+	/*! \brief The regular expression from the NAPTR record */
+	const char *regexp;
+	/*! \brief The replacement from the NAPTR record */
+	const char *replacement;
+	/*! \brief The order for the NAPTR record */
+	unsigned short order;
+	/*! \brief The preference of the NAPTR record */
+	unsigned short preference;
+};
+
+/*! \brief The result of a DNS query */
+struct ast_dns_result {
+	/*! \brief Whether the domain was not found */
+	unsigned int nxdomain;
+	/*! \brief Whether the result is secure */
+	unsigned int secure;
+	/*! \brief Whether the result is bogus */
+	unsigned int bogus;
+	/*! \brief The canonical name */
+	const char *canonical;
+	/*! \brief Records returned */
+	AST_LIST_HEAD_NOLOCK(, ast_dns_record) records;
+};
+
+/*! \brief A DNS query */
+struct ast_dns_query {
+	/*! \brief Callback to invoke upon completion */
+	ast_dns_resolve_callback callback;
+	/*! \brief User-specific data */
+	void *user_data;
+	/*! \brief The resolver in use for this query */
+	struct ast_dns_resolver *resolver;
+	/*! \brief Resolver-specific data */
+	void *resolver_data;
+	/*! \brief Result of the DNS query */
+	struct ast_dns_result *result;
+	/*! \brief Timer for recurring resolution */
+	int timer;
+	/*! \brief Resource record type */
+	int rr_type;
+	/*! \brief Resource record class */
+	int rr_class;
+	/*! \brief The name of what is being resolved */
+	char name[0];
+};
+
