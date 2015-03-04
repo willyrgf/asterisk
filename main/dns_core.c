@@ -33,6 +33,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include "asterisk/linkedlists.h"
 #include "asterisk/vector.h"
+#include "asterisk/astobj2.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_naptr.h"
 #include "asterisk/dns_srv.h"
@@ -109,27 +110,35 @@ struct ast_dns_query {
 	ast_dns_resolve_callback callback;
 	/*! \brief User-specific data */
 	void *user_data;
+	/*! \brief The resolver in use for this query */
+	struct ast_dns_resolver *resolver;
 	/*! \brief Resolver-specific data */
 	void *resolver_data;
 	/*! \brief Result of the DNS query */
 	struct ast_dns_result *result;
 	/*! \brief Timer for recurring resolution */
 	int timer;
+	/*! \brief Resource record type */
+	int rr_type;
+	/*! \brief Resource record class */
+	int rr_class;
+	/*! \brief The name of what is being resolved */
+	char name[0];
 };
 
 const char *ast_dns_query_get_name(const struct ast_dns_query *query)
 {
-	return NULL;
+	return query->name;
 }
 
 int ast_dns_query_get_rr_type(const struct ast_dns_query *query)
 {
-	return 0;
+	return query->rr_type;
 }
 
 int ast_dns_query_get_rr_class(const struct ast_dns_query *query)
 {
-	return 0;
+	return query->rr_class;
 }
 
 int ast_dns_query_get_rcode(const struct ast_dns_query *query)
@@ -201,9 +210,47 @@ struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *reco
 	return AST_LIST_NEXT(record, list);
 }
 
+/*! \brief Destructor for a DNS query */
+static void dns_query_destroy(void *data)
+{
+	struct ast_dns_query *query = data;
+
+	ao2_cleanup(query->user_data);
+}
+
 struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
 {
-	return NULL;
+	struct ast_dns_query *query;
+
+	query = ao2_alloc_options(sizeof(*query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!query) {
+		return NULL;
+	}
+
+	query->callback = callback;
+	query->rr_type = rr_type;
+	query->rr_class = rr_class;
+	strcpy(query->name, name); /* SAFE */
+
+	AST_RWLIST_RDLOCK(&resolvers);
+	query->resolver = AST_RWLIST_FIRST(&resolvers);
+	AST_RWLIST_UNLOCK(&resolvers);
+
+	if (!query->resolver) {
+		ast_log(LOG_ERROR, "Attempted to do a DNS query for '%s' of class '%d' and type '%d' but no resolver is available\n",
+			name, rr_class, rr_type);
+		ao2_ref(query, -1);
+		return NULL;
+	}
+
+	if (query->resolver->resolve(query)) {
+		ast_log(LOG_ERROR, "Resolver '%s' returned an error when resolving '%s' of class '%d' and type '%d'\n",
+			query->resolver->name, name, rr_class, rr_type);
+		ao2_ref(query, -1);
+		return NULL;
+	}
+
+	return query;
 }
 
 struct ast_dns_query *ast_dns_resolve_async_recurring(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
@@ -213,7 +260,7 @@ struct ast_dns_query *ast_dns_resolve_async_recurring(const char *name, int rr_t
 
 int ast_dns_resolve_cancel(struct ast_dns_query *query)
 {
-	return 0;
+	return query->resolver->cancel(query);
 }
 
 int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_result **result)
