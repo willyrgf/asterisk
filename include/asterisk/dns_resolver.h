@@ -69,8 +69,11 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query);
  * \param result Whether the result is secured or not
  * \param bogus Whether the result is bogus or not
  * \param canonical The canonical name
+ *
+ * \retval 0 success
+ * \retval -1 failure
  */
-void ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
+int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
 	const char *canonical);
 
 /*!

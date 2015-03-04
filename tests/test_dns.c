@@ -24,6 +24,7 @@
 #include "asterisk.h"
 
 #include <arpa/nameser.h>
+#include <arpa/inet.h>
 
 #include "asterisk/test.h"
 #include "asterisk/module.h"
@@ -211,8 +212,13 @@ AST_TEST_DEFINE(resolver_data)
 		info->name = "resolver_data";
 		info->category = "/main/dns/";
 		info->summary = "Test getting and setting data on a DNS resolver";
-		/* XXX Better description required */
-		info->description = "Sup dawg";
+		info->description = "This test does the following:\n"
+			"\t* Ensure that requesting resolver data results in a NULL return if no data has been set.\n"
+			"\t* Ensure that setting resolver data does not result in an error.\n"
+			"\t* Ensure that retrieving the set resolver data returns the data we expect\n"
+			"\t* Ensure that setting new resolver data on the query does not result in an error\n"
+			"\t* Ensure that retrieving the resolver data returns the new data that we set\n"
+			"\t* Ensure that ast_dns_resolver_completed() removes resolver data from the query\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
@@ -270,12 +276,23 @@ AST_TEST_DEFINE(resolver_data)
 AST_TEST_DEFINE(resolver_add_record)
 {
 	struct ast_dns_query some_query;
-	/* XXX I know this isn't what an A record looks like, but just trying to get something compiling right now */
-	static const char *CLEAN_ADDR = "127.0.0.1";
+	static const char *LOCAL_ADDR = "127.0.0.1";
+	static const size_t bufsize = sizeof(struct in_addr);
+	char buf[bufsize];
 
 	switch (cmd) {
 	case TEST_INIT:
-		/* XXX Add details */
+		info->name = "resolver_add_record";
+		info->category = "/main/dns/";
+		info->summary = "Test adding DNS records to a query";
+		info->description =
+			"This test performs the following:\n"
+			"\t* Ensure a nominal A record can be added to a query\n"
+			"\t* Ensure that an A record with invalid RR types cannot be added to a query\n"
+			"\t* Ensure that an A record with invalid RR classes cannot be added to a query\n"
+			"\t* Ensure that an A record with invalid TTL cannot be added to a query\n"
+			"\t* Ensure that an A record with NULL data cannot be added to a query\n"
+			"\t* Ensure that an A record with invalid length cannot be added to a query\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
@@ -283,36 +300,38 @@ AST_TEST_DEFINE(resolver_add_record)
 
 	memset(&some_query, 0, sizeof(some_query));
 
+	inet_ntop(AF_INET, LOCAL_ADDR, buf, bufsize);
+
 	/* Nominal Record */
-	if (ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, CLEAN_ADDR, strlen(CLEAN_ADDR))) {
+	if (ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, buf, bufsize)) {
 		ast_test_status_update(test, "Unable to add nominal record to query\n");
 		return AST_TEST_FAIL;
 	}
 
 	/* Invalid RR types */
-	if (!ast_dns_resolver_add_record(&some_query, -1, ns_c_in, 12345, CLEAN_ADDR, strlen(CLEAN_ADDR))) {
+	if (!ast_dns_resolver_add_record(&some_query, -1, ns_c_in, 12345, buf, bufsize)) {
 		ast_test_status_update(test, "Successfully added DNS record with negative RR type\n");
 		return AST_TEST_FAIL;
 	}
 	
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_max + 1, ns_c_in, 12345, CLEAN_ADDR, strlen(CLEAN_ADDR))) {
+	if (!ast_dns_resolver_add_record(&some_query, ns_t_max + 1, ns_c_in, 12345, buf, bufsize)) {
 		ast_test_status_update(test, "Successfully added DNS record with too large RR type\n");
 		return AST_TEST_FAIL;
 	}
 
 	/* Invalid RR classes */
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, -1, 12345, CLEAN_ADDR, strlen(CLEAN_ADDR))) {
+	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, -1, 12345, buf, bufsize)) {
 		ast_test_status_update(test, "Successfully added DNS record with negative RR class\n");
 		return AST_TEST_FAIL;
 	}
 
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_max + 1, 12345, CLEAN_ADDR, strlen(CLEAN_ADDR))) {
+	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_max + 1, 12345, buf, bufsize)) {
 		ast_test_status_update(test, "Successfully added DNS record with too large RR class\n");
 		return AST_TEST_FAIL;
 	}
 
 	/* Invalid TTL */
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, -1, CLEAN_ADDR, strlen(CLEAN_ADDR))) {
+	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, -1, buf, bufsize)) {
 		ast_test_status_update(test, "Successfully added DNS record with negative TTL\n");
 		return AST_TEST_FAIL;
 	}
@@ -324,18 +343,38 @@ AST_TEST_DEFINE(resolver_add_record)
 	}
 
 	/* Lie about the length */
-	/* XXX I don't know how valid these tests actually are. */
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, CLEAN_ADDR, 0)) {
+	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, buf, 0)) {
 		ast_test_status_update(test, "Successfully added a DNS record with length zero\n");
 		return AST_TEST_FAIL;
 	}
 	
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, CLEAN_ADDR, strlen(CLEAN_ADDR) * 3)) {
+	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, buf, bufsize * 3)) {
 		ast_test_status_update(test, "Successfully added a DNS record with overly-large length\n");
 		return AST_TEST_FAIL;
 	}
 
 	return AST_TEST_PASS;
+}
+
+static int test_results(struct ast_test *test, const struct ast_dns_query *query,
+		int expected_nxdomain, int expected_secure, int expected_bogus)
+{
+	struct ast_dns_result *result;
+
+	result = ast_dns_query_get_result(query);
+	if (!result) {
+		ast_test_status_update(test, "Unable to retrieve result from query\n");
+		return -1;
+	}
+
+	if (ast_dns_result_get_nxdomain(result) != expected_nxdomain ||
+			ast_dns_result_get_secure(result) != expected_secure ||
+			ast_dns_result_get_bogus(result) != expected_bogus) {
+		ast_test_status_update(test, "Unexpected values in result from query\n");
+		return -1;
+	}
+
+	return 0;
 }
 
 AST_TEST_DEFINE(resolver_set_result)
@@ -344,7 +383,17 @@ AST_TEST_DEFINE(resolver_set_result)
 
 	switch (cmd) {
 	case TEST_INIT:
-		/* XXX Add details */
+		info->name = "resolver_set_result";
+		info->category = "/main/dns/";
+		info->summary = "Test setting and getting results on DNS queries";
+		info->description =
+			"This test performs the following:\n"
+			"\t* Sets a result that is not secure, bogus, or nxdomain\n"
+			"\t* Sets a result that is not secure or nxdomain, but is secure\n"
+			"\t* Sets a result that is not bogus or nxdomain, but is secure\n"
+			"\t* Sets a result that is not secure or bogus, but is nxdomain\n"
+			"After each result is set, we ensure that parameters retrieved from\n"
+			"the result have the expected values.";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
@@ -352,7 +401,73 @@ AST_TEST_DEFINE(resolver_set_result)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	/* XXX Not sure what to set for canonical on results */
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, "asterisk.org")) {
+		ast_test_status_update(test, "Unable to add legitimate DNS result to query\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (test_results(test, &some_query, 0, 0, 0)) {
+		return AST_TEST_FAIL;
+	}
+
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, 1, "asterisk.org")) {
+		ast_test_status_update(test, "Unable to add bogus DNS result to query\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (test_results(test, &some_query, 0, 0, 1)) {
+		return AST_TEST_FAIL;
+	}
+
+	if (ast_dns_resolver_set_result(&some_query, 0, 1, 0, "asterisk.org")) {
+		ast_test_status_update(test, "Unable to add secure DNS result to query\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (test_results(test, &some_query, 0, 1, 0)) {
+		return AST_TEST_FAIL;
+	}
+
+	if (ast_dns_resolver_set_result(&some_query, 1, 0, 0, "asterisk.org")) {
+		ast_test_status_update(test, "Unable to add nxdomain DNS result to query\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (test_results(test, &some_query, 1, 0, 0)) {
+		return AST_TEST_FAIL;
+	}
+
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(resolver_set_result_off_nominal)
+{
+	struct ast_dns_query some_query;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolver_set_result_off_nominal";
+		info->category = "/main/dns/";
+		info->summary = "Test setting off-nominal DNS results\n";
+		info->description =
+			"This test performs the following:\n"
+			"\t* Attempt to add a DNS result that is both bogus and secure\n"
+			"\t* Attempt to add a DNS result that has no canonical name\n";
+	case TEST_EXECUTE:
+		break;
+	}
+
+	memset(&some_query, 0, sizeof(some_query));
+
+	if (!ast_dns_resolver_set_result(&some_query, 0, 1, 1, "asterisk.org")) {
+		ast_test_status_update(test, "Successfully added a result that was both secure and bogus\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (!ast_dns_resolver_set_result(&some_query, 0, 0, 0, NULL)) {
+		ast_test_status_update(test, "Successfully added result with no canonical name\n");
+		return AST_TEST_FAIL;
+	}
 
 	return AST_TEST_PASS;
 }
@@ -365,6 +480,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolver_data);
 	AST_TEST_UNREGISTER(resolver_add_record);
 	AST_TEST_UNREGISTER(resolver_set_result);
+	AST_TEST_UNREGISTER(resolver_set_result_off_nominal);
 
 	return 0;
 }
@@ -377,6 +493,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolver_data);
 	AST_TEST_REGISTER(resolver_add_record);
 	AST_TEST_REGISTER(resolver_set_result);
+	AST_TEST_REGISTER(resolver_set_result_off_nominal);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

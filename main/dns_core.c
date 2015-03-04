@@ -333,7 +333,7 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query)
 	return query->resolver_data;
 }
 
-void ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
+int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
 	const char *canonical)
 {
 	if (query->result) {
@@ -341,6 +341,7 @@ void ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdom
 	}
 
 	query->result = NULL;
+	return 0;
 }
 
 int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr_class, int ttl, const char *data, const size_t size)
