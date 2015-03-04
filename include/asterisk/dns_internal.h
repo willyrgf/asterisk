@@ -31,12 +31,12 @@ struct ast_dns_record {
 	int rr_class;
 	/*! \brief Time-to-live of the record */
 	int ttl;
-	/*! \brief The raw DNS record */
-	char *data;
 	/*! \brief The size of the raw DNS record */
 	size_t data_len;
 	/*! \brief Linked list information */
 	AST_LIST_ENTRY(ast_dns_record) list;
+	/*! \brief The raw DNS record */
+	char data[0];
 };
 
 /*! \brief An SRV record */
@@ -79,10 +79,10 @@ struct ast_dns_result {
 	unsigned int secure;
 	/*! \brief Whether the result is bogus */
 	unsigned int bogus;
-	/*! \brief The canonical name */
-	const char *canonical;
 	/*! \brief Records returned */
 	AST_LIST_HEAD_NOLOCK(, ast_dns_record) records;
+	/*! \brief The canonical name */
+	char canonical[0];
 };
 
 /*! \brief A DNS query */

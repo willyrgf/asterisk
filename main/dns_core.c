@@ -101,6 +101,7 @@ const struct ast_dns_record *ast_dns_result_get_records(const struct ast_dns_res
 
 void ast_dns_result_free(struct ast_dns_result *result)
 {
+	ao2_cleanup(result);
 }
 
 int ast_dns_record_get_rr_type(const struct ast_dns_record *record)
@@ -333,6 +334,17 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query)
 	return query->resolver_data;
 }
 
+/*! \brief Destructor for DNS result */
+static void dns_result_destroy(void *obj)
+{
+	struct ast_dns_result *result = obj;
+	struct ast_dns_record *record;
+
+	while ((record = AST_LIST_REMOVE_HEAD(&result->records, list))) {
+		ast_free(record);
+	}
+}
+
 int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
 	const char *canonical)
 {
@@ -340,17 +352,41 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdoma
 		ast_dns_result_free(query->result);
 	}
 
-	query->result = NULL;
+	query->result = ao2_alloc_options(sizeof(*query->result) + strlen(canonical) + 1, dns_result_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!query->result) {
+		return -1;
+	}
+
+	query->result->nxdomain = nxdomain;
+	query->result->secure = secure;
+	query->result->bogus = bogus;
+	strcpy(query->result->canonical, canonical); /* SAFE */
+
 	return 0;
 }
 
 int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr_class, int ttl, const char *data, const size_t size)
 {
+	struct ast_dns_record *record;
+
 	if (!query->result) {
 		return -1;
 	}
 
-	return -1;
+	record = ast_calloc(1, sizeof(*record) + size);
+	if (!record) {
+		return -1;
+	}
+
+	record->rr_type = rr_type;
+	record->rr_class = rr_class;
+	record->ttl = ttl;
+	memcpy(record->data, data, size);
+	record->data_len = size;
+
+	AST_LIST_INSERT_TAIL(&query->result->records, record, list);
+
+	return 0;
 }
 
 void ast_dns_resolver_completed(const struct ast_dns_query *query)
