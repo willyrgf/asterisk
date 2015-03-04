@@ -372,6 +372,7 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 			"This test performs the following:\n"
 			"\t* Attempt to add a DNS result that is both bogus and secure\n"
 			"\t* Attempt to add a DNS result that has no canonical name\n";
+		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
 	}
