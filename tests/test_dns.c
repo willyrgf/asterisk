@@ -750,6 +750,7 @@ AST_TEST_DEFINE(resolver_resolve_async)
 	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup); 
 	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
 	enum ast_test_result_state res = AST_TEST_PASS;
+	struct timespec timeout;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -799,11 +800,21 @@ AST_TEST_DEFINE(resolver_resolve_async)
 		goto cleanup;
 	}
 
+	clock_gettime(CLOCK_REALTIME, &timeout);
+	timeout.tv_sec += 10;
 	ast_mutex_lock(&async_data->lock);
 	while (!async_data->complete) {
-		ast_cond_wait(&async_data->cond, &async_data->lock);
+		if (ast_cond_timedwait(&async_data->cond, &async_data->lock, &timeout) == ETIMEDOUT) {
+			break;
+		}
 	}
 	ast_mutex_unlock(&async_data->lock);
+
+	if (!async_data->complete) {
+		ast_test_status_update(test, "Asynchronous resolution timed out\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
 
 	if (!test_resolver_data.resolution_complete) {
 		ast_test_status_update(test, "Asynchronous resolution completed early?\n");
