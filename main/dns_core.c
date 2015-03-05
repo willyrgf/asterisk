@@ -368,6 +368,12 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdoma
 		return -1;
 	}
 
+	if (ast_strlen_zero(canonical)) {
+		ast_debug(2, "Query '%p': Could not set result information since no canonical name was provided\n",
+			query);
+		return -1;
+	}
+
 	if (query->result) {
 		ast_dns_result_free(query->result);
 	}
