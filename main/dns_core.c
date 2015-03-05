@@ -42,6 +42,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_resolver.h"
 #include "asterisk/dns_internal.h"
 
+#include <arpa/nameser.h>
+
 AST_RWLIST_HEAD_STATIC(resolvers, ast_dns_resolver);
 
 const char *ast_dns_query_get_name(const struct ast_dns_query *query)
@@ -348,6 +350,12 @@ static void dns_result_destroy(void *obj)
 int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
 	const char *canonical)
 {
+	if (secure && bogus) {
+		ast_debug(2, "Query '%p': Could not set result information, it can not be both secure and bogus\n",
+			query);
+		return -1;
+	}
+
 	if (query->result) {
 		ast_dns_result_free(query->result);
 	}
@@ -369,7 +377,33 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
 {
 	struct ast_dns_record *record;
 
-	if (!query->result) {
+	if (rr_type < 0) {
+		ast_debug(2, "Query '%p': Could not add record, invalid resource record type '%d'\n",
+			query, rr_type);
+		return -1;
+	} else if (rr_type > ns_t_max) {
+		ast_debug(2, "Query '%p': Could not add record, resource record type '%d' exceeds maximum\n",
+			query, rr_type);
+		return -1;
+	} else if (rr_class < 0) {
+		ast_debug(2, "Query '%p': Could not add record, invalid resource record class '%d'\n",
+			query, rr_class);
+		return -1;
+	} else if (rr_class > ns_c_max) {
+		ast_debug(2, "Query '%p': Could not add record, resource record class '%d' exceeds maximum\n",
+			query, rr_class);
+		return -1;
+	} else if (ttl < 0) {
+		ast_debug(2, "Query '%p': Could not add record, invalid TTL '%d'\n",
+			query, ttl);
+		return -1;
+	} else if (!data || !size) {
+		ast_debug(2, "Query '%p': Could not add record, no data specified\n",
+			query);
+		return -1;
+	} else if (!query->result) {
+		ast_debug(2, "Query '%p': No result was set on the query, thus records can not be added\n",
+			query);
 		return -1;
 	}
 
