@@ -79,6 +79,8 @@ struct ast_dns_result {
 	unsigned int secure;
 	/*! \brief Whether the result is bogus */
 	unsigned int bogus;
+	/*! \brief Optional rcode, set if an error occurred */
+	unsigned int rcode;
 	/*! \brief Records returned */
 	AST_LIST_HEAD_NOLOCK(, ast_dns_record) records;
 	/*! \brief The canonical name */

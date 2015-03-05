@@ -61,11 +61,6 @@ int ast_dns_query_get_rr_class(const struct ast_dns_query *query)
 	return query->rr_class;
 }
 
-int ast_dns_query_get_rcode(const struct ast_dns_query *query)
-{
-	return 0;
-}
-
 void *ast_dns_query_get_data(const struct ast_dns_query *query)
 {
 	return query->user_data;
@@ -89,6 +84,11 @@ unsigned int ast_dns_result_get_secure(const struct ast_dns_result *result)
 unsigned int ast_dns_result_get_bogus(const struct ast_dns_result *result)
 {
 	return result->bogus;
+}
+
+unsigned int ast_dns_result_get_rcode(const struct ast_dns_result *result)
+{
+	return result->rcode;
 }
 
 const char *ast_dns_result_get_canonical(const struct ast_dns_result *result)
@@ -348,7 +348,7 @@ static void dns_result_destroy(void *obj)
 }
 
 int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
-	const char *canonical)
+	unsigned int rcode, const char *canonical)
 {
 	if (secure && bogus) {
 		ast_debug(2, "Query '%p': Could not set result information, it can not be both secure and bogus\n",
@@ -368,6 +368,7 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdoma
 	query->result->nxdomain = nxdomain;
 	query->result->secure = secure;
 	query->result->bogus = bogus;
+	query->result->rcode = rcode;
 	strcpy(query->result->canonical, canonical); /* SAFE */
 
 	return 0;

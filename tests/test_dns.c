@@ -320,7 +320,7 @@ AST_TEST_DEFINE(resolver_set_result)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to add legitimate DNS result to query\n");
 		return AST_TEST_FAIL;
 	}
@@ -329,7 +329,7 @@ AST_TEST_DEFINE(resolver_set_result)
 		return AST_TEST_FAIL;
 	}
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 1, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, 1, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to add bogus DNS result to query\n");
 		return AST_TEST_FAIL;
 	}
@@ -338,7 +338,7 @@ AST_TEST_DEFINE(resolver_set_result)
 		return AST_TEST_FAIL;
 	}
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 1, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 1, 0, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to add secure DNS result to query\n");
 		return AST_TEST_FAIL;
 	}
@@ -347,7 +347,7 @@ AST_TEST_DEFINE(resolver_set_result)
 		return AST_TEST_FAIL;
 	}
 
-	if (ast_dns_resolver_set_result(&some_query, 1, 0, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 1, 0, 0, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to add nxdomain DNS result to query\n");
 		return AST_TEST_FAIL;
 	}
@@ -379,12 +379,12 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (!ast_dns_resolver_set_result(&some_query, 0, 1, 1, "asterisk.org")) {
+	if (!ast_dns_resolver_set_result(&some_query, 0, 1, 1, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Successfully added a result that was both secure and bogus\n");
 		return AST_TEST_FAIL;
 	}
 
-	if (!ast_dns_resolver_set_result(&some_query, 0, 0, 0, NULL)) {
+	if (!ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, NULL)) {
 		ast_test_status_update(test, "Successfully added result with no canonical name\n");
 		return AST_TEST_FAIL;
 	}
@@ -450,7 +450,7 @@ AST_TEST_DEFINE(resolver_add_record)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}
@@ -548,7 +548,7 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 		return AST_TEST_FAIL;
 	}
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}

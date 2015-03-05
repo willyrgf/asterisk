@@ -59,15 +59,6 @@ int ast_dns_query_get_rr_type(const struct ast_dns_query *query);
 int ast_dns_query_get_rr_class(const struct ast_dns_query *query);
 
 /*!
- * \brief Get the error rcode of a DNS query
- *
- * \param query The DNS query
- *
- * \return the DNS rcode
- */
-int ast_dns_query_get_rcode(const struct ast_dns_query *query);
-
-/*!
  * \brief Get the user specific data of a DNS query
  *
  * \param query The DNS query
@@ -114,6 +105,15 @@ unsigned int ast_dns_result_get_secure(const struct ast_dns_result *result);
  * \return whether the result is bogus or not
  */
 unsigned int ast_dns_result_get_bogus(const struct ast_dns_result *result);
+
+/*!
+ * \brief Get the error rcode of a DN result
+ *
+ * \param query The DNS result
+ *
+ * \return the DNS rcode
+ */
+unsigned int ast_dns_result_get_rcode(const struct ast_dns_result *result);
 
 /*!
  * \brief Get the canonical name of the result
