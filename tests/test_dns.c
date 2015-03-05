@@ -592,11 +592,6 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 		ast_test_status_update(test, "Successfully added a DNS record with length zero\n");
 		return AST_TEST_FAIL;
 	}
-	
-	if (!ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE * 3)) {
-		ast_test_status_update(test, "Successfully added a DNS record with overly-large length\n");
-		return AST_TEST_FAIL;
-	}
 
 	return AST_TEST_PASS;
 }
