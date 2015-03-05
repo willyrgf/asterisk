@@ -290,6 +290,7 @@ static int test_results(struct ast_test *test, const struct ast_dns_query *query
 AST_TEST_DEFINE(resolver_set_result)
 {
 	struct ast_dns_query some_query;
+	struct ast_dns_result *result;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -347,12 +348,17 @@ AST_TEST_DEFINE(resolver_set_result)
 		return AST_TEST_FAIL;
 	}
 
+	/* The final result we set needs to be freed */
+	result = ast_dns_query_get_result(&some_query);
+	ast_dns_result_free(result);
+
 	return AST_TEST_PASS;
 }
 
 AST_TEST_DEFINE(resolver_set_result_off_nominal)
 {
 	struct ast_dns_query some_query;
+	struct ast_dns_result *result;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -372,11 +378,15 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 
 	if (!ast_dns_resolver_set_result(&some_query, 0, 1, 1, 0, "asterisk.org")) {
 		ast_test_status_update(test, "Successfully added a result that was both secure and bogus\n");
+		result = ast_dns_query_get_result(&some_query);
+		ao2_cleanup(result);
 		return AST_TEST_FAIL;
 	}
 
 	if (!ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, NULL)) {
 		ast_test_status_update(test, "Successfully added result with no canonical name\n");
+		result = ast_dns_query_get_result(&some_query);
+		ao2_cleanup(result);
 		return AST_TEST_FAIL;
 	}
 
@@ -411,8 +421,8 @@ static int test_record(struct ast_test *test, const struct ast_dns_record *recor
 
 AST_TEST_DEFINE(resolver_add_record)
 {
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	struct ast_dns_query some_query;
-	struct ast_dns_result *result;
 	const struct ast_dns_record *record;
 
 	static const char *V4 = "127.0.0.1";
@@ -422,6 +432,20 @@ AST_TEST_DEFINE(resolver_add_record)
 	static const char *V6 = "::1";
 	static const size_t V6_BUFSIZE = sizeof(struct in6_addr);
 	char v6_buf[V6_BUFSIZE];
+
+	struct dns_record_details {
+		int type;
+		int class;
+		int ttl;
+		const char *data;
+		const size_t size;
+		int visited;
+	} records[] = {
+		{ ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE, 0, },
+		{ ns_t_aaaa, ns_c_in, 12345, v6_buf, V6_BUFSIZE, 0, },
+	};
+
+	int num_records_visited = 0;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -446,51 +470,58 @@ AST_TEST_DEFINE(resolver_add_record)
 		return AST_TEST_FAIL;
 	}
 
-	inet_pton(AF_INET, V4, v4_buf);
-
-	/* Nominal Record */
-	if (ast_dns_resolver_add_record(&some_query, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE)) {
-		ast_test_status_update(test, "Unable to add nominal record to query result\n");
-		return AST_TEST_FAIL;
-	}
-
-	/* I should only be able to retrieve one record */
 	result = ast_dns_query_get_result(&some_query);
 	if (!result) {
 		ast_test_status_update(test, "Unable to retrieve result from query\n");
 		return AST_TEST_FAIL;
 	}
 
+	inet_pton(AF_INET, V4, v4_buf);
+
+	/* Nominal Record */
+	if (ast_dns_resolver_add_record(&some_query, records[0].type, records[0].class,
+				records[0].ttl, records[0].data, records[0].size)) {
+		ast_test_status_update(test, "Unable to add nominal record to query result\n");
+		return AST_TEST_FAIL;
+	}
+
+	/* I should only be able to retrieve one record */
 	record = ast_dns_result_get_records(result);
 	if (!record) {
 		ast_test_status_update(test, "Unable to retrieve record from result\n");
 		return AST_TEST_FAIL;
 	}
 
-	if (test_record(test, record, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE)) {
+	if (test_record(test, record, records[0].type, records[0].class, records[0].ttl,
+				records[0].data, records[0].size)) {
+		return AST_TEST_FAIL;
+	}
+
+	if (ast_dns_record_get_next(record)) {
+		ast_test_status_update(test, "Multiple records returned when only one was expected\n");
 		return AST_TEST_FAIL;
 	}
 
 	inet_pton(AF_INET6, V6, v6_buf);
 
-	if (ast_dns_resolver_add_record(&some_query, ns_t_aaaa, ns_c_in, 12345, v6_buf, V6_BUFSIZE)) {
+	if (ast_dns_resolver_add_record(&some_query, records[1].type, records[1].class,
+				records[1].ttl, records[1].data, records[1].size)) {
 		ast_test_status_update(test, "Unable to add second record to query result\n");
 		return AST_TEST_FAIL;
 	}
 
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
 		/* The order of returned records is not specified. We use the record type as the discriminator
-		 * to determine which record we expect
-		 *
-		 * XXX There currently is no guarantee that both records will be visited by this loop, and there
-		 * is no check that only two records are visited.
+		 * to determine which record data to expect.
 		 */
 		int res;
 
-		if (ast_dns_record_get_rr_type(record) == ns_t_a) {
-			res = test_record(test, record, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE);
-		} else if (ast_dns_record_get_rr_type(record) == ns_t_aaaa) {
-			res = test_record(test, record, ns_t_aaaa, ns_c_in, 12345, v6_buf, V6_BUFSIZE);
+		if (ast_dns_record_get_rr_type(record) == records[0].type) {
+			res = test_record(test, record, records[0].type, records[0].class, records[0].ttl, records[0].data, records[0].size);
+			records[0].visited = 1;
+		} else if (ast_dns_record_get_rr_type(record) == records[1].type) {
+			res = test_record(test, record, records[1].type, records[1].class, records[1].ttl, records[1].data, records[1].size);
+			records[1].visited = 1;
 		} else {
 			ast_test_status_update(test, "Unknown record type found in DNS results\n");
 			return AST_TEST_FAIL;
@@ -499,6 +530,18 @@ AST_TEST_DEFINE(resolver_add_record)
 		if (res) {
 			return AST_TEST_FAIL;
 		}
+		
+		++num_records_visited;
+	}
+
+	if (!records[0].visited || !records[1].visited) {
+		ast_test_status_update(test, "Did not visit all added DNS records\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (num_records_visited != ARRAY_LEN(records)) {
+		ast_test_status_update(test, "Did not visit the expected number of DNS records\n");
+		return AST_TEST_FAIL;
 	}
 
 	return AST_TEST_PASS;
