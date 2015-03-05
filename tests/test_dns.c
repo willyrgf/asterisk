@@ -587,6 +587,235 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 	return AST_TEST_PASS;
 }
 
+static struct resolver_data {
+	int resolve_called;
+	int cancel_called;
+	int resolution_complete;
+} test_resolver_data;
+
+static void *resolution_thread(void *dns_query)
+{
+	struct ast_dns_query *query = dns_query;
+
+	static const char *V4 = "127.0.0.1";
+	static const size_t V4_BUFSIZE = sizeof(struct in_addr);
+	char v4_buf[V4_BUFSIZE];
+
+	ast_dns_resolver_set_result(query, 0, 0, 0, 0, "asterisk.org");
+
+	inet_pton(AF_INET, V4, v4_buf);
+
+	ast_dns_resolver_add_record(query, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE);
+	test_resolver_data.resolution_complete = 1;
+	ast_dns_resolver_completed(query);
+
+	ao2_ref(query, -1);
+	return NULL;
+}
+
+static int test_resolve(struct ast_dns_query *query)
+{
+	pthread_t resolver_thread;
+
+	test_resolver_data.resolve_called = 1;
+	return ast_pthread_create_detached(&resolver_thread, NULL, resolution_thread, ao2_bump(query));
+}
+
+static int test_cancel(struct ast_dns_query *query)
+{
+	test_resolver_data.cancel_called = 1;
+	return 0;
+}
+
+static void resolver_data_init(void)
+{
+	test_resolver_data.resolve_called = 0;
+	test_resolver_data.cancel_called = 0;
+	test_resolver_data.resolution_complete = 0;
+}
+
+static struct ast_dns_resolver test_resolver = {
+	.name = "test",
+	.priority = 0,
+	.resolve = test_resolve,
+	.cancel = test_cancel,
+};
+
+AST_TEST_DEFINE(resolver_resolve_sync)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolver_resolve_sync";
+		info->category = "/main/dns/";
+		info->summary = "Test a nominal synchronous DNS resolution";
+		info->description =
+			"This test performs a synchronous DNS resolution of a domain. The goal of this\n"
+			"test is not to check the records for accuracy. Rather, the goal is to ensure that\n"
+			"the resolver is called into as expected, that the query completes entirely before\n"
+			"returning from the synchronous resolution, and to ensure that nothing tried to\n"
+			"cancel the resolution.";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&test_resolver)) {
+		ast_test_status_update(test, "Unable to register test resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	resolver_data_init();
+
+	if (ast_dns_resolve("asterisk.org", ns_t_a, ns_c_in, &result)) {
+		ast_test_status_update(test, "Resolution of address failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "DNS resolution returned a NULL result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!test_resolver_data.resolve_called) {
+		ast_test_status_update(test, "DNS resolution did not call resolver's resolve() method\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (test_resolver_data.cancel_called) {
+		ast_test_status_update(test, "Resolver's cancel() method called for no reason\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!test_resolver_data.resolution_complete) {
+		ast_test_status_update(test, "Synchronous resolution completed early?\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+	ast_dns_resolver_unregister(&test_resolver);
+	return res;
+}
+
+struct async_resolution_data {
+	int complete;
+	ast_mutex_t lock;
+	ast_cond_t cond;
+};
+
+static void async_data_destructor(void *obj)
+{
+	struct async_resolution_data *async_data = obj;
+
+	ast_mutex_destroy(&async_data->lock);
+	ast_cond_destroy(&async_data->cond);
+}
+
+static struct async_resolution_data *async_data_alloc(void)
+{
+	struct async_resolution_data *async_data;
+
+	async_data = ao2_alloc(sizeof(*async_data), async_data_destructor);
+	if (!async_data) {
+		return NULL;
+	}
+
+	async_data->complete = 0;
+	ast_mutex_init(&async_data->lock);
+	ast_cond_init(&async_data->cond, NULL);
+
+	return async_data;
+}
+
+static void async_callback(const struct ast_dns_query *query)
+{
+	struct async_resolution_data *async_data = ast_dns_query_get_data(query);
+
+	ast_mutex_lock(&async_data->lock);
+	async_data->complete = 1;
+	ast_cond_signal(&async_data->cond);
+	ast_mutex_unlock(&async_data->lock);
+}
+
+AST_TEST_DEFINE(resolver_resolve_async)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup); 
+	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolver_resolve_async";
+		info->category = "/main/dns/";
+		info->summary = "Test a nominal asynchronous DNS resolution";
+		info->description =
+			"This test performs an asynchronous DNS resolution of a domain. The goal of this\n"
+			"test is not to check the records for accuracy. Rather, the goal is to ensure that\n"
+			"the resolver is called into as expected, that we regain control before the query\n"
+			"is completed, and to ensure that nothing tried to cancel the resolution.";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&test_resolver)) {
+		ast_test_status_update(test, "Unable to register test resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	resolver_data_init();
+
+	async_data = async_data_alloc();
+	if (!async_data) {
+		ast_test_status_update(test, "Failed to allocate asynchronous data\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	query = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, async_callback, async_data);
+	if (!query) {
+		ast_test_status_update(test, "Asynchronous resolution of address failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!test_resolver_data.resolve_called) {
+		ast_test_status_update(test, "DNS resolution did not call resolver's resolve() method\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (test_resolver_data.cancel_called) {
+		ast_test_status_update(test, "Resolver's cancel() method called for no reason\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	ast_mutex_lock(&async_data->lock);
+	while (!async_data->complete) {
+		ast_cond_wait(&async_data->cond, &async_data->lock);
+	}
+	ast_mutex_unlock(&async_data->lock);
+
+	if (!test_resolver_data.resolution_complete) {
+		ast_test_status_update(test, "Asynchronous resolution completed early?\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+	ast_dns_resolver_unregister(&test_resolver);
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(resolver_register_unregister);
@@ -597,6 +826,8 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolver_set_result_off_nominal);
 	AST_TEST_UNREGISTER(resolver_add_record);
 	AST_TEST_UNREGISTER(resolver_add_record_off_nominal);
+	AST_TEST_UNREGISTER(resolver_resolve_sync);
+	AST_TEST_UNREGISTER(resolver_resolve_async);
 
 	return 0;
 }
@@ -611,6 +842,8 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolver_set_result_off_nominal);
 	AST_TEST_REGISTER(resolver_add_record);
 	AST_TEST_REGISTER(resolver_add_record_off_nominal);
+	AST_TEST_REGISTER(resolver_resolve_sync);
+	AST_TEST_REGISTER(resolver_resolve_async);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
