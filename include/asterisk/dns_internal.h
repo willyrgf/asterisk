@@ -99,6 +99,8 @@ struct ast_dns_query {
 	void *resolver_data;
 	/*! \brief Result of the DNS query */
 	struct ast_dns_result *result;
+	/*! \brief If the query is recurring or not */
+	unsigned int recurring;
 	/*! \brief Timer for recurring resolution */
 	int timer;
 	/*! \brief Resource record type */

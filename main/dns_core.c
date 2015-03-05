@@ -141,7 +141,7 @@ static void dns_query_destroy(void *data)
 	ast_dns_result_free(query->result);
 }
 
-struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
+static struct ast_dns_query *dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data, unsigned int recurring)
 {
 	struct ast_dns_query *query;
 
@@ -149,12 +149,19 @@ struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int r
 		return NULL;
 	}
 
-	query = ao2_alloc_options(sizeof(*query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!recurring) {
+		query = ao2_alloc_options(sizeof(*query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	} else {
+		query = ao2_alloc(sizeof(*query) + strlen(name) + 1, dns_query_destroy);
+	}
+
 	if (!query) {
 		return NULL;
 	}
 
 	query->callback = callback;
+	query->user_data = ao2_bump(data);
+	query->recurring = recurring;
 	query->rr_type = rr_type;
 	query->rr_class = rr_class;
 	strcpy(query->name, name); /* SAFE */
@@ -180,9 +187,14 @@ struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int r
 	return query;
 }
 
+struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
+{
+	return dns_resolve_async(name, rr_type, rr_class, callback, data, 0);
+}
+
 struct ast_dns_query *ast_dns_resolve_async_recurring(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
 {
-	return NULL;
+	return dns_resolve_async(name, rr_type, rr_class, callback, data, 1);
 }
 
 int ast_dns_resolve_cancel(struct ast_dns_query *query)
