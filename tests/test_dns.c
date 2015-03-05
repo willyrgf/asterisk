@@ -261,15 +261,6 @@ AST_TEST_DEFINE(resolver_data)
 		return AST_TEST_FAIL;
 	}
 
-	/* Ensure that ast_dns_resolver_completed() removes resolver data from the query */
-	ast_dns_resolver_completed(&some_query);
-
-	data_ptr = ast_dns_resolver_get_data(&some_query);
-	if (data_ptr) {
-		ast_test_status_update(test, "Query still has resolver data after query completed\n");
-		return AST_TEST_FAIL;
-	}
-
 	return AST_TEST_PASS;
 }
 
