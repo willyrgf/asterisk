@@ -137,7 +137,7 @@ static void dns_query_destroy(void *data)
 	struct ast_dns_query *query = data;
 
 	ao2_cleanup(query->user_data);
-	ast_assert(query->resolver_data != NULL);
+	ast_assert(query->resolver_data == NULL);
 	ast_dns_result_free(query->result);
 }
 
