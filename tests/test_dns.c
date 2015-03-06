@@ -210,8 +210,7 @@ AST_TEST_DEFINE(resolver_data)
 			"\t* Ensure that setting resolver data does not result in an error.\n"
 			"\t* Ensure that retrieving the set resolver data returns the data we expect\n"
 			"\t* Ensure that setting new resolver data on the query does not result in an error\n"
-			"\t* Ensure that retrieving the resolver data returns the new data that we set\n"
-			"\t* Ensure that ast_dns_resolver_completed() removes resolver data from the query\n";
+			"\t* Ensure that retrieving the resolver data returns the new data that we set\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
@@ -500,11 +499,11 @@ AST_TEST_DEFINE(resolver_add_record)
 	}
 
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		/* The order of returned records is not specified. We use the record type as the discriminator
-		 * to determine which record data to expect.
-		 */
 		int res;
 
+		/* The order of returned records is not specified by the API. We use the record type
+		 * as the discriminator to determine which record data to expect.
+		 */
 		if (ast_dns_record_get_rr_type(record) == records[0].type) {
 			res = test_record(test, record, records[0].type, records[0].class, records[0].ttl, records[0].data, records[0].size);
 			records[0].visited = 1;
@@ -619,14 +618,38 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 	return AST_TEST_PASS;
 }
 
+/*!
+ * \brief File-scoped data used during resolver tests
+ *
+ * This data has to live at file-scope since it needs to be
+ * accessible by multiple threads.
+ */
 static struct resolver_data {
+	/*! True if the resolver's resolve() method has been called */
 	int resolve_called;
+	/*! True if the resolver's cancel() method has been called */
 	int canceled;
+	/*! True if resolution successfully completed. This is mutually exclusive with \ref canceled */
 	int resolution_complete;
+	/*! Lock used for protecting \ref cancel_cond */
 	ast_mutex_t lock;
+	/*! Condition variable used to coordinate canceling a query */
 	ast_cond_t cancel_cond;
 } test_resolver_data;
 
+/*!
+ * \brief Thread spawned by the mock resolver
+ *
+ * All DNS resolvers are required to be asynchronous. The mock resolver
+ * spawns this thread for every DNS query that is executed.
+ *
+ * This thread waits for 5 seconds and then returns the same A record
+ * every time. The 5 second wait is to allow for the query to be
+ * canceled if desired
+ *
+ * \param dns_query The ast_dns_query that is being resolved
+ * \return NULL
+ */
 static void *resolution_thread(void *dns_query)
 {
 	struct ast_dns_query *query = dns_query;
@@ -665,6 +688,13 @@ static void *resolution_thread(void *dns_query)
 	return NULL;
 }
 
+/*!
+ * \brief Mock resolver's resolve method
+ *
+ * \param query The query to resolve
+ * \retval 0 Successfully spawned resolution thread
+ * \retval non-zero Failed to spawn the resolution thread
+ */
 static int test_resolve(struct ast_dns_query *query)
 {
 	pthread_t resolver_thread;
@@ -673,6 +703,14 @@ static int test_resolve(struct ast_dns_query *query)
 	return ast_pthread_create_detached(&resolver_thread, NULL, resolution_thread, ao2_bump(query));
 }
 
+/*!
+ * \brief Mock resolver's cancel method
+ *
+ * This signals the resolution thread not to return any DNS results.
+ *
+ * \param query DNS query to cancel
+ * \return 0
+ */
 static int test_cancel(struct ast_dns_query *query)
 {
 	ast_mutex_lock(&test_resolver_data.lock);
@@ -683,6 +721,11 @@ static int test_cancel(struct ast_dns_query *query)
 	return 0;
 }
 
+/*!
+ * \brief Initialize global mock resolver data.
+ *
+ * This must be called at the beginning of tests that use the mock resolver
+ */
 static void resolver_data_init(void)
 {
 	test_resolver_data.resolve_called = 0;
@@ -693,12 +736,24 @@ static void resolver_data_init(void)
 	ast_cond_init(&test_resolver_data.cancel_cond, NULL);
 }
 
+/*!
+ * \brief Cleanup global mock resolver data
+ *
+ * This must be called at the end of tests that use the mock resolver
+ */
 static void resolver_data_cleanup(void)
 {
 	ast_mutex_destroy(&test_resolver_data.lock);
 	ast_cond_destroy(&test_resolver_data.cancel_cond);
 }
 
+/*!
+ * \brief The mock resolver
+ *
+ * The mock resolver does not care about the DNS query that is
+ * actually being made on it. It simply regurgitates the same
+ * DNS record no matter what.
+ */
 static struct ast_dns_resolver test_resolver = {
 	.name = "test",
 	.priority = 0,
@@ -776,12 +831,121 @@ cleanup:
 	return res;
 }
 
+/*!
+ * \brief A resolve() method that simply fails
+ *
+ * \param query The DNS query to resolve. This is ignored.
+ * \return -1
+ */
+static int fail_resolve(struct ast_dns_query *query)
+{
+	return -1;
+}
+
+AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
+{
+	struct ast_dns_resolver terrible_resolver = {
+		.name = "Uwe Boll's Filmography",
+		.priority = 0,
+		.resolve = fail_resolve,
+		.cancel = stub_cancel,
+	};
+
+	struct ast_dns_result *result = NULL;
+
+	struct dns_resolve_data {
+		const char *name;
+		int rr_type;
+		int rr_class;
+		struct ast_dns_result **result;
+	} resolves [] = {
+		{ NULL,           ns_t_a,       ns_c_in,      &result },
+		{ "asterisk.org", -1,           ns_c_in,      &result },
+		{ "asterisk.org", ns_t_max + 1, ns_c_in,      &result },
+		{ "asterisk.org", ns_t_a,       -1,           &result },
+		{ "asterisk.org", ns_t_a,       ns_c_max + 1, &result },
+		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
+	};
+	
+	int i;
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolver_resolve_sync_off_nominal";
+		info->category = "/main/dns/";
+		info->summary = "Test off-nominal synchronous DNS resolution";
+		info->description =
+			"This test performs several off-nominal synchronous DNS resolutions:\n"
+			"\t* Attempt resolution with NULL name\n",
+			"\t* Attempt resolution with invalid RR type\n",
+			"\t* Attempt resolution with invalid RR class\n",
+			"\t* Attempt resolution with NULL result pointer\n",
+			"\t* Attempt resolution with resolver that returns an error\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&test_resolver)) {
+		ast_test_status_update(test, "Failed to register test resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	for (i = 0; i < ARRAY_LEN(resolves); ++i) {
+		if (!ast_dns_resolve(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class, resolves[i].result)) {
+			ast_test_status_update(test, "Successfully resolved DNS query with invalid parameters\n");
+			res = AST_TEST_FAIL;
+		} else if (result) {
+			ast_test_status_update(test, "Failed resolution set a non-NULL result\n");
+			ast_dns_result_free(result);
+			res = AST_TEST_FAIL;
+		}
+	}
+
+	ast_dns_resolver_unregister(&test_resolver);
+
+	/* As a final test, try a legitimate query with a bad resolver */
+	if (ast_dns_resolver_register(&terrible_resolver)) {
+		ast_test_status_update(test, "Failed to register the terrible resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (!ast_dns_resolve("asterisk.org", ns_t_a, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution succeeded when we expected it not to\n");
+		ast_dns_resolver_unregister(&terrible_resolver);
+		return AST_TEST_FAIL;
+	}
+
+	ast_dns_resolver_unregister(&terrible_resolver);
+
+	if (result) {
+		ast_test_status_update(test, "Failed DNS resolution set the result to something non-NULL\n");
+		ast_dns_result_free(result);
+		return AST_TEST_FAIL;
+	}
+
+	return res;
+}
+
+/*!
+ * \brief Data used by async result callback
+ *
+ * This is the typical combination of boolean, lock, and condition
+ * used to synchronize the activities of two threads. In this case,
+ * the testing thread waits on the condition, and the async callback
+ * signals the condition when the asynchronous callback is complete.
+ */
 struct async_resolution_data {
 	int complete;
 	ast_mutex_t lock;
 	ast_cond_t cond;
 };
 
+/*!
+ * \brief Destructor for async_resolution_data
+ */
 static void async_data_destructor(void *obj)
 {
 	struct async_resolution_data *async_data = obj;
@@ -790,6 +954,15 @@ static void async_data_destructor(void *obj)
 	ast_cond_destroy(&async_data->cond);
 }
 
+/*!
+ * \brief Allocation/initialization for async_resolution_data
+ *
+ * The DNS core mandates that a query's user data has to be ao2 allocated,
+ * so this is a helper method for doing that.
+ *
+ * \retval NULL Failed allocation
+ * \retval non-NULL Newly allocated async_resolution_data
+ */
 static struct async_resolution_data *async_data_alloc(void)
 {
 	struct async_resolution_data *async_data;
@@ -806,6 +979,15 @@ static struct async_resolution_data *async_data_alloc(void)
 	return async_data;
 }
 
+/*!
+ * \brief Async DNS callback
+ *
+ * This is called when an async query completes, either because it resolved or
+ * because it was canceled. In our case, this callback is used to signal to the
+ * test that it can continue
+ *
+ * \param query The DNS query that has completed
+ */
 static void async_callback(const struct ast_dns_query *query)
 {
 	struct async_resolution_data *async_data = ast_dns_query_get_data(query);
@@ -913,98 +1095,7 @@ cleanup:
 	return res;
 }
 
-static int fail_resolve(struct ast_dns_query *query)
-{
-	return -1;
-}
-
-AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
-{
-	struct ast_dns_resolver terrible_resolver = {
-		.name = "Uwe Boll's Filmography",
-		.priority = 0,
-		.resolve = fail_resolve,
-		.cancel = stub_cancel,
-	};
-
-	struct ast_dns_result *result = NULL;
-
-	struct dns_resolve_data {
-		const char *name;
-		int rr_type;
-		int rr_class;
-		struct ast_dns_result **result;
-	} resolves [] = {
-		{ NULL,           ns_t_a,       ns_c_in,      &result },
-		{ "asterisk.org", -1,           ns_c_in,      &result },
-		{ "asterisk.org", ns_t_max + 1, ns_c_in,      &result },
-		{ "asterisk.org", ns_t_a,       -1,           &result },
-		{ "asterisk.org", ns_t_a,       ns_c_max + 1, &result },
-		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
-	};
-	
-	int i;
-
-	enum ast_test_result_state res = AST_TEST_PASS;
-
-	switch (cmd) {
-	case TEST_INIT:
-		info->name = "resolver_resolve_sync_off_nominal";
-		info->category = "/main/dns/";
-		info->summary = "Test off-nominal synchronous DNS resolution";
-		info->description =
-			"This test performs several off-nominal synchronous DNS resolutions:\n"
-			"\t* Attempt resolution with NULL name\n",
-			"\t* Attempt resolution with invalid RR type\n",
-			"\t* Attempt resolution with invalid RR class\n",
-			"\t* Attempt resolution with NULL result pointer\n",
-			"\t* Attempt resolution with resolver that returns an error\n";
-		return AST_TEST_NOT_RUN;
-	case TEST_EXECUTE:
-		break;
-	}
-
-	if (ast_dns_resolver_register(&test_resolver)) {
-		ast_test_status_update(test, "Failed to register test resolver\n");
-		return AST_TEST_FAIL;
-	}
-
-	for (i = 0; i < ARRAY_LEN(resolves); ++i) {
-		if (!ast_dns_resolve(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class, resolves[i].result)) {
-			ast_test_status_update(test, "Successfully resolved DNS query with invalid parameters\n");
-			res = AST_TEST_FAIL;
-		} else if (result) {
-			ast_test_status_update(test, "Failed resolution set a non-NULL result\n");
-			ast_dns_result_free(result);
-			res = AST_TEST_FAIL;
-		}
-	}
-
-	ast_dns_resolver_unregister(&test_resolver);
-
-	/* As a final test, try a legitimate query with a bad resolver */
-	if (ast_dns_resolver_register(&terrible_resolver)) {
-		ast_test_status_update(test, "Failed to register the terrible resolver\n");
-		return AST_TEST_FAIL;
-	}
-
-	if (!ast_dns_resolve("asterisk.org", ns_t_a, ns_c_in, &result)) {
-		ast_test_status_update(test, "DNS resolution succeeded when we expected it not to\n");
-		ast_dns_resolver_unregister(&terrible_resolver);
-		return AST_TEST_FAIL;
-	}
-
-	ast_dns_resolver_unregister(&terrible_resolver);
-
-	if (result) {
-		ast_test_status_update(test, "Failed DNS resolution set the result to something non-NULL\n");
-		ast_dns_result_free(result);
-		return AST_TEST_FAIL;
-	}
-
-	return res;
-}
-
+/*! Stub async resolution callback */
 static void stub_callback(const struct ast_dns_query *query)
 {
 	return;
