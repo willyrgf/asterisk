@@ -194,16 +194,9 @@ AST_TEST_DEFINE(resolver_data)
 		int fingers;
 		int toes;
 	};
-	
-	struct digits average = {
-		.fingers = 10,
-		.toes = 10,
-	};
 
-	struct digits polydactyl = {
-		.fingers = 12,
-		.toes = 10,
-	};
+	RAII_VAR(struct digits *, average, NULL, ao2_cleanup);
+	RAII_VAR(struct digits *, polydactyl, NULL, ao2_cleanup);
 
 	struct digits *data_ptr;
 
@@ -226,6 +219,14 @@ AST_TEST_DEFINE(resolver_data)
 
 	memset(&some_query, 0, sizeof(some_query));
 
+	average = ao2_alloc(sizeof(*average), NULL);
+	polydactyl = ao2_alloc(sizeof(*average), NULL);
+
+	if (!average || !polydactyl) {
+		ast_test_status_update(test, "Allocation failure during unit test\n");
+		return AST_TEST_FAIL;
+	}
+
 	/* Ensure that NULL is retrieved if we haven't set anything on the query */
 	data_ptr = ast_dns_resolver_get_data(&some_query);
 	if (data_ptr) {
@@ -233,7 +234,13 @@ AST_TEST_DEFINE(resolver_data)
 		return AST_TEST_FAIL;
 	}
 
-	ast_dns_resolver_set_data(&some_query, &average);
+	if (ast_dns_resolver_set_data(&some_query, average)) {
+		ast_test_status_update(test, "Failed to set resolver data on query\n");
+		return AST_TEST_FAIL;
+	}
+	
+	/* Go ahead now and remove the query's reference to the resolver data to prevent memory leaks */
+	ao2_ref(average, -1);
 
 	/* Ensure that data can be set and retrieved */
 	data_ptr = ast_dns_resolver_get_data(&some_query);
@@ -242,22 +249,14 @@ AST_TEST_DEFINE(resolver_data)
 		return AST_TEST_FAIL;
 	}
 
-	if (data_ptr->fingers != average.fingers || data_ptr->toes != average.toes) {
+	if (data_ptr != average) {
 		ast_test_status_update(test, "Unexpected resolver data retrieved from DNS query\n");
 		return AST_TEST_FAIL;
 	}
 
-	/* Ensure that we can set new resolver data even if there already is resolver data on the query */
-	ast_dns_resolver_set_data(&some_query, &polydactyl);
-
-	data_ptr = ast_dns_resolver_get_data(&some_query);
-	if (!data_ptr) {
-		ast_test_status_update(test, "Unable to retrieve resolver data from DNS query\n");
-		return AST_TEST_FAIL;
-	}
-
-	if (data_ptr->fingers != polydactyl.fingers || data_ptr->toes != polydactyl.toes) {
-		ast_test_status_update(test, "Unexpected resolver data retrieved from DNS query\n");
+	/* Ensure that attempting to set new resolver data on the query fails */
+	if (!ast_dns_resolver_set_data(&some_query, polydactyl)) {
+		ast_test_status_update(test, "Successfully overwrote resolver data on a query. We shouldn't be able to do that\n");
 		return AST_TEST_FAIL;
 	}
 
