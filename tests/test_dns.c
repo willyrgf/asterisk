@@ -237,7 +237,7 @@ AST_TEST_DEFINE(resolver_data)
 		ast_test_status_update(test, "Failed to set resolver data on query\n");
 		return AST_TEST_FAIL;
 	}
-	
+
 	/* Go ahead now and remove the query's reference to the resolver data to prevent memory leaks */
 	ao2_ref(average, -1);
 
