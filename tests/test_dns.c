@@ -929,27 +929,72 @@ AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
 
 	struct ast_dns_result *result = NULL;
 
+	struct dns_resolve_data {
+		const char *name;
+		int rr_type;
+		int rr_class;
+		struct ast_dns_result **result;
+	} resolves [] = {
+		{ NULL,           ns_t_a,       ns_c_in,      &result },
+		{ "asterisk.org", -1,           ns_c_in,      &result },
+		{ "asterisk.org", ns_t_max + 1, ns_c_in,      &result },
+		{ "asterisk.org", ns_t_a,       -1,           &result },
+		{ "asterisk.org", ns_t_a,       ns_c_max + 1, &result },
+		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
+	};
+	
+	int i;
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "resolver_resolve_sync_off_nominal";
 		info->category = "/main/dns/";
 		info->summary = "Test off-nominal synchronous DNS resolution";
 		info->description =
-			"This test attempts to call into a resolver that fails to resolve\n";
+			"This test performs several off-nominal synchronous DNS resolutions:\n"
+			"\t* Attempt resolution with NULL name\n",
+			"\t* Attempt resolution with invalid RR type\n",
+			"\t* Attempt resolution with invalid RR class\n",
+			"\t* Attempt resolution with NULL result pointer\n",
+			"\t* Attempt resolution with resolver that returns an error\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
 	}
 
+	if (ast_dns_resolver_register(&test_resolver)) {
+		ast_test_status_update(test, "Failed to register test resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	for (i = 0; i < ARRAY_LEN(resolves); ++i) {
+		if (!ast_dns_resolve(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class, resolves[i].result)) {
+			ast_test_status_update(test, "Successfully resolved DNS query with invalid parameters\n");
+			res = AST_TEST_FAIL;
+		} else if (result) {
+			ast_test_status_update(test, "Failed resolution set a non-NULL result\n");
+			ast_dns_result_free(result);
+			res = AST_TEST_FAIL;
+		}
+	}
+
+	ast_dns_resolver_unregister(&test_resolver);
+
+	/* As a final test, try a legitimate query with a bad resolver */
 	if (ast_dns_resolver_register(&terrible_resolver)) {
-		ast_test_status_update(test, "Failed to register the DNS resolver\n");
+		ast_test_status_update(test, "Failed to register the terrible resolver\n");
 		return AST_TEST_FAIL;
 	}
 
 	if (!ast_dns_resolve("asterisk.org", ns_t_a, ns_c_in, &result)) {
 		ast_test_status_update(test, "DNS resolution succeeded when we expected it not to\n");
+		ast_dns_resolver_unregister(&test_resolver);
 		return AST_TEST_FAIL;
 	}
+
+	ast_dns_resolver_unregister(&test_resolver);
 
 	if (result) {
 		ast_test_status_update(test, "Failed DNS resolution set the result to something non-NULL\n");
@@ -957,7 +1002,86 @@ AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
 		return AST_TEST_FAIL;
 	}
 
-	return AST_TEST_PASS;
+	return res;
+}
+
+static void stub_callback(const struct ast_dns_query *query)
+{
+	return;
+}
+
+AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
+{
+	struct ast_dns_resolver terrible_resolver = {
+		.name = "Ed Wood's Filmography",
+		.priority = 0,
+		.resolve = fail_resolve,
+		.cancel = stub_cancel,
+	};
+
+	struct dns_resolve_data {
+		const char *name;
+		int rr_type;
+		int rr_class;
+		ast_dns_resolve_callback callback;
+	} resolves [] = {
+		{ NULL,           ns_t_a,       ns_c_in,      stub_callback },
+		{ "asterisk.org", -1,           ns_c_in,      stub_callback },
+		{ "asterisk.org", ns_t_max + 1, ns_c_in,      stub_callback },
+		{ "asterisk.org", ns_t_a,       -1,           stub_callback },
+		{ "asterisk.org", ns_t_a,       ns_c_max + 1, stub_callback },
+		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
+	};
+
+	struct ast_dns_query *query;
+	enum ast_test_result_state res = AST_TEST_PASS;
+	int i;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolver_resolve_async_off_nominal";
+		info->category = "/main/dns/";
+		info->summary = "Test off-nominal asynchronous DNS resolution";
+		info->description =
+			"This test attempts to call into a resolver that fails to resolve\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&test_resolver)) {
+		ast_test_status_update(test, "Failed to register test resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	for (i = 0; i < ARRAY_LEN(resolves); ++i) {
+		query = ast_dns_resolve_async(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class,
+				resolves[i].callback, NULL);
+		if (query) {
+			ast_test_status_update(test, "Successfully performed asynchronous resolution with invalid data\n");
+			ao2_ref(query, -1);
+			res = AST_TEST_FAIL;
+		}
+	}
+
+	ast_dns_resolver_unregister(&test_resolver);
+
+	if (ast_dns_resolver_register(&terrible_resolver)) {
+		ast_test_status_update(test, "Failed to register the DNS resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	query = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, stub_callback, NULL);
+
+	ast_dns_resolver_unregister(&terrible_resolver);
+
+	if (query) {
+		ast_test_status_update(test, "Successfully performed asynchronous resolution with invalid data\n");
+		ao2_ref(query, -1);
+		return AST_TEST_FAIL;
+	}
+
+	return res;
 }
 
 AST_TEST_DEFINE(resolver_resolve_async_cancel)
@@ -1072,6 +1196,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolver_resolve_sync);
 	AST_TEST_UNREGISTER(resolver_resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolver_resolve_async);
+	AST_TEST_UNREGISTER(resolver_resolve_async_off_nominal);
 	AST_TEST_UNREGISTER(resolver_resolve_async_cancel);
 
 	return 0;
@@ -1090,6 +1215,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolver_resolve_sync);
 	AST_TEST_REGISTER(resolver_resolve_sync_off_nominal);
 	AST_TEST_REGISTER(resolver_resolve_async);
+	AST_TEST_REGISTER(resolver_resolve_async_off_nominal);
 	AST_TEST_REGISTER(resolver_resolve_async_cancel);
 
 	return AST_MODULE_LOAD_SUCCESS;
