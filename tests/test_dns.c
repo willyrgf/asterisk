@@ -1043,7 +1043,12 @@ AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
 		info->category = "/main/dns/";
 		info->summary = "Test off-nominal asynchronous DNS resolution";
 		info->description =
-			"This test attempts to call into a resolver that fails to resolve\n";
+			"This test performs several off-nominal asynchronous DNS resolutions:\n"
+			"\t* Attempt resolution with NULL name\n",
+			"\t* Attempt resolution with invalid RR type\n",
+			"\t* Attempt resolution with invalid RR class\n",
+			"\t* Attempt resolution with NULL callback pointer\n",
+			"\t* Attempt resolution with resolver that returns an error\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
