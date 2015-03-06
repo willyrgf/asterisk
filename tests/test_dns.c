@@ -289,7 +289,7 @@ AST_TEST_DEFINE(resolver_set_result)
 {
 	struct ast_dns_query some_query;
 	struct ast_dns_result *result;
-	
+
 	struct dns_result {
 		unsigned int secure;
 		unsigned int bogus;
@@ -518,7 +518,7 @@ AST_TEST_DEFINE(resolver_add_record)
 		if (res) {
 			return AST_TEST_FAIL;
 		}
-		
+
 		++num_records_visited;
 	}
 
@@ -584,7 +584,7 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 		ast_test_status_update(test, "Successfully added DNS record with negative RR type\n");
 		return AST_TEST_FAIL;
 	}
-	
+
 	if (!ast_dns_resolver_add_record(&some_query, ns_t_max + 1, ns_c_in, 12345, v4_buf, V4_BUFSIZE)) {
 		ast_test_status_update(test, "Successfully added DNS record with too large RR type\n");
 		return AST_TEST_FAIL;
@@ -673,7 +673,7 @@ static void *resolution_thread(void *dns_query)
 		}
 	}
 	ast_mutex_unlock(&test_resolver_data.lock);
-	
+
 	if (test_resolver_data.canceled) {
 		ast_dns_resolver_completed(query);
 		ao2_ref(query, -1);
@@ -684,7 +684,7 @@ static void *resolution_thread(void *dns_query)
 
 	inet_pton(AF_INET, V4, v4_buf);
 	ast_dns_resolver_add_record(query, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE);
-	
+
 	test_resolver_data.resolution_complete = 1;
 	ast_dns_resolver_completed(query);
 
@@ -870,7 +870,7 @@ AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
 		{ "asterisk.org", ns_t_a,       ns_c_max + 1, &result },
 		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
 	};
-	
+
 	int i;
 
 	enum ast_test_result_state res = AST_TEST_PASS;
@@ -1004,7 +1004,7 @@ static void async_callback(const struct ast_dns_query *query)
 
 AST_TEST_DEFINE(resolver_resolve_async)
 {
-	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup); 
+	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
 	struct ast_dns_result *result;
 	enum ast_test_result_state res = AST_TEST_PASS;
@@ -1079,7 +1079,7 @@ AST_TEST_DEFINE(resolver_resolve_async)
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
-	
+
 	result = ast_dns_query_get_result(query);
 	if (!result) {
 		ast_test_status_update(test, "Asynchronous resolution yielded no result\n");
@@ -1186,7 +1186,7 @@ AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
 
 AST_TEST_DEFINE(resolver_resolve_async_cancel)
 {
-	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup); 
+	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
 	struct ast_dns_result *result;
 	enum ast_test_result_state res = AST_TEST_PASS;
