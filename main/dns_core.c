@@ -450,7 +450,7 @@ static int dns_query_recurring_get_ttl(const struct ast_dns_query *query)
 	const struct ast_dns_result *result = ast_dns_query_get_result(query);
 	const struct ast_dns_record *record;
 
-	if (ast_dns_result_get_nxdomain(result)) {
+	if (ast_dns_result_get_rcode(result) == ns_r_nxdomain) {
 		return 0;
 	}
 
