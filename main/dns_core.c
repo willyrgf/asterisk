@@ -35,6 +35,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/vector.h"
 #include "asterisk/astobj2.h"
 #include "asterisk/strings.h"
+#include "asterisk/sched.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_naptr.h"
 #include "asterisk/dns_srv.h"
@@ -45,6 +46,8 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <arpa/nameser.h>
 
 AST_RWLIST_HEAD_STATIC(resolvers, ast_dns_resolver);
+
+static struct ast_sched_context *sched;
 
 const char *ast_dns_query_get_name(const struct ast_dns_query *query)
 {
@@ -447,6 +450,14 @@ void ast_dns_resolver_completed(const struct ast_dns_query *query)
 	query->callback(query);
 }
 
+static void dns_shutdown(void)
+{
+	if (sched) {
+		ast_sched_context_destroy(sched);
+		sched = NULL;
+	}
+}
+
 int ast_dns_resolver_register(struct ast_dns_resolver *resolver)
 {
 	struct ast_dns_resolver *iter;
@@ -468,6 +479,27 @@ int ast_dns_resolver_register(struct ast_dns_resolver *resolver)
 	}
 
 	AST_RWLIST_WRLOCK(&resolvers);
+
+	/* On the first registration of a resolver start a scheduler for recurring queries */
+	if (AST_LIST_EMPTY(&resolvers) && !sched) {
+		sched = ast_sched_context_create();
+		if (!sched) {
+			ast_log(LOG_ERROR, "DNS resolver '%s' could not be registered: Failed to create scheduler for recurring DNS queries\n",
+				resolver->name);
+			AST_RWLIST_UNLOCK(&resolvers);
+			return -1;
+		}
+
+		if (ast_sched_start_thread(sched)) {
+			ast_log(LOG_ERROR, "DNS resolver '%s' could not be registered: Failed to start thread for recurring DNS queries\n",
+				resolver->name);
+			dns_shutdown();
+			AST_RWLIST_UNLOCK(&resolvers);
+			return -1;
+		}
+
+		ast_register_cleanup(dns_shutdown);
+	}
 
 	AST_LIST_TRAVERSE(&resolvers, iter, next) {
 		if (!strcmp(iter->name, resolver->name)) {
@@ -513,6 +545,11 @@ void ast_dns_resolver_unregister(struct ast_dns_resolver *resolver)
 		}
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END;
+
+	if (AST_LIST_EMPTY(&resolvers)) {
+		dns_shutdown();
+	}
+
 	AST_RWLIST_UNLOCK(&resolvers);
 
 	ast_verb(2, "Unregistered DNS resolver '%s'\n", resolver->name);
