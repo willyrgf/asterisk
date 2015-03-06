@@ -212,26 +212,6 @@ struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *reco
 struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
 
 /*!
- * \brief Asynchronously resolve a DNS query, and continue resolving it according to the lowest TTL available
- *
- * \param name The name of what to resolve
- * \param rr_type Resource record type
- * \param rr_class Resource record class
- * \param callback The callback to invoke upon completion
- * \param data User data to make available on the query
- *
- * \retval non-NULL success - query has been sent for resolution
- * \retval NULL failure
- *
- * \note The user data passed in to this function must be ao2 allocated
- *
- * \note This query will continue to happen according to the lowest TTL unless cancelled using ast_dns_resolve_cancel
- *
- * \note It is NOT possible for the callback to be invoked concurrently for the query multiple times
- */
-struct ast_dns_query *ast_dns_resolve_async_recurring(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
-
-/*!
  * \brief Cancel an asynchronous DNS resolution
  *
  * \param query The DNS query returned from ast_dns_resolve_async

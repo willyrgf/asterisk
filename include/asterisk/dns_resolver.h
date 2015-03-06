@@ -99,7 +99,7 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
  *
  * \note Once this is invoked the resolver data on the query will be removed
  */
-void ast_dns_resolver_completed(const struct ast_dns_query *query);
+void ast_dns_resolver_completed(struct ast_dns_query *query);
 
 /*!
  * \brief Register a DNS resolver
