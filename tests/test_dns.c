@@ -537,6 +537,7 @@ AST_TEST_DEFINE(resolver_add_record)
 
 AST_TEST_DEFINE(resolver_add_record_off_nominal)
 {
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	struct ast_dns_query some_query;
 	static const char *V4 = "127.0.0.1";
 	static const size_t V4_BUFSIZE = sizeof(struct in_addr);
@@ -574,6 +575,9 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}
+
+	/* We get the result so it will be cleaned up when the function exits */
+	result = ast_dns_query_get_result(&some_query);
 
 	/* Invalid RR types */
 	if (!ast_dns_resolver_add_record(&some_query, -1, ns_c_in, 12345, v4_buf, V4_BUFSIZE)) {
