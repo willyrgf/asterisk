@@ -48,9 +48,16 @@ struct ast_dns_resolver {
  * \param query The DNS query
  * \param data The resolver specific data
  *
- * \note Unlike user specific data this does not have to be ao2 allocated
+ * \note The resolver data MUST be an ao2 object
+ *
+ * \note This function increments the reference count of the resolver data, it does NOT steal
+ *
+ * \note Once resolver specific data has been set it can not be changed
+ *
+ * \retval 0 success
+ * \retval -1 failure, resolver data is already set
  */
-void ast_dns_resolver_set_data(struct ast_dns_query *query, void *data);
+int ast_dns_resolver_set_data(struct ast_dns_query *query, void *data);
 
 /*!
  * \brief Retrieve resolver specific data

@@ -141,7 +141,7 @@ static void dns_query_destroy(void *data)
 	struct ast_dns_query *query = data;
 
 	ao2_cleanup(query->user_data);
-	ast_assert(query->resolver_data == NULL);
+	ao2_cleanup(query->resolver_data);
 	ast_dns_result_free(query->result);
 }
 
@@ -326,9 +326,15 @@ const char *ast_dns_tlsa_get_association_data(const struct ast_dns_record *recor
 	return NULL;
 }
 
-void ast_dns_resolver_set_data(struct ast_dns_query *query, void *data)
+int ast_dns_resolver_set_data(struct ast_dns_query *query, void *data)
 {
-	query->resolver_data = data;
+	if (query->resolver_data) {
+		return -1;
+	}
+
+	query->resolver_data = ao2_bump(data);
+
+	return 0;
 }
 
 void *ast_dns_resolver_get_data(const struct ast_dns_query *query)

@@ -208,6 +208,10 @@ struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *reco
  * \retval NULL failure
  *
  * \note The result passed to the callback does not need to be freed
+ *
+ * \note The user data MUST be an ao2 object
+ *
+ * \note This function increments the reference count of the user data, it does NOT steal
  */
 struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
 
