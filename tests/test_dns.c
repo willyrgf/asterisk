@@ -990,11 +990,11 @@ AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
 
 	if (!ast_dns_resolve("asterisk.org", ns_t_a, ns_c_in, &result)) {
 		ast_test_status_update(test, "DNS resolution succeeded when we expected it not to\n");
-		ast_dns_resolver_unregister(&test_resolver);
+		ast_dns_resolver_unregister(&terrible_resolver);
 		return AST_TEST_FAIL;
 	}
 
-	ast_dns_resolver_unregister(&test_resolver);
+	ast_dns_resolver_unregister(&terrible_resolver);
 
 	if (result) {
 		ast_test_status_update(test, "Failed DNS resolution set the result to something non-NULL\n");

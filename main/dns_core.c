@@ -148,23 +148,24 @@ struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int r
 		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, no name provided\n");
 		return NULL;
 	} else if (rr_type > ns_t_max) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, resource record type '%d' exceeds maximum\n",
-			rr_type);
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', resource record type '%d' exceeds maximum\n",
+			name, rr_type);
 		return NULL;
 	} else if (rr_type < 0) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, invalid resource record type '%d'\n",
-			rr_type);
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', invalid resource record type '%d'\n",
+			name, rr_type);
 		return NULL;
 	} else if (rr_class > ns_c_max) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, resource record class '%d' exceeds maximum\n",
-			rr_class);
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', resource record class '%d' exceeds maximum\n",
+			name, rr_class);
 		return NULL;
 	} else if (rr_class < 0) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, invalid resource class '%d'\n",
-			rr_class);
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', invalid resource class '%d'\n",
+			name, rr_class);
 		return NULL;
 	} else if (!callback) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, no callback provided\n");
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', no callback provided\n",
+			name);
 		return NULL;
 	}
 
@@ -250,20 +251,24 @@ int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_
 		ast_log(LOG_ERROR, "Could not perform synchronous resolution, no name provided\n");
 		return -1;
 	} else if (rr_type > ns_t_max) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution, resource record type '%d' exceeds maximum\n",
-			rr_type);
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', resource record type '%d' exceeds maximum\n",
+			name, rr_type);
 		return -1;
 	} else if (rr_type < 0) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution, invalid resource record type '%d'\n",
-			rr_type);
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', invalid resource record type '%d'\n",
+			name, rr_type);
 		return -1;
 	} else if (rr_class > ns_c_max) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution, resource record class '%d' exceeds maximum\n",
-			rr_class);
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', resource record class '%d' exceeds maximum\n",
+			name, rr_class);
 		return -1;
 	} else if (rr_class < 0) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution, invalid resource class '%d'\n",
-			rr_class);
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', invalid resource class '%d'\n",
+			name, rr_class);
+		return -1;
+	} else if (!result) {
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', no result pointer provided for storing results\n",
+			name);
 		return -1;
 	}
 
