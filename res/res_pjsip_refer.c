@@ -408,7 +408,7 @@ struct refer_attended {
 	/*! \brief Transferer channel */
 	struct ast_channel *transferer_chan;
 	/*! \brief Second transferer session */
-	struct ast_sip_session *transferer_second	;
+	struct ast_sip_session *transferer_second;
 	/*! \brief Optional refer progress structure */
 	struct refer_progress *progress;
 };
@@ -425,11 +425,14 @@ static void refer_attended_destroy(void *obj)
 }
 
 /*! \brief Allocator for attended transfer task */
-static struct refer_attended *refer_attended_alloc(struct ast_sip_session *transferer, struct ast_sip_session *transferer_second,
+static struct refer_attended *refer_attended_alloc(struct ast_sip_session *transferer,
+	struct ast_sip_session *transferer_second,
 	struct refer_progress *progress)
 {
-	struct refer_attended *attended = ao2_alloc(sizeof(*attended), refer_attended_destroy);
+	struct refer_attended *attended;
 
+	attended = ao2_alloc_options(sizeof(*attended), refer_attended_destroy,
+		AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!attended) {
 		return NULL;
 	}
@@ -625,6 +628,26 @@ static void refer_blind_callback(struct ast_channel *chan, struct transfer_chann
 	}
 }
 
+/*!
+ * \internal
+ * \brief Set the passed in context variable to the determined transfer context.
+ * \since 13.3.0
+ *
+ * \param context Set to the determined transfer context.
+ * \param session INVITE dialog SIP session.
+ */
+#define DETERMINE_TRANSFER_CONTEXT(context, session)									\
+	do {																				\
+		ast_channel_lock((session)->channel);											\
+		context = pbx_builtin_getvar_helper((session)->channel, "TRANSFER_CONTEXT");	\
+		if (ast_strlen_zero(context)) {													\
+			context = (session)->endpoint->context;										\
+		} else {																		\
+			context = ast_strdupa(context);												\
+		}																				\
+		ast_channel_unlock((session)->channel);											\
+	} while (0)																			\
+
 static int refer_incoming_attended_request(struct ast_sip_session *session, pjsip_rx_data *rdata, pjsip_sip_uri *target_uri,
 	pjsip_param *replaces_param, struct refer_progress *progress)
 {
@@ -675,12 +698,10 @@ static int refer_incoming_attended_request(struct ast_sip_session *session, pjsi
 
 		return 200;
 	} else {
-		const char *context = pbx_builtin_getvar_helper(session->channel, "TRANSFER_CONTEXT");
+		const char *context;
 		struct refer_blind refer = { 0, };
 
-		if (ast_strlen_zero(context)) {
-			context = session->endpoint->context;
-		}
+		DETERMINE_TRANSFER_CONTEXT(context, session);
 
 		if (!ast_exists_extension(NULL, context, "external_replaces", 1, NULL)) {
 			ast_log(LOG_ERROR, "Received REFER for remote session on channel '%s' from endpoint '%s' but 'external_replaces' extension not found in context %s\n",
@@ -718,10 +739,7 @@ static int refer_incoming_blind_request(struct ast_sip_session *session, pjsip_r
 	struct refer_blind refer = { 0, };
 
 	/* If no explicit transfer context has been provided use their configured context */
-	context = pbx_builtin_getvar_helper(session->channel, "TRANSFER_CONTEXT");
-	if (ast_strlen_zero(context)) {
-		context = session->endpoint->context;
-	}
+	DETERMINE_TRANSFER_CONTEXT(context, session);
 
 	/* Using the user portion of the target URI see if it exists as a valid extension in their context */
 	ast_copy_pj_str(exten, &target->user, sizeof(exten));
