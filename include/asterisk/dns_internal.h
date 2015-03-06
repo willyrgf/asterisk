@@ -107,3 +107,23 @@ struct ast_dns_query {
 	char name[0];
 };
 
+/*! \brief A recurring DNS query */
+struct ast_dns_query_recurring
+{
+	/*! \brief Callback to invoke upon completion */
+	ast_dns_resolve_callback callback;
+	/*! \brief User-specific data */
+	void *user_data;
+	/*! \brief Current active query */
+	struct ast_dns_query *query;
+	/*! \brief The recurring query has been cancelled */
+	unsigned int cancelled;
+	/*! \brief Scheduled timer for next resolution */
+	int timer;
+	/*! \brief Resource record type */
+	int rr_type;
+	/*! \brief Resource record class */
+	int rr_class;
+	/*! \brief The name of what is being resolved */
+	char name[0];	
+};
