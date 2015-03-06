@@ -448,6 +448,12 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
 void ast_dns_resolver_completed(const struct ast_dns_query *query)
 {
 	query->callback(query);
+
+	if (!query->recurring) {
+		return;
+	}
+
+
 }
 
 static void dns_shutdown(void)
@@ -545,11 +551,6 @@ void ast_dns_resolver_unregister(struct ast_dns_resolver *resolver)
 		}
 	}
 	AST_RWLIST_TRAVERSE_SAFE_END;
-
-	if (AST_LIST_EMPTY(&resolvers)) {
-		dns_shutdown();
-	}
-
 	AST_RWLIST_UNLOCK(&resolvers);
 
 	ast_verb(2, "Unregistered DNS resolver '%s'\n", resolver->name);
