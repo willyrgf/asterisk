@@ -913,6 +913,53 @@ cleanup:
 	return res;
 }
 
+static int fail_resolve(struct ast_dns_query *query)
+{
+	return -1;
+}
+
+AST_TEST_DEFINE(resolver_resolve_sync_off_nominal)
+{
+	struct ast_dns_resolver terrible_resolver = {
+		.name = "Uwe Boll's Filmography",
+		.priority = 0,
+		.resolve = fail_resolve,
+		.cancel = stub_cancel,
+	};
+
+	struct ast_dns_result *result = NULL;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolver_resolve_sync_off_nominal";
+		info->category = "/main/dns/";
+		info->summary = "Test off-nominal synchronous DNS resolution";
+		info->description =
+			"This test attempts to call into a resolver that fails to resolve\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&terrible_resolver)) {
+		ast_test_status_update(test, "Failed to register the DNS resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (!ast_dns_resolve("asterisk.org", ns_t_a, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution succeeded when we expected it not to\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (result) {
+		ast_test_status_update(test, "Failed DNS resolution set the result to something non-NULL\n");
+		ast_dns_result_free(result);
+		return AST_TEST_FAIL;
+	}
+
+	return AST_TEST_PASS;
+}
+
 AST_TEST_DEFINE(resolver_resolve_async_cancel)
 {
 	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup); 
@@ -1023,6 +1070,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolver_add_record);
 	AST_TEST_UNREGISTER(resolver_add_record_off_nominal);
 	AST_TEST_UNREGISTER(resolver_resolve_sync);
+	AST_TEST_UNREGISTER(resolver_resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolver_resolve_async);
 	AST_TEST_UNREGISTER(resolver_resolve_async_cancel);
 
@@ -1040,6 +1088,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolver_add_record);
 	AST_TEST_REGISTER(resolver_add_record_off_nominal);
 	AST_TEST_REGISTER(resolver_resolve_sync);
+	AST_TEST_REGISTER(resolver_resolve_sync_off_nominal);
 	AST_TEST_REGISTER(resolver_resolve_async);
 	AST_TEST_REGISTER(resolver_resolve_async_cancel);
 
