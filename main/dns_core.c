@@ -144,7 +144,27 @@ struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int r
 {
 	struct ast_dns_query *query;
 
-	if (ast_strlen_zero(name) || !callback) {
+	if (ast_strlen_zero(name)) {
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, no name provided\n");
+		return NULL;
+	} else if (rr_type > ns_t_max) {
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, resource record type '%d' exceeds maximum\n",
+			rr_type);
+		return NULL;
+	} else if (rr_type < 0) {
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, invalid resource record type '%d'\n",
+			rr_type);
+		return NULL;
+	} else if (rr_class > ns_c_max) {
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, resource record class '%d' exceeds maximum\n",
+			rr_class);
+		return NULL;
+	} else if (rr_class < 0) {
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, invalid resource class '%d'\n",
+			rr_class);
+		return NULL;
+	} else if (!callback) {
+		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, no callback provided\n");
 		return NULL;
 	}
 
@@ -225,6 +245,27 @@ int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_
 {
 	struct dns_synchronous_resolve *synchronous;
 	struct ast_dns_query *query;
+
+	if (ast_strlen_zero(name)) {
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution, no name provided\n");
+		return -1;
+	} else if (rr_type > ns_t_max) {
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution, resource record type '%d' exceeds maximum\n",
+			rr_type);
+		return -1;
+	} else if (rr_type < 0) {
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution, invalid resource record type '%d'\n",
+			rr_type);
+		return -1;
+	} else if (rr_class > ns_c_max) {
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution, resource record class '%d' exceeds maximum\n",
+			rr_class);
+		return -1;
+	} else if (rr_class < 0) {
+		ast_log(LOG_ERROR, "Could not perform synchronous resolution, invalid resource class '%d'\n",
+			rr_class);
+		return -1;
+	}
 
 	synchronous = ao2_alloc_options(sizeof(*synchronous), dns_synchronous_resolve_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!synchronous) {
