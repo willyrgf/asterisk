@@ -73,8 +73,6 @@ struct ast_dns_naptr_record {
 
 /*! \brief The result of a DNS query */
 struct ast_dns_result {
-	/*! \brief Whether the domain was not found */
-	unsigned int nxdomain;
 	/*! \brief Whether the result is secure */
 	unsigned int secure;
 	/*! \brief Whether the result is bogus */

@@ -72,7 +72,6 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query);
  * \brief Set result information for a DNS query
  *
  * \param query The DNS query
- * \param nxdomain Whether the domain was not found
  * \param result Whether the result is secured or not
  * \param bogus Whether the result is bogus or not
  * \param rcode Optional response code
@@ -81,7 +80,7 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query);
  * \retval 0 success
  * \retval -1 failure
  */
-int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
+int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure, unsigned int bogus,
 	unsigned int rcode, const char *canonical);
 
 /*!

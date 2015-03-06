@@ -80,15 +80,6 @@ struct ast_dns_result;
 struct ast_dns_result *ast_dns_query_get_result(const struct ast_dns_query *query);
 
 /*!
- * \brief Get whether the domain exists or not
- *
- * \param query The DNS result
- *
- * \return whether the domain exists or not
- */
-unsigned int ast_dns_result_get_nxdomain(const struct ast_dns_result *result);
-
-/*!
  * \brief Get whether the result is secure or not
  *
  * \param result The DNS result

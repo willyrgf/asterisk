@@ -75,11 +75,6 @@ struct ast_dns_result *ast_dns_query_get_result(const struct ast_dns_query *quer
 	return query->result;
 }
 
-unsigned int ast_dns_result_get_nxdomain(const struct ast_dns_result *result)
-{
-	return result->nxdomain;
-}
-
 unsigned int ast_dns_result_get_secure(const struct ast_dns_result *result)
 {
 	return result->secure;
@@ -353,7 +348,7 @@ static void dns_result_destroy(void *obj)
 	}
 }
 
-int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdomain, unsigned int secure, unsigned int bogus,
+int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure, unsigned int bogus,
 	unsigned int rcode, const char *canonical)
 {
 	if (secure && bogus) {
@@ -377,7 +372,6 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int nxdoma
 		return -1;
 	}
 
-	query->result->nxdomain = nxdomain;
 	query->result->secure = secure;
 	query->result->bogus = bogus;
 	query->result->rcode = rcode;

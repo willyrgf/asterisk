@@ -265,8 +265,8 @@ AST_TEST_DEFINE(resolver_data)
 }
 
 static int test_results(struct ast_test *test, const struct ast_dns_query *query,
-		int expected_nxdomain, int expected_secure, int expected_bogus,
-		const char *expected_canonical)
+		unsigned int expected_secure, unsigned int expected_bogus,
+		unsigned int expected_rcode, const char *expected_canonical)
 {
 	struct ast_dns_result *result;
 
@@ -276,9 +276,9 @@ static int test_results(struct ast_test *test, const struct ast_dns_query *query
 		return -1;
 	}
 
-	if (ast_dns_result_get_nxdomain(result) != expected_nxdomain ||
-			ast_dns_result_get_secure(result) != expected_secure ||
+	if (ast_dns_result_get_secure(result) != expected_secure ||
 			ast_dns_result_get_bogus(result) != expected_bogus ||
+			ast_dns_result_get_rcode(result) != expected_rcode ||
 			strcmp(ast_dns_result_get_canonical(result), expected_canonical)) {
 		ast_test_status_update(test, "Unexpected values in result from query\n");
 		return -1;
@@ -291,6 +291,19 @@ AST_TEST_DEFINE(resolver_set_result)
 {
 	struct ast_dns_query some_query;
 	struct ast_dns_result *result;
+	
+	struct dns_result {
+		unsigned int secure;
+		unsigned int bogus;
+		unsigned int rcode;
+	} results[] = {
+		{ 0, 0, ns_r_noerror },
+		{ 0, 1, ns_r_noerror },
+		{ 1, 0, ns_r_noerror },
+		{ 0, 0, ns_r_nxdomain },
+	};
+	int i;
+	enum ast_test_result_state res = AST_TEST_PASS;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -299,10 +312,10 @@ AST_TEST_DEFINE(resolver_set_result)
 		info->summary = "Test setting and getting results on DNS queries";
 		info->description =
 			"This test performs the following:\n"
-			"\t* Sets a result that is not secure, bogus, or nxdomain\n"
-			"\t* Sets a result that is not secure or nxdomain, but is secure\n"
-			"\t* Sets a result that is not bogus or nxdomain, but is secure\n"
-			"\t* Sets a result that is not secure or bogus, but is nxdomain\n"
+			"\t* Sets a result that is not secure, bogus, and has rcode 0\n"
+			"\t* Sets a result that is not secure, has rcode 0, but is secure\n"
+			"\t* Sets a result that is not bogus, has rcode 0, but is secure\n"
+			"\t* Sets a result that is not secure or bogus, but has rcode NXDOMAIN\n"
 			"After each result is set, we ensure that parameters retrieved from\n"
 			"the result have the expected values.";
 		return AST_TEST_NOT_RUN;
@@ -312,47 +325,24 @@ AST_TEST_DEFINE(resolver_set_result)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, "asterisk.org")) {
-		ast_test_status_update(test, "Unable to add legitimate DNS result to query\n");
-		return AST_TEST_FAIL;
-	}
+	for (i = 0; i < ARRAY_LEN(results); ++i) {
+		if (ast_dns_resolver_set_result(&some_query, results[i].secure, results[i].bogus,
+				results[i].rcode, "asterisk.org")) {
+			ast_test_status_update(test, "Unable to add DNS result to query\n");
+			res = AST_TEST_FAIL;
+		}
 
-	if (test_results(test, &some_query, 0, 0, 0, "asterisk.org")) {
-		return AST_TEST_FAIL;
-	}
-
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 1, 0, "asterisk.org")) {
-		ast_test_status_update(test, "Unable to add bogus DNS result to query\n");
-		return AST_TEST_FAIL;
-	}
-
-	if (test_results(test, &some_query, 0, 0, 1, "asterisk.org")) {
-		return AST_TEST_FAIL;
-	}
-
-	if (ast_dns_resolver_set_result(&some_query, 0, 1, 0, 0, "asterisk.org")) {
-		ast_test_status_update(test, "Unable to add secure DNS result to query\n");
-		return AST_TEST_FAIL;
-	}
-
-	if (test_results(test, &some_query, 0, 1, 0, "asterisk.org")) {
-		return AST_TEST_FAIL;
-	}
-
-	if (ast_dns_resolver_set_result(&some_query, 1, 0, 0, 0, "asterisk.org")) {
-		ast_test_status_update(test, "Unable to add nxdomain DNS result to query\n");
-		return AST_TEST_FAIL;
-	}
-
-	if (test_results(test, &some_query, 1, 0, 0, "asterisk.org")) {
-		return AST_TEST_FAIL;
+		if (test_results(test, &some_query, results[i].secure, results[i].bogus,
+				results[i].rcode, "asterisk.org")) {
+			res = AST_TEST_FAIL;
+		}
 	}
 
 	/* The final result we set needs to be freed */
 	result = ast_dns_query_get_result(&some_query);
 	ast_dns_result_free(result);
 
-	return AST_TEST_PASS;
+	return res;
 }
 
 AST_TEST_DEFINE(resolver_set_result_off_nominal)
@@ -376,14 +366,14 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (!ast_dns_resolver_set_result(&some_query, 0, 1, 1, 0, "asterisk.org")) {
+	if (!ast_dns_resolver_set_result(&some_query, 1, 1, ns_r_noerror, "asterisk.org")) {
 		ast_test_status_update(test, "Successfully added a result that was both secure and bogus\n");
 		result = ast_dns_query_get_result(&some_query);
 		ao2_cleanup(result);
 		return AST_TEST_FAIL;
 	}
 
-	if (!ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, NULL)) {
+	if (!ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, NULL)) {
 		ast_test_status_update(test, "Successfully added result with no canonical name\n");
 		result = ast_dns_query_get_result(&some_query);
 		ao2_cleanup(result);
@@ -465,7 +455,7 @@ AST_TEST_DEFINE(resolver_add_record)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}
@@ -582,7 +572,7 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 		return AST_TEST_FAIL;
 	}
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, 0, 0, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, "asterisk.org")) {
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}
@@ -664,7 +654,7 @@ static void *resolution_thread(void *dns_query)
 		return NULL;
 	}
 
-	ast_dns_resolver_set_result(query, 0, 0, 0, 0, "asterisk.org");
+	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org");
 
 	inet_pton(AF_INET, V4, v4_buf);
 	ast_dns_resolver_add_record(query, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE);
