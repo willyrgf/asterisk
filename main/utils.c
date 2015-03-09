@@ -2691,7 +2691,7 @@ void __ast_assert_failed(int condition, const char *condition_str, const char *f
 }
 #endif	/* defined(AST_DEVMODE) */
 
-char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid)
+char *ast_eid_to_str(char *s, int maxlen, const struct ast_eid *eid)
 {
 	int x;
 	char *os = s;

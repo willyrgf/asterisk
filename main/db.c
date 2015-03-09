@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 1999 - 2005, Digium, Inc.
+ * Copyright (C) 1999 - 2015, Digium, Inc.
  *
  * Mark Spencer <markster@digium.com>
  *
@@ -22,9 +22,6 @@
  *
  * \author Mark Spencer <markster@digium.com>
  *
- * \note DB3 is licensed under Sleepycat Public License and is thus incompatible
- * with GPL.  To avoid having to make another exception (and complicate
- * licensing even further) we elect to use DB1 which is BSD licensed
  */
 
 /*** MODULEINFO
@@ -45,11 +42,12 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include <dirent.h>
 #include <sqlite3.h>
 
-#include "asterisk/channel.h"
 #include "asterisk/file.h"
-#include "asterisk/app.h"
-#include "asterisk/dsp.h"
+#include "asterisk/utils.h"
 #include "asterisk/astdb.h"
+#include "asterisk/stasis.h"
+#include "asterisk/stasis_message_router.h"
+#include "asterisk/app.h"
 #include "asterisk/cli.h"
 #include "asterisk/utils.h"
 #include "asterisk/manager.h"
@@ -114,7 +112,16 @@ static pthread_t syncthread;
 static int doexit;
 static int dosync;
 
+/*! \brief A container of families to share across Asterisk instances */
+static struct ao2_container *shared_families;
+
+static struct stasis_topic *db_cluster_topic;
+
+static struct stasis_message_router *message_router;
+
 static void db_sync(void);
+
+#define SHARED_FAMILY "__asterisk_shared_family"
 
 #define DEFINE_SQL_STATEMENT(stmt,sql) static sqlite3_stmt *stmt; \
 	const char stmt##_sql[] = sql;
@@ -199,6 +206,76 @@ static int convert_bdb_to_sqlite3(void)
 
 	return res;
 }
+
+struct ast_db_entry *ast_db_entry_create(const char *key, const char *value)
+{
+	struct ast_db_entry *entry;
+
+	entry = ast_malloc(sizeof(*entry) + strlen(key) + strlen(value) + 2);
+	if (!entry) {
+		return NULL;
+	}
+	entry->next = NULL;
+	entry->key = entry->data + strlen(value) + 1;
+	strcpy(entry->data, value); /* safe */
+	strcpy(entry->key, key); /* safe */
+
+	return entry;
+}
+
+static void shared_db_family_dtor(void *obj)
+{
+	struct ast_db_shared_family *family = obj;
+
+	ast_db_freetree(family->entries);
+}
+
+struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family, enum ast_db_shared_type share_type)
+{
+	struct ast_db_shared_family *shared_family;
+
+	shared_family = ao2_alloc_options(sizeof(*shared_family) + strlen(family) + 1,
+		shared_db_family_dtor, OBJ_NOLOCK);
+	if (!shared_family) {
+		return NULL;
+	}
+	strcpy(shared_family->name, family); /* safe */
+	shared_family->share_type = share_type;
+
+	return shared_family;
+}
+
+static struct ast_db_shared_family *db_shared_family_clone(const struct ast_db_shared_family *shared_family)
+{
+	struct ast_db_shared_family *clone;
+
+	clone = ast_db_shared_family_alloc(shared_family->name, shared_family->share_type);
+
+	return clone;
+}
+
+static int db_shared_family_sort_fn(const void *obj_left, const void *obj_right, int flags)
+{
+	const struct ast_db_shared_family *left = obj_left;
+	const struct ast_db_shared_family *right = obj_right;
+	const char *right_key = obj_right;
+	int cmp;
+
+	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
+	default:
+	case OBJ_POINTER:
+		right_key = right->name;
+		/* Fall through */
+	case OBJ_KEY:
+		cmp = strcmp(left->name, right_key);
+		break;
+	case OBJ_PARTIAL_KEY:
+		cmp = strncmp(left->name, right_key, strlen(right_key));
+		break;
+	}
+	return cmp;
+}
+
 
 static int db_create_astdb(void)
 {
@@ -308,7 +385,152 @@ static int ast_db_rollback_transaction(void)
 	return db_execute_sql("ROLLBACK", NULL, NULL);
 }
 
-int ast_db_put(const char *family, const char *key, const char *value)
+static int db_put_common(const char *family, const char *key, const char *value, int share);
+
+int ast_db_put_shared(const char *family, enum ast_db_shared_type share_type)
+{
+	struct ast_db_shared_family *shared_family;
+
+	if (ast_strlen_zero(family)) {
+		return -1;
+	}
+
+	ao2_lock(shared_families);
+
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_KEY | OBJ_NOLOCK);
+	if (shared_family) {
+		ao2_ref(shared_family, -1);
+		ao2_unlock(shared_families);
+		return -1;
+	}
+
+	shared_family = ast_db_shared_family_alloc(family, share_type);
+	if (!shared_family) {
+		ao2_unlock(shared_families);
+		return -1;
+	}
+
+	ao2_link_flags(shared_families, shared_family, OBJ_NOLOCK);
+
+	db_put_common(SHARED_FAMILY, shared_family->name,
+		share_type == SHARED_DB_TYPE_UNIQUE ? "UNIQUE" : "GLOBAL", 0);
+
+	ao2_ref(shared_family, -1);
+
+	ao2_unlock(shared_families);
+
+	return 0;
+}
+
+int ast_db_is_shared(const char *family)
+{
+	struct ast_db_shared_family *shared_family;
+	int res = 0;
+
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_KEY);
+	if (shared_family) {
+		res = 1;
+		ao2_ref(shared_family, -1);
+	}
+
+	return res;
+}
+
+static int db_put_shared(const char *family, const char *key, const char *value)
+{
+	struct ast_db_shared_family *shared_family;
+	struct ast_db_shared_family *clone;
+
+	/* See if we are shared */
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_PARTIAL_KEY);
+	if (!shared_family) {
+		return 0;
+	}
+
+	/* Create a Stasis message for the new item */
+	clone = db_shared_family_clone(shared_family);
+	if (!clone) {
+		ao2_ref(shared_family, -1);
+		return -1;
+	}
+	clone->entries = ast_db_entry_create(key, value);
+	if (!clone->entries) {
+		ao2_ref(shared_family, -1);
+		ao2_ref(clone, -1);
+		return -1;
+	}
+
+	/* Publish */
+	ast_db_publish_shared_message(ast_db_put_shared_type(), clone, NULL);
+
+	ao2_ref(shared_family, -1);
+
+	return 0;
+}
+
+static int db_del_shared(const char *family, const char *key)
+{
+	struct ast_db_shared_family *shared_family;
+	struct ast_db_shared_family *clone;
+
+	/* See if we are shared */
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_PARTIAL_KEY);
+	if (!shared_family) {
+		return 0;
+	}
+
+	if (ast_strlen_zero(key)) {
+		clone = ao2_bump(shared_family);
+	} else {
+		clone = db_shared_family_clone(shared_family);
+		if (!clone) {
+			ao2_ref(shared_family, -1);
+			return -1;
+		}
+		clone->entries = ast_db_entry_create(key, "");
+		if (!clone->entries) {
+			ao2_ref(shared_family, -1);
+			ao2_ref(clone, -1);
+			return -1;
+		}
+	}
+
+	/* Publish */
+	ast_db_publish_shared_message(ast_db_del_shared_type(), clone, NULL);
+
+	ao2_ref(shared_family, -1);
+
+	return 0;
+}
+
+static int db_del_common(const char *family, const char *key, int share);
+
+int ast_db_del_shared(const char *family)
+{
+	struct ast_db_shared_family *shared_family;
+	int res = 0;
+
+	if (ast_strlen_zero(family)) {
+		return -1;
+	}
+
+	ao2_lock(shared_families);
+
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_KEY | OBJ_NOLOCK);
+	if (shared_family) {
+		ao2_unlink_flags(shared_families, shared_family, OBJ_NOLOCK);
+		db_del_common(SHARED_FAMILY, shared_family->name, 0);
+		ao2_ref(shared_family, -1);
+	} else {
+		res = -1;
+	}
+
+	ao2_unlock(shared_families);
+
+	return res;
+}
+
+static int db_put_common(const char *family, const char *key, const char *value, int share)
 {
 	char fullkey[MAX_DB_FIELD];
 	size_t fullkey_len;
@@ -335,9 +557,17 @@ int ast_db_put(const char *family, const char *key, const char *value)
 
 	sqlite3_reset(put_stmt);
 	db_sync();
+	if (share) {
+		db_put_shared(family, key, value);
+	}
 	ast_mutex_unlock(&dblock);
 
 	return res;
+}
+
+int ast_db_put(const char *family, const char *key, const char *value)
+{
+	return db_put_common(family, key, value, 1);
 }
 
 /*!
@@ -410,7 +640,7 @@ int ast_db_get_allocated(const char *family, const char *key, char **out)
 	return db_get_common(family, key, out, -1);
 }
 
-int ast_db_del(const char *family, const char *key)
+static int db_del_common(const char *family, const char *key, int share)
 {
 	char fullkey[MAX_DB_FIELD];
 	size_t fullkey_len;
@@ -433,12 +663,20 @@ int ast_db_del(const char *family, const char *key)
 	}
 	sqlite3_reset(del_stmt);
 	db_sync();
+	if (share) {
+		db_del_shared(family, key);
+	}
 	ast_mutex_unlock(&dblock);
 
-	return res;
+	return res;	
 }
 
-int ast_db_deltree(const char *family, const char *keytree)
+int ast_db_del(const char *family, const char *key)
+{
+	return db_del_common(family, key, 1);
+}
+
+static int db_deltree_common(const char *family, const char *keytree, int share)
 {
 	sqlite3_stmt *stmt = deltree_stmt;
 	char prefix[MAX_DB_FIELD];
@@ -468,9 +706,17 @@ int ast_db_deltree(const char *family, const char *keytree)
 	res = sqlite3_changes(astdb);
 	sqlite3_reset(stmt);
 	db_sync();
+	if (share) {
+		db_del_shared(prefix, NULL);
+	}
 	ast_mutex_unlock(&dblock);
 
-	return res;
+	return res;	
+}
+
+int ast_db_deltree(const char *family, const char *keytree)
+{
+	return db_deltree_common(family, keytree, 1);
 }
 
 struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
@@ -508,13 +754,10 @@ struct ast_db_entry *ast_db_gettree(const char *family, const char *keytree)
 		if (!(value_s = (const char *) sqlite3_column_text(stmt, 1))) {
 			break;
 		}
-		if (!(cur = ast_malloc(sizeof(*cur) + strlen(key_s) + strlen(value_s) + 2))) {
+		cur = ast_db_entry_create(key_s, value_s);
+		if (!cur) {
 			break;
 		}
-		cur->next = NULL;
-		cur->key = cur->data + strlen(value_s) + 1;
-		strcpy(cur->data, value_s);
-		strcpy(cur->key, key_s);
 		if (last) {
 			last->next = cur;
 		} else {
@@ -748,14 +991,26 @@ static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struc
 
 	while (sqlite3_step(showkey_stmt) == SQLITE_ROW) {
 		const char *key_s, *value_s;
+		char *family_s;
+		char *delim;
+
 		if (!(key_s = (const char *) sqlite3_column_text(showkey_stmt, 0))) {
 			break;
 		}
 		if (!(value_s = (const char *) sqlite3_column_text(showkey_stmt, 1))) {
 			break;
 		}
+		family_s = ast_strdup(key_s);
+		if (!family_s) {
+			break;
+		}
+		delim = strchr(family_s + 1, '/');
+		*delim = '\0';
+
 		++counter;
-		ast_cli(a->fd, "%-50s: %-25s\n", key_s, value_s);
+		ast_cli(a->fd, "%-50s: %-25s %s\n", key_s, value_s,
+			ast_db_is_shared(family_s + 1) ? "(S)" : "");
+		ast_free(family_s);
 	}
 	sqlite3_reset(showkey_stmt);
 	ast_mutex_unlock(&dblock);
@@ -984,6 +1239,197 @@ static void *db_sync_thread(void *data)
 	return NULL;
 }
 
+int ast_db_publish_shared_message(struct stasis_message_type *type, struct ast_db_shared_family *shared_family, struct ast_eid *eid)
+{
+	struct stasis_message *message;
+
+	/* Aggregate doesn't really apply to the AstDB; as such, if we aren't
+	 * provided an EID use our own.
+	 */
+	if (!eid) {
+		eid = &ast_eid_default;
+	}
+
+	message = stasis_message_create_full(type, shared_family, eid);
+	if (!message) {
+		return -1;
+	}
+
+	stasis_publish(ast_db_cluster_topic(), message);
+
+	return 0;
+}
+
+void ast_db_refresh_shared(void)
+{
+	struct ao2_iterator it_shared_families;
+	struct ast_db_shared_family *shared_family;
+
+	it_shared_families = ao2_iterator_init(shared_families, 0);
+	while ((shared_family = ao2_iterator_next(&it_shared_families))) {
+		struct ast_db_shared_family *clone;
+
+		clone = db_shared_family_clone(shared_family);
+		if (!clone) {
+			ao2_ref(shared_family, -1);
+			continue;
+		}
+
+		clone->entries = ast_db_gettree(shared_family->name, "");
+		if (!clone->entries) {
+			ao2_ref(clone, -1);
+			ao2_ref(shared_family, -1);
+			continue;
+		}
+
+		ast_db_publish_shared_message(ast_db_put_shared_type(), clone, NULL);
+
+		ao2_ref(clone, -1);
+		ao2_ref(shared_family, -1);
+	}
+	ao2_iterator_destroy(&it_shared_families);	
+}
+
+static struct ast_event *db_del_shared_type_to_event(struct stasis_message *message)
+{
+	return NULL;
+}
+
+static struct ast_json *db_entries_to_json(struct ast_db_entry *entry)
+{
+	struct ast_json *json;
+	struct ast_db_entry *cur;
+
+	json = ast_json_array_create();
+	if (!json) {
+		return NULL;
+	}
+
+	for (cur = entry; cur; cur = cur->next) {
+		struct ast_json *json_entry;
+
+		json_entry = ast_json_pack("{s: s, s: s}",
+			"key", cur->key,
+			"data", cur->data);
+		if (!json_entry) {
+			ast_json_unref(json);
+			return NULL;
+		}
+
+		if (ast_json_array_append(json, json_entry)) {
+			ast_json_unref(json);
+			return NULL;
+		}
+	}
+
+	return json;
+}
+
+static struct ast_json *db_shared_family_to_json(struct stasis_message *message,
+	const struct stasis_message_sanitizer *sanitize)
+{
+	struct stasis_message_type *type = stasis_message_type(message);
+	struct ast_db_shared_family *shared_family;
+
+	shared_family = stasis_message_data(message);
+	if (!shared_family) {
+		return NULL;
+	}
+
+	return ast_json_pack("{s: s, s: s, s: s, s: o}",
+		"verb", type == ast_db_put_shared_type() ? "put" : "delete",
+		"family", shared_family->name,
+		"share_type", shared_family->share_type == SHARED_DB_TYPE_UNIQUE ? "unique" : "global",
+		"entries", shared_family->entries ? db_entries_to_json(shared_family->entries) : ast_json_null());
+}
+
+static struct ast_event *db_put_shared_type_to_event(struct stasis_message *message)
+{
+	return NULL;
+}
+
+struct stasis_topic *ast_db_cluster_topic(void)
+{
+	return db_cluster_topic;
+}
+
+STASIS_MESSAGE_TYPE_DEFN(ast_db_put_shared_type,
+		.to_event = db_put_shared_type_to_event,
+		.to_json = db_shared_family_to_json,
+	);
+STASIS_MESSAGE_TYPE_DEFN(ast_db_del_shared_type,
+		.to_event = db_del_shared_type_to_event,
+		.to_json = db_shared_family_to_json,
+	);
+
+static void db_put_shared_msg_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
+{
+	struct ast_db_shared_family *shared_family;
+	struct ast_db_shared_family *shared_check;
+	struct ast_db_entry *cur;
+	const struct ast_eid *eid;
+	char *family_id;
+
+	shared_family = stasis_message_data(message);
+	if (!shared_family) {
+		return;
+	}
+
+	eid = stasis_message_eid(message);
+	if (!eid || !ast_eid_cmp(eid, &ast_eid_default)) {
+		return;
+	}
+
+	/* Don't update if we don't have this area shared on this server */
+	shared_check = ao2_find(shared_families, shared_family->name, OBJ_KEY);
+	if (!shared_check) {
+		return;
+	}
+	ao2_ref(shared_check, -1);
+
+	if (shared_family->share_type == SHARED_DB_TYPE_UNIQUE) {
+		char eid_workspace[20];
+
+		/* Length is family + '/' + EID length (20) + 1 */
+		family_id = ast_alloca(strlen(shared_family->name) + 22);
+		ast_eid_to_str(eid_workspace, sizeof(eid_workspace), eid);
+		sprintf(family_id, "%s/%s", eid_workspace, shared_family->name); /* safe */
+	} else {
+		family_id = shared_family->name;
+	}
+
+	for (cur = shared_family->entries; cur; cur = cur->next) {
+		db_put_common(family_id, cur->key, cur->data, 0);
+	}
+}
+
+static void db_del_shared_msg_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
+{
+	struct ast_db_shared_family *shared_family;
+	struct ast_db_entry *cur;
+	const struct ast_eid *eid;
+
+	shared_family = stasis_message_data(message);
+	if (!shared_family) {
+		return;
+	}
+
+	eid = stasis_message_eid(message);
+	if (!eid || !ast_eid_cmp(eid, &ast_eid_default)) {
+		return;
+	}
+
+	cur = shared_family->entries;
+	if (!cur) {
+		db_deltree_common(shared_family->name, NULL, 0);
+		return;
+	}
+
+	for (; cur; cur = cur->next) {
+		db_del_common(shared_family->name, cur->key, 0);
+	}
+}
+
 /*!
  * \internal
  * \brief Clean up resources on Asterisk shutdown
@@ -996,6 +1442,11 @@ static void astdb_atexit(void)
 	ast_manager_unregister("DBDel");
 	ast_manager_unregister("DBDelTree");
 
+	ao2_cleanup(db_cluster_topic);
+	db_cluster_topic = NULL;
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_put_shared_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_del_shared_type);
+
 	/* Set doexit to 1 to kill thread. db_sync must be called with
 	 * mutex held. */
 	ast_mutex_lock(&dblock);
@@ -1005,6 +1456,10 @@ static void astdb_atexit(void)
 
 	pthread_join(syncthread, NULL);
 	ast_mutex_lock(&dblock);
+
+	ao2_ref(shared_families, -1);
+	shared_families = NULL;
+
 	clean_statements();
 	if (sqlite3_close(astdb) == SQLITE_OK) {
 		astdb = NULL;
@@ -1014,12 +1469,43 @@ static void astdb_atexit(void)
 
 int astdb_init(void)
 {
+	shared_families = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_MUTEX,
+		AO2_CONTAINER_ALLOC_OPT_DUPS_REJECT | AO2_CONTAINER_ALLOC_OPT_DUPS_OBJ_REJECT,
+		db_shared_family_sort_fn, NULL);
+	if (!shared_families) {
+		return -1;
+	}
+
+	db_cluster_topic = stasis_topic_create("ast_db_cluster_topic");
+	if (!db_cluster_topic) {
+		ao2_ref(shared_families, -1);
+		return -1;
+	}
+
+	STASIS_MESSAGE_TYPE_INIT(ast_db_put_shared_type);
+	STASIS_MESSAGE_TYPE_INIT(ast_db_del_shared_type);
+
+	message_router = stasis_message_router_create_pool(ast_db_cluster_topic());
+	if (!message_router) {
+		ao2_ref(db_cluster_topic, -1);
+		ao2_ref(shared_families, -1);
+		return -1;
+	}
+	stasis_message_router_add(message_router, ast_db_put_shared_type(),
+		db_put_shared_msg_cb, NULL);
+	stasis_message_router_add(message_router, ast_db_del_shared_type(),
+		db_del_shared_msg_cb, NULL);
+
 	if (db_init()) {
+		ao2_ref(db_cluster_topic, -1);
+		ao2_ref(shared_families, -1);
 		return -1;
 	}
 
 	ast_cond_init(&dbcond, NULL);
 	if (ast_pthread_create_background(&syncthread, NULL, db_sync_thread, NULL)) {
+		ao2_ref(db_cluster_topic, -1);
+		ao2_ref(shared_families, -1);
 		return -1;
 	}
 

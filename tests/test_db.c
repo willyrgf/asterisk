@@ -1,9 +1,10 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2011, Digium, Inc.
+ * Copyright (C) 2011-2015, Digium, Inc.
  *
  * Terry Wilson <twilson@digium.com>
+ * Matt Jordan <mjordan@digium.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -21,6 +22,7 @@
  * \brief AstDB Unit Tests
  *
  * \author Terry Wilson <twilson@digium.com>
+ * \author Matt Jordan <mjordan@digium.com>
  *
  */
 
@@ -37,6 +39,15 @@ ASTERISK_FILE_VERSION(__FILE__, "")
 #include "asterisk/module.h"
 #include "asterisk/astdb.h"
 #include "asterisk/logger.h"
+#include "asterisk/stasis.h"
+
+#define CATEGORY "/main/astdb/"
+
+#define TEST_EID "ff:ff:ff:ff:ff:ff"
+
+#define GLOBAL_SHARED_FAMILY "astdbtest_global"
+
+#define UNIQUE_SHARED_FAMILY "astdbtest_unique"
 
 enum {
 	FAMILY = 0,
@@ -47,6 +58,91 @@ enum {
 /* Longest value we can support is 256 for family/key/ so, with
  * family = astdbtest and two slashes we are left with 244 bytes */
 static const char long_val[] = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+
+struct consumer {
+	ast_cond_t out;
+	struct stasis_message **messages_rxed;
+	size_t messages_rxed_len;
+	int ignore_subscriptions;
+	int complete;
+};
+
+static void consumer_dtor(void *obj)
+{
+	struct consumer *consumer = obj;
+
+	ast_cond_destroy(&consumer->out);
+
+	while (consumer->messages_rxed_len > 0) {
+		ao2_cleanup(consumer->messages_rxed[--consumer->messages_rxed_len]);
+	}
+	ast_free(consumer->messages_rxed);
+	consumer->messages_rxed = NULL;
+}
+
+static struct consumer *consumer_create(int ignore_subscriptions)
+{
+	struct consumer *consumer;
+
+	consumer = ao2_alloc(sizeof(*consumer), consumer_dtor);
+	if (!consumer) {
+		return NULL;
+	}
+
+	consumer->ignore_subscriptions = ignore_subscriptions;
+	consumer->messages_rxed = ast_malloc(sizeof(*consumer->messages_rxed));
+	if (!consumer->messages_rxed) {
+		ao2_cleanup(consumer);
+		return NULL;
+	}
+
+	ast_cond_init(&consumer->out, NULL);
+
+	return consumer;
+}
+
+static void consumer_exec(void *data, struct stasis_subscription *sub, struct stasis_message *message)
+{
+	struct consumer *consumer = data;
+	RAII_VAR(struct consumer *, consumer_needs_cleanup, NULL, ao2_cleanup);
+	SCOPED_AO2LOCK(lock, consumer);
+
+	if (!consumer->ignore_subscriptions || stasis_message_type(message) != stasis_subscription_change_type()) {
+		++consumer->messages_rxed_len;
+		consumer->messages_rxed = ast_realloc(consumer->messages_rxed, sizeof(*consumer->messages_rxed) * consumer->messages_rxed_len);
+		ast_assert(consumer->messages_rxed != NULL);
+		consumer->messages_rxed[consumer->messages_rxed_len - 1] = message;
+		ao2_ref(message, +1);
+	}
+
+	if (stasis_subscription_final_message(sub, message)) {
+		consumer->complete = 1;
+		consumer_needs_cleanup = consumer;
+	}
+
+	ast_cond_signal(&consumer->out);
+}
+
+static int consumer_wait_for(struct consumer *consumer, size_t expected_len)
+{
+	struct timeval start = ast_tvnow();
+	struct timespec end = {
+		.tv_sec = start.tv_sec + 30,
+		.tv_nsec = start.tv_usec * 1000
+	};
+
+	SCOPED_AO2LOCK(lock, consumer);
+
+	while (consumer->messages_rxed_len < expected_len) {
+		int r = ast_cond_timedwait(&consumer->out, ao2_object_get_lockaddr(consumer), &end);
+
+		if (r == ETIMEDOUT) {
+			break;
+		}
+		ast_assert(r == 0); /* Not expecting any othet types of errors */
+	}
+	return consumer->messages_rxed_len;
+}
 
 AST_TEST_DEFINE(put_get_del)
 {
@@ -68,7 +164,7 @@ AST_TEST_DEFINE(put_get_del)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "put_get_del";
-		info->category = "/main/astdb/";
+		info->category = CATEGORY;
 		info->summary = "ast_db_(put|get|del) unit test";
 		info->description =
 			"Ensures that the ast_db put, get, and del functions work";
@@ -121,7 +217,7 @@ AST_TEST_DEFINE(gettree_deltree)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "gettree_deltree";
-		info->category = "/main/astdb/";
+		info->category = CATEGORY;
 		info->summary = "ast_db_(gettree|deltree) unit test";
 		info->description =
 			"Ensures that the ast_db gettree and deltree functions work";
@@ -215,7 +311,7 @@ AST_TEST_DEFINE(perftest)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "perftest";
-		info->category = "/main/astdb/";
+		info->category = CATEGORY;
 		info->summary = "astdb performance unit test";
 		info->description =
 			"Measure astdb performance";
@@ -244,7 +340,7 @@ AST_TEST_DEFINE(put_get_long)
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "put_get_long";
-		info->category = "/main/astdb/";
+		info->category = CATEGORY;
 		info->summary = "ast_db_(put|get_allocated) unit test";
 		info->description =
 			"Ensures that the ast_db_put and ast_db_get_allocated functions work";
@@ -290,12 +386,403 @@ AST_TEST_DEFINE(put_get_long)
 	return res;
 }
 
+#define TEST_FOR_VALUE(family, key, value) do { \
+	int i; \
+	for (i = 0; i < 10; i++) { \
+		res = ast_db_get_allocated((family), (key), &(value)); \
+		if ((value)) { \
+			break; \
+		} \
+		usleep(100); \
+	} \
+	ast_test_validate(test, (value) != NULL); \
+	ast_test_status_update(test, "Retrieved '%s' for '%s'\n", (value), (key)); \
+} while (0)
+
+
+AST_TEST_DEFINE(test_ast_db_put_shared_create)
+{
+	int res;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test basic creation of a shared family";
+		info->description =
+			"Verifies that a family can be shared, and shared only once";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res == 0, "Creating global shared area");
+	res = ast_db_is_shared(GLOBAL_SHARED_FAMILY);
+	ast_test_validate(test, res == 1, "Test existance of global shared area");
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res != 0, "Creating duplicate global shared area");
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res != 0, "Creating duplicate unique of global shared area");
+
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res == 0, "Creating unique shared area");
+	res = ast_db_is_shared(UNIQUE_SHARED_FAMILY);
+	ast_test_validate(test, res == 1, "Test existance of unique shared area");
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res != 0, "Creating duplicate unique shared area");
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res != 0, "Creating duplicate global of unique shared area");
+
+	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
+	ast_db_del_shared(UNIQUE_SHARED_FAMILY);
+
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_ast_db_put_shared_delete)
+{
+	int res;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test removal of a shared family";
+		info->description =
+			"Verifies that a shared family can be deleted\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res == 0, "Creating global shared area");
+	res = ast_db_del_shared(GLOBAL_SHARED_FAMILY);
+	ast_test_validate(test, res == 0, "Deletion of global shared area");
+	res = ast_db_is_shared(GLOBAL_SHARED_FAMILY);
+	ast_test_validate(test, res == 0, "Test absence of global shared area");
+	res = ast_db_del_shared(GLOBAL_SHARED_FAMILY);
+	ast_test_validate(test, res != 0, "Allowed duplicate deletion of global shared area");
+
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res == 0, "Creating unique shared area");
+	res = ast_db_del_shared(UNIQUE_SHARED_FAMILY);
+	ast_test_validate(test, res == 0, "Deletion of unique shared area");
+	res = ast_db_is_shared(UNIQUE_SHARED_FAMILY);
+	ast_test_validate(test, res == 0, "Test absence of unique shared area");
+	res = ast_db_del_shared(UNIQUE_SHARED_FAMILY);
+	ast_test_validate(test, res != 0, "Allowed duplicate deletion of unique shared area");
+
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_ast_db_put_shared_unique)
+{
+	RAII_VAR(struct consumer *, consumer, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_subscription *, uut, NULL, stasis_unsubscribe);
+	int res;
+	int actual_len;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test publication of a unique shared area";
+		info->description =
+			"Verifies that a unique shared family is published and not\n"
+			"updated locally\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	consumer = consumer_create(1);
+	ast_test_validate(test, NULL != consumer);
+
+	uut = stasis_subscribe(ast_db_cluster_topic(), consumer_exec, consumer);
+	ast_test_validate(test, NULL != uut);
+	ao2_ref(consumer, +1);
+
+	/* Create a key that is not published due to not being shared yet */
+	res = ast_db_put(UNIQUE_SHARED_FAMILY, "foo", "bar");
+	ast_test_validate(test, res == 0, "Creation of non-published test key");
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res == 0, "Creation of unique shared area");
+
+	/* Publish a new key */
+	res = ast_db_put(UNIQUE_SHARED_FAMILY, "foobar", "awesome");
+	ast_test_validate(test, res == 0, "Creation of shared key foobar");
+
+	/* Update the old key */
+	res = ast_db_put(UNIQUE_SHARED_FAMILY, "foo", "awesome-bar");
+	ast_test_validate(test, res == 0, "Update of shared key foo");
+
+	/* Verify that we got two messages */
+	actual_len = consumer_wait_for(consumer, 2);
+	ast_test_status_update(test, "Got %d messages\n", actual_len);
+	ast_test_validate(test, actual_len == 2);
+
+	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[0]) == ast_db_put_shared_type());
+	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[1]) == ast_db_put_shared_type());
+
+	ast_db_del_shared(UNIQUE_SHARED_FAMILY);
+	ast_db_deltree(UNIQUE_SHARED_FAMILY, "");
+
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_ast_db_put_shared_global)
+{
+	RAII_VAR(struct consumer *, consumer, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_subscription *, uut, NULL, stasis_unsubscribe);
+	int res;
+	int actual_len;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test publication of a global shared area";
+		info->description =
+			"Verifies that a global shared family is published and not\n"
+			"updated locally\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	consumer = consumer_create(1);
+	ast_test_validate(test, NULL != consumer);
+
+	uut = stasis_subscribe(ast_db_cluster_topic(), consumer_exec, consumer);
+	ast_test_validate(test, NULL != uut);
+	ao2_ref(consumer, +1);
+
+	/* Create a key that is not published due to not being shared yet */
+	res = ast_db_put(GLOBAL_SHARED_FAMILY, "foo", "bar");
+	ast_test_validate(test, res == 0, "Creation of non-published test key");
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res == 0, "Creation of global shared area");
+
+	/* Publish a new key */
+	res = ast_db_put(GLOBAL_SHARED_FAMILY, "foobar", "awesome");
+	ast_test_validate(test, res == 0, "Creation of shared key foobar");
+
+	/* Update the old key */
+	res = ast_db_put(GLOBAL_SHARED_FAMILY, "foo", "awesome-bar");
+	ast_test_validate(test, res == 0, "Update of shared key foo");
+
+	/* Verify that we got two messages */
+	actual_len = consumer_wait_for(consumer, 2);
+	ast_test_status_update(test, "Got %d messages\n", actual_len);
+	ast_test_validate(test, actual_len == 2);
+
+	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[0]) == ast_db_put_shared_type());
+	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[1]) == ast_db_put_shared_type());
+
+	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
+	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
+
+	return AST_TEST_PASS;	
+}
+
+AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
+{
+	RAII_VAR(struct ast_db_shared_family *, shared_family, NULL, ao2_cleanup);
+	char eid_family[256];
+	char *value = NULL;
+	struct ast_eid eid;
+	int res;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test updating of a unique shared area";
+		info->description =
+			"Verifies that a unique shared family is updated when an\n"
+			"external system publishes an update\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	ast_test_validate(test, ast_str_to_eid(&eid, TEST_EID) == 0);
+	snprintf(eid_family, sizeof(eid_family), "%s/%s", TEST_EID, UNIQUE_SHARED_FAMILY);
+
+	ast_test_status_update(test, "Verifying unique shared area can be updated\n");
+
+	shared_family = ast_db_shared_family_alloc(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, shared_family != NULL);
+	shared_family->entries = ast_db_entry_create("foo", "bar");
+	ast_test_validate(test, shared_family->entries != NULL);
+
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res == 0, "Creation of unique shared area");
+
+	ast_db_publish_shared_message(ast_db_put_shared_type(), shared_family, &eid);
+
+	TEST_FOR_VALUE(eid_family, "foo", value);
+	ast_test_validate(test, strcmp(value, "bar") == 0);
+	ast_free(value);
+
+	res = ast_db_del_shared(UNIQUE_SHARED_FAMILY);
+	ast_test_validate(test, res == 0, "Removal of unique shared area");
+
+	/* Destroy the current message */
+	ao2_ref(shared_family, -1);
+
+	ast_test_status_update(test, "Verifying unique non-shared area is not updated\n");
+	shared_family = ast_db_shared_family_alloc(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, shared_family != NULL);
+	shared_family->entries = ast_db_entry_create("foo", "yackity");
+	ast_test_validate(test, shared_family->entries != NULL);
+
+	ast_db_publish_shared_message(ast_db_put_shared_type(), shared_family, &eid);
+
+	/* Make sure we didn't update the value */
+	TEST_FOR_VALUE(eid_family, "foo", value);
+	ast_test_validate(test, strcmp(value, "bar") == 0);
+	ast_free(value);
+
+	ast_db_deltree("astdbtest_unique", "");
+	ast_db_deltree(TEST_EID, "");
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_ast_db_put_shared_global_update)
+{
+	RAII_VAR(struct ast_db_shared_family *, shared_family, NULL, ao2_cleanup);
+	struct ast_eid eid;
+	char *value = NULL;
+	int res;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test updating of a global shared area";
+		info->description =
+			"Verifies that a global shared family is updated when an\n"
+			"external system publishes an update\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	ast_test_validate(test, ast_str_to_eid(&eid, TEST_EID) == 0);
+
+	ast_test_status_update(test, "Verifying global shared area can be updated\n");
+
+	shared_family = ast_db_shared_family_alloc(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, shared_family != NULL);
+	shared_family->entries = ast_db_entry_create("foo", "bar");
+	ast_test_validate(test, shared_family->entries != NULL);
+
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res == 0, "Creation of global shared area");
+
+	ast_db_publish_shared_message(ast_db_put_shared_type(), shared_family, &eid);
+
+	TEST_FOR_VALUE(GLOBAL_SHARED_FAMILY, "foo", value);
+	ast_test_validate(test, strcmp(value, "bar") == 0);
+	ast_free(value);
+
+	res = ast_db_del_shared(GLOBAL_SHARED_FAMILY);
+	ast_test_validate(test, res == 0, "Removal of global shared area");
+
+	/* Destroy the current message */
+	ao2_ref(shared_family, -1);
+
+	ast_test_status_update(test, "Verifying global non-shared area is not updated\n");
+	shared_family = ast_db_shared_family_alloc(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, shared_family != NULL);
+	shared_family->entries = ast_db_entry_create("foo", "yackity");
+	ast_test_validate(test, shared_family->entries != NULL);
+
+	ast_db_publish_shared_message(ast_db_put_shared_type(), shared_family, &eid);
+
+	/* Make sure we didn't update the value */
+	TEST_FOR_VALUE(GLOBAL_SHARED_FAMILY, "foo", value);
+	ast_test_validate(test, strcmp(value, "bar") == 0);
+	ast_free(value);
+
+	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
+
+	return AST_TEST_PASS;
+}
+
+AST_TEST_DEFINE(test_ast_db_refresh_shared)
+{
+	RAII_VAR(struct consumer *, consumer, NULL, ao2_cleanup);
+	RAII_VAR(struct stasis_subscription *, uut, NULL, stasis_unsubscribe);
+	int res;
+	int actual_len;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = __func__;
+		info->category = CATEGORY;
+		info->summary = "Test refresh of existing shared families";
+		info->description =
+			"Verifies that all existing shared families can be published\n"
+			"over the Stasis message bus.\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	ast_test_validate(test, res == 0, "Creation of global shared area");
+
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	ast_test_validate(test, res == 0, "Creation of unique shared area");
+
+	ast_test_validate(test, ast_db_put(GLOBAL_SHARED_FAMILY, "foo", "foo_key") == 0);
+	ast_test_validate(test, ast_db_put(GLOBAL_SHARED_FAMILY, "bar", "bar_key") == 0);
+	ast_test_validate(test, ast_db_put(UNIQUE_SHARED_FAMILY, "foo", "unique") == 0);
+
+	consumer = consumer_create(1);
+	ast_test_validate(test, NULL != consumer);
+
+	uut = stasis_subscribe(ast_db_cluster_topic(), consumer_exec, consumer);
+	ast_test_validate(test, NULL != uut);
+	ao2_ref(consumer, +1);
+
+	ast_db_refresh_shared();
+
+	/* Verify that we got two messages */
+	actual_len = consumer_wait_for(consumer, 2);
+	ast_test_status_update(test, "Got %d messages\n", actual_len);
+	ast_test_validate(test, actual_len == 2);
+
+	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[0]) == ast_db_put_shared_type());
+	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[1]) == ast_db_put_shared_type());
+
+	ast_db_del_shared(UNIQUE_SHARED_FAMILY);
+	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
+	ast_db_deltree(UNIQUE_SHARED_FAMILY, "");
+	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
+
+	return AST_TEST_PASS;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(put_get_del);
 	AST_TEST_UNREGISTER(gettree_deltree);
 	AST_TEST_UNREGISTER(perftest);
 	AST_TEST_UNREGISTER(put_get_long);
+
+	AST_TEST_UNREGISTER(test_ast_db_put_shared_create);
+	AST_TEST_UNREGISTER(test_ast_db_put_shared_delete);
+	AST_TEST_UNREGISTER(test_ast_db_put_shared_unique);
+	AST_TEST_UNREGISTER(test_ast_db_put_shared_global);
+	AST_TEST_UNREGISTER(test_ast_db_put_shared_unique_update);
+	AST_TEST_UNREGISTER(test_ast_db_put_shared_global_update);
+	AST_TEST_UNREGISTER(test_ast_db_refresh_shared);
+
 	return 0;
 }
 
@@ -305,6 +792,15 @@ static int load_module(void)
 	AST_TEST_REGISTER(gettree_deltree);
 	AST_TEST_REGISTER(perftest);
 	AST_TEST_REGISTER(put_get_long);
+
+	AST_TEST_REGISTER(test_ast_db_put_shared_create);
+	AST_TEST_REGISTER(test_ast_db_put_shared_delete);
+	AST_TEST_REGISTER(test_ast_db_put_shared_unique);
+	AST_TEST_REGISTER(test_ast_db_put_shared_global);
+	AST_TEST_REGISTER(test_ast_db_put_shared_unique_update);
+	AST_TEST_REGISTER(test_ast_db_put_shared_global_update);
+	AST_TEST_REGISTER(test_ast_db_refresh_shared);
+
 	return AST_MODULE_LOAD_SUCCESS;
 }
 

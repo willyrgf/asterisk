@@ -922,7 +922,7 @@ void ast_set_default_eid(struct ast_eid *eid);
  * \brief Convert an EID to a string
  * \since 1.6.1
  */
-char *ast_eid_to_str(char *s, int maxlen, struct ast_eid *eid);
+char *ast_eid_to_str(char *s, int maxlen, const struct ast_eid *eid);
 
 /*!
  * \brief Convert a string into an EID

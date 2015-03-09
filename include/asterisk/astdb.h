@@ -28,11 +28,73 @@
 extern "C" {
 #endif
 
+#include "asterisk/utils.h"
+
+enum ast_db_shared_type {
+	/* Items in the shared family are common across all Asterisk instances */
+	SHARED_DB_TYPE_GLOBAL = 0,
+	/*! Items in the shared family are made unique across all Asterisk instances */
+	SHARED_DB_TYPE_UNIQUE,
+};
+
 struct ast_db_entry {
 	struct ast_db_entry *next;
 	char *key;
 	char data[0];
 };
+
+struct stasis_topic;
+struct stasis_message_type;
+
+struct ast_db_shared_family {
+	/*! How the family is shared */
+	enum ast_db_shared_type share_type;
+	/*! Entries in the family, if appropriate */
+	struct ast_db_entry *entries;
+	/*! The name of the shared family */
+	char name[0];
+};
+
+struct ast_db_entry *ast_db_entry_create(const char *key, const char *value);
+
+struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family, enum ast_db_shared_type share_type);
+
+int ast_db_publish_shared_message(struct stasis_message_type *type, struct ast_db_shared_family *shared_family, struct ast_eid *eid);
+
+void ast_db_refresh_shared(void);
+
+/*! \addtogroup StasisTopicsAndMessages
+ * @{
+ */
+
+struct stasis_topic *ast_db_cluster_topic(void);
+
+/*!
+ * \since 14
+ * \brief Message type for an RTCP message sent from this Asterisk instance
+ *
+ * \retval A stasis message type
+ */
+struct stasis_message_type *ast_db_put_shared_type(void);
+
+/*!
+ * \since 14
+ * \brief Message type for an RTCP message received from some external source
+ *
+ * \retval A stasis message type
+ */
+struct stasis_message_type *ast_db_del_shared_type(void);
+
+/* }@ */
+
+/*!
+ * \brief @@@@
+ */
+int ast_db_put_shared(const char *family, enum ast_db_shared_type);
+
+int ast_db_del_shared(const char *family);
+
+int ast_db_is_shared(const char *family);
 
 /*! \brief Get key value specified by family/key */
 int ast_db_get(const char *family, const char *key, char *value, int valuelen);

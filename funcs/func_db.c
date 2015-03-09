@@ -1,7 +1,7 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2005-2006, Russell Bryant <russelb@clemson.edu> 
+ * Copyright (C) 2005-2015, Russell Bryant <russelb@clemson.edu> 
  *
  * func_db.c adapted from the old app_db.c, copyright by the following people 
  * Copyright (C) 2005, Mark Spencer <markster@digium.com>
@@ -23,6 +23,7 @@
  * \brief Functions for interaction with the Asterisk database
  *
  * \author Russell Bryant <russelb@clemson.edu>
+ * \author Matt Jordan <mjordan@digium.com>
  *
  * \ingroup functions
  */
@@ -52,6 +53,30 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax argsep="/">
 			<parameter name="family" required="true" />
 			<parameter name="key" required="true" />
+		</syntax>
+		<description>
+			<para>This function will read from or write a value to the Asterisk database.  On a
+			read, this function returns the corresponding value from the database, or blank
+			if it does not exist.  Reading a database value will also set the variable
+			DB_RESULT.  If you wish to find out if an entry exists, use the DB_EXISTS
+			function.</para>
+		</description>
+		<see-also>
+			<ref type="application">DBdel</ref>
+			<ref type="function">DB_DELETE</ref>
+			<ref type="application">DBdeltree</ref>
+			<ref type="function">DB_EXISTS</ref>
+		</see-also>
+	</function>
+	<function name="DB_SHARED" language="en_US">
+		<synopsis>
+			Create or delete a shared family in the Asterisk database.
+		</synopsis>
+		<syntax argsep="/">
+			<parameter name="action" required="true">
+			</parameter>
+			<parameter name="type">
+			</parameter>
 		</syntax>
 		<description>
 			<para>This function will read from or write a value to the Asterisk database.  On a
@@ -200,14 +225,14 @@ static int function_db_exists(struct ast_channel *chan, const char *cmd,
 	buf[0] = '\0';
 
 	if (ast_strlen_zero(parse)) {
-		ast_log(LOG_WARNING, "DB_EXISTS requires an argument, DB(<family>/<key>)\n");
+		ast_log(LOG_WARNING, "DB_EXISTS requires an argument, DB_EXISTS(<family>/<key>)\n");
 		return -1;
 	}
 
 	AST_NONSTANDARD_APP_ARGS(args, parse, '/');
 
 	if (args.argc < 2) {
-		ast_log(LOG_WARNING, "DB_EXISTS requires an argument, DB(<family>/<key>)\n");
+		ast_log(LOG_WARNING, "DB_EXISTS requires an argument, DB_EXISTS(<family>/<key>)\n");
 		return -1;
 	}
 
@@ -335,6 +360,106 @@ static struct ast_custom_function db_delete_function = {
 	.write = function_db_delete_write,
 };
 
+static int function_db_shared_exists_read(struct ast_channel *chan,
+	const char *cmd, char *parse, char *buf, size_t len)
+{
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(family);
+	);
+
+	buf[0] = '\0';
+
+	if (ast_strlen_zero(parse)) {
+		ast_log(LOG_WARNING, "DB_SHARED_EXISTS requires an argument, DB_SHARED_EXISTS(<family>)\n");
+		return -1;
+	}
+
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (args.argc != 1) {
+		ast_log(LOG_WARNING, "DB_SHARED_EXISTS requires an argument, DB_SHARED_EXISTS(<family>)\n");
+		return -1;
+	}
+
+	if (ast_db_is_shared(args.family)) {
+		ast_copy_string(buf, "1", len);
+	} else {
+		ast_copy_string(buf, "0", len);
+	}
+	pbx_builtin_setvar_helper(chan, "DB_RESULT", buf);
+
+	return 0;
+}
+
+static struct ast_custom_function db_shared_exists_function = {
+	.name = "DB_SHARED_EXISTS",
+	.read = function_db_shared_exists_read,
+};
+
+static int function_db_shared_write(struct ast_channel *chan, const char *cmd, char *parse,
+	const char *value)
+{
+	enum ast_db_shared_type share_type;
+
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(action);
+		AST_APP_ARG(type);
+	);
+
+	if (ast_strlen_zero(parse)) {
+		ast_log(LOG_WARNING, "DB_SHARED requires an argument, DB_SHARED(<action>[,<type>])=<family>\n");
+		return -1;
+	}
+
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (args.argc < 1) {
+		ast_log(LOG_WARNING, "DB_SHARED requires an argument, DB_SHARED(<action>[,<type>])=<family>\n");
+		return -1;
+	}
+
+	if (ast_strlen_zero(value)) {
+		ast_log(LOG_WARNING, "DB_SHARED requires a value, DB_SHARED(<action>[,<type>])=<family>\n");
+		return -1;
+	}
+
+	if (!strcasecmp(args.action, "put")) {
+		if (ast_strlen_zero(args.type) || !strcasecmp(args.type, "global")) {
+			share_type = SHARED_DB_TYPE_GLOBAL;
+		} else if (!strcasecmp(args.type, "unique")) {
+			share_type = SHARED_DB_TYPE_UNIQUE;
+		} else {
+			ast_log(LOG_WARNING, "DB_SHARED: Unknown 'type' %s\n", args.type);
+			return -1;
+		}
+
+		if (ast_db_put_shared(value, share_type)) {
+			/* Generally, failure is benign (key exists) */
+			ast_debug(2, "Failed to create shared family '%s'\n", value);
+		} else {
+			ast_verb(4, "Created %s shared family '%s'",
+				share_type == SHARED_DB_TYPE_GLOBAL ? "GLOBAL" : "UNIQUE",
+				value);
+		}
+	} else if (!strcasecmp(args.action, "delete")) {
+		if (ast_db_del_shared(value)) {
+			/* Generally, failure is benign (key doesn't exist) */
+			ast_debug(2, "Failed to delete shared family '%s'\n", value);
+		} else {
+			ast_verb(4, "Deleted shared family '%s'\n", value);
+		}
+	} else {
+		ast_log(LOG_WARNING, "DB_SHARED: Unknown 'action' %s\n", args.action);
+	}
+
+	return 0;
+}
+
+static struct ast_custom_function db_shared_function = {
+	.name = "DB_SHARED",
+	.write = function_db_shared_write,
+};
+
 static int unload_module(void)
 {
 	int res = 0;
@@ -343,6 +468,8 @@ static int unload_module(void)
 	res |= ast_custom_function_unregister(&db_exists_function);
 	res |= ast_custom_function_unregister(&db_delete_function);
 	res |= ast_custom_function_unregister(&db_keys_function);
+	res |= ast_custom_function_unregister(&db_shared_function);
+	res |= ast_custom_function_unregister(&db_shared_exists_function);
 
 	return res;
 }
@@ -355,6 +482,8 @@ static int load_module(void)
 	res |= ast_custom_function_register(&db_exists_function);
 	res |= ast_custom_function_register_escalating(&db_delete_function, AST_CFE_READ);
 	res |= ast_custom_function_register(&db_keys_function);
+	res |= ast_custom_function_register_escalating(&db_shared_function, AST_CFE_WRITE);
+	res |= ast_custom_function_register(&db_shared_exists_function);
 
 	return res;
 }
