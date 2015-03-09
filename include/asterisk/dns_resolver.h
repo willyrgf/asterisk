@@ -32,12 +32,21 @@ extern "C" {
 struct ast_dns_resolver {
     /*! \brief The name of the resolver implementation */
     const char *name;
-    /*! \brief Priority for this resolver if multiple exist */
+
+    /*! \brief Priority for this resolver if multiple exist, lower being higher priority */
     unsigned int priority;
-    /*! \brief Perform resolution of a DNS query */
+
+    /*!
+     * \brief Perform resolution of a DNS query
+     *
+     * \note The reference count of the query should be increased and released
+     *       upon the query completing or being successfully cancelled
+     */
     int (*resolve)(struct ast_dns_query *query);
+
     /*! \brief Cancel resolution of a DNS query */
     int (*cancel)(struct ast_dns_query *query);
+
     /*! \brief Linked list information */
     AST_RWLIST_ENTRY(ast_dns_resolver) next;
 };
@@ -65,6 +74,8 @@ int ast_dns_resolver_set_data(struct ast_dns_query *query, void *data);
  * \param query The DNS query
  *
  * \return the resolver specific data
+ *
+ * \note The reference count of the resolver data is NOT incremented on return
  */
 void *ast_dns_resolver_get_data(const struct ast_dns_query *query);
 
@@ -102,8 +113,6 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
  * \brief Mark a DNS query as having been completed
  *
  * \param query The DNS query
- *
- * \note Once this is invoked the resolver data on the query will be removed
  */
 void ast_dns_resolver_completed(struct ast_dns_query *query);
 

@@ -64,6 +64,8 @@ int ast_dns_query_get_rr_class(const struct ast_dns_query *query);
  * \param query The DNS query
  *
  * \return the user specific data
+ *
+ * \note The reference count of the data is NOT incremented on return
  */
 void *ast_dns_query_get_data(const struct ast_dns_query *query);
 
@@ -184,7 +186,7 @@ const char *ast_dns_record_get_data(const struct ast_dns_record *record);
  *
  * \return the next DNS record
  */
-struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *record);
+const struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *record);
 
 /*!
  * \brief Asynchronously resolve a DNS query
@@ -203,6 +205,8 @@ struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *reco
  * \note The user data MUST be an ao2 object
  *
  * \note This function increments the reference count of the user data, it does NOT steal
+ *
+ * \note The query must be released upon completion or cancellation using ao2_ref
  */
 struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
 

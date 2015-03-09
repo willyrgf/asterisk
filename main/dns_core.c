@@ -125,7 +125,7 @@ const char *ast_dns_record_get_data(const struct ast_dns_record *record)
 	return record->data;
 }
 
-struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *record)
+const struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *record)
 {
 	return AST_LIST_NEXT(record, list);
 }
