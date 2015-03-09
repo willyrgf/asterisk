@@ -271,9 +271,107 @@ cleanup:
 	return res;
 }
 
+static int fail_resolve(struct ast_dns_query *query)
+{
+	return -1;
+}
+
+static int stub_cancel(struct ast_dns_query *query)
+{
+	return 0;
+}
+
+static void stub_callback(const struct ast_dns_query *query)
+{
+	return;
+}
+
+AST_TEST_DEFINE(recurring_query_off_nominal)
+{
+	struct ast_dns_resolver terrible_resolver = {
+		.name = "Harold P. Warren's Filmography",
+		.priority = 0,
+		.resolve = fail_resolve,
+		.cancel = stub_cancel,
+	};
+
+	struct ast_dns_query_recurring *recurring;
+
+	struct dns_resolve_data {
+		const char *name;
+		int rr_type;
+		int rr_class;
+		ast_dns_resolve_callback callback;
+	} resolves [] = {
+		{ NULL,           ns_t_a,       ns_c_in,      stub_callback },
+		{ "asterisk.org", -1,           ns_c_in,      stub_callback },
+		{ "asterisk.org", ns_t_max + 1, ns_c_in,      stub_callback },
+		{ "asterisk.org", ns_t_a,       -1,           stub_callback },
+		{ "asterisk.org", ns_t_a,       ns_c_max + 1, stub_callback },
+		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
+	};
+	int i;
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "recurring_query_off_nominal";
+		info->category = "/main/dns/recurring/";
+		info->summary = "Test off-nominal recurring DNS resolution";
+		info->description =
+			"This test performs several off-nominal recurring DNS resolutions:\n"
+			"\t* Attempt resolution with NULL name\n",
+			"\t* Attempt resolution with invalid RR type\n",
+			"\t* Attempt resolution with invalid RR class\n",
+			"\t* Attempt resolution with NULL callback pointer\n",
+			"\t* Attempt resolution with resolver that returns an error\n";
+
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&recurring_resolver)) {
+		ast_test_status_update(test, "Failed to register test resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	for (i = 0; i < ARRAY_LEN(resolves); ++i) {
+		recurring = ast_dns_resolve_recurring(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class,
+				resolves[i].callback, NULL);
+		if (recurring) {
+			ast_test_status_update(test, "Successfully performed recurring resolution with invalid data\n");
+			ast_dns_resolve_recurring_cancel(recurring);
+			ao2_ref(recurring, -1);
+			res = AST_TEST_FAIL;
+		}
+	}
+
+	ast_dns_resolver_unregister(&recurring_resolver);
+
+	if (ast_dns_resolver_register(&terrible_resolver)) {
+		ast_test_status_update(test, "Failed to register the DNS resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	recurring = ast_dns_resolve_recurring("asterisk.org", ns_t_a, ns_c_in, stub_callback, NULL);
+
+	ast_dns_resolver_unregister(&terrible_resolver);
+
+	if (recurring) {
+		ast_test_status_update(test, "Successfully performed recurring resolution with invalid data\n");
+		ast_dns_resolve_recurring_cancel(recurring);
+		ao2_ref(recurring, -1);
+		return AST_TEST_FAIL;
+	}
+
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(recurring_query);
+	AST_TEST_UNREGISTER(recurring_query_off_nominal);
 
 	return 0;
 }
@@ -281,6 +379,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	AST_TEST_REGISTER(recurring_query);
+	AST_TEST_REGISTER(recurring_query_off_nominal);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
