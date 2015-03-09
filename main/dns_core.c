@@ -545,7 +545,7 @@ static void dns_query_recurring_resolution_callback(const struct ast_dns_query *
 		int ttl = dns_query_recurring_get_ttl(query);
 
 		if (ttl) {
-			recurring->timer = ast_sched_add(sched, ttl, dns_query_recurring_scheduled_callback, ao2_bump(recurring));
+			recurring->timer = ast_sched_add(sched, ttl * 1000, dns_query_recurring_scheduled_callback, ao2_bump(recurring));
 			if (recurring->timer < 0) {
 				ao2_ref(recurring, -1);
 			}
