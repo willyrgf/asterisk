@@ -123,5 +123,5 @@ struct ast_dns_query_recurring
 	/*! \brief Resource record class */
 	int rr_class;
 	/*! \brief The name of what is being resolved */
-	char name[0];	
+	char name[0];
 };
