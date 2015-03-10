@@ -549,7 +549,15 @@ AST_TEST_DEFINE(recurring_query_cancel_during)
 		goto cleanup;
 	}
 
-	/* Query has been canceled. Now wait to make sure there are no more recurring queries */
+	/* Query has been canceled. We'll be told that the query in flight has completed */
+	ast_mutex_lock(&rdata->lock);
+	while (!rdata->query_complete) {
+		ast_cond_wait(&rdata->cond, &rdata->lock);
+	}
+	rdata->query_complete = 0;
+	ast_mutex_unlock(&rdata->lock);
+
+	/* Now ensure that no more queries get completed after cancellation */
 	clock_gettime(CLOCK_REALTIME, &timeout);
 	timeout.tv_sec += 10;
 
