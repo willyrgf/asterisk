@@ -517,6 +517,7 @@ static int dns_query_recurring_scheduled_callback(const void *data)
 	struct ast_dns_query_recurring *recurring = (struct ast_dns_query_recurring *)data;
 
 	ao2_lock(recurring);
+	recurring->timer = -1;
 	if (!recurring->cancelled) {
 		recurring->query = ast_dns_resolve_async(recurring->name, recurring->rr_type, recurring->rr_class, dns_query_recurring_resolution_callback,
 			recurring);
@@ -538,8 +539,6 @@ static void dns_query_recurring_resolution_callback(const struct ast_dns_query *
 	recurring->callback(query);
 
 	ao2_lock(recurring);
-	recurring->timer = -1;
-
 	/* So.. if something has not externally cancelled this we can reschedule based on the TTL */
 	if (!recurring->cancelled) {
 		int ttl = dns_query_recurring_get_ttl(query);
