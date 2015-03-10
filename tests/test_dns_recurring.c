@@ -77,6 +77,16 @@ static struct recurring_data *recurring_data_alloc(void)
 	return rdata;
 }
 
+/*!
+ * \brief Thread that performs asynchronous resolution.
+ *
+ * This thread uses the query's user data to determine how to
+ * perform the resolution. The query may either be canceled or
+ * it may be completed with records.
+ *
+ * \param dns_query The ast_dns_query that is being performed
+ * \return NULL
+ */
 static void *resolution_thread(void *dns_query)
 {
 	struct ast_dns_query *query = dns_query;
@@ -113,6 +123,9 @@ static void *resolution_thread(void *dns_query)
 		return NULL;
 	}
 
+	/* When the query isn't canceled, we set the TTL of the results based on what
+	 * we've been told to set it to
+	 */
 	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org");
 
 	inet_pton(AF_INET, ADDR1, addr1_buf);
@@ -129,6 +142,13 @@ static void *resolution_thread(void *dns_query)
 	return NULL;
 }
 
+/*!
+ * \brief Resolver's resolve() method
+ *
+ * \param query The query that is to be resolved
+ * \retval 0 Successfully created thread to perform the resolution
+ * \retval non-zero Failed to create resolution thread
+ */
 static int recurring_resolve(struct ast_dns_query *query)
 {
 	struct ast_dns_query_recurring *recurring = ast_dns_query_get_data(query);
@@ -140,6 +160,12 @@ static int recurring_resolve(struct ast_dns_query *query)
 	return ast_pthread_create_detached(&resolver_thread, NULL, resolution_thread, ao2_bump(query));
 }
 
+/*!
+ * \brief Resolver's cancel() method
+ *
+ * \param query The query to cancel
+ * \return 0
+ */
 static int recurring_cancel(struct ast_dns_query *query)
 {
 	struct ast_dns_query_recurring *recurring = ast_dns_query_get_data(query);
@@ -160,8 +186,21 @@ static struct ast_dns_resolver recurring_resolver = {
 	.cancel = recurring_cancel,
 };
 
+/*!
+ * \brief Wait for a successful resolution to complete
+ *
+ * This is called whenever a successful DNS resolution occurs. This function
+ * serves to ensure that parameters are as we expect them to be.
+ *
+ * \param test The test being executed
+ * \param rdata DNS query user data
+ * \param expected_lapse The amount of time we expect to wait for the query to complete
+ * \param num_resolves The number of DNS resolutions that have been executed
+ * \param num_completed The number of DNS resolutions we expect to have completed successfully
+ * \param canceled Whether the query is expected to have been canceled
+ */
 static int wait_for_resolution(struct ast_test *test, struct recurring_data *rdata,
-		int expected_lapse, int num_completed)
+		int expected_lapse, int num_resolves, int num_completed, int canceled)
 {
 	struct timespec begin;
 	struct timespec end;
@@ -197,8 +236,13 @@ static int wait_for_resolution(struct ast_test *test, struct recurring_data *rda
 		return -1;
 	}
 
-	if (rdata->resolves != rdata->complete_resolutions && rdata->resolves != num_completed) {
+	if (rdata->resolves != num_resolves || rdata->complete_resolutions != num_completed) {
 		ast_test_status_update(test, "Query has not undergone expected number of resolutions\n");
+		return -1;
+	}
+
+	if (rdata->canceled != canceled) {
+		ast_test_status_update(test, "Query was canceled unexpectedly\n");
 		return -1;
 	}
 
@@ -269,7 +313,7 @@ AST_TEST_DEFINE(recurring_query)
 	}
 
 	/* This should be near instantaneous */
-	if (wait_for_resolution(test, rdata, expected_lapse, 1)) {
+	if (wait_for_resolution(test, rdata, expected_lapse, 1, 1, 0)) {
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -279,7 +323,7 @@ AST_TEST_DEFINE(recurring_query)
 	rdata->ttl2 = 10;
 
 	/* This should take approximately 5 seconds */
-	if (wait_for_resolution(test, rdata, expected_lapse, 2)) {
+	if (wait_for_resolution(test, rdata, expected_lapse, 2, 2, 0)) {
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -287,7 +331,7 @@ AST_TEST_DEFINE(recurring_query)
 	expected_lapse = rdata->ttl2;
 
 	/* This should take approximately 10 seconds */
-	if (wait_for_resolution(test, rdata, expected_lapse, 3)) {
+	if (wait_for_resolution(test, rdata, expected_lapse, 3, 3, 0)) {
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -444,7 +488,7 @@ AST_TEST_DEFINE(recurring_query_cancel_between)
 		goto cleanup;
 	}
 
-	if (wait_for_resolution(test, rdata, 0, 1)) {
+	if (wait_for_resolution(test, rdata, 0, 1, 1, 0)) {
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -527,7 +571,7 @@ AST_TEST_DEFINE(recurring_query_cancel_during)
 		goto cleanup;
 	}
 
-	if (wait_for_resolution(test, rdata, 0, 1)) {
+	if (wait_for_resolution(test, rdata, 0, 1, 1, 0)) {
 		res = AST_TEST_FAIL;
 		goto cleanup;
 	}
@@ -549,15 +593,13 @@ AST_TEST_DEFINE(recurring_query_cancel_during)
 		goto cleanup;
 	}
 
-	/* Query has been canceled. We'll be told that the query in flight has completed */
-	ast_mutex_lock(&rdata->lock);
-	while (!rdata->query_complete) {
-		ast_cond_wait(&rdata->cond, &rdata->lock);
+	/* Query has been canceled. We'll be told that the query in flight has completed. */
+	if (wait_for_resolution(test, rdata, 0, 2, 1, 1)) {
+		res = AST_TEST_FAIL;
+		goto cleanup;
 	}
-	rdata->query_complete = 0;
-	ast_mutex_unlock(&rdata->lock);
 
-	/* Now ensure that no more queries get completed after cancellation */
+	/* Now ensure that no more queries get completed after cancellation. */
 	clock_gettime(CLOCK_REALTIME, &timeout);
 	timeout.tv_sec += 10;
 
@@ -594,6 +636,7 @@ static int load_module(void)
 {
 	AST_TEST_REGISTER(recurring_query);
 	AST_TEST_REGISTER(recurring_query_off_nominal);
+	AST_TEST_REGISTER(recurring_query_cancel_between);
 	AST_TEST_REGISTER(recurring_query_cancel_during);
 
 	return AST_MODULE_LOAD_SUCCESS;
