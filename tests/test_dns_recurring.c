@@ -44,6 +44,12 @@ struct recurring_data {
 	int complete_resolutions;
 	/*! Number of times resolve() method has been called */
 	int resolves;
+	/*! Indicates that the query is expected to be canceled */
+	int cancel_expected;
+	/*! Indicates that the query is ready to be canceled */
+	int cancel_ready;
+	/*! Indicates that the query has been canceled */
+	int canceled;
 	ast_mutex_t lock;
 	ast_cond_t cond;
 };
@@ -88,6 +94,25 @@ static void *resolution_thread(void *dns_query)
 
 	ast_assert(rdata != NULL);
 
+	/* Canceling is an interesting dance. This thread needs to signal that it is
+	 * ready to be canceled. Then it needs to wait until the query is actually canceled.
+	 */
+	if (rdata->cancel_expected) {
+		ast_mutex_lock(&rdata->lock);
+		rdata->cancel_ready = 1;
+		ast_cond_signal(&rdata->cond);
+
+		while (!rdata->canceled) {
+			ast_cond_wait(&rdata->cond, &rdata->lock);
+		}
+		ast_mutex_unlock(&rdata->lock);
+
+		ast_dns_resolver_completed(query);
+		ao2_ref(query, -1);
+
+		return NULL;
+	}
+
 	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org");
 
 	inet_pton(AF_INET, ADDR1, addr1_buf);
@@ -117,7 +142,14 @@ static int recurring_resolve(struct ast_dns_query *query)
 
 static int recurring_cancel(struct ast_dns_query *query)
 {
-	/* XXX STUB */
+	struct ast_dns_query_recurring *recurring = ast_dns_query_get_data(query);
+	struct recurring_data *rdata = recurring->user_data;
+
+	ast_mutex_lock(&rdata->lock);
+	rdata->canceled = 1;
+	ast_cond_signal(&rdata->cond);
+	ast_mutex_unlock(&rdata->lock);
+
 	return 0;
 }
 
@@ -368,10 +400,184 @@ AST_TEST_DEFINE(recurring_query_off_nominal)
 	return res;
 }
 
+AST_TEST_DEFINE(recurring_query_cancel_between)
+{
+	RAII_VAR(struct ast_dns_query_recurring *, recurring_query, NULL, ao2_cleanup);
+	RAII_VAR(struct recurring_data *, rdata, NULL, ao2_cleanup);
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+	struct timespec timeout;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "recurring_query_cancel_between";
+		info->category = "/main/dns/recurring/";
+		info->summary = "Test canceling a recurring DNS query during the downtime between queries\n";
+		info->description = "This test does the following:\n"
+			"\t* Issue a recurring DNS query.\n"
+			"\t* Once results have been returned, cancel the recurring query.\n"
+			"\t* Wait a while to ensure that no more queries are occurring.\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&recurring_resolver)) {
+		ast_test_status_update(test, "Failed to register recurring DNS resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	rdata = recurring_data_alloc();
+	if (!rdata) {
+		ast_test_status_update(test, "Failed to allocate data necessary for recurring test\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	rdata->ttl1 = 5;
+	rdata->ttl2 = 20;
+
+	recurring_query = ast_dns_resolve_recurring("asterisk.org", ns_t_a, ns_c_in, async_callback, rdata);
+	if (!recurring_query) {
+		ast_test_status_update(test, "Unable to make recurring query\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (wait_for_resolution(test, rdata, 0, 1)) {
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (ast_dns_resolve_recurring_cancel(recurring_query)) {
+		ast_test_status_update(test, "Failed to cancel recurring query\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	/* Query has been canceled, so let's wait to make sure that we don't get
+	 * told another query has occurred.
+	 */
+	clock_gettime(CLOCK_REALTIME, &timeout);
+	timeout.tv_sec += 10;
+
+	ast_mutex_lock(&rdata->lock);
+	while (!rdata->query_complete) {
+		if (ast_cond_timedwait(&rdata->cond, &rdata->lock, &timeout) == ETIMEDOUT) {
+			break;
+		}
+	}
+	ast_mutex_unlock(&rdata->lock);
+
+	if (rdata->query_complete) {
+		ast_test_status_update(test, "Recurring query occurred after cancellation\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+	ast_dns_resolver_unregister(&recurring_resolver);
+	return res;
+}
+
+AST_TEST_DEFINE(recurring_query_cancel_during)
+{
+
+	RAII_VAR(struct ast_dns_query_recurring *, recurring_query, NULL, ao2_cleanup);
+	RAII_VAR(struct recurring_data *, rdata, NULL, ao2_cleanup);
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+	struct timespec timeout;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "recurring_query_cancel_during";
+		info->category = "/main/dns/recurring/";
+		info->summary = "Cancel a recurring DNS query while a query is actually happening\n";
+		info->description = "This test does the following:\n"
+			"\t* Initiate a recurring DNS query.\n"
+			"\t* Allow the initial query to complete, and a second query to start\n"
+			"\t* Cancel the recurring query while the second query is executing\n"
+			"\t* Ensure that the resolver's cancel() method was called\n"
+			"\t* Wait a while to make sure that recurring queries are no longer occurring\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	if (ast_dns_resolver_register(&recurring_resolver)) {
+		ast_test_status_update(test, "Failed to register recurring DNS resolver\n");
+		return AST_TEST_FAIL;
+	}
+
+	rdata = recurring_data_alloc();
+	if (!rdata) {
+		ast_test_status_update(test, "Failed to allocate data necessary for recurring test\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	rdata->ttl1 = 5;
+	rdata->ttl2 = 20;
+
+	recurring_query = ast_dns_resolve_recurring("asterisk.org", ns_t_a, ns_c_in, async_callback, rdata);
+	if (!recurring_query) {
+		ast_test_status_update(test, "Failed to make recurring DNS query\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (wait_for_resolution(test, rdata, 0, 1)) {
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	/* Initial query has completed. Now let's make the next query expect a cancelation */
+	rdata->cancel_expected = 1;
+
+	/* Wait to be told that the query should be canceled  */
+	ast_mutex_lock(&rdata->lock);
+	while (!rdata->cancel_ready) {
+		ast_cond_wait(&rdata->cond, &rdata->lock);
+	}
+	rdata->cancel_expected = 0;
+	ast_mutex_unlock(&rdata->lock);
+
+	if (ast_dns_resolve_recurring_cancel(recurring_query)) {
+		ast_test_status_update(test, "Failed to cancel recurring DNS query\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	/* Query has been canceled. Now wait to make sure there are no more recurring queries */
+	clock_gettime(CLOCK_REALTIME, &timeout);
+	timeout.tv_sec += 10;
+
+	ast_mutex_lock(&rdata->lock);
+	while (!rdata->query_complete) {
+		if (ast_cond_timedwait(&rdata->cond, &rdata->lock, &timeout) == ETIMEDOUT) {
+			break;
+		}
+	}
+	ast_mutex_unlock(&rdata->lock);
+
+	if (rdata->query_complete) {
+		ast_test_status_update(test, "Recurring query occurred after cancellation\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+	ast_dns_resolver_unregister(&recurring_resolver);
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(recurring_query);
 	AST_TEST_UNREGISTER(recurring_query_off_nominal);
+	AST_TEST_UNREGISTER(recurring_query_cancel_between);
+	AST_TEST_UNREGISTER(recurring_query_cancel_during);
 
 	return 0;
 }
@@ -380,6 +586,7 @@ static int load_module(void)
 {
 	AST_TEST_REGISTER(recurring_query);
 	AST_TEST_REGISTER(recurring_query_off_nominal);
+	AST_TEST_REGISTER(recurring_query_cancel_during);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
