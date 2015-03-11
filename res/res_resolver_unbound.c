@@ -23,6 +23,8 @@
 
 #include "asterisk.h"
 
+ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
+
 #include <unbound.h>
 
 #include "asterisk/module.h"
