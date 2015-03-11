@@ -232,12 +232,13 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	if (unbound_resolver_start(resolver)) {
+	if (unbound_resolver_start(resolver) ||
+		ast_dns_resolver_register(&unbound_resolver)) {
 		unload_module();
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	ast_dns_resolver_register(&unbound_resolver);
+	ast_module_shutdown_ref(ast_module_info->self);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
