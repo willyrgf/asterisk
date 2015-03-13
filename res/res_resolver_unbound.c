@@ -26,6 +26,7 @@
 ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <unbound.h>
+#include <arpa/nameser.h>
 
 #include "asterisk/module.h"
 #include "asterisk/linkedlists.h"
@@ -33,6 +34,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_resolver.h"
 #include "asterisk/config.h"
 #include "asterisk/config_options.h"
+#include "asterisk/test.h"
 
 /*** DOCUMENTATION
 	<configInfo name="res_resolver_unbound" language="en_US">
@@ -483,6 +485,380 @@ static int unbound_config_preapply_callback(void)
 	return unbound_config_preapply(aco_pending_config(&cfg_info));
 }
 
+#ifdef TEST_FRAMEWORK
+
+/*!
+ * \brief A DNS record to be used during a test
+ */
+struct dns_record {
+	/*! String representation of the record, as would be found in a file */
+	const char *as_string;
+	/*! The domain this record belongs to */
+	const char *domain;
+	/*! The type of the record */
+	int rr_type;
+	/*! The class of the record */
+	int rr_class;
+	/*! The TTL of the record, in seconds */
+	int ttl;
+	/*! The RDATA of the DNS record */
+	const char *buf;
+	/*! The size of the RDATA */
+	const size_t bufsize;
+	/*! Whether a record checker has visited this record */
+	int visited;
+};
+
+/*!
+ * \brief Resolution function for tests.
+ *
+ * Several tests will have similar setups but will want to make use of a different
+ * means of actually making queries and checking their results. This pluggable
+ * function pointer allows for similar tests to be operated in different ways.
+ *
+ * \param test The test being run
+ * \param domain The domain to look up
+ * \param rr_type The record type to look up
+ * \param rr_class The class of record to look up
+ * \param records All records that exist for the test.
+ * \param num_records Number of records in the records array.
+ *
+ * \retval 0 The test has passed thus far.
+ * \retval -1 The test has failed.
+ */
+typedef int (*resolve_fn)(struct ast_test *test, const char *domain, int rr_type,
+		int rr_class, struct dns_record *records, size_t num_records);
+
+/*!
+ * \brief Pluggable function for running a synchronous query and checking its results
+ */
+static int sync_run(struct ast_test *test, const char *domain, int rr_type,
+		int rr_class, struct dns_record *records, size_t num_records)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ao2_cleanup);
+	const struct ast_dns_record *record;
+	int i;
+	
+	/* Start by making sure no records have been visited */
+	for (i = 0; i < num_records; ++i) {
+		records[i].visited = 0;
+	}
+
+	ast_test_status_update(test, "Performing DNS query '%s', type %d\n", domain, rr_type);
+
+	if (ast_dns_resolve(domain, rr_type, rr_class, &result)) {
+		ast_test_status_update(test, "Failed to perform synchronous resolution of domain %s\n", domain);
+		return -1;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "Successful synchronous resolution of domain %s gave NULL result\n", domain);
+		return -1;
+	}
+
+	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
+		int match = 0;
+		
+		/* Let's make sure this matches one of our known records */
+		for (i = 0; i < num_records; ++i) {
+			if (ast_dns_record_get_rr_type(record) == records[i].rr_type &&
+					ast_dns_record_get_rr_class(record) == records[i].rr_class &&
+					ast_dns_record_get_ttl(record) == records[i].ttl &&
+					!memcmp(ast_dns_record_get_data(record), records[i].buf, records[i].bufsize)) {
+				match = 1;
+				records[i].visited = 1;
+				break;
+			}
+		}
+
+		if (!match) {
+			ast_test_status_update(test, "Unknown DNS record returned from domain %s\n", domain);
+			return -1;
+		}
+	}
+
+	return 0;
+}
+
+/*!
+ * \brief Data required for an asynchronous callback
+ */
+struct async_data {
+	/*! The set of DNS records on a test */
+	struct dns_record *records;
+	/*! The number of DNS records on the test */
+	size_t num_records;
+	/*! Whether an asynchronous query failed */
+	int failed;
+	/*! Indicates the asynchronous query is complete */
+	int complete;
+	ast_mutex_t lock;
+	ast_cond_t cond;
+};
+
+static void async_data_destructor(void *obj)
+{
+	struct async_data *adata = obj;
+
+	ast_mutex_destroy(&adata->lock);
+	ast_cond_destroy(&adata->cond);
+}
+
+static struct async_data *async_data_alloc(struct dns_record *records, size_t num_records)
+{
+	struct async_data *adata;
+
+	adata = ao2_alloc(sizeof(*adata), async_data_destructor);
+	if (!adata) {
+		return NULL;
+	}
+
+	ast_mutex_init(&adata->lock);
+	ast_cond_init(&adata->cond, NULL);
+	adata->records = records;
+	adata->num_records = num_records;
+
+	return adata;
+}
+
+/*!
+ * \brief Callback for asynchronous queries
+ *
+ * This query will check that the records in the DNS result match
+ * records that the test has created. The success or failure of the
+ * query is indicated through the async_data failed field.
+ *
+ * \param query The DNS query that has been resolved
+ */
+static void async_callback(const struct ast_dns_query *query)
+{
+	struct async_data *adata = ast_dns_query_get_data(query);
+	struct ast_dns_result *result = ast_dns_query_get_result(query);
+	const struct ast_dns_record *record;
+	int i;
+
+	if (!result) {
+		adata->failed = -1;
+		goto end;
+	}
+
+	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
+		int match = 0;
+		
+		/* Let's make sure this matches one of our known records */
+		for (i = 0; i < adata->num_records; ++i) {
+			if (ast_dns_record_get_rr_type(record) == adata->records[i].rr_type &&
+					ast_dns_record_get_rr_class(record) == adata->records[i].rr_class &&
+					ast_dns_record_get_ttl(record) == adata->records[i].ttl &&
+					!memcmp(ast_dns_record_get_data(record), adata->records[i].buf, adata->records[i].bufsize)) {
+				match = 1;
+				adata->records[i].visited = 1;
+				break;
+			}
+		}
+
+		if (!match) {
+			adata->failed = -1;
+			goto end;
+		}
+	}
+
+end:
+	ast_mutex_lock(&adata->lock);
+	adata->complete = 1;
+	ast_cond_signal(&adata->cond);
+	ast_mutex_unlock(&adata->lock);
+}
+
+/*!
+ * \brief Pluggable function for performing an asynchronous query during a test
+ *
+ * Unlike the synchronous version, this does not check the records, instead leaving
+ * that to be done in the asynchronous callback.
+ */
+static int async_run(struct ast_test *test, const char *domain, int rr_type,
+		int rr_class, struct dns_record *records, size_t num_records)
+{
+	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
+	RAII_VAR(struct async_data *, adata, NULL, ao2_cleanup);
+	int i;
+
+	adata = async_data_alloc(records, num_records);
+	if (!adata) {
+		ast_test_status_update(test, "Unable to allocate data for async query\n");
+		return -1;
+	}
+	
+	/* Start by making sure no records have been visited */
+	for (i = 0; i < num_records; ++i) {
+		records[i].visited = 0;
+	}
+
+	ast_test_status_update(test, "Performing DNS query '%s', type %d\n", domain, rr_type);
+
+	query = ast_dns_resolve_async(domain, rr_type, rr_class, async_callback, adata);
+	if (!query) {
+		ast_test_status_update(test, "Failed to perform asynchronous resolution of domain %s\n", domain);
+		return -1;
+	}
+
+	ast_mutex_lock(&adata->lock);
+	while (!adata->complete) {
+		ast_cond_wait(&adata->cond, &adata->lock);
+	}
+	ast_mutex_unlock(&adata->lock);
+
+	if (adata->failed) {
+		ast_test_status_update(test, "Unknown DNS record returned from domain %s\n", domain);
+	}
+	return adata->failed;
+}
+
+/*!
+ * \brief Framework for running a nominal DNS test
+ *
+ * Synchronous and asynchronous tests mostly have the same setup, so this function
+ * serves as a common way to set up both types of tests by accepting a pluggable
+ * function to determine which type of lookup is used
+ *
+ * \param test The test being run
+ * \param runner The method for resolving queries on this test
+ */
+static enum ast_test_result_state nominal_test(struct ast_test *test, resolve_fn runner)
+{
+	RAII_VAR(struct unbound_resolver *, resolver, NULL, ao2_cleanup);
+	RAII_VAR(struct unbound_config *, cfg, NULL, ao2_cleanup);
+
+	static const size_t V4_SIZE = sizeof(struct in_addr);
+	static const size_t V6_SIZE = sizeof(struct in6_addr);
+
+	static const char *DOMAIN1 = "goose.feathers";
+	static const char *DOMAIN2 = "duck.feathers";
+
+	static const char *ADDR1 = "127.0.0.2";
+	static const char *ADDR2 = "127.0.0.3";
+	static const char *ADDR3 = "::1";
+	static const char *ADDR4 = "127.0.0.4";
+
+	char addr1_buf[V4_SIZE];
+	char addr2_buf[V4_SIZE];
+	char addr3_buf[V6_SIZE];
+	char addr4_buf[V4_SIZE];
+
+	struct dns_record records [] = {
+		{ "goose.feathers 12345 IN A 127.0.0.2", DOMAIN1, ns_t_a,    ns_c_in, 12345, addr1_buf, V4_SIZE, 0 },
+		{ "goose.feathers 12345 IN A 127.0.0.3", DOMAIN1, ns_t_a,    ns_c_in, 12345, addr2_buf, V4_SIZE, 0 },
+		{ "goose.feathers 12345 IN AAAA ::1",    DOMAIN1, ns_t_aaaa, ns_c_in, 12345, addr3_buf, V6_SIZE, 0 },
+		{ "duck.feathers 12345 IN A 127.0.0.4",  DOMAIN2, ns_t_a,    ns_c_in, 12345, addr4_buf, V4_SIZE, 0 },
+	};
+
+	struct {
+		const char *domain;
+		int rr_type;
+		int rr_class;
+		int visited[ARRAY_LEN(records)];
+	} runs [] = {
+		{ DOMAIN1, ns_t_a,    ns_c_in, { 1, 1, 0, 0 } },
+		{ DOMAIN1, ns_t_aaaa, ns_c_in, { 0, 0, 1, 0 } },
+		{ DOMAIN2, ns_t_a,    ns_c_in, { 0, 0, 0, 1 } },
+	};
+
+	int i;
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	inet_pton(AF_INET,  ADDR1, addr1_buf);
+	inet_pton(AF_INET,  ADDR2, addr2_buf);
+	inet_pton(AF_INET6,  ADDR3, addr3_buf);
+	inet_pton(AF_INET, ADDR4, addr4_buf);
+
+	cfg = ao2_global_obj_ref(globals);
+	resolver = ao2_bump(cfg->global->state->resolver);
+
+	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
+	ub_ctx_zone_add(resolver->context, DOMAIN2, "static");
+
+	for (i = 0; i < ARRAY_LEN(records); ++i) {
+		ub_ctx_data_add(resolver->context, records[i].as_string);
+	}
+
+	for (i = 0; i < ARRAY_LEN(runs); ++i) {
+		int j;
+
+		if (runner(test, runs[i].domain, runs[i].rr_type, runs[i].rr_class, records, ARRAY_LEN(records))) {
+			res = AST_TEST_FAIL;
+			goto cleanup;
+		}
+
+		for (j = 0; j < ARRAY_LEN(records); ++j) {
+			if (records[j].visited != runs[i].visited[j]) {
+				ast_test_status_update(test, "DNS results match unexpected records\n");
+				res = AST_TEST_FAIL;
+				goto cleanup;
+			}
+		}
+	}
+
+cleanup:
+	for (i = 0; i < ARRAY_LEN(records); ++i) {
+		ub_ctx_data_remove(resolver->context, records[i].as_string);
+	}
+	ub_ctx_zone_remove(resolver->context, DOMAIN1);
+	ub_ctx_zone_remove(resolver->context, DOMAIN2);
+
+	return res;
+
+}
+
+AST_TEST_DEFINE(resolve_sync)
+{
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolve_sync";
+		info->category = "/res/res_resolver_unbound/";
+		info->summary = "Test nominal synchronous resolution using libunbound\n";
+		info->description = "This test performs the following:\n"
+			"\t* Set two static A records and one static AAAA record on one domain\n"
+			"\t* Set an A record for a second domain\n"
+			"\t* Perform an A record lookup on the first domain\n"
+			"\t* Ensure that both A records are returned and no AAAA record is returned\n"
+			"\t* Perform an AAAA record lookup on the first domain\n"
+			"\t* Ensure that the AAAA record is returned and no A record is returned\n"
+			"\t* Perform an A record lookup on the second domain\n"
+			"\t* Ensure that the A record from the second domain is returned\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return nominal_test(test, sync_run);
+}
+
+AST_TEST_DEFINE(resolve_async)
+{
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolve_async";
+		info->category = "/res/res_resolver_unbound/";
+		info->summary = "Test nominal asynchronous resolution using libunbound\n";
+		info->description = "This test performs the following:\n"
+			"\t* Set two static A records and one static AAAA record on one domain\n"
+			"\t* Set an A record for a second domain\n"
+			"\t* Perform an A record lookup on the first domain\n"
+			"\t* Ensure that both A records are returned and no AAAA record is returned\n"
+			"\t* Perform an AAAA record lookup on the first domain\n"
+			"\t* Ensure that the AAAA record is returned and no A record is returned\n"
+			"\t* Perform an A record lookup on the second domain\n"
+			"\t* Ensure that the A record from the second domain is returned\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return nominal_test(test, async_run);
+}
+
+#endif
+
 static int reload_module(void)
 {
 	if (aco_process_config(&cfg_info, 1) == ACO_PROCESS_ERROR) {
@@ -496,6 +872,9 @@ static int unload_module(void)
 {
 	aco_info_destroy(&cfg_info);
 	ao2_global_obj_release(globals);
+	
+	AST_TEST_UNREGISTER(resolve_sync);
+	AST_TEST_UNREGISTER(resolve_async);
 	return 0;
 }
 
@@ -539,6 +918,9 @@ static int load_module(void)
 	ast_dns_resolver_register(&unbound_resolver);
 
 	ast_module_shutdown_ref(ast_module_info->self);
+
+	AST_TEST_REGISTER(resolve_sync);
+	AST_TEST_REGISTER(resolve_async);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
