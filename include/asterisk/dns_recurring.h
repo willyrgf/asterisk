@@ -66,6 +66,8 @@ struct ast_dns_query_recurring *ast_dns_resolve_recurring(const char *name, int 
  * \retval -1 failure - an active query was in progress and could not be cancelled
  *
  * \note If successfully cancelled the callback will not be invoked
+ *
+ * \note This function does NOT drop your reference to the recurring query, this should be dropped using ao2_ref
  */
 int ast_dns_resolve_recurring_cancel(struct ast_dns_query_recurring *recurring);
 
