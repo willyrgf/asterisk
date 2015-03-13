@@ -126,6 +126,18 @@ const char *ast_dns_result_get_canonical(const struct ast_dns_result *result);
  */
 const struct ast_dns_record *ast_dns_result_get_records(const struct ast_dns_result *result);
 
+
+/*!
+ * \brief Retrieve the lowest TTL from a result
+ *
+ * \param result The DNS result
+ *
+ * \return the lowest TTL
+ *
+ * \note If no records exist this function will return a TTL of 0
+ */
+int ast_dns_result_get_lowest_ttl(const struct ast_dns_result *result);
+
 /*!
  * \brief Free the DNS result information
  *

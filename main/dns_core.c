@@ -37,7 +37,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/strings.h"
 #include "asterisk/sched.h"
 #include "asterisk/dns_core.h"
-#include "asterisk/dns_naptr.h"
 #include "asterisk/dns_srv.h"
 #include "asterisk/dns_tlsa.h"
 #include "asterisk/dns_recurring.h"
@@ -49,6 +48,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 AST_RWLIST_HEAD_STATIC(resolvers, ast_dns_resolver);
 
 static struct ast_sched_context *sched;
+
+struct ast_sched_context *ast_dns_get_sched(void)
+{
+	return sched;
+}
 
 const char *ast_dns_query_get_name(const struct ast_dns_query *query)
 {
@@ -98,6 +102,24 @@ const char *ast_dns_result_get_canonical(const struct ast_dns_result *result)
 const struct ast_dns_record *ast_dns_result_get_records(const struct ast_dns_result *result)
 {
 	return AST_LIST_FIRST(&result->records);
+}
+
+int ast_dns_result_get_lowest_ttl(const struct ast_dns_result *result)
+{
+	int ttl = 0;
+	const struct ast_dns_record *record;
+
+	if (ast_dns_result_get_rcode(result) == ns_r_nxdomain) {
+		return 0;
+	}
+
+	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
+		if (!ttl || (ast_dns_record_get_ttl(record) && (ast_dns_record_get_ttl(record) < ttl))) {
+			ttl = ast_dns_record_get_ttl(record);
+		}
+	}
+
+	return ttl;
 }
 
 void ast_dns_result_free(struct ast_dns_result *result)
@@ -297,76 +319,6 @@ int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_
 	return *result ? 0 : -1;
 }
 
-const char *ast_dns_naptr_get_flags(const struct ast_dns_record *record)
-{
-	return NULL;
-}
-
-const char *ast_dns_naptr_get_service(const struct ast_dns_record *record)
-{
-	return NULL;
-}
-
-const char *ast_dns_naptr_get_regexp(const struct ast_dns_record *record)
-{
-	return NULL;
-}
-
-const char *ast_dns_naptr_get_replacement(const struct ast_dns_record *record)
-{
-	return NULL;
-}
-
-unsigned short ast_dns_naptr_get_order(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-unsigned short ast_dns_naptr_get_preference(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-const char *ast_dns_srv_get_host(const struct ast_dns_record *record)
-{
-	return NULL;
-}
-
-unsigned short ast_dns_srv_get_priority(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-unsigned short ast_dns_srv_get_weight(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-unsigned short ast_dns_srv_get_port(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-unsigned int ast_dns_tlsa_get_usage(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-unsigned int ast_dns_tlsa_get_selector(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-unsigned int ast_dns_tlsa_get_matching_type(const struct ast_dns_record *record)
-{
-	return 0;
-}
-
-const char *ast_dns_tlsa_get_association_data(const struct ast_dns_record *record)
-{
-	return NULL;
-}
-
 int ast_dns_resolver_set_data(struct ast_dns_query *query, void *data)
 {
 	if (query->resolver_data) {
@@ -479,130 +431,6 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
 void ast_dns_resolver_completed(struct ast_dns_query *query)
 {
 	query->callback(query);
-}
-
-/*! \brief Destructor for a DNS query */
-static void dns_query_recurring_destroy(void *data)
-{
-	struct ast_dns_query_recurring *recurring = data;
-
-	ao2_cleanup(recurring->user_data);
-}
-
-/*! \brief Determine the TTL to use when scheduling recurring resolution */
-static int dns_query_recurring_get_ttl(const struct ast_dns_query *query)
-{
-	int ttl = 0;
-	const struct ast_dns_result *result = ast_dns_query_get_result(query);
-	const struct ast_dns_record *record;
-
-	if (ast_dns_result_get_rcode(result) == ns_r_nxdomain) {
-		return 0;
-	}
-
-	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		if (!ttl || (ast_dns_record_get_ttl(record) < ttl)) {
-			ttl = ast_dns_record_get_ttl(record);
-		}
-	}
-
-	return ttl;
-}
-
-static void dns_query_recurring_resolution_callback(const struct ast_dns_query *query);
-
-/*! \brief Scheduled recurring query callback */
-static int dns_query_recurring_scheduled_callback(const void *data)
-{
-	struct ast_dns_query_recurring *recurring = (struct ast_dns_query_recurring *)data;
-
-	ao2_lock(recurring);
-	recurring->timer = -1;
-	if (!recurring->cancelled) {
-		recurring->query = ast_dns_resolve_async(recurring->name, recurring->rr_type, recurring->rr_class, dns_query_recurring_resolution_callback,
-			recurring);
-	}
-	ao2_unlock(recurring);
-
-	ao2_ref(recurring, -1);
-
-	return 0;
-}
-
-/*! \brief Query resolution callback */
-static void dns_query_recurring_resolution_callback(const struct ast_dns_query *query)
-{
-	struct ast_dns_query_recurring *recurring = ast_dns_query_get_data(query);
-
-	/* Replace the user data so the actual callback sees what it provided */
-	((struct ast_dns_query*)query)->user_data = ao2_bump(recurring->user_data);
-	recurring->callback(query);
-
-	ao2_lock(recurring);
-	/* So.. if something has not externally cancelled this we can reschedule based on the TTL */
-	if (!recurring->cancelled) {
-		int ttl = dns_query_recurring_get_ttl(query);
-
-		if (ttl) {
-			recurring->timer = ast_sched_add(sched, ttl * 1000, dns_query_recurring_scheduled_callback, ao2_bump(recurring));
-			if (recurring->timer < 0) {
-				ao2_ref(recurring, -1);
-			}
-		}
-	}
-
-	ao2_replace(recurring->query, NULL);
-	ao2_unlock(recurring);
-
-	/* Since we stole the reference from the query we need to drop it ourselves */
-	ao2_ref(recurring, -1);
-}
-
-struct ast_dns_query_recurring *ast_dns_resolve_recurring(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
-{
-	struct ast_dns_query_recurring *recurring;
-
-	if (ast_strlen_zero(name) || !callback) {
-		return NULL;
-	}
-
-	recurring = ao2_alloc(sizeof(*recurring) + strlen(name) + 1, dns_query_recurring_destroy);
-	if (!recurring) {
-		return NULL;
-	}
-
-	recurring->callback = callback;
-	recurring->user_data = ao2_bump(data);
-	recurring->timer = -1;
-	recurring->rr_type = rr_type;
-	recurring->rr_class = rr_class;
-	strcpy(recurring->name, name); /* SAFE */
-
-	/* The scheduler callback expects a reference, so bump it up */
-	recurring->query = ast_dns_resolve_async(name, rr_type, rr_class, dns_query_recurring_resolution_callback, recurring);
-	if (!recurring->query) {
-		ao2_ref(recurring, -1);
-		return NULL;
-	}
-
-	return recurring;
-}
-
-int ast_dns_resolve_recurring_cancel(struct ast_dns_query_recurring *recurring)
-{
-	ao2_lock(recurring);
-
-	recurring->cancelled = 1;
-	AST_SCHED_DEL_UNREF(sched, recurring->timer, ao2_ref(recurring, -1));
-
-	if (recurring->query) {
-		ast_dns_resolve_cancel(recurring->query);
-		ao2_replace(recurring->query, NULL);
-	}
-
-	ao2_unlock(recurring);
-
-	return 0;
 }
 
 static void dns_shutdown(void)

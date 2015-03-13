@@ -45,9 +45,15 @@ struct ast_dns_query_recurring;
  *
  * \note The user data passed in to this function must be ao2 allocated
  *
- * \note This query will continue to happen according to the lowest TTL unless cancelled using ast_dns_resolve_cancel
+ * \note This query will continue to happen according to the lowest TTL unless cancelled using ast_dns_resolve_recurring_cancel
  *
  * \note It is NOT possible for the callback to be invoked concurrently for the query multiple times
+ *
+ * \note The query will occur when the TTL expires, not before. This means that there is a period of time where the previous
+ *       information can be considered stale.
+ *
+ * \note If the TTL is determined to be 0 (the record specifies 0, or no records exist) this will cease doing a recurring query.
+ *       It is the responsibility of the caller to resume querying at an interval they determine.
  */
 struct ast_dns_query_recurring *ast_dns_resolve_recurring(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
 
@@ -56,8 +62,8 @@ struct ast_dns_query_recurring *ast_dns_resolve_recurring(const char *name, int 
  *
  * \param query The DNS query returned from ast_dns_resolve_recurring
  *
- * \retval 0 success
- * \retval -1 failure
+ * \retval 0 success - any active query has been cancelled and the query will no longer occur
+ * \retval -1 failure - an active query was in progress and could not be cancelled
  *
  * \note If successfully cancelled the callback will not be invoked
  */

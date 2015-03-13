@@ -125,3 +125,12 @@ struct ast_dns_query_recurring
 	/*! \brief The name of what is being resolved */
 	char name[0];
 };
+
+struct ast_sched_context;
+
+/*!
+ * \brief Retrieve the DNS scheduler context
+ *
+ * \return scheduler context
+ */
+struct ast_sched_context *ast_dns_get_sched(void);
