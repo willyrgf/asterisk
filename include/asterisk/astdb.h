@@ -30,6 +30,9 @@ extern "C" {
 
 #include "asterisk/utils.h"
 
+struct stasis_topic;
+struct stasis_message_type;
+
 enum ast_db_shared_type {
 	/* Items in the shared family are common across all Asterisk instances */
 	SHARED_DB_TYPE_GLOBAL = 0,
@@ -37,15 +40,17 @@ enum ast_db_shared_type {
 	SHARED_DB_TYPE_UNIQUE,
 };
 
+/*! \brief An actual entry in the AstDB */
 struct ast_db_entry {
+	/*! The next entry, if there are multiple entries */
 	struct ast_db_entry *next;
+	/*! The key of the entry */
 	char *key;
+	/*! The data associated with the key */
 	char data[0];
 };
 
-struct stasis_topic;
-struct stasis_message_type;
-
+/*! \brief A shared family of keys in the AstDB */
 struct ast_db_shared_family {
 	/*! How the family is shared */
 	enum ast_db_shared_type share_type;
@@ -55,31 +60,61 @@ struct ast_db_shared_family {
 	char name[0];
 };
 
+/*!
+ * \since 14.0.0
+ * \brief Create a new database entry
+ *
+ * \param key The key of the entry in the database
+ * \param value The value of the entry
+ *
+ * \note The entry returned is allocated on the heap, and should be
+ * disposed of using \ref ast_db_freetree
+ *
+ * \retval NULL on error
+ * \retval \c ast_db_entry on success
+ */
 struct ast_db_entry *ast_db_entry_create(const char *key, const char *value);
 
-struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family, enum ast_db_shared_type share_type);
-
-int ast_db_publish_shared_message(struct stasis_message_type *type, struct ast_db_shared_family *shared_family, struct ast_eid *eid);
-
-void ast_db_refresh_shared(void);
+/*!
+ * \since 14.0.0
+ * \brief Create a shared database family
+ *
+ * \param family The family to share
+ * \param share_type The way in which the family should be shared
+ *
+ * \note The \c ast_db_shared_family structure is an \c ao2 ref counted
+ * object.
+ *
+ * \retval NULL on error
+ * \retval an \c ao2 ref counted \c ast_db_shared_family object
+ */
+struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family,
+	enum ast_db_shared_type share_type);
 
 /*! \addtogroup StasisTopicsAndMessages
  * @{
  */
 
+/*!
+ * \since 14.0.0
+ * \brief Topic for families that should be passed to clustered Asterisk
+ *        instances
+ *
+ * \retval A stasis topic
+ */
 struct stasis_topic *ast_db_cluster_topic(void);
 
 /*!
- * \since 14
- * \brief Message type for an RTCP message sent from this Asterisk instance
+ * \since 14.0.0
+ * \brief Message type for an update to a shared family
  *
  * \retval A stasis message type
  */
 struct stasis_message_type *ast_db_put_shared_type(void);
 
 /*!
- * \since 14
- * \brief Message type for an RTCP message received from some external source
+ * \since 14.0.0
+ * \brief Message type for deletion of a shared family
  *
  * \retval A stasis message type
  */
@@ -88,12 +123,64 @@ struct stasis_message_type *ast_db_del_shared_type(void);
 /* }@ */
 
 /*!
- * \brief @@@@
+ * \since 14.0.0
+ * \brief Publish a message for a shared family
+ *
+ * \param type The \c stasis_message_type indicating what happened to
+               the shared family
+ * \param shared_family The shared family that was updated
+ * \param eid The server that conveyed the update
+ *
+ * \retval 0 success
+ * \retval -1 error
  */
-int ast_db_put_shared(const char *family, enum ast_db_shared_type);
+int ast_db_publish_shared_message(struct stasis_message_type *type,
+	struct ast_db_shared_family *shared_family, struct ast_eid *eid);
 
+/*!
+ * \since 14.0.0
+ * \brief Refresh the state of all shared families
+ *
+ * \details
+ * This will cause Stasis messages to be generated that contain the current
+ * key/value pairs of all shared families. This can be used to send the state
+ * of all shared families to other Asterisk instances.
+ */
+void ast_db_refresh_shared(void);
+
+
+/*!
+ * \since 14.0.0
+ * \brief Add a new shared family
+ *
+ * \param family The family to share
+ * \param share_type The way in which the family should be shared
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
+int ast_db_put_shared(const char *family, enum ast_db_shared_type share_type);
+
+/*!
+ * \since 14.0.0
+ * \brief Delete a shared family
+ *
+ * \param family The family whose shared status should be removed
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
 int ast_db_del_shared(const char *family);
 
+/*!
+ * \since 14.0.0
+ * \brief Check if a family is shared
+ *
+ * \param family The family to verify
+ *
+ * \retval 0 The family is not shared
+ * \retval 1 The family is shared
+ */
 int ast_db_is_shared(const char *family);
 
 /*! \brief Get key value specified by family/key */

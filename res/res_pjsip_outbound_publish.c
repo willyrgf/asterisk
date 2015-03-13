@@ -370,6 +370,8 @@ static void sip_outbound_publish_synchronize(struct ast_sip_event_publisher_hand
 				ast_log(LOG_ERROR, "Failed to start outbound publish with event '%s' for client '%s'\n",
 					publish->event, ast_sorcery_object_get_id(publish));
 			} else {
+				ast_debug(2, "Started outbound publish client '%s' for event '%s'\n",
+					ast_sorcery_object_get_id(publish), publish->event);
 				state->client->started = 1;
 			}
 		} else if (state->client->started && !handler && removed && !strcmp(publish->event, removed->event_name)) {
@@ -380,6 +382,9 @@ static void sip_outbound_publish_synchronize(struct ast_sip_event_publisher_hand
 				ast_log(LOG_WARNING, "Could not stop refresh timer on client '%s'\n",
 					ast_sorcery_object_get_id(publish));
 				ao2_ref(state->client, -1);
+			} else {
+				ast_debug(2, "Stopped outbound publish client '%s'\n",
+					ast_sorcery_object_get_id(publish));
 			}
 		}
 		ao2_ref(publish, -1);
@@ -429,6 +434,8 @@ int ast_sip_register_event_publisher_handler(struct ast_sip_event_publisher_hand
 	}
 
 	sub_add_handler(handler);
+
+	ast_debug(1, "Registered publisher handler for event '%s'\n", handler->event_name);
 
 	sip_outbound_publish_synchronize(NULL);
 

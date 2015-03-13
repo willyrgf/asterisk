@@ -51,6 +51,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/utils.h"
 #include "asterisk/manager.h"
+#include "asterisk/event.h"
 
 /*** DOCUMENTATION
 	<manager name="DBGet" language="en_US">
@@ -115,12 +116,15 @@ static int dosync;
 /*! \brief A container of families to share across Asterisk instances */
 static struct ao2_container *shared_families;
 
+/*! \brief The Stasis topic for shared families */
 static struct stasis_topic *db_cluster_topic;
 
+/*! \brief A Stasis message router for handling external AstDB updates */
 static struct stasis_message_router *message_router;
 
 static void db_sync(void);
 
+/*! \brief The AstDB key used to store which families are shared across restarts */
 #define SHARED_FAMILY "__asterisk_shared_family"
 
 #define DEFINE_SQL_STATEMENT(stmt,sql) static sqlite3_stmt *stmt; \
@@ -223,6 +227,9 @@ struct ast_db_entry *ast_db_entry_create(const char *key, const char *value)
 	return entry;
 }
 
+/*! \internal
+ * \brief AO2 destructor for \c ast_db_shared_family
+ */
 static void shared_db_family_dtor(void *obj)
 {
 	struct ast_db_shared_family *family = obj;
@@ -245,6 +252,9 @@ struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family, enum
 	return shared_family;
 }
 
+/*! \internal
+ * \brief Clone a \c ast_db_shared_family
+ */
 static struct ast_db_shared_family *db_shared_family_clone(const struct ast_db_shared_family *shared_family)
 {
 	struct ast_db_shared_family *clone;
@@ -254,6 +264,9 @@ static struct ast_db_shared_family *db_shared_family_clone(const struct ast_db_s
 	return clone;
 }
 
+/*! \internal
+ * \brief AO2 container sort function for \c ast_db_shared_family
+ */
 static int db_shared_family_sort_fn(const void *obj_left, const void *obj_right, int flags)
 {
 	const struct ast_db_shared_family *left = obj_left;
@@ -275,7 +288,6 @@ static int db_shared_family_sort_fn(const void *obj_left, const void *obj_right,
 	}
 	return cmp;
 }
-
 
 static int db_create_astdb(void)
 {
@@ -436,7 +448,7 @@ int ast_db_is_shared(const char *family)
 	return res;
 }
 
-static int db_put_shared(const char *family, const char *key, const char *value)
+static int db_entry_put_shared(const char *family, const char *key, const char *value)
 {
 	struct ast_db_shared_family *shared_family;
 	struct ast_db_shared_family *clone;
@@ -468,7 +480,7 @@ static int db_put_shared(const char *family, const char *key, const char *value)
 	return 0;
 }
 
-static int db_del_shared(const char *family, const char *key)
+static int db_entry_del_shared(const char *family, const char *key)
 {
 	struct ast_db_shared_family *shared_family;
 	struct ast_db_shared_family *clone;
@@ -558,7 +570,7 @@ static int db_put_common(const char *family, const char *key, const char *value,
 	sqlite3_reset(put_stmt);
 	db_sync();
 	if (share) {
-		db_put_shared(family, key, value);
+		db_entry_put_shared(family, key, value);
 	}
 	ast_mutex_unlock(&dblock);
 
@@ -664,7 +676,7 @@ static int db_del_common(const char *family, const char *key, int share)
 	sqlite3_reset(del_stmt);
 	db_sync();
 	if (share) {
-		db_del_shared(family, key);
+		db_entry_del_shared(family, key);
 	}
 	ast_mutex_unlock(&dblock);
 
@@ -707,7 +719,7 @@ static int db_deltree_common(const char *family, const char *keytree, int share)
 	sqlite3_reset(stmt);
 	db_sync();
 	if (share) {
-		db_del_shared(prefix, NULL);
+		db_entry_del_shared(prefix, NULL);
 	}
 	ast_mutex_unlock(&dblock);
 
@@ -863,6 +875,71 @@ static char *handle_cli_database_del(struct ast_cli_entry *e, int cmd, struct as
 	return CLI_SUCCESS;
 }
 
+static char *handle_cli_database_put_shared(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int res;
+	enum ast_db_shared_type share_type;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database put shared";
+		e->usage =
+			"Usage: database put shared <family> <type>\n"
+			"       Creates a new shared family of the given type,\n"
+			"       where type is either 'unique' or 'global'.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 5) {
+		return CLI_SHOWUSAGE;
+	}
+
+	if (!strcasecmp(a->argv[4], "unique")) {
+		share_type = SHARED_DB_TYPE_UNIQUE;
+	} else if (!strcasecmp(a->argv[4], "global")) {
+		share_type = SHARED_DB_TYPE_GLOBAL;
+	} else {
+		ast_cli(a->fd, "Unknown share type: '%s'\n", a->argv[4]);
+		return CLI_SUCCESS;
+	}
+
+	res = ast_db_put_shared(a->argv[3], share_type);
+	if (res) {
+		ast_cli(a->fd, "Could not share family '%s' (is it already shared?)\n", a->argv[3]);
+	} else {
+		ast_cli(a->fd, "Shared database family '%s'.\n", a->argv[3]);
+	}
+	return CLI_SUCCESS;
+}
+
+static char *handle_cli_database_del_shared(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
+{
+	int res;
+
+	switch (cmd) {
+	case CLI_INIT:
+		e->command = "database del shared";
+		e->usage =
+			"Usage: database del shared <family>\n"
+			"       Deletes the shared status of a database family.\n";
+		return NULL;
+	case CLI_GENERATE:
+		return NULL;
+	}
+
+	if (a->argc != 4) {
+		return CLI_SHOWUSAGE;
+	}
+	res = ast_db_del_shared(a->argv[3]);
+	if (res) {
+		ast_cli(a->fd, "Shared family '%s' does not exist.\n", a->argv[3]);
+	} else {
+		ast_cli(a->fd, "Shared database family '%s' removed.\n", a->argv[3]);
+	}
+	return CLI_SUCCESS;
+}
 static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
 {
 	int num_deleted;
@@ -896,6 +973,45 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 		ast_cli(a->fd, "%d database entries removed.\n",num_deleted);
 	}
 	return CLI_SUCCESS;
+}
+
+static int print_database_show(struct ast_cli_args *a, sqlite3_stmt *stmt)
+{
+	int counter = 0;
+
+	ast_cli(a->fd, "%-50s: %-25s %s\n", "Key", "Data", "Shared");
+	ast_cli(a->fd, "--------------------------------------------------  ------------------------- ------\n");
+	while (sqlite3_step(stmt) == SQLITE_ROW) {
+		struct ast_db_shared_family *shared_family;
+		const char *key_s;
+		const char *value_s;
+		char *family_s;
+		char *delim;
+
+		if (!(key_s = (const char *) sqlite3_column_text(stmt, 0))) {
+			break;
+		}
+		if (!(value_s = (const char *) sqlite3_column_text(stmt, 1))) {
+			break;
+		}
+		family_s = ast_strdup(key_s);
+		if (!family_s) {
+			break;
+		}
+		delim = strchr(family_s + 1, '/');
+		*delim = '\0';
+
+		shared_family = ao2_find(shared_families, family_s + 1, OBJ_SEARCH_KEY);
+
+		++counter;
+		ast_cli(a->fd, "%-50s: %-25s %s\n", key_s, value_s,
+			shared_family ? (shared_family->share_type == SHARED_DB_TYPE_UNIQUE ? "(U)" : "(G)") : "");
+
+		ao2_cleanup(shared_family);
+		ast_free(family_s);
+	}
+
+	return counter;
 }
 
 static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct ast_cli_args *a)
@@ -941,19 +1057,7 @@ static char *handle_cli_database_show(struct ast_cli_entry *e, int cmd, struct a
 		return NULL;
 	}
 
-	while (sqlite3_step(stmt) == SQLITE_ROW) {
-		const char *key_s, *value_s;
-		if (!(key_s = (const char *) sqlite3_column_text(stmt, 0))) {
-			ast_log(LOG_WARNING, "Skipping invalid key!\n");
-			continue;
-		}
-		if (!(value_s = (const char *) sqlite3_column_text(stmt, 1))) {
-			ast_log(LOG_WARNING, "Skipping invalid value!\n");
-			continue;
-		}
-		++counter;
-		ast_cli(a->fd, "%-50s: %-25s\n", key_s, value_s);
-	}
+	counter = print_database_show(a, stmt);
 
 	sqlite3_reset(stmt);
 	ast_mutex_unlock(&dblock);
@@ -989,29 +1093,8 @@ static char *handle_cli_database_showkey(struct ast_cli_entry *e, int cmd, struc
 		return NULL;
 	}
 
-	while (sqlite3_step(showkey_stmt) == SQLITE_ROW) {
-		const char *key_s, *value_s;
-		char *family_s;
-		char *delim;
+	counter = print_database_show(a, showkey_stmt);
 
-		if (!(key_s = (const char *) sqlite3_column_text(showkey_stmt, 0))) {
-			break;
-		}
-		if (!(value_s = (const char *) sqlite3_column_text(showkey_stmt, 1))) {
-			break;
-		}
-		family_s = ast_strdup(key_s);
-		if (!family_s) {
-			break;
-		}
-		delim = strchr(family_s + 1, '/');
-		*delim = '\0';
-
-		++counter;
-		ast_cli(a->fd, "%-50s: %-25s %s\n", key_s, value_s,
-			ast_db_is_shared(family_s + 1) ? "(S)" : "");
-		ast_free(family_s);
-	}
 	sqlite3_reset(showkey_stmt);
 	ast_mutex_unlock(&dblock);
 
@@ -1059,13 +1142,15 @@ static char *handle_cli_database_query(struct ast_cli_entry *e, int cmd, struct 
 }
 
 static struct ast_cli_entry cli_database[] = {
-	AST_CLI_DEFINE(handle_cli_database_show,    "Shows database contents"),
-	AST_CLI_DEFINE(handle_cli_database_showkey, "Shows database contents"),
-	AST_CLI_DEFINE(handle_cli_database_get,     "Gets database value"),
-	AST_CLI_DEFINE(handle_cli_database_put,     "Adds/updates database value"),
-	AST_CLI_DEFINE(handle_cli_database_del,     "Removes database key/value"),
-	AST_CLI_DEFINE(handle_cli_database_deltree, "Removes database keytree/values"),
-	AST_CLI_DEFINE(handle_cli_database_query,   "Run a user-specified query on the astdb"),
+	AST_CLI_DEFINE(handle_cli_database_show,       "Shows database contents"),
+	AST_CLI_DEFINE(handle_cli_database_showkey,    "Shows database contents"),
+	AST_CLI_DEFINE(handle_cli_database_get,        "Gets database value"),
+	AST_CLI_DEFINE(handle_cli_database_put,        "Adds/updates database value"),
+	AST_CLI_DEFINE(handle_cli_database_del,        "Removes database key/value"),
+	AST_CLI_DEFINE(handle_cli_database_put_shared, "Add a shared family"),
+	AST_CLI_DEFINE(handle_cli_database_del_shared, "Remove a shared family"),
+	AST_CLI_DEFINE(handle_cli_database_deltree,    "Removes database keytree/values"),
+	AST_CLI_DEFINE(handle_cli_database_query,      "Run a user-specified query on the astdb"),
 };
 
 static int manager_dbput(struct mansession *s, const struct message *m)
@@ -1254,7 +1339,6 @@ int ast_db_publish_shared_message(struct stasis_message_type *type, struct ast_d
 	if (!message) {
 		return -1;
 	}
-
 	stasis_publish(ast_db_cluster_topic(), message);
 
 	return 0;
@@ -1343,25 +1427,21 @@ static struct ast_json *db_shared_family_to_json(struct stasis_message *message,
 		"entries", shared_family->entries ? db_entries_to_json(shared_family->entries) : ast_json_null());
 }
 
-static struct ast_event *db_put_shared_type_to_event(struct stasis_message *message)
-{
-	return NULL;
-}
-
 struct stasis_topic *ast_db_cluster_topic(void)
 {
 	return db_cluster_topic;
 }
 
 STASIS_MESSAGE_TYPE_DEFN(ast_db_put_shared_type,
-		.to_event = db_put_shared_type_to_event,
 		.to_json = db_shared_family_to_json,
 	);
 STASIS_MESSAGE_TYPE_DEFN(ast_db_del_shared_type,
-		.to_event = db_del_shared_type_to_event,
 		.to_json = db_shared_family_to_json,
 	);
 
+/*! \internal
+ * \brief Stasis message callback for external updates to AstDB shared families
+ */
 static void db_put_shared_msg_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
 {
 	struct ast_db_shared_family *shared_family;
@@ -1375,6 +1455,7 @@ static void db_put_shared_msg_cb(void *data, struct stasis_subscription *sub, st
 		return;
 	}
 
+	/* Pass on any updates that originated from ourselves */
 	eid = stasis_message_eid(message);
 	if (!eid || !ast_eid_cmp(eid, &ast_eid_default)) {
 		return;
@@ -1403,6 +1484,9 @@ static void db_put_shared_msg_cb(void *data, struct stasis_subscription *sub, st
 	}
 }
 
+/*! \internal
+ * \brief Stasis message callback for external deletes to AstDB shared families
+ */
 static void db_del_shared_msg_cb(void *data, struct stasis_subscription *sub, struct stasis_message *message)
 {
 	struct ast_db_shared_family *shared_family;
@@ -1414,6 +1498,7 @@ static void db_del_shared_msg_cb(void *data, struct stasis_subscription *sub, st
 		return;
 	}
 
+	/* Pass on any updates that originated from ourselves */
 	eid = stasis_message_eid(message);
 	if (!eid || !ast_eid_cmp(eid, &ast_eid_default)) {
 		return;
@@ -1467,6 +1552,39 @@ static void astdb_atexit(void)
 	ast_mutex_unlock(&dblock);
 }
 
+/*! \internal
+ * \brief Rebuild shared families from any stored in the AstDB
+ */
+static void restore_shared_families(void)
+{
+	struct ast_db_entry *entry;
+	struct ast_db_entry *cur;
+
+	entry = ast_db_gettree(SHARED_FAMILY, "");
+	for (cur = entry; cur; cur = cur->next) {
+		enum ast_db_shared_type share_type;
+		const char *family;
+
+		/* Find the 'key', which is the name of the shared family */
+		family = strchr(cur->key + 1, '/') + 1;
+		if (!family) {
+			continue;
+		}
+
+		if (!strcasecmp(cur->data, "unique")) {
+			share_type = SHARED_DB_TYPE_UNIQUE;
+		} else if (!strcasecmp(cur->data, "global")) {
+			share_type = SHARED_DB_TYPE_GLOBAL;
+		} else {
+			continue;
+		}
+
+		ast_db_put_shared(family, share_type);
+	}
+
+	ast_db_freetree(entry);
+}
+
 int astdb_init(void)
 {
 	shared_families = ao2_container_alloc_rbtree(AO2_ALLOC_OPT_LOCK_MUTEX,
@@ -1501,6 +1619,8 @@ int astdb_init(void)
 		ao2_ref(shared_families, -1);
 		return -1;
 	}
+
+	restore_shared_families();
 
 	ast_cond_init(&dbcond, NULL);
 	if (ast_pthread_create_background(&syncthread, NULL, db_sync_thread, NULL)) {

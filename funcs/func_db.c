@@ -437,7 +437,7 @@ static int function_db_shared_write(struct ast_channel *chan, const char *cmd, c
 			/* Generally, failure is benign (key exists) */
 			ast_debug(2, "Failed to create shared family '%s'\n", value);
 		} else {
-			ast_verb(4, "Created %s shared family '%s'",
+			ast_verb(4, "Created %s shared family '%s'\n",
 				share_type == SHARED_DB_TYPE_GLOBAL ? "GLOBAL" : "UNIQUE",
 				value);
 		}

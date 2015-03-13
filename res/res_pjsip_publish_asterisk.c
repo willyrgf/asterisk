@@ -59,7 +59,7 @@
 				<configOption name="mailboxstate_publish">
 					<synopsis>Optional name of a publish item that can be used to publish a request for full mailbox state information.</synopsis>
 				</configOption>
-				<configOption name="dbstate_publish">
+				<configOption name="db_publish">
 					<synopsis>Optional name of a publish item that can be used to publish a request for full AstDB state information.</synopsis>
 				</configOption>
 				<configOption name="device_state" default="no">
@@ -187,10 +187,28 @@ static void asterisk_mwi_publisher_state_destroy(void *obj)
 	}
 }
 
-/*! \brief Datastore for attaching devicestate publisher state information */
+/*! \brief Datastore for attaching MWI publisher state information */
 static const struct ast_datastore_info asterisk_mwi_publisher_state_datastore = {
 	.type = "asterisk-mwi-publisher",
 	.destroy = asterisk_mwi_publisher_state_destroy,
+};
+
+static void asterisk_db_publisher_state_destroy(void *obj)
+{
+	struct asterisk_db_publisher_state *publisher_state = obj;
+
+	ao2_cleanup(publisher_state->client);
+
+	if (publisher_state->db_state_filter) {
+		regfree(&publisher_state->db_state_regex);
+	}
+}
+
+
+/*! \brief Datastore for attaching database publisher state information */
+static const struct ast_datastore_info asterisk_db_publisher_state_datastore = {
+	.type = "asterisk-db-publisher",
+	.destroy = asterisk_db_publisher_state_destroy,
 };
 
 /*!
@@ -336,6 +354,11 @@ static void asterisk_publisher_dbstate_cb(void *data, struct stasis_subscription
 		return;
 	}
 
+	if (stasis_message_type(msg) != ast_db_put_shared_type()
+		&& stasis_message_type(msg) != ast_db_del_shared_type()) {
+		return;
+	}
+
 	eid = stasis_message_eid(msg);
 	if (!eid || ast_eid_cmp(&ast_eid_default, eid)) {
 		/* If the event is aggregate, unknown, or didn't originate from this
@@ -350,6 +373,7 @@ static void asterisk_publisher_dbstate_cb(void *data, struct stasis_subscription
 
 	if (publisher_state->db_state_filter && regexec(&publisher_state->db_state_regex, shared_family->name, 0, NULL, 0)) {
 		/* Outgoing AstDB state is filtered and the family wasn't allowed */
+		ast_debug(3, "Filtered out state family '%s'\n", shared_family->name);
 		return;
 	}
 
@@ -578,7 +602,7 @@ static int asterisk_start_db_publishing(struct ast_sip_outbound_publish *configu
 	struct asterisk_db_publisher_state *publisher_state;
 	const char *value;
 
-	datastore = ast_sip_publish_client_alloc_datastore(&asterisk_mwi_publisher_state_datastore, "asterisk-db-publisher");
+	datastore = ast_sip_publish_client_alloc_datastore(&asterisk_db_publisher_state_datastore, "asterisk-db-publisher");
 	if (!datastore) {
 		return -1;
 	}
@@ -596,7 +620,6 @@ static int asterisk_start_db_publishing(struct ast_sip_outbound_publish *configu
 		}
 		publisher_state->db_state_filter = 1;
 	}
-
 	publisher_state->client = ao2_bump(client);
 
 	if (ast_sip_publish_client_add_datastore(client, datastore)) {
@@ -1261,7 +1284,7 @@ static int load_module(void)
 	ast_sorcery_object_field_register_custom(ast_sip_get_sorcery(), "asterisk-publication", "db_state_filter", "", regex_filter_handler, NULL, NULL, 0, 0);
 	ast_sorcery_reload_object(ast_sip_get_sorcery(), "asterisk-publication");
 
-	for (i = 0; i < ARRAY_LEN(&publish_handlers); i++) {
+	for (i = 0; i < ARRAY_LEN(publish_handlers); i++) {
 		if (ast_sip_register_publish_handler(publish_handlers[i])) {
 			ast_log(LOG_WARNING, "Unable to register event publication handler %s\n",
 				publish_handlers[i]->event_name);
@@ -1272,7 +1295,7 @@ static int load_module(void)
 		}
 	}
 
-	for (i = 0; i < ARRAY_LEN(&event_publisher_handlers); i++) {
+	for (i = 0; i < ARRAY_LEN(event_publisher_handlers); i++) {
 		if (ast_sip_register_event_publisher_handler(event_publisher_handlers[i])) {
 			ast_log(LOG_WARNING, "Unable to register event publisher handler %s\n",
 				event_publisher_handlers[i]->event_name);			
@@ -1302,11 +1325,11 @@ static int unload_module(void)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_LEN(&publish_handlers); i++) {
+	for (i = 0; i < ARRAY_LEN(publish_handlers); i++) {
 		ast_sip_unregister_publish_handler(publish_handlers[i]);
 	}
 
-	for (i = 0; i < ARRAY_LEN(&event_publisher_handlers); i++) {
+	for (i = 0; i < ARRAY_LEN(event_publisher_handlers); i++) {
 		ast_sip_unregister_event_publisher_handler(event_publisher_handlers[i]);
 	}
 
