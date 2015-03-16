@@ -120,8 +120,7 @@ struct ast_dns_query_recurring *ast_dns_resolve_recurring(const char *name, int 
 	recurring->rr_class = rr_class;
 	strcpy(recurring->name, name); /* SAFE */
 
-	/* The resolution callback expects a reference, so bump it up */
-	recurring->query = ast_dns_resolve_async(name, rr_type, rr_class, dns_query_recurring_resolution_callback, ao2_bump(recurring));
+	recurring->query = ast_dns_resolve_async(name, rr_type, rr_class, dns_query_recurring_resolution_callback, recurring);
 	if (!recurring->query) {
 		ao2_ref(recurring, -1);
 		return NULL;
