@@ -87,6 +87,7 @@ static void dns_query_recurring_resolution_callback(const struct ast_dns_query *
 		if (ttl) {
 			recurring->timer = ast_sched_add(ast_dns_get_sched(), ttl * 1000, dns_query_recurring_scheduled_callback, ao2_bump(recurring));
 			if (recurring->timer < 0) {
+				/* It is impossible for this to be the last reference as this callback function holds a reference itself */
 				ao2_ref(recurring, -1);
 			}
 		}
