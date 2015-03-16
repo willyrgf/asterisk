@@ -69,7 +69,7 @@ int ast_dns_query_get_rr_class(const struct ast_dns_query *query);
  */
 void *ast_dns_query_get_data(const struct ast_dns_query *query);
 
-/*! \brief Opaque structure for a DNS query result */
+/*! \brief Opaque structure for a DNS query result, guaranteed to be immutable */
 struct ast_dns_result;
 
 /*!
@@ -78,6 +78,8 @@ struct ast_dns_result;
  * \param query The DNS query
  *
  * \return the DNS result information
+ *
+ * \note The result is NOT ao2 allocated
  */
 struct ast_dns_result *ast_dns_query_get_result(const struct ast_dns_query *query);
 

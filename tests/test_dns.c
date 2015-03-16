@@ -367,14 +367,14 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 	if (!ast_dns_resolver_set_result(&some_query, 1, 1, ns_r_noerror, "asterisk.org")) {
 		ast_test_status_update(test, "Successfully added a result that was both secure and bogus\n");
 		result = ast_dns_query_get_result(&some_query);
-		ao2_cleanup(result);
+		ast_dns_result_free(result);
 		return AST_TEST_FAIL;
 	}
 
 	if (!ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, NULL)) {
 		ast_test_status_update(test, "Successfully added result with no canonical name\n");
 		result = ast_dns_query_get_result(&some_query);
-		ao2_cleanup(result);
+		ast_dns_result_free(result);
 		return AST_TEST_FAIL;
 	}
 

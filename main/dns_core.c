@@ -124,7 +124,17 @@ int ast_dns_result_get_lowest_ttl(const struct ast_dns_result *result)
 
 void ast_dns_result_free(struct ast_dns_result *result)
 {
-	ao2_cleanup(result);
+	struct ast_dns_record *record;
+
+	if (!result) {
+		return;
+	}
+
+	while ((record = AST_LIST_REMOVE_HEAD(&result->records, list))) {
+		ast_free(record);
+	}
+
+	ast_free(result);
 }
 
 int ast_dns_record_get_rr_type(const struct ast_dns_record *record)
@@ -167,26 +177,26 @@ struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int r
 	struct ast_dns_query *query;
 
 	if (ast_strlen_zero(name)) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution, no name provided\n");
+		ast_log(LOG_WARNING, "Could not perform asynchronous resolution, no name provided\n");
 		return NULL;
 	} else if (rr_type > ns_t_max) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', resource record type '%d' exceeds maximum\n",
+		ast_log(LOG_WARNING, "Could not perform asynchronous resolution of '%s', resource record type '%d' exceeds maximum\n",
 			name, rr_type);
 		return NULL;
 	} else if (rr_type < 0) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', invalid resource record type '%d'\n",
+		ast_log(LOG_WARNING, "Could not perform asynchronous resolution of '%s', invalid resource record type '%d'\n",
 			name, rr_type);
 		return NULL;
 	} else if (rr_class > ns_c_max) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', resource record class '%d' exceeds maximum\n",
+		ast_log(LOG_WARNING, "Could not perform asynchronous resolution of '%s', resource record class '%d' exceeds maximum\n",
 			name, rr_class);
 		return NULL;
 	} else if (rr_class < 0) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', invalid resource class '%d'\n",
+		ast_log(LOG_WARNING, "Could not perform asynchronous resolution of '%s', invalid resource class '%d'\n",
 			name, rr_class);
 		return NULL;
 	} else if (!callback) {
-		ast_log(LOG_ERROR, "Could not perform asynchronous resolution of '%s', no callback provided\n",
+		ast_log(LOG_WARNING, "Could not perform asynchronous resolution of '%s', no callback provided\n",
 			name);
 		return NULL;
 	}
@@ -256,7 +266,8 @@ static void dns_synchronous_resolve_callback(const struct ast_dns_query *query)
 {
 	struct dns_synchronous_resolve *synchronous = ast_dns_query_get_data(query);
 
-	synchronous->result = ao2_bump(ast_dns_query_get_result(query));
+	synchronous->result = query->result;
+	((struct ast_dns_query *)query)->result = NULL;
 
 	ast_mutex_lock(&synchronous->lock);
 	synchronous->completed = 1;
@@ -270,26 +281,26 @@ int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_
 	struct ast_dns_query *query;
 
 	if (ast_strlen_zero(name)) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution, no name provided\n");
+		ast_log(LOG_WARNING, "Could not perform synchronous resolution, no name provided\n");
 		return -1;
 	} else if (rr_type > ns_t_max) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', resource record type '%d' exceeds maximum\n",
+		ast_log(LOG_WARNING, "Could not perform synchronous resolution of '%s', resource record type '%d' exceeds maximum\n",
 			name, rr_type);
 		return -1;
 	} else if (rr_type < 0) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', invalid resource record type '%d'\n",
+		ast_log(LOG_WARNING, "Could not perform synchronous resolution of '%s', invalid resource record type '%d'\n",
 			name, rr_type);
 		return -1;
 	} else if (rr_class > ns_c_max) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', resource record class '%d' exceeds maximum\n",
+		ast_log(LOG_WARNING, "Could not perform synchronous resolution of '%s', resource record class '%d' exceeds maximum\n",
 			name, rr_class);
 		return -1;
 	} else if (rr_class < 0) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', invalid resource class '%d'\n",
+		ast_log(LOG_WARNING, "Could not perform synchronous resolution of '%s', invalid resource class '%d'\n",
 			name, rr_class);
 		return -1;
 	} else if (!result) {
-		ast_log(LOG_ERROR, "Could not perform synchronous resolution of '%s', no result pointer provided for storing results\n",
+		ast_log(LOG_WARNING, "Could not perform synchronous resolution of '%s', no result pointer provided for storing results\n",
 			name);
 		return -1;
 	}
@@ -335,17 +346,6 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query)
 	return query->resolver_data;
 }
 
-/*! \brief Destructor for DNS result */
-static void dns_result_destroy(void *obj)
-{
-	struct ast_dns_result *result = obj;
-	struct ast_dns_record *record;
-
-	while ((record = AST_LIST_REMOVE_HEAD(&result->records, list))) {
-		ast_free(record);
-	}
-}
-
 int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure, unsigned int bogus,
 	unsigned int rcode, const char *canonical)
 {
@@ -361,11 +361,9 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure
 		return -1;
 	}
 
-	if (query->result) {
-		ast_dns_result_free(query->result);
-	}
+	ast_dns_result_free(query->result);
 
-	query->result = ao2_alloc_options(sizeof(*query->result) + strlen(canonical) + 1, dns_result_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	query->result = ast_calloc(1, sizeof(*query->result) + strlen(canonical) + 1);
 	if (!query->result) {
 		return -1;
 	}
