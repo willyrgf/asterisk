@@ -372,11 +372,6 @@ static void *unbound_config_alloc(void)
 		goto error;
 	}
 
-	cfg->global->nameservers = ast_str_container_alloc_options(AO2_ALLOC_OPT_LOCK_NOLOCK, 1);
-	if (!cfg->global->nameservers) {
-		goto error;
-	}
-
 	return cfg;
 error:
 	ao2_ref(cfg, -1);
@@ -386,8 +381,6 @@ error:
 static int unbound_config_preapply(struct unbound_config *cfg)
 {
 	int res = 0;
-	struct ao2_iterator it_nameservers;
-	const char *nameserver;
 
 	cfg->global->state = ao2_alloc_options(sizeof(*cfg->global->state), unbound_config_state_destructor,
 		AO2_ALLOC_OPT_LOCK_NOLOCK);
@@ -416,18 +409,23 @@ static int unbound_config_preapply(struct unbound_config *cfg)
 		return -1;
 	}
 
-	it_nameservers = ao2_iterator_init(cfg->global->nameservers, 0);
-	while ((nameserver = ao2_iterator_next(&it_nameservers))) {
-		res = ub_ctx_set_fwd(cfg->global->state->resolver->context, nameserver);
+	if (cfg->global->nameservers) {
+		struct ao2_iterator it_nameservers;
+		const char *nameserver;
 
-		if (res) {
-			ast_log(LOG_ERROR, "Failed to add nameserver '%s' to unbound resolver: %s\n",
-				nameserver, ub_strerror(res));
-			ao2_iterator_destroy(&it_nameservers);
-			return -1;
+		it_nameservers = ao2_iterator_init(cfg->global->nameservers, 0);
+		while ((nameserver = ao2_iterator_next(&it_nameservers))) {
+			res = ub_ctx_set_fwd(cfg->global->state->resolver->context, nameserver);
+
+			if (res) {
+				ast_log(LOG_ERROR, "Failed to add nameserver '%s' to unbound resolver: %s\n",
+					nameserver, ub_strerror(res));
+				ao2_iterator_destroy(&it_nameservers);
+				return -1;
+			}
 		}
+		ao2_iterator_destroy(&it_nameservers);
 	}
-	ao2_iterator_destroy(&it_nameservers);
 
 	if (!strcmp(cfg->global->resolv, "system")) {
 		res = ub_ctx_resolvconf(cfg->global->state->resolver->context, NULL);
@@ -884,6 +882,13 @@ static int unload_module(void)
 static int custom_nameserver_handler(const struct aco_option *opt, struct ast_variable *var, void *obj)
 {
 	struct unbound_global_config *global = obj;
+
+	if (!global->nameservers) {
+		global->nameservers = ast_str_container_alloc_options(AO2_ALLOC_OPT_LOCK_NOLOCK, 1);
+		if (!global->nameservers) {
+			return -1;
+		}
+	}
 
 	return ast_str_container_add(global->nameservers, var->value);
 }
