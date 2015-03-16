@@ -49,13 +49,15 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 				<configOption name="resolv">
 					<synopsis>Full path to an optional resolv.conf file</synopsis>
 					<description><para>The resolv.conf file specifies the nameservers to contact when resolving queries. If a
-					value of system is provided the system-specific file will be used.</para></description>
+					value of system is provided the system-specific file will be used. If provided alongside explicit nameservers the
+					nameservers contained within the resolv.conf file will be used after all others.</para></description>
 				</configOption>
 				<configOption name="nameserver">
 					<synopsis>Nameserver to use for queries</synopsis>
 					<description><para>An explicit nameserver can be specified which is used for resolving queries. If multiple
 					nameserver lines are specified the first will be the primary with failover occurring, in order, to the other
-					nameservers as backups.</para></description>
+					nameservers as backups. If provided alongside a resolv.conf file the nameservers explicitly specified will be
+					used before all others.</para></description>
 				</configOption>
 				<configOption name="debug">
 					<synopsis>Unbound debug level</synopsis>
@@ -399,6 +401,8 @@ static int unbound_config_preapply(struct unbound_config *cfg)
 		return -1;
 	}
 
+	ub_ctx_debuglevel(cfg->global->state->resolver->context, cfg->global->debug);
+
 	if (!strcmp(cfg->global->hosts, "system")) {
 		res = ub_ctx_hosts(cfg->global->state->resolver->context, NULL);
 	} else if (!ast_strlen_zero(cfg->global->hosts)) {
@@ -408,18 +412,6 @@ static int unbound_config_preapply(struct unbound_config *cfg)
 	if (res) {
 		ast_log(LOG_ERROR, "Failed to set hosts file to '%s' in unbound resolver: %s\n",
 			cfg->global->hosts, ub_strerror(res));
-		return -1;
-	}
-
-	if (!strcmp(cfg->global->resolv, "system")) {
-		res = ub_ctx_resolvconf(cfg->global->state->resolver->context, NULL);
-	} else if (!ast_strlen_zero(cfg->global->resolv)) {
-		res = ub_ctx_resolvconf(cfg->global->state->resolver->context, cfg->global->resolv);
-	}
-
-	if (res) {
-		ast_log(LOG_ERROR, "Failed to set resolv.conf file to '%s' in unbound resolver: %s\n",
-			cfg->global->resolv, ub_strerror(res));
 		return -1;
 	}
 
@@ -436,7 +428,17 @@ static int unbound_config_preapply(struct unbound_config *cfg)
 	}
 	ao2_iterator_destroy(&it_nameservers);
 
-	ub_ctx_debuglevel(cfg->global->state->resolver->context, cfg->global->debug);
+	if (!strcmp(cfg->global->resolv, "system")) {
+		res = ub_ctx_resolvconf(cfg->global->state->resolver->context, NULL);
+	} else if (!ast_strlen_zero(cfg->global->resolv)) {
+		res = ub_ctx_resolvconf(cfg->global->state->resolver->context, cfg->global->resolv);
+	}
+
+	if (res) {
+		ast_log(LOG_ERROR, "Failed to set resolv.conf file to '%s' in unbound resolver: %s\n",
+			cfg->global->resolv, ub_strerror(res));
+		return -1;
+	}
 
 	if (!ast_strlen_zero(cfg->global->ta_file)) {
 		res = ub_ctx_add_ta_file(cfg->global->state->resolver->context, cfg->global->ta_file);
