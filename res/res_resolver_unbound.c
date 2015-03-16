@@ -535,7 +535,7 @@ typedef int (*resolve_fn)(struct ast_test *test, const char *domain, int rr_type
 static int sync_run(struct ast_test *test, const char *domain, int rr_type,
 		int rr_class, struct dns_record *records, size_t num_records)
 {
-	RAII_VAR(struct ast_dns_result *, result, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	const struct ast_dns_record *record;
 	int i;
 	
