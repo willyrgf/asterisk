@@ -106,14 +106,13 @@ struct ast_dns_query {
 };
 
 /*! \brief A recurring DNS query */
-struct ast_dns_query_recurring
-{
+struct ast_dns_query_recurring {
 	/*! \brief Callback to invoke upon completion */
 	ast_dns_resolve_callback callback;
 	/*! \brief User-specific data */
 	void *user_data;
 	/*! \brief Current active query */
-	struct ast_dns_query *query;
+	struct ast_dns_query_active *active;
 	/*! \brief The recurring query has been cancelled */
 	unsigned int cancelled;
 	/*! \brief Scheduled timer for next resolution */
@@ -124,6 +123,12 @@ struct ast_dns_query_recurring
 	int rr_class;
 	/*! \brief The name of what is being resolved */
 	char name[0];
+};
+
+/*! \brief An active DNS query */
+struct ast_dns_query_active {
+	/*! \brief The underlying DNS query */
+	struct ast_dns_query *query;
 };
 
 struct ast_sched_context;

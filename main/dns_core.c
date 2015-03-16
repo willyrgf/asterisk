@@ -162,6 +162,14 @@ const struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record
 	return AST_LIST_NEXT(record, list);
 }
 
+/*! \brief Destructor for an active DNS query */
+static void dns_query_active_destroy(void *data)
+{
+	struct ast_dns_query_active *active = data;
+
+	ao2_cleanup(active->query);
+}
+
 /*! \brief \brief Destructor for a DNS query */
 static void dns_query_destroy(void *data)
 {
@@ -172,9 +180,9 @@ static void dns_query_destroy(void *data)
 	ast_dns_result_free(query->result);
 }
 
-struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
+struct ast_dns_query_active *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data)
 {
-	struct ast_dns_query *query;
+	struct ast_dns_query_active *active;
 
 	if (ast_strlen_zero(name)) {
 		ast_log(LOG_WARNING, "Could not perform asynchronous resolution, no name provided\n");
@@ -201,41 +209,46 @@ struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int r
 		return NULL;
 	}
 
-	query = ao2_alloc_options(sizeof(*query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
-	if (!query) {
+	active = ao2_alloc_options(sizeof(*active), dns_query_active_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!active) {
 		return NULL;
 	}
 
-	query->callback = callback;
-	query->user_data = ao2_bump(data);
-	query->rr_type = rr_type;
-	query->rr_class = rr_class;
-	strcpy(query->name, name); /* SAFE */
+	active->query = ao2_alloc_options(sizeof(*active->query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!active->query) {
+		return NULL;
+	}
+
+	active->query->callback = callback;
+	active->query->user_data = ao2_bump(data);
+	active->query->rr_type = rr_type;
+	active->query->rr_class = rr_class;
+	strcpy(active->query->name, name); /* SAFE */
 
 	AST_RWLIST_RDLOCK(&resolvers);
-	query->resolver = AST_RWLIST_FIRST(&resolvers);
+	active->query->resolver = AST_RWLIST_FIRST(&resolvers);
 	AST_RWLIST_UNLOCK(&resolvers);
 
-	if (!query->resolver) {
+	if (!active->query->resolver) {
 		ast_log(LOG_ERROR, "Attempted to do a DNS query for '%s' of class '%d' and type '%d' but no resolver is available\n",
 			name, rr_class, rr_type);
-		ao2_ref(query, -1);
+		ao2_ref(active, -1);
 		return NULL;
 	}
 
-	if (query->resolver->resolve(query)) {
+	if (active->query->resolver->resolve(active->query)) {
 		ast_log(LOG_ERROR, "Resolver '%s' returned an error when resolving '%s' of class '%d' and type '%d'\n",
-			query->resolver->name, name, rr_class, rr_type);
-		ao2_ref(query, -1);
+			active->query->resolver->name, name, rr_class, rr_type);
+		ao2_ref(active, -1);
 		return NULL;
 	}
 
-	return query;
+	return active;
 }
 
-int ast_dns_resolve_cancel(struct ast_dns_query *query)
+int ast_dns_resolve_cancel(struct ast_dns_query_active *active)
 {
-	return query->resolver->cancel(query);
+	return active->query->resolver->cancel(active->query);
 }
 
 /*! \brief Structure used for signaling back for synchronous resolution completion */
@@ -278,7 +291,7 @@ static void dns_synchronous_resolve_callback(const struct ast_dns_query *query)
 int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_result **result)
 {
 	struct dns_synchronous_resolve *synchronous;
-	struct ast_dns_query *query;
+	struct ast_dns_query_active *active;
 
 	if (ast_strlen_zero(name)) {
 		ast_log(LOG_WARNING, "Could not perform synchronous resolution, no name provided\n");
@@ -313,15 +326,15 @@ int ast_dns_resolve(const char *name, int rr_type, int rr_class, struct ast_dns_
 	ast_mutex_init(&synchronous->lock);
 	ast_cond_init(&synchronous->cond, NULL);
 
-	query = ast_dns_resolve_async(name, rr_type, rr_class, dns_synchronous_resolve_callback, synchronous);
-	if (query) {
+	active = ast_dns_resolve_async(name, rr_type, rr_class, dns_synchronous_resolve_callback, synchronous);
+	if (active) {
 		/* Wait for resolution to complete */
 		ast_mutex_lock(&synchronous->lock);
 		while (!synchronous->completed) {
 			ast_cond_wait(&synchronous->cond, &synchronous->lock);
 		}
 		ast_mutex_unlock(&synchronous->lock);
-		ao2_ref(query, -1);
+		ao2_ref(active, -1);
 	}
 
 	*result = synchronous->result;

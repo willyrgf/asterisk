@@ -681,7 +681,7 @@ end:
 static int async_run(struct ast_test *test, const char *domain, int rr_type,
 		int rr_class, struct dns_record *records, size_t num_records)
 {
-	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_dns_query_active *, active, NULL, ao2_cleanup);
 	RAII_VAR(struct async_data *, adata, NULL, ao2_cleanup);
 	int i;
 
@@ -698,8 +698,8 @@ static int async_run(struct ast_test *test, const char *domain, int rr_type,
 
 	ast_test_status_update(test, "Performing DNS query '%s', type %d\n", domain, rr_type);
 
-	query = ast_dns_resolve_async(domain, rr_type, rr_class, async_callback, adata);
-	if (!query) {
+	active = ast_dns_resolve_async(domain, rr_type, rr_class, async_callback, adata);
+	if (!active) {
 		ast_test_status_update(test, "Failed to perform asynchronous resolution of domain %s\n", domain);
 		return -1;
 	}

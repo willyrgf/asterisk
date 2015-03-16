@@ -59,7 +59,7 @@ static int dns_query_recurring_scheduled_callback(const void *data)
 	ao2_lock(recurring);
 	recurring->timer = -1;
 	if (!recurring->cancelled) {
-		recurring->query = ast_dns_resolve_async(recurring->name, recurring->rr_type, recurring->rr_class, dns_query_recurring_resolution_callback,
+		recurring->active = ast_dns_resolve_async(recurring->name, recurring->rr_type, recurring->rr_class, dns_query_recurring_resolution_callback,
 			recurring);
 	}
 	ao2_unlock(recurring);
@@ -93,7 +93,7 @@ static void dns_query_recurring_resolution_callback(const struct ast_dns_query *
 		}
 	}
 
-	ao2_replace(recurring->query, NULL);
+	ao2_replace(recurring->active, NULL);
 	ao2_unlock(recurring);
 
 	/* Since we stole the reference from the query we need to drop it ourselves */
@@ -120,8 +120,8 @@ struct ast_dns_query_recurring *ast_dns_resolve_recurring(const char *name, int 
 	recurring->rr_class = rr_class;
 	strcpy(recurring->name, name); /* SAFE */
 
-	recurring->query = ast_dns_resolve_async(name, rr_type, rr_class, dns_query_recurring_resolution_callback, recurring);
-	if (!recurring->query) {
+	recurring->active = ast_dns_resolve_async(name, rr_type, rr_class, dns_query_recurring_resolution_callback, recurring);
+	if (!recurring->active) {
 		ao2_ref(recurring, -1);
 		return NULL;
 	}
@@ -138,9 +138,9 @@ int ast_dns_resolve_recurring_cancel(struct ast_dns_query_recurring *recurring)
 	recurring->cancelled = 1;
 	AST_SCHED_DEL_UNREF(ast_dns_get_sched(), recurring->timer, ao2_ref(recurring, -1));
 
-	if (recurring->query) {
-		res = ast_dns_resolve_cancel(recurring->query);
-		ao2_replace(recurring->query, NULL);
+	if (recurring->active) {
+		res = ast_dns_resolve_cancel(recurring->active);
+		ao2_replace(recurring->active, NULL);
 	}
 
 	ao2_unlock(recurring);

@@ -1005,7 +1005,7 @@ static void async_callback(const struct ast_dns_query *query)
 AST_TEST_DEFINE(resolver_resolve_async)
 {
 	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_dns_query_active *, active, NULL, ao2_cleanup);
 	struct ast_dns_result *result;
 	enum ast_test_result_state res = AST_TEST_PASS;
 	struct timespec timeout;
@@ -1039,8 +1039,8 @@ AST_TEST_DEFINE(resolver_resolve_async)
 		goto cleanup;
 	}
 
-	query = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, async_callback, async_data);
-	if (!query) {
+	active = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, async_callback, async_data);
+	if (!active) {
 		ast_test_status_update(test, "Asynchronous resolution of address failed\n");
 		res = AST_TEST_FAIL;
 		goto cleanup;
@@ -1080,7 +1080,7 @@ AST_TEST_DEFINE(resolver_resolve_async)
 		goto cleanup;
 	}
 
-	result = ast_dns_query_get_result(query);
+	result = ast_dns_query_get_result(active->query);
 	if (!result) {
 		ast_test_status_update(test, "Asynchronous resolution yielded no result\n");
 		res = AST_TEST_FAIL;
@@ -1128,7 +1128,7 @@ AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
 		{ "asterisk.org", ns_t_a,       ns_c_in,      NULL },
 	};
 
-	struct ast_dns_query *query;
+	struct ast_dns_query_active *active;
 	enum ast_test_result_state res = AST_TEST_PASS;
 	int i;
 
@@ -1155,11 +1155,11 @@ AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
 	}
 
 	for (i = 0; i < ARRAY_LEN(resolves); ++i) {
-		query = ast_dns_resolve_async(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class,
+		active = ast_dns_resolve_async(resolves[i].name, resolves[i].rr_type, resolves[i].rr_class,
 				resolves[i].callback, NULL);
-		if (query) {
+		if (active) {
 			ast_test_status_update(test, "Successfully performed asynchronous resolution with invalid data\n");
-			ao2_ref(query, -1);
+			ao2_ref(active, -1);
 			res = AST_TEST_FAIL;
 		}
 	}
@@ -1171,13 +1171,13 @@ AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
 		return AST_TEST_FAIL;
 	}
 
-	query = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, stub_callback, NULL);
+	active = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, stub_callback, NULL);
 
 	ast_dns_resolver_unregister(&terrible_resolver);
 
-	if (query) {
+	if (active) {
 		ast_test_status_update(test, "Successfully performed asynchronous resolution with invalid data\n");
-		ao2_ref(query, -1);
+		ao2_ref(active, -1);
 		return AST_TEST_FAIL;
 	}
 
@@ -1187,7 +1187,7 @@ AST_TEST_DEFINE(resolver_resolve_async_off_nominal)
 AST_TEST_DEFINE(resolver_resolve_async_cancel)
 {
 	RAII_VAR(struct async_resolution_data *, async_data, NULL, ao2_cleanup);
-	RAII_VAR(struct ast_dns_query *, query, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_dns_query_active *, active, NULL, ao2_cleanup);
 	struct ast_dns_result *result;
 	enum ast_test_result_state res = AST_TEST_PASS;
 	struct timespec timeout;
@@ -1221,8 +1221,8 @@ AST_TEST_DEFINE(resolver_resolve_async_cancel)
 		goto cleanup;
 	}
 
-	query = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, async_callback, async_data);
-	if (!query) {
+	active = ast_dns_resolve_async("asterisk.org", ns_t_a, ns_c_in, async_callback, async_data);
+	if (!active) {
 		ast_test_status_update(test, "Asynchronous resolution of address failed\n");
 		res = AST_TEST_FAIL;
 		goto cleanup;
@@ -1240,7 +1240,7 @@ AST_TEST_DEFINE(resolver_resolve_async_cancel)
 		goto cleanup;
 	}
 
-	ast_dns_resolve_cancel(query);
+	ast_dns_resolve_cancel(active);
 
 	if (!test_resolver_data.canceled) {
 		ast_test_status_update(test, "Resolver's cancel() method was not called\n");
@@ -1270,7 +1270,7 @@ AST_TEST_DEFINE(resolver_resolve_async_cancel)
 		goto cleanup;
 	}
 
-	result = ast_dns_query_get_result(query);
+	result = ast_dns_query_get_result(active->query);
 	if (result) {
 		ast_test_status_update(test, "Canceled resolution had a result\n");
 		res = AST_TEST_FAIL;

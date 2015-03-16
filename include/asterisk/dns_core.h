@@ -28,6 +28,9 @@
 extern "C" {
 #endif
 
+/*! \brief Opaque structure for an active DNS query */
+struct ast_dns_query_active;
+
 /*! \brief Opaque structure for a DNS query */
 struct ast_dns_query;
 
@@ -220,21 +223,21 @@ const struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record
  *
  * \note This function increments the reference count of the user data, it does NOT steal
  *
- * \note The query must be released upon completion or cancellation using ao2_ref
+ * \note The active query must be released upon completion or cancellation using ao2_ref
  */
-struct ast_dns_query *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
+struct ast_dns_query_active *ast_dns_resolve_async(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
 
 /*!
  * \brief Cancel an asynchronous DNS resolution
  *
- * \param query The DNS query returned from ast_dns_resolve_async
+ * \param active The active DNS query returned from ast_dns_resolve_async
  *
  * \retval 0 success
  * \retval -1 failure
  *
  * \note If successfully cancelled the callback will not be invoked
  */
-int ast_dns_resolve_cancel(struct ast_dns_query *query);
+int ast_dns_resolve_cancel(struct ast_dns_query_active *active);
 
 /*!
  * \brief Synchronously resolve a DNS query
