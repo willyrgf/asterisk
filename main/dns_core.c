@@ -216,6 +216,7 @@ struct ast_dns_query_active *ast_dns_resolve_async(const char *name, int rr_type
 
 	active->query = ao2_alloc_options(sizeof(*active->query) + strlen(name) + 1, dns_query_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!active->query) {
+		ao2_ref(active, -1);
 		return NULL;
 	}
 
