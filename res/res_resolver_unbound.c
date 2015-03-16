@@ -533,7 +533,7 @@ typedef int (*resolve_fn)(struct ast_test *test, const char *domain, int rr_type
 /*!
  * \brief Pluggable function for running a synchronous query and checking its results
  */
-static int sync_run(struct ast_test *test, const char *domain, int rr_type,
+static int nominal_sync_run(struct ast_test *test, const char *domain, int rr_type,
 		int rr_class, struct dns_record *records, size_t num_records)
 {
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
@@ -677,7 +677,7 @@ end:
  * Unlike the synchronous version, this does not check the records, instead leaving
  * that to be done in the asynchronous callback.
  */
-static int async_run(struct ast_test *test, const char *domain, int rr_type,
+static int nominal_async_run(struct ast_test *test, const char *domain, int rr_type,
 		int rr_class, struct dns_record *records, size_t num_records)
 {
 	RAII_VAR(struct ast_dns_query_active *, active, NULL, ao2_cleanup);
@@ -807,11 +807,11 @@ cleanup:
 	ub_ctx_zone_remove(resolver->context, DOMAIN2);
 
 	return res;
-
 }
 
 AST_TEST_DEFINE(resolve_sync)
 {
+
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "resolve_sync";
@@ -831,7 +831,7 @@ AST_TEST_DEFINE(resolve_sync)
 		break;
 	}
 
-	return nominal_test(test, sync_run);
+	return nominal_test(test, nominal_sync_run);
 }
 
 AST_TEST_DEFINE(resolve_async)
@@ -855,7 +855,94 @@ AST_TEST_DEFINE(resolve_async)
 		break;
 	}
 
-	return nominal_test(test, async_run);
+	return nominal_test(test, nominal_async_run);
+}
+
+AST_TEST_DEFINE(resolve_sync_off_nominal)
+{
+	RAII_VAR(struct unbound_resolver *, resolver, NULL, ao2_cleanup);
+	RAII_VAR(struct unbound_config *, cfg, NULL, ao2_cleanup);
+
+	static const size_t V4_SIZE = sizeof(struct in_addr);
+
+	static const char *DOMAIN1 = "goose.feathers";
+	static const char *DOMAIN2 = "duck.feathers";
+
+	static const char *ADDR1 = "127.0.0.2";
+
+	char addr1_buf[V4_SIZE];
+
+	struct dns_record records [] = {
+		{ "goose.feathers 12345 IN A 127.0.0.2", DOMAIN1, ns_t_a, ns_c_in, 12345, addr1_buf, V4_SIZE, 0, },
+	};
+
+	int i;
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	struct {
+		const char *domain;
+		int rr_type;
+		int rr_class;
+		int rcode;
+	} runs [] = {
+		{ DOMAIN2, ns_t_a,    ns_c_in, ns_r_nxdomain },
+		{ DOMAIN1, ns_t_aaaa, ns_c_in, ns_r_noerror },
+		{ DOMAIN1, ns_t_a,    ns_c_chaos, ns_r_refused },
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolve_sync_off_nominal";
+		info->category = "/res/res_resolver_unbound/";
+		info->summary = "Test off-nominal synchronous resolution using libunbound\n";
+		info->description = "This test performs the following:\n"
+			"\t* Attempt a lookup of a non-existent domain\n"
+			"\t* Attempt a lookup of a AAAA record on a domain that contains only A records\n"
+			"\t* Attempt a lookup of an A record on Chaos-net\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	inet_pton(AF_INET,  ADDR1, addr1_buf);
+
+	cfg = ao2_global_obj_ref(globals);
+	resolver = ao2_bump(cfg->global->state->resolver);
+
+	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
+	ub_ctx_zone_add(resolver->context, DOMAIN2, "static");
+
+	for (i = 0; i < ARRAY_LEN(records); ++i) {
+		ub_ctx_data_add(resolver->context, records[i].as_string);
+	}
+
+	for (i = 0; i < ARRAY_LEN(runs); ++i) {
+		struct ast_dns_result *result;
+
+		if (ast_dns_resolve(runs[i].domain, runs[i].rr_type, runs[i].rr_class, &result)) {
+			ast_test_status_update(test, "Failed to perform resolution :(\n");
+			res = AST_TEST_FAIL;
+		}
+
+		if (!result) {
+			ast_test_status_update(test, "Resolution returned no result\n");
+			res = AST_TEST_FAIL;
+		}
+
+		if (ast_dns_result_get_rcode(result) != runs[i].rcode) {
+			ast_test_status_update(test, "Unexpected rcode from DNS resolution\n");
+			res = AST_TEST_FAIL;
+		}
+
+		if (ast_dns_result_get_records(result)) {
+			ast_test_status_update(test, "DNS resolution returned records unexpectedly\n");
+			res = AST_TEST_FAIL;
+		}
+
+		ast_dns_result_free(result);
+	}
+	
+	return res;
 }
 
 #endif
@@ -876,6 +963,7 @@ static int unload_module(void)
 	
 	AST_TEST_UNREGISTER(resolve_sync);
 	AST_TEST_UNREGISTER(resolve_async);
+	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	return 0;
 }
 
@@ -929,6 +1017,7 @@ static int load_module(void)
 
 	AST_TEST_REGISTER(resolve_sync);
 	AST_TEST_REGISTER(resolve_async);
+	AST_TEST_REGISTER(resolve_sync_off_nominal);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
