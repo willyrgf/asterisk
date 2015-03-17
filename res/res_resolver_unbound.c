@@ -858,7 +858,133 @@ AST_TEST_DEFINE(resolve_async)
 	return nominal_test(test, nominal_async_run);
 }
 
-AST_TEST_DEFINE(resolve_sync_off_nominal)
+typedef int (*off_nominal_resolve_fn)(struct ast_test *test, const char *domain, int rr_type,
+		int rr_class, int expected_rcode);
+
+static int off_nominal_sync_run(struct ast_test *test, const char *domain, int rr_type,
+		int rr_class, int expected_rcode)
+{
+	struct ast_dns_result *result;
+	int res = 0;
+
+	if (ast_dns_resolve(domain, rr_type, rr_class, &result)) {
+		ast_test_status_update(test, "Failed to perform resolution :(\n");
+		return -1;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "Resolution returned no result\n");
+		return -1;
+	}
+
+	if (ast_dns_result_get_rcode(result) != expected_rcode) {
+		ast_test_status_update(test, "Unexpected rcode from DNS resolution\n");
+		res = -1;
+	}
+
+	if (ast_dns_result_get_records(result)) {
+		ast_test_status_update(test, "DNS resolution returned records unexpectedly\n");
+		res = -1;
+	}
+
+	ast_dns_result_free(result);
+	return res;
+}
+
+struct off_nominal_async_data {
+	int expected_rcode;
+	/*! Whether an asynchronous query failed */
+	int failed;
+	/*! Indicates the asynchronous query is complete */
+	int complete;
+	ast_mutex_t lock;
+	ast_cond_t cond;
+};
+
+static void off_nominal_async_data_destructor(void *obj)
+{
+	struct off_nominal_async_data *adata = obj;
+
+	ast_mutex_destroy(&adata->lock);
+	ast_cond_destroy(&adata->cond);
+}
+
+static struct off_nominal_async_data *off_nominal_async_data_alloc(int expected_rcode)
+{
+	struct off_nominal_async_data *adata;
+
+	adata = ao2_alloc(sizeof(*adata), off_nominal_async_data_destructor);
+	if (!adata) {
+		return NULL;
+	}
+
+	ast_mutex_init(&adata->lock);
+	ast_cond_init(&adata->cond, NULL);
+
+	adata->expected_rcode = expected_rcode;
+
+	return adata;
+}
+
+static void off_nominal_async_callback(const struct ast_dns_query *query)
+{
+	struct off_nominal_async_data *adata = ast_dns_query_get_data(query);
+	struct ast_dns_result *result = ast_dns_query_get_result(query);
+
+	if (!result) {
+		adata->failed = -1;
+		goto end;
+	}
+
+	if (ast_dns_result_get_rcode(result) != adata->expected_rcode) {
+		adata->failed = -1;
+	}
+
+	if (ast_dns_result_get_records(result)) {
+		adata->failed = -1;
+	}
+
+end:
+	ast_mutex_lock(&adata->lock);
+	adata->complete = 1;
+	ast_cond_signal(&adata->cond);
+	ast_mutex_unlock(&adata->lock);
+}
+
+static int off_nominal_async_run(struct ast_test *test, const char *domain, int rr_type,
+		int rr_class, int expected_rcode)
+{
+	RAII_VAR(struct ast_dns_query_active *, active, NULL, ao2_cleanup);
+	RAII_VAR(struct off_nominal_async_data *, adata, NULL, ao2_cleanup);
+
+	adata = off_nominal_async_data_alloc(expected_rcode);
+	if (!adata) {
+		ast_test_status_update(test, "Unable to allocate data for async query\n");
+		return -1;
+	}
+
+	ast_test_status_update(test, "Performing DNS query '%s', type %d\n", domain, rr_type);
+
+	active = ast_dns_resolve_async(domain, rr_type, rr_class, off_nominal_async_callback, adata);
+	if (!active) {
+		ast_test_status_update(test, "Failed to perform asynchronous resolution of domain %s\n", domain);
+		return -1;
+	}
+
+	ast_mutex_lock(&adata->lock);
+	while (!adata->complete) {
+		ast_cond_wait(&adata->cond, &adata->lock);
+	}
+	ast_mutex_unlock(&adata->lock);
+
+	if (adata->failed) {
+		ast_test_status_update(test, "Asynchronous resolution failure %s\n", domain);
+	}
+	return adata->failed;
+}
+
+static enum ast_test_result_state off_nominal_test(struct ast_test *test,
+		off_nominal_resolve_fn runner)
 {
 	RAII_VAR(struct unbound_resolver *, resolver, NULL, ao2_cleanup);
 	RAII_VAR(struct unbound_config *, cfg, NULL, ao2_cleanup);
@@ -890,6 +1016,29 @@ AST_TEST_DEFINE(resolve_sync_off_nominal)
 		{ DOMAIN1, ns_t_a,    ns_c_chaos, ns_r_refused },
 	};
 
+	inet_pton(AF_INET,  ADDR1, addr1_buf);
+
+	cfg = ao2_global_obj_ref(globals);
+	resolver = ao2_bump(cfg->global->state->resolver);
+
+	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
+	ub_ctx_zone_add(resolver->context, DOMAIN2, "static");
+
+	for (i = 0; i < ARRAY_LEN(records); ++i) {
+		ub_ctx_data_add(resolver->context, records[i].as_string);
+	}
+
+	for (i = 0; i < ARRAY_LEN(runs); ++i) {
+		if (runner(test, runs[i].domain, runs[i].rr_type, runs[i].rr_class, runs[i].rcode)) {
+			res = AST_TEST_FAIL;
+		}
+	}
+	
+	return res;
+}
+
+AST_TEST_DEFINE(resolve_sync_off_nominal)
+{
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "resolve_sync_off_nominal";
@@ -904,47 +1053,27 @@ AST_TEST_DEFINE(resolve_sync_off_nominal)
 		break;
 	}
 
-	inet_pton(AF_INET,  ADDR1, addr1_buf);
-
-	cfg = ao2_global_obj_ref(globals);
-	resolver = ao2_bump(cfg->global->state->resolver);
-
-	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
-	ub_ctx_zone_add(resolver->context, DOMAIN2, "static");
-
-	for (i = 0; i < ARRAY_LEN(records); ++i) {
-		ub_ctx_data_add(resolver->context, records[i].as_string);
-	}
-
-	for (i = 0; i < ARRAY_LEN(runs); ++i) {
-		struct ast_dns_result *result;
-
-		if (ast_dns_resolve(runs[i].domain, runs[i].rr_type, runs[i].rr_class, &result)) {
-			ast_test_status_update(test, "Failed to perform resolution :(\n");
-			res = AST_TEST_FAIL;
-		}
-
-		if (!result) {
-			ast_test_status_update(test, "Resolution returned no result\n");
-			res = AST_TEST_FAIL;
-		}
-
-		if (ast_dns_result_get_rcode(result) != runs[i].rcode) {
-			ast_test_status_update(test, "Unexpected rcode from DNS resolution\n");
-			res = AST_TEST_FAIL;
-		}
-
-		if (ast_dns_result_get_records(result)) {
-			ast_test_status_update(test, "DNS resolution returned records unexpectedly\n");
-			res = AST_TEST_FAIL;
-		}
-
-		ast_dns_result_free(result);
-	}
-	
-	return res;
+	return off_nominal_test(test, off_nominal_sync_run);
 }
 
+AST_TEST_DEFINE(resolve_async_off_nominal)
+{
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolve_async_off_nominal";
+		info->category = "/res/res_resolver_unbound/";
+		info->summary = "Test off-nominal synchronous resolution using libunbound\n";
+		info->description = "This test performs the following:\n"
+			"\t* Attempt a lookup of a non-existent domain\n"
+			"\t* Attempt a lookup of a AAAA record on a domain that contains only A records\n"
+			"\t* Attempt a lookup of an A record on Chaos-net\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return off_nominal_test(test, off_nominal_async_run);
+}
 #endif
 
 static int reload_module(void)
@@ -963,6 +1092,7 @@ static int unload_module(void)
 	
 	AST_TEST_UNREGISTER(resolve_sync);
 	AST_TEST_UNREGISTER(resolve_async);
+	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	return 0;
 }
@@ -1018,6 +1148,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolve_sync);
 	AST_TEST_REGISTER(resolve_async);
 	AST_TEST_REGISTER(resolve_sync_off_nominal);
+	AST_TEST_REGISTER(resolve_async_off_nominal);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
