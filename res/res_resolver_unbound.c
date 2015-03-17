@@ -891,7 +891,11 @@ static int off_nominal_sync_run(struct ast_test *test, const char *domain, int r
 	return res;
 }
 
+/*!
+ * \brief User data for off-nominal async resolution test
+ */
 struct off_nominal_async_data {
+	/*! The DNS result's expected rcode */
 	int expected_rcode;
 	/*! Whether an asynchronous query failed */
 	int failed;
@@ -926,6 +930,16 @@ static struct off_nominal_async_data *off_nominal_async_data_alloc(int expected_
 	return adata;
 }
 
+/*!
+ * \brief Async callback for off-nominal async test
+ * 
+ * This test ensures that there is a result present on the query, then it checks
+ * that the rcode on the result is the expected value and that there are no
+ * records on the result.
+ *
+ * Once completed, the testing thread is signaled that the async query has
+ * completed.
+ */
 static void off_nominal_async_callback(const struct ast_dns_query *query)
 {
 	struct off_nominal_async_data *adata = ast_dns_query_get_data(query);
@@ -1075,6 +1089,9 @@ AST_TEST_DEFINE(resolve_async_off_nominal)
 	return off_nominal_test(test, off_nominal_async_run);
 }
 
+/*!
+ * \brief Minimal data required to signal the completion of an async resolve
+ */
 struct async_minimal_data {
 	int complete;
 	ast_mutex_t lock;
@@ -1104,6 +1121,11 @@ static struct async_minimal_data *async_minimal_data_alloc(void)
 	return adata;
 }
 
+/*!
+ * \brief Async callback for off-nominal cancellation test.
+ *
+ * This simply signals the testing thread that the query completed
+ */
 static void minimal_callback(const struct ast_dns_query *query)
 {
 	struct async_minimal_data *adata = ast_dns_query_get_data(query);
