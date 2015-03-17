@@ -1074,6 +1074,90 @@ AST_TEST_DEFINE(resolve_async_off_nominal)
 
 	return off_nominal_test(test, off_nominal_async_run);
 }
+
+struct async_minimal_data {
+	int complete;
+	ast_mutex_t lock;
+	ast_cond_t cond;
+};
+
+static void async_minimal_data_destructor(void *obj)
+{
+	struct async_minimal_data *adata = obj;
+
+	ast_mutex_destroy(&adata->lock);
+	ast_cond_destroy(&adata->cond);
+}
+
+static struct async_minimal_data *async_minimal_data_alloc(void)
+{
+	struct async_minimal_data *adata;
+
+	adata = ao2_alloc(sizeof(*adata), async_minimal_data_destructor);
+	if (!adata) {
+		return NULL;
+	}
+
+	ast_mutex_init(&adata->lock);
+	ast_cond_init(&adata->cond, NULL);
+
+	return adata;
+}
+
+static void minimal_callback(const struct ast_dns_query *query)
+{
+	struct async_minimal_data *adata = ast_dns_query_get_data(query);
+
+	ast_mutex_lock(&adata->lock);
+	adata->complete = 1;
+	ast_cond_signal(&adata->cond);
+	ast_mutex_unlock(&adata->lock);
+}
+
+AST_TEST_DEFINE(resolve_cancel_off_nominal)
+{
+	RAII_VAR(struct ast_dns_query_active *, active, NULL, ao2_cleanup);
+	RAII_VAR(struct async_minimal_data *, adata, NULL, ao2_cleanup);
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolve_cancel_off_nominal";
+		info->category = "/res/res_resolver_unbound/";
+		info->summary = "Off nominal cancellation test using libunbound\n";
+		info->description = "This test does the following:\n"
+			"\t* Perform an asynchronous query\n"
+			"\t* Once the query has completed, attempt to cancel it\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	adata = async_minimal_data_alloc();
+	if (!adata) {
+		ast_test_status_update(test, "Failed to allocate necessary data for test\n");
+		return AST_TEST_FAIL;
+	}
+
+	active = ast_dns_resolve_async("crunchy.peanut.butter", ns_t_a, ns_c_in, minimal_callback, adata);
+	if (!active) {
+		ast_test_status_update(test, "Failed to perform asynchronous query\n");
+		return AST_TEST_FAIL;
+	}
+
+	/* Wait for async query to complete */
+	ast_mutex_lock(&adata->lock);
+	while (!adata->complete) {
+		ast_cond_wait(&adata->cond, &adata->lock);
+	}
+	ast_mutex_unlock(&adata->lock);
+
+	if (!ast_dns_resolve_cancel(active)) {
+		ast_test_status_update(test, "Successfully canceled completed query\n");
+		return AST_TEST_FAIL;
+	}
+	
+	return AST_TEST_PASS;
+}
 #endif
 
 static int reload_module(void)
@@ -1094,6 +1178,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolve_async);
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
+	AST_TEST_UNREGISTER(resolve_cancel_off_nominal);
 	return 0;
 }
 
@@ -1149,6 +1234,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolve_async);
 	AST_TEST_REGISTER(resolve_sync_off_nominal);
 	AST_TEST_REGISTER(resolve_async_off_nominal);
+	AST_TEST_REGISTER(resolve_cancel_off_nominal);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
