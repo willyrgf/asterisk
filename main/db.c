@@ -1595,7 +1595,7 @@ static void astdb_atexit(void)
 	ast_manager_unregister("DBDel");
 	ast_manager_unregister("DBDelTree");
 
-	ao2_ref(message_router, -1);
+	stasis_message_router_unsubscribe_and_join(message_router);
 	message_router = NULL;
 	ao2_ref(db_cluster_topic, -1);
 	db_cluster_topic = NULL;
@@ -1701,7 +1701,7 @@ int astdb_init(void)
 	return 0;
 
 error_cleanup:
-	ao2_cleanup(message_router);
+	stasis_message_router_unsubscribe_and_join(message_router);
 	ao2_cleanup(db_cluster_topic);
 	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_put_shared_type);
 	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_del_shared_type);
