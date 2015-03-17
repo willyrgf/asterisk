@@ -4,7 +4,6 @@
  * Copyright (C) 2011-2015, Digium, Inc.
  *
  * Terry Wilson <twilson@digium.com>
- * Matt Jordan <mjordan@digium.com>
  *
  * See http://www.asterisk.org for more information about
  * the Asterisk project. Please do not directly contact
@@ -22,7 +21,6 @@
  * \brief AstDB Unit Tests
  *
  * \author Terry Wilson <twilson@digium.com>
- * \author Matt Jordan <mjordan@digium.com>
  *
  */
 
@@ -386,6 +384,16 @@ AST_TEST_DEFINE(put_get_long)
 	return res;
 }
 
+/*!
+ * \brief Test the AstDB for the given family, key, value tuple
+ *
+ * As annoying as it is, it's actually really hard to synchronize on when the
+ * AstDB updates itself from the received publication of a shared family value.
+ * This is because while we can synchronize on the delivery to a topic, we can't
+ * synchronize that the AstDB handler's for that topic has written the value out.
+ * Hence, we use this loop - if we don't get a value written within 1000 usec,
+ * something is definitely wrong and we should just fail the unit test.
+ */
 #define TEST_FOR_VALUE(family, key, value) do { \
 	int i; \
 	for (i = 0; i < 10; i++) { \
@@ -416,22 +424,22 @@ AST_TEST_DEFINE(test_ast_db_put_shared_create)
 		break;
 	}
 
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res == 0, "Creating global shared area");
 	res = ast_db_is_shared(GLOBAL_SHARED_FAMILY);
 	ast_test_validate(test, res == 1, "Test existance of global shared area");
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res != 0, "Creating duplicate global shared area");
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res != 0, "Creating duplicate unique of global shared area");
 
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res == 0, "Creating unique shared area");
 	res = ast_db_is_shared(UNIQUE_SHARED_FAMILY);
 	ast_test_validate(test, res == 1, "Test existance of unique shared area");
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res != 0, "Creating duplicate unique shared area");
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res != 0, "Creating duplicate global of unique shared area");
 
 	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
@@ -456,7 +464,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_delete)
 		break;
 	}
 
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res == 0, "Creating global shared area");
 	res = ast_db_del_shared(GLOBAL_SHARED_FAMILY);
 	ast_test_validate(test, res == 0, "Deletion of global shared area");
@@ -465,7 +473,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_delete)
 	res = ast_db_del_shared(GLOBAL_SHARED_FAMILY);
 	ast_test_validate(test, res != 0, "Allowed duplicate deletion of global shared area");
 
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res == 0, "Creating unique shared area");
 	res = ast_db_del_shared(UNIQUE_SHARED_FAMILY);
 	ast_test_validate(test, res == 0, "Deletion of unique shared area");
@@ -507,7 +515,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_unique)
 	/* Create a key that is not published due to not being shared yet */
 	res = ast_db_put(UNIQUE_SHARED_FAMILY, "foo", "bar");
 	ast_test_validate(test, res == 0, "Creation of non-published test key");
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res == 0, "Creation of unique shared area");
 
 	/* Publish a new key */
@@ -562,7 +570,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global)
 	/* Create a key that is not published due to not being shared yet */
 	res = ast_db_put(GLOBAL_SHARED_FAMILY, "foo", "bar");
 	ast_test_validate(test, res == 0, "Creation of non-published test key");
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res == 0, "Creation of global shared area");
 
 	/* Publish a new key */
@@ -584,7 +592,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global)
 	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
 	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
 
-	return AST_TEST_PASS;	
+	return AST_TEST_PASS;
 }
 
 AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
@@ -613,12 +621,12 @@ AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
 
 	ast_test_status_update(test, "Verifying unique shared area can be updated\n");
 
-	shared_family = ast_db_shared_family_alloc(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	shared_family = ast_db_shared_family_alloc(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, shared_family != NULL);
 	shared_family->entries = ast_db_entry_create("foo", "bar");
 	ast_test_validate(test, shared_family->entries != NULL);
 
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res == 0, "Creation of unique shared area");
 
 	ast_db_publish_shared_message(ast_db_put_shared_type(), shared_family, &eid);
@@ -634,7 +642,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
 	ao2_ref(shared_family, -1);
 
 	ast_test_status_update(test, "Verifying unique non-shared area is not updated\n");
-	shared_family = ast_db_shared_family_alloc(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	shared_family = ast_db_shared_family_alloc(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, shared_family != NULL);
 	shared_family->entries = ast_db_entry_create("foo", "yackity");
 	ast_test_validate(test, shared_family->entries != NULL);
@@ -675,12 +683,12 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global_update)
 
 	ast_test_status_update(test, "Verifying global shared area can be updated\n");
 
-	shared_family = ast_db_shared_family_alloc(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	shared_family = ast_db_shared_family_alloc(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, shared_family != NULL);
 	shared_family->entries = ast_db_entry_create("foo", "bar");
 	ast_test_validate(test, shared_family->entries != NULL);
 
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res == 0, "Creation of global shared area");
 
 	ast_db_publish_shared_message(ast_db_put_shared_type(), shared_family, &eid);
@@ -696,7 +704,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global_update)
 	ao2_ref(shared_family, -1);
 
 	ast_test_status_update(test, "Verifying global non-shared area is not updated\n");
-	shared_family = ast_db_shared_family_alloc(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	shared_family = ast_db_shared_family_alloc(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, shared_family != NULL);
 	shared_family->entries = ast_db_entry_create("foo", "yackity");
 	ast_test_validate(test, shared_family->entries != NULL);
@@ -733,10 +741,10 @@ AST_TEST_DEFINE(test_ast_db_refresh_shared)
 		break;
 	}
 
-	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, SHARED_DB_TYPE_GLOBAL);
+	res = ast_db_put_shared(GLOBAL_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res == 0, "Creation of global shared area");
 
-	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, SHARED_DB_TYPE_UNIQUE);
+	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_UNIQUE);
 	ast_test_validate(test, res == 0, "Creation of unique shared area");
 
 	ast_test_validate(test, ast_db_put(GLOBAL_SHARED_FAMILY, "foo", "foo_key") == 0);

@@ -51,7 +51,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/cli.h"
 #include "asterisk/utils.h"
 #include "asterisk/manager.h"
-#include "asterisk/event.h"
 
 /*** DOCUMENTATION
 	<manager name="DBGet" language="en_US">
@@ -113,7 +112,11 @@ static pthread_t syncthread;
 static int doexit;
 static int dosync;
 
-/*! \brief A container of families to share across Asterisk instances */
+/*!
+ * \brief A container of families to share across Asterisk instances.
+ * \note Entries in this container should be treated as immutable. The container
+ *       needs locking; the entries do not.
+ */
 static struct ao2_container *shared_families;
 
 /*! \brief The Stasis topic for shared families */
@@ -227,9 +230,7 @@ struct ast_db_entry *ast_db_entry_create(const char *key, const char *value)
 	return entry;
 }
 
-/*! \internal
- * \brief AO2 destructor for \c ast_db_shared_family
- */
+/*! \internal \brief AO2 destructor for \c ast_db_shared_family */
 static void shared_db_family_dtor(void *obj)
 {
 	struct ast_db_shared_family *family = obj;
@@ -425,7 +426,7 @@ int ast_db_put_shared(const char *family, enum ast_db_shared_type share_type)
 	ao2_link_flags(shared_families, shared_family, OBJ_NOLOCK);
 
 	db_put_common(SHARED_FAMILY, shared_family->name,
-		share_type == SHARED_DB_TYPE_UNIQUE ? "UNIQUE" : "GLOBAL", 0);
+		share_type == DB_SHARE_TYPE_UNIQUE ? "UNIQUE" : "GLOBAL", 0);
 
 	ao2_ref(shared_family, -1);
 
@@ -448,13 +449,24 @@ int ast_db_is_shared(const char *family)
 	return res;
 }
 
+/*!
+ * \internal
+ * \brief Update remote instances that a shared family key/value was updated
+ *
+ * \param family The AstDB family
+ * \param key The AstDB key
+ * \param value The AstDB value
+ *
+ * \retval 0 entry was processed successfully
+ * \retval -1 error
+ */
 static int db_entry_put_shared(const char *family, const char *key, const char *value)
 {
 	struct ast_db_shared_family *shared_family;
 	struct ast_db_shared_family *clone;
 
 	/* See if we are shared */
-	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_PARTIAL_KEY);
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_KEY);
 	if (!shared_family) {
 		return 0;
 	}
@@ -480,13 +492,24 @@ static int db_entry_put_shared(const char *family, const char *key, const char *
 	return 0;
 }
 
+/*!
+ * \internal
+ * \brief Update remote instances that a shared family key/value was deleted
+ *
+ * \param family The AstDB family
+ * \param key The AstDB key
+ * \param value The AstDB value
+ *
+ * \retval 0 entry was processed successfully
+ * \retval -1 error
+ */
 static int db_entry_del_shared(const char *family, const char *key)
 {
 	struct ast_db_shared_family *shared_family;
 	struct ast_db_shared_family *clone;
 
 	/* See if we are shared */
-	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_PARTIAL_KEY);
+	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_KEY);
 	if (!shared_family) {
 		return 0;
 	}
@@ -542,6 +565,18 @@ int ast_db_del_shared(const char *family)
 	return res;
 }
 
+/*!
+ * \internal
+ * \brief Common routine to update an entry in the AstDB
+ *
+ * \param family The AstDB family
+ * \param key The AstDB key
+ * \param value The AstDB value
+ * \param share If non-zero, try to inform other instances that the key was updated
+ *
+ * \retval 0 success
+ * \retval -1 error
+ */
 static int db_put_common(const char *family, const char *key, const char *value, int share)
 {
 	char fullkey[MAX_DB_FIELD];
@@ -652,6 +687,17 @@ int ast_db_get_allocated(const char *family, const char *key, char **out)
 	return db_get_common(family, key, out, -1);
 }
 
+/*!
+ * \internal
+ * \brief Common routine to delete an entry in the AstDB
+ *
+ * \param family The AstDB family
+ * \param key The AstDB key
+ * \param share If non-zero, try to inform other instances that the key was deleted
+ *
+ * \retval 0 success
+ * \retval -1 error
+ */
 static int db_del_common(const char *family, const char *key, int share)
 {
 	char fullkey[MAX_DB_FIELD];
@@ -680,7 +726,7 @@ static int db_del_common(const char *family, const char *key, int share)
 	}
 	ast_mutex_unlock(&dblock);
 
-	return res;	
+	return res;
 }
 
 int ast_db_del(const char *family, const char *key)
@@ -688,6 +734,17 @@ int ast_db_del(const char *family, const char *key)
 	return db_del_common(family, key, 1);
 }
 
+/*!
+ * \internal
+ * \brief Common routine to delete an entire tree in the AstDB
+ *
+ * \param family The AstDB family
+ * \param key The AstDB key. May be NULL.
+ * \param share If non-zero, try to inform other instances that the key was deleted
+ *
+ * \retval 0 success
+ * \retval -1 error
+ */
 static int db_deltree_common(const char *family, const char *keytree, int share)
 {
 	sqlite3_stmt *stmt = deltree_stmt;
@@ -723,7 +780,7 @@ static int db_deltree_common(const char *family, const char *keytree, int share)
 	}
 	ast_mutex_unlock(&dblock);
 
-	return res;	
+	return res;
 }
 
 int ast_db_deltree(const char *family, const char *keytree)
@@ -897,9 +954,9 @@ static char *handle_cli_database_put_shared(struct ast_cli_entry *e, int cmd, st
 	}
 
 	if (!strcasecmp(a->argv[4], "unique")) {
-		share_type = SHARED_DB_TYPE_UNIQUE;
+		share_type = DB_SHARE_TYPE_UNIQUE;
 	} else if (!strcasecmp(a->argv[4], "global")) {
-		share_type = SHARED_DB_TYPE_GLOBAL;
+		share_type = DB_SHARE_TYPE_GLOBAL;
 	} else {
 		ast_cli(a->fd, "Unknown share type: '%s'\n", a->argv[4]);
 		return CLI_SUCCESS;
@@ -975,6 +1032,7 @@ static char *handle_cli_database_deltree(struct ast_cli_entry *e, int cmd, struc
 	return CLI_SUCCESS;
 }
 
+/*! \internal \brief Helper for CLI commands that print the AstDB */
 static int print_database_show(struct ast_cli_args *a, sqlite3_stmt *stmt)
 {
 	int counter = 0;
@@ -1005,7 +1063,7 @@ static int print_database_show(struct ast_cli_args *a, sqlite3_stmt *stmt)
 
 		++counter;
 		ast_cli(a->fd, "%-50s: %-25s %s\n", key_s, value_s,
-			shared_family ? (shared_family->share_type == SHARED_DB_TYPE_UNIQUE ? "(U)" : "(G)") : "");
+			shared_family ? (shared_family->share_type == DB_SHARE_TYPE_UNIQUE ? "(U)" : "(G)") : "");
 
 		ao2_cleanup(shared_family);
 		ast_free(family_s);
@@ -1324,7 +1382,8 @@ static void *db_sync_thread(void *data)
 	return NULL;
 }
 
-int ast_db_publish_shared_message(struct stasis_message_type *type, struct ast_db_shared_family *shared_family, struct ast_eid *eid)
+int ast_db_publish_shared_message(struct stasis_message_type *type,
+	struct ast_db_shared_family *shared_family, struct ast_eid *eid)
 {
 	struct stasis_message *message;
 
@@ -1371,18 +1430,17 @@ void ast_db_refresh_shared(void)
 		ao2_ref(clone, -1);
 		ao2_ref(shared_family, -1);
 	}
-	ao2_iterator_destroy(&it_shared_families);	
-}
-
-static struct ast_event *db_del_shared_type_to_event(struct stasis_message *message)
-{
-	return NULL;
+	ao2_iterator_destroy(&it_shared_families);
 }
 
 static struct ast_json *db_entries_to_json(struct ast_db_entry *entry)
 {
 	struct ast_json *json;
 	struct ast_db_entry *cur;
+
+	if (!entry) {
+		return ast_json_null();
+	}
 
 	json = ast_json_array_create();
 	if (!json) {
@@ -1414,17 +1472,27 @@ static struct ast_json *db_shared_family_to_json(struct stasis_message *message,
 {
 	struct stasis_message_type *type = stasis_message_type(message);
 	struct ast_db_shared_family *shared_family;
+	struct ast_json *entries;
+
+	if (type != ast_db_put_shared_type() && type != ast_db_del_shared_type()) {
+		return NULL;
+	}
 
 	shared_family = stasis_message_data(message);
 	if (!shared_family) {
 		return NULL;
 	}
 
+	entries = db_entries_to_json(shared_family->entries);
+	if (!entries) {
+		return NULL;
+	}
+
 	return ast_json_pack("{s: s, s: s, s: s, s: o}",
 		"verb", type == ast_db_put_shared_type() ? "put" : "delete",
 		"family", shared_family->name,
-		"share_type", shared_family->share_type == SHARED_DB_TYPE_UNIQUE ? "unique" : "global",
-		"entries", shared_family->entries ? db_entries_to_json(shared_family->entries) : ast_json_null());
+		"share_type", shared_family->share_type == DB_SHARE_TYPE_UNIQUE ? "unique" : "global",
+		"entries", entries);
 }
 
 struct stasis_topic *ast_db_cluster_topic(void)
@@ -1468,7 +1536,7 @@ static void db_put_shared_msg_cb(void *data, struct stasis_subscription *sub, st
 	}
 	ao2_ref(shared_check, -1);
 
-	if (shared_family->share_type == SHARED_DB_TYPE_UNIQUE) {
+	if (shared_family->share_type == DB_SHARE_TYPE_UNIQUE) {
 		char eid_workspace[20];
 
 		/* Length is family + '/' + EID length (20) + 1 */
@@ -1527,7 +1595,9 @@ static void astdb_atexit(void)
 	ast_manager_unregister("DBDel");
 	ast_manager_unregister("DBDelTree");
 
-	ao2_cleanup(db_cluster_topic);
+	ao2_ref(message_router, -1);
+	message_router = NULL;
+	ao2_ref(db_cluster_topic, -1);
 	db_cluster_topic = NULL;
 	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_put_shared_type);
 	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_del_shared_type);
@@ -1572,9 +1642,9 @@ static void restore_shared_families(void)
 		}
 
 		if (!strcasecmp(cur->data, "unique")) {
-			share_type = SHARED_DB_TYPE_UNIQUE;
+			share_type = DB_SHARE_TYPE_UNIQUE;
 		} else if (!strcasecmp(cur->data, "global")) {
-			share_type = SHARED_DB_TYPE_GLOBAL;
+			share_type = DB_SHARE_TYPE_GLOBAL;
 		} else {
 			continue;
 		}
@@ -1596,8 +1666,7 @@ int astdb_init(void)
 
 	db_cluster_topic = stasis_topic_create("ast_db_cluster_topic");
 	if (!db_cluster_topic) {
-		ao2_ref(shared_families, -1);
-		return -1;
+		goto error_cleanup;
 	}
 
 	STASIS_MESSAGE_TYPE_INIT(ast_db_put_shared_type);
@@ -1605,9 +1674,7 @@ int astdb_init(void)
 
 	message_router = stasis_message_router_create_pool(ast_db_cluster_topic());
 	if (!message_router) {
-		ao2_ref(db_cluster_topic, -1);
-		ao2_ref(shared_families, -1);
-		return -1;
+		goto error_cleanup;
 	}
 	stasis_message_router_add(message_router, ast_db_put_shared_type(),
 		db_put_shared_msg_cb, NULL);
@@ -1615,18 +1682,14 @@ int astdb_init(void)
 		db_del_shared_msg_cb, NULL);
 
 	if (db_init()) {
-		ao2_ref(db_cluster_topic, -1);
-		ao2_ref(shared_families, -1);
-		return -1;
+		goto error_cleanup;
 	}
 
 	restore_shared_families();
 
 	ast_cond_init(&dbcond, NULL);
 	if (ast_pthread_create_background(&syncthread, NULL, db_sync_thread, NULL)) {
-		ao2_ref(db_cluster_topic, -1);
-		ao2_ref(shared_families, -1);
-		return -1;
+		goto error_cleanup;
 	}
 
 	ast_register_atexit(astdb_atexit);
@@ -1636,4 +1699,12 @@ int astdb_init(void)
 	ast_manager_register_xml_core("DBDel", EVENT_FLAG_SYSTEM, manager_dbdel);
 	ast_manager_register_xml_core("DBDelTree", EVENT_FLAG_SYSTEM, manager_dbdeltree);
 	return 0;
+
+error_cleanup:
+	ao2_cleanup(message_router);
+	ao2_cleanup(db_cluster_topic);
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_put_shared_type);
+	STASIS_MESSAGE_TYPE_CLEANUP(ast_db_del_shared_type);
+	ao2_cleanup(shared_families);
+	return -1;
 }

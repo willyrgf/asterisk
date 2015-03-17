@@ -363,7 +363,7 @@ static void asterisk_publisher_dbstate_cb(void *data, struct stasis_subscription
 	if (!eid || ast_eid_cmp(&ast_eid_default, eid)) {
 		/* If the event is aggregate, unknown, or didn't originate from this
 		 * server, don't send it out. */
-		return;		
+		return;
 	}
 
 	shared_family = stasis_message_data(msg);
@@ -798,9 +798,9 @@ static int asterisk_publication_dbstate(struct ast_sip_publication *pub, struct 
 			ast_sorcery_object_get_id(config));
 		return -1;
 	} else if (!strcasecmp(str_share_type, "global")) {
-		share_type = SHARED_DB_TYPE_GLOBAL;
+		share_type = DB_SHARE_TYPE_GLOBAL;
 	} else if (!strcasecmp(str_share_type, "unique")) {
-		share_type = SHARED_DB_TYPE_UNIQUE;
+		share_type = DB_SHARE_TYPE_UNIQUE;
 	} else {
 		ast_debug(1, "Received bad AstDB state event for resource '%s': unknown verb '%s'\n",
 			ast_sorcery_object_get_id(config), str_share_type);
@@ -1298,7 +1298,7 @@ static int load_module(void)
 	for (i = 0; i < ARRAY_LEN(event_publisher_handlers); i++) {
 		if (ast_sip_register_event_publisher_handler(event_publisher_handlers[i])) {
 			ast_log(LOG_WARNING, "Unable to register event publisher handler %s\n",
-				event_publisher_handlers[i]->event_name);			
+				event_publisher_handlers[i]->event_name);
 			for (j = 0; j < ARRAY_LEN(&publish_handlers); j++) {
 				ast_sip_unregister_publish_handler(publish_handlers[j]);
 			}

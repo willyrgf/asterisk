@@ -73,6 +73,10 @@
 ;   * Contains information about an outbound SIP registration
 ; * Phone Provisioning "phoneprov"
 ;   * Contains information needed by res_phoneprov for autoprovisioning
+; * Inbound publication handler "inbound-publication"
+;   * Defines a handler for received PUBLISH requests
+; * Outbound publisher "outbound-publish"
+;   * Defines an entity to send PUBLISH requests to
 
 ; The following sections show example configurations for various scenarios.
 ; Most require a couple or more configuration types configured in concert.
@@ -587,6 +591,54 @@
 ;TRANSPORT_ID=transport-udp-nat ;automatically added by this module
 ;LABEL=1000                     ;added by user
 
+;==============EXAMPLE PUBLISH CONFIGURATION================================
+; The production and handling of PUBLISH requests is broken into three different
+; sections: "inbound-publication", "asterisk-publication", and "outbound-publish".
+; An "inbound-publication" section defines how Asterisk will handle received
+; PUBLISH requests from a particular endpoint; an "asterisk-publication" section
+; specifically handles intra-Asterisk event types; and an "outbound-publish"
+; section defines how Asterisk will transmit PUBLISH requests to a particular
+; endpoint.
+
+; The following example demonstrates distributing device state to another
+; Asterisk instance. In this case, this example assumes that there is an
+; "endpoint" definition for the other Asterisk instance named "ast2". We'll
+; provide a small stub for this endpoint, but otherwise leave it undefined.
+
+; [ast2]
+; type=endpoint          ; An endpoint instance for the "other" Asterisk instance
+;
+
+; To handle inbound device state updates, we define both an "inbound-publication"
+; section as well as an "asterisk-publication" section. The "inbound-publication"
+; defines a handler for an event type of "asterisk-devicestate" that maps to
+; the "asterisk-publication" section. Note that all event types for
+; inbound PUBLISH handlers prefix the event type(s) that they handle with
+; "event_". The value of the event type specifies the "asterisk-publication"
+; section that will define how we handle these events.
+
+; [ast2]
+; type=inbound-publication
+; event_asterisk-devicestate=ast2   ; Handle "asterisk-devicestate" events
+;                                   ; using the "asterisk-publication" section
+;                                   ; "ast2"
+
+; [ast2]
+; type=asterisk-publication
+; device_state=yes                  ; Specify that we will handle intra-Asterisk
+;                                   ; device state updates
+
+; To PUBLISH our device state to endpoint "ast2", we define an "outbound-publish"
+; section. This section specifies that we will PUBLISH events of type
+; "asterisk-devicestate" to the SIP URI "sip:ast2@my-awesome-service.com:5060".
+
+; [ast2]
+; type=outbound-publish
+; server_uri=sip:ast2@my-awesome-service.com:5060 ; PUBLISH device states to this URI
+; event=asterisk-devicestate                      ; The event type to publish
+
+
+
 ; MODULE PROVIDING BELOW SECTION(S): res_pjsip
 ;==========================ENDPOINT SECTION OPTIONS=========================
 ;[endpoint]
@@ -930,3 +982,55 @@
                 ; Common variables include LINE, LINEKEYS, etc.
                 ; See phoneprov.conf.sample for others.
 ;type=          ; Must be of type phoneprov (default: "")
+
+
+
+; MODULE(S) PROVIDING BELOW SECTION(S): res_pjsip_pubsub, res_pjsip_outbound_publish,
+;                                       res_pjsip_publish_asterisk
+;=============================PUBLISH OPTIONS=================================
+; [inbound-publication]
+; type=                         ; Must be of type inbound-publication (default: "")
+; event_asterisk-devicestate=   ; The asterisk-publication section that defines how
+                                ; asterisk-devicestate PUBLISH requests are handled
+; event_asterisk-mwi=           ; The asterisk-publication section that defines how
+                                ; asterisk-mwi PUBLISH requests are handled
+; event_asterisk-db=            ; The asterisk-publication section that defines how
+                                ; asterisk-db PUBLISH requests are handled
+; endpoint=                     ; Endpoints that we should accept PUBLISH requests
+                                ; from (default: "")
+
+; [outbound-publish]
+; type=                         ; Must be of type outbound-publish (default: "")
+; expiration=                   ; Expiration time for PUBLISH requests in seconds
+                                ; (default: 3600)
+; outbound_auth=                ; Authentication object to be used for outbound
+                                ; publishes (default: "")
+; outbound_proxy=               ; SIP URI of the outbound proxy used to send publishes
+                                ; (default: "")
+; server_uri=                   ; SIP URI of the server and entity to publish to
+; from_uri=                     ; SIP URI to use in the From header
+; to_uri=                       ; SIP URI to use in the To header
+; max_auth_attempts=            ; Maximum number of authentication attempts before
+                                ; stopping the publication (default: 5)
+; event=                        ; Event type to publish (default: "")
+
+; [asterisk-publication]
+; type=                         ; Must be of type asterisk-publication (default: "")
+; devicestate_publish=          ; Optional name of an outbound publish item that can be
+                                ; used to publish a request for full device state information
+; mailboxstate_publish=         ; Optional name of an outbound publish item that can be used
+                                ; to publish a request for full mailbox state information
+; db_publish=                   ; Optional name of an outbound publish item that can be used
+                                ; to publish a request for full AstDB shared family information
+; device_state=                 ; Permit incoming "asterisk-devicestate" events.
+                                ; (default: No)
+; device_state_filter=          ; Optional regular expression used to filter what devices
+                                ; we accept events for.
+; mailbox_state=                ; Permit incoming "asterisk-mailboxstate" events.
+                                ; (default: No)
+; mailbox_state_filter=         ; Optional regular expression used to filter what mailboxes
+                                ; we accept events for.
+; db_state=                     ; Permit incoming "asterisk-db" events. (default: No)
+; db_state_filter=              ; Optional regular expression used to filter what AstDB
+                                ; shared families we accept events for.
+

@@ -1,9 +1,9 @@
 /*
  * Asterisk -- An open source telephony toolkit.
  *
- * Copyright (C) 2005-2015, Russell Bryant <russelb@clemson.edu> 
+ * Copyright (C) 2005-2015, Russell Bryant <russelb@clemson.edu>
  *
- * func_db.c adapted from the old app_db.c, copyright by the following people 
+ * func_db.c adapted from the old app_db.c, copyright by the following people
  * Copyright (C) 2005, Mark Spencer <markster@digium.com>
  * Copyright (C) 2003, Jefferson Noxon <jeff@debian.org>
  *
@@ -23,7 +23,6 @@
  * \brief Functions for interaction with the Asterisk database
  *
  * \author Russell Bryant <russelb@clemson.edu>
- * \author Matt Jordan <mjordan@digium.com>
  *
  * \ingroup functions
  */
@@ -53,30 +52,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		<syntax argsep="/">
 			<parameter name="family" required="true" />
 			<parameter name="key" required="true" />
-		</syntax>
-		<description>
-			<para>This function will read from or write a value to the Asterisk database.  On a
-			read, this function returns the corresponding value from the database, or blank
-			if it does not exist.  Reading a database value will also set the variable
-			DB_RESULT.  If you wish to find out if an entry exists, use the DB_EXISTS
-			function.</para>
-		</description>
-		<see-also>
-			<ref type="application">DBdel</ref>
-			<ref type="function">DB_DELETE</ref>
-			<ref type="application">DBdeltree</ref>
-			<ref type="function">DB_EXISTS</ref>
-		</see-also>
-	</function>
-	<function name="DB_SHARED" language="en_US">
-		<synopsis>
-			Create or delete a shared family in the Asterisk database.
-		</synopsis>
-		<syntax argsep="/">
-			<parameter name="action" required="true">
-			</parameter>
-			<parameter name="type">
-			</parameter>
 		</syntax>
 		<description>
 			<para>This function will read from or write a value to the Asterisk database.  On a
@@ -146,6 +121,120 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 			<ref type="application">DBdel</ref>
 			<ref type="function">DB</ref>
 			<ref type="application">DBdeltree</ref>
+		</see-also>
+	</function>
+	<function name="DB_SHARED" language="en_US">
+		<synopsis>
+			W/O. Create or delete a shared family in the Asterisk database.
+		</synopsis>
+		<syntax>
+			<parameter name="action" required="true">
+				<enumlist>
+					<enum name="put">
+						<para>Create a shared family.</para>
+					</enum>
+					<enum name="delete">
+						<para>Delete a shared family.</para>
+					</enum>
+				</enumlist>
+			</parameter>
+			<parameter name="type">
+				<enumlist>
+					<enum name="global">
+						<para>
+						Create a global shared family.
+						</para>
+					</enum>
+					<enum name="unique">
+						<para>
+						Create a unique shared family.
+						</para>
+					</enum>
+				</enumlist>
+			</parameter>
+		</syntax>
+		<description>
+			<para>
+				This function will mark a family in the AstDB as shared
+				across a cluster of Asterisk servers. Updates to keys in
+				the shared family are distributed to the other Asterisk
+				servers in the cluster.
+			</para>
+			<para>
+				Families may be shared in one of two ways: 'global' or 'unique'.
+			</para>
+			<para>
+				A global shared family shares its keys/values across
+				Asterisk servers as a shared namespace. Any server that
+				changes a value in a global shared family will have that
+				same key be updated in the shared families of other servers.
+			</para>
+			<para>
+				A unique shared family shares its keys/values across
+				Asterisk servers, but the keys/values are stored in a
+				family matching the originating Asterisk server's
+				<replaceable>EID</replaceable>. Other Asterisk servers must
+				also have a shared family matching the originating Asterisk
+				server's shared family.
+			</para>
+			<note>
+				<para>The mechanism of sharing the information to other
+				Asterisk servers is independent of this function.</para>
+			</note>
+			<example title="Create global shared family">
+			    ; Share AstDB family 'global_shared' globally across servers
+			    same => n,Set(DB_SHARED(put,global)=global_shared)
+
+			    ; Update to key/value 'foo/bar' will be distributed to
+			    ; other Asterisk servers that have also shared the
+			    ; 'global_shared' family
+			    same => n,Set(DB(global_shared/foo)=bar)
+			</example>
+			<example title="Create unique shared family">
+				; Share AstDB family 'unique_shared' uniquely across servers
+				same => n,Set(DB_SHARED(put,unique)=unique_shared)
+
+				; Update to key/value 'foo/bar' will be distributed to
+				; other Asterisk servers that have also shared the
+				; 'unique_shared' family. Assuming this server's EID is
+				; 11:11:11:11:11:11, the key will be stored in
+				; '11:11:11:11:11:11/unique_shared/foo' with value 'bar'
+				; on those servers.
+				same => n,Set(DB(unique_shared/foo)=bar)
+			</example>
+			<example title="Delete global shared family">
+				; Share AstDB family 'global_shared' globally across servers
+				same => n,Set(DB_SHARED(put,global)=global_shared)
+
+				; This update will be shared
+				same => n,Set(DB(global_shared/foo)=bar)
+
+				; Remove the shared status of 'global_shared'
+				same => n,Set(DB_SHARED(delete)=global_shared)
+
+				; This update will not be shared
+				same => n,Set(DB(global_shared/foo)=unbar)
+			</example>
+		</description>
+		<see-also>
+			<ref type="function">DB</ref>
+			<ref type="function">DB_SHARED_EXISTS</ref>
+		</see-also>
+	</function>
+	<function name="DB_SHARED_EXISTS" language="en_US">
+		<synopsis>
+			Check to see if a family is shared.
+		</synopsis>
+		<syntax>
+			<parameter name="family" required="true" />
+		</syntax>
+		<description>
+			<para>This function will check to see if a family is shared between
+			Asteris instances. If so, the function will return <literal>1</literal>.
+			If not, it will return <literal>0</literal>.</para>
+		</description>
+		<see-also>
+			<ref type="function">DB_SHARED</ref>
 		</see-also>
 	</function>
  ***/
@@ -386,7 +475,6 @@ static int function_db_shared_exists_read(struct ast_channel *chan,
 	} else {
 		ast_copy_string(buf, "0", len);
 	}
-	pbx_builtin_setvar_helper(chan, "DB_RESULT", buf);
 
 	return 0;
 }
@@ -425,9 +513,9 @@ static int function_db_shared_write(struct ast_channel *chan, const char *cmd, c
 
 	if (!strcasecmp(args.action, "put")) {
 		if (ast_strlen_zero(args.type) || !strcasecmp(args.type, "global")) {
-			share_type = SHARED_DB_TYPE_GLOBAL;
+			share_type = DB_SHARE_TYPE_GLOBAL;
 		} else if (!strcasecmp(args.type, "unique")) {
-			share_type = SHARED_DB_TYPE_UNIQUE;
+			share_type = DB_SHARE_TYPE_UNIQUE;
 		} else {
 			ast_log(LOG_WARNING, "DB_SHARED: Unknown 'type' %s\n", args.type);
 			return -1;
@@ -438,7 +526,7 @@ static int function_db_shared_write(struct ast_channel *chan, const char *cmd, c
 			ast_debug(2, "Failed to create shared family '%s'\n", value);
 		} else {
 			ast_verb(4, "Created %s shared family '%s'\n",
-				share_type == SHARED_DB_TYPE_GLOBAL ? "GLOBAL" : "UNIQUE",
+				share_type == DB_SHARE_TYPE_GLOBAL ? "GLOBAL" : "UNIQUE",
 				value);
 		}
 	} else if (!strcasecmp(args.action, "delete")) {

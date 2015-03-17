@@ -35,9 +35,9 @@ struct stasis_message_type;
 
 enum ast_db_shared_type {
 	/* Items in the shared family are common across all Asterisk instances */
-	SHARED_DB_TYPE_GLOBAL = 0,
+	DB_SHARE_TYPE_GLOBAL = 0,
 	/*! Items in the shared family are made unique across all Asterisk instances */
-	SHARED_DB_TYPE_UNIQUE,
+	DB_SHARE_TYPE_UNIQUE,
 };
 
 /*! \brief An actual entry in the AstDB */
@@ -147,7 +147,6 @@ int ast_db_publish_shared_message(struct stasis_message_type *type,
  * of all shared families to other Asterisk instances.
  */
 void ast_db_refresh_shared(void);
-
 
 /*!
  * \since 14.0.0

@@ -58,10 +58,8 @@ enum ast_event_type {
 	AST_EVENT_ACL_CHANGE          = 0x0b,
 	/*! Send out a ping for debugging distributed events */
 	AST_EVENT_PING                = 0x0c,
-	/*! Send out a shared database event */
-	AST_EVENT_DB_SHARED           = 0x0d,
 	/*! Number of event types.  This should be the last event type + 1 */
-	AST_EVENT_TOTAL               = 0x0e,
+	AST_EVENT_TOTAL               = 0x0d,
 };
 
 /*! \brief Event Information Element types */
@@ -304,38 +302,8 @@ enum ast_event_ie_type {
 	 * Payload type: UINT
 	 */
 	AST_EVENT_IE_CACHABLE            = 0x003d,
-	/*!
-	 * \brief AstDB Family
-	 * Used by: AST_EVENT_DB_SHARED
-	 * Payload type: STR
-	 */
-	AST_EVENT_IE_DB_FAMILY           = 0x003e,
-	/*!
-	 * \brief AstDB action to take
-	 * Used by: AST_EVENT_DB_SHARED
-	 * Payload type: STR
-	 */
-	AST_EVENT_ID_DB_ACTION_TYPE      = 0x003f,
-	/*!
-	 * \brief AstDB share type
-	 * Used by: AST_EVENT_DB_SHARED
-	 * Payload type: UINT
-	 */
-	AST_EVENT_IE_DB_SHARE_TYPE       = 0x0040,
-	/*!
-	 * \brief AstDB key
-	 * Used by: AST_EVENT_DB_SHARED
-	 * Payload type: STR
-	 */
-	AST_EVENT_IE_DB_KEY              = 0x0041,
-	/*!
-	 * \brief AstDB value
-	 * Used by: AST_EVENT_DB_SHARED
-	 * Payload type: STR
-	 */
-	AST_EVENT_IE_DB_VALUE            = 0x0042,
 	/*! \brief Must be the last IE value +1 */
-	AST_EVENT_IE_TOTAL               = 0x0043,
+	AST_EVENT_IE_TOTAL               = 0x003e,
 };
 
 /*!

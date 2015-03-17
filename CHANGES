@@ -79,6 +79,28 @@ Core
    dedicated thread per consumer in certain cases. The initial settings for
    the thread pool can now be configured in 'stasis.conf'.
 
+ * The AstDB now has the ability to share families of key/value pairs with
+   other Asterisk servers. Families in the AstDB can be marked as shared using
+   dialplan functions (which can be accessed via AMI, AGI, and ARI) or CLI
+   commands. Sharing has two strategies: 'global' and 'unique'. Global shared
+   families have a common family name across all Asterisk servers, and any
+   update to a key in that shared family is reflected in the same family across
+   other servers. Unique shared families are distributes to other Asterisk servers,
+   but are placed in a new family that corresponds to the remote instance's
+   EID. Currently, the PJSIP stack is the only mechanism available to share
+   AstDB families. See CLI updates, DB_SHARED/DB_SHARED_EXISTS, and the
+   res_pjsip updates for more information.
+
+CLI
+------------------
+ * The 'database show' and 'database showkey' commands have been updated
+   to display the shared status of the family the key(s) reside in a new
+   column. A value of '(G)' indicates the key is shared 'globally', a value
+   of '(U)' indicates the key is shared 'uniquely'.
+
+ * Added commands 'database put shared' and 'database del shared'. These
+   commands add/delete the shared status of AstDB families, respectively.
+
 
 Functions
 ------------------
@@ -87,6 +109,15 @@ CHANNEL
 ------------------
  * Added CHANNEL(onhold) item that returns 1 (onhold) and 0 (not-onhold) for
    the hold status of a channel.
+
+DB_SHARED
+------------------
+ * A new function, this will either create a new shared family in the AstDB
+   or delete an existing shared family.
+
+DB_SHARED_EXISTS
+------------------
+ * Determines whether an AstDB family is shared.
 
 DTMF Features
 ------------------
@@ -105,6 +136,13 @@ res_musiconhold
  * Added preferchannelclass=no option to prefer the application-passed class
    over the channel-set musicclass. This allows separate hold-music from
    application (e.g. Queue or Dial) specified music.
+
+res_pjsip_publish_asterisk
+------------------
+ * Added the ability to distribute AstDB shared families between Asterisk
+   instances. This includes inbound/outbound PUBLISH support for a new event
+   type, 'asterisk-db'.
+
 
 ------------------------------------------------------------------------------
 --- Functionality changes from Asterisk 13.2.0 to Asterisk 13.3.0 ------------
