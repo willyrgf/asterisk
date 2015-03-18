@@ -539,7 +539,7 @@ static int nominal_sync_run(struct ast_test *test, const char *domain, int rr_ty
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	const struct ast_dns_record *record;
 	int i;
-	
+
 	/* Start by making sure no records have been visited */
 	for (i = 0; i < num_records; ++i) {
 		records[i].visited = 0;
@@ -559,7 +559,7 @@ static int nominal_sync_run(struct ast_test *test, const char *domain, int rr_ty
 
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
 		int match = 0;
-		
+
 		/* Let's make sure this matches one of our known records */
 		for (i = 0; i < num_records; ++i) {
 			if (ast_dns_record_get_rr_type(record) == records[i].rr_type &&
@@ -645,7 +645,7 @@ static void async_callback(const struct ast_dns_query *query)
 
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
 		int match = 0;
-		
+
 		/* Let's make sure this matches one of our known records */
 		for (i = 0; i < adata->num_records; ++i) {
 			if (ast_dns_record_get_rr_type(record) == adata->records[i].rr_type &&
@@ -689,7 +689,7 @@ static int nominal_async_run(struct ast_test *test, const char *domain, int rr_t
 		ast_test_status_update(test, "Unable to allocate data for async query\n");
 		return -1;
 	}
-	
+
 	/* Start by making sure no records have been visited */
 	for (i = 0; i < num_records; ++i) {
 		records[i].visited = 0;
@@ -932,7 +932,7 @@ static struct off_nominal_async_data *off_nominal_async_data_alloc(int expected_
 
 /*!
  * \brief Async callback for off-nominal async test
- * 
+ *
  * This test ensures that there is a result present on the query, then it checks
  * that the rcode on the result is the expected value and that there are no
  * records on the result.
@@ -1047,7 +1047,7 @@ static enum ast_test_result_state off_nominal_test(struct ast_test *test,
 			res = AST_TEST_FAIL;
 		}
 	}
-	
+
 	return res;
 }
 
@@ -1177,7 +1177,7 @@ AST_TEST_DEFINE(resolve_cancel_off_nominal)
 		ast_test_status_update(test, "Successfully canceled completed query\n");
 		return AST_TEST_FAIL;
 	}
-	
+
 	return AST_TEST_PASS;
 }
 #endif
@@ -1195,7 +1195,7 @@ static int unload_module(void)
 {
 	aco_info_destroy(&cfg_info);
 	ao2_global_obj_release(globals);
-	
+
 	AST_TEST_UNREGISTER(resolve_sync);
 	AST_TEST_UNREGISTER(resolve_async);
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
