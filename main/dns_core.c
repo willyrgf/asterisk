@@ -461,11 +461,6 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 	 */
 	while (1) {
 		naptr_offset = memchr(naptr_search_base, data[0], remaining_size);
-		/* Couldn't find first byte of NAPTR record */
-		if (!naptr_offset) {
-			ast_log(LOG_NOTICE, "Failed to find NAPTR record within answer\n");
-			return NULL;
-		}
 
 		/* Since the NAPTR record we have been given came from the DNS answer,
 		 * we should never run into a situation where we can't find ourself
