@@ -470,6 +470,7 @@ static int unbound_config_apply_default(void)
 	aco_set_defaults(&global_option, "general", cfg->global);
 
 	if (unbound_config_preapply(cfg)) {
+		ao2_ref(cfg, -1);
 		return -1;
 	}
 
@@ -1227,8 +1228,8 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	aco_option_register(&cfg_info, "hosts", ACO_EXACT, global_options, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct unbound_global_config, hosts));
-	aco_option_register(&cfg_info, "resolv", ACO_EXACT, global_options, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct unbound_global_config, resolv));
+	aco_option_register(&cfg_info, "hosts", ACO_EXACT, global_options, "system", OPT_STRINGFIELD_T, 0, STRFLDSET(struct unbound_global_config, hosts));
+	aco_option_register(&cfg_info, "resolv", ACO_EXACT, global_options, "system", OPT_STRINGFIELD_T, 0, STRFLDSET(struct unbound_global_config, resolv));
 	aco_option_register_custom(&cfg_info, "nameserver", ACO_EXACT, global_options, "", custom_nameserver_handler, 0);
 	aco_option_register(&cfg_info, "debug", ACO_EXACT, global_options, "0", OPT_UINT_T, 0, FLDSET(struct unbound_global_config, debug));
 	aco_option_register(&cfg_info, "ta_file", ACO_EXACT, global_options, "", OPT_STRINGFIELD_T, 0, STRFLDSET(struct unbound_global_config, ta_file));
