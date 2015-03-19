@@ -466,14 +466,14 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 			ast_log(LOG_NOTICE, "Failed to find NAPTR record within answer\n");
 			return NULL;
 		}
-		/* Found first byte of NAPTR record, but not enough space left in
-		 * the answer for this to be us
+
+		/* Since the NAPTR record we have been given came from the DNS answer,
+		 * we should never run into a situation where we can't find ourself
+		 * in the answer
 		 */
-		if ((naptr_search_base + remaining_size) - naptr_offset < size) {
-			/* This really shouldn't happen */
-			ast_log(LOG_ERROR, "Ran out of room searching for NAPTR record in answer\n");
-			return NULL;
-		}
+		ast_assert(naptr_offset != NULL);
+		ast_assert(naptr_search_base + remaining_size - naptr_offset >= size);
+		
 		if (!memcmp(naptr_offset, data, size)) {
 			/* BAM! FOUND IT! */
 			ptr = naptr_offset;
@@ -484,10 +484,7 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 		naptr_search_base = naptr_offset + 1;
 	}
 
-	if (!ptr) {
-		/* WHAT? */
-		return NULL;
-	}
+	ast_assert(ptr != NULL);
 
 	/* ORDER */
 	order = (ptr[1] << 0) | (ptr[0] << 8);
@@ -526,7 +523,6 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 		return NULL;
 	}
 
-	naptr->generic.data_ptr = naptr->data;
 	naptr->order = order;
 	naptr->preference = preference;
 
@@ -550,6 +546,8 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 
 	strcpy(ptr, replacement);
 	naptr->replacement = ptr;
+
+	naptr->generic.data_ptr = naptr->data;
 
 	return (struct ast_dns_record *)naptr;
 }
