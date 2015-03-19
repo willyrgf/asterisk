@@ -104,6 +104,11 @@ const struct ast_dns_record *ast_dns_result_get_records(const struct ast_dns_res
 	return AST_LIST_FIRST(&result->records);
 }
 
+const char *ast_dns_result_get_answer(const struct ast_dns_result *result)
+{
+	return result->answer;
+}
+
 int ast_dns_result_get_lowest_ttl(const struct ast_dns_result *result)
 {
 	int ttl = 0;
@@ -361,8 +366,10 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query)
 }
 
 int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure, unsigned int bogus,
-	unsigned int rcode, const char *canonical)
+	unsigned int rcode, const char *canonical, const char *answer, size_t answer_size)
 {
+	char *buf_ptr;
+
 	if (secure && bogus) {
 		ast_debug(2, "Query '%p': Could not set result information, it can not be both secure and bogus\n",
 			query);
@@ -375,9 +382,15 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure
 		return -1;
 	}
 
+	if (ast_strlen_zero(answer) || answer_size == 0) {
+		ast_debug(2, "Query '%p': Could not set result information since no DNS answer was provided\n",
+			query);
+		return -1;
+	}
+
 	ast_dns_result_free(query->result);
 
-	query->result = ast_calloc(1, sizeof(*query->result) + strlen(canonical) + 1);
+	query->result = ast_calloc(1, sizeof(*query->result) + strlen(canonical) + 1 + answer_size);
 	if (!query->result) {
 		return -1;
 	}
@@ -385,7 +398,14 @@ int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure
 	query->result->secure = secure;
 	query->result->bogus = bogus;
 	query->result->rcode = rcode;
-	strcpy(query->result->canonical, canonical); /* SAFE */
+
+	buf_ptr = query->result->buf;
+	strcpy(buf_ptr, canonical); /* SAFE */
+	query->result->canonical = buf_ptr;
+
+	buf_ptr += strlen(canonical) + 1;
+	memcpy(buf_ptr, answer, answer_size); /* SAFE */
+	query->result->answer = buf_ptr;
 
 	return 0;
 }

@@ -87,12 +87,14 @@ void *ast_dns_resolver_get_data(const struct ast_dns_query *query);
  * \param bogus Whether the result is bogus or not
  * \param rcode Optional response code
  * \param canonical The canonical name
+ * \param answer The raw DNS answer
+ * \param answer_size The size of the raw DNS answer
  *
  * \retval 0 success
  * \retval -1 failure
  */
 int ast_dns_resolver_set_result(struct ast_dns_query *query, unsigned int secure, unsigned int bogus,
-	unsigned int rcode, const char *canonical);
+	unsigned int rcode, const char *canonical, const char *answer, size_t answer_size);
 
 /*!
  * \brief Add a DNS record to the result of a DNS query
