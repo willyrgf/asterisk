@@ -77,6 +77,9 @@ static struct recurring_data *recurring_data_alloc(void)
 	return rdata;
 }
 
+#define DNS_ANSWER "Yes sirree"
+#define DNS_ANSWER_SIZE strlen(DNS_ANSWER)
+
 /*!
  * \brief Thread that performs asynchronous resolution.
  *
@@ -126,7 +129,7 @@ static void *resolution_thread(void *dns_query)
 	/* When the query isn't canceled, we set the TTL of the results based on what
 	 * we've been told to set it to
 	 */
-	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org");
+	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org", DNS_ANSWER, DNS_ANSWER_SIZE);
 
 	inet_pton(AF_INET, ADDR1, addr1_buf);
 	ast_dns_resolver_add_record(query, ns_t_a, ns_c_in, rdata->ttl1, addr1_buf, ADDR1_BUFSIZE);

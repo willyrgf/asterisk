@@ -82,7 +82,11 @@ struct ast_dns_result {
 	/*! \brief Records returned */
 	AST_LIST_HEAD_NOLOCK(, ast_dns_record) records;
 	/*! \brief The canonical name */
-	char canonical[0];
+	const char *canonical;
+	/*! \brief The raw DNS answer */
+	const char *answer;
+	/*! \brief Buffer for dynamic data */
+	char buf[0];
 };
 
 /*! \brief A DNS query */

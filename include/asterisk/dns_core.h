@@ -131,6 +131,14 @@ const char *ast_dns_result_get_canonical(const struct ast_dns_result *result);
  */
 const struct ast_dns_record *ast_dns_result_get_records(const struct ast_dns_result *result);
 
+/*!
+ * \brief Get the raw DNS answer from a DNS result
+ *
+ * \param result The DNS result
+ *
+ * \return The DNS result
+ */
+const char *ast_dns_result_get_answer(const struct ast_dns_result *result);
 
 /*!
  * \brief Retrieve the lowest TTL from a result

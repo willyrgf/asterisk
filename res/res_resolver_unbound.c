@@ -255,7 +255,7 @@ static void unbound_resolver_callback(void *data, int err, struct ub_result *ub_
 	struct ast_dns_query *query = data;
 
 	if (!ast_dns_resolver_set_result(query, ub_result->secure, ub_result->bogus, ub_result->rcode,
-		S_OR(ub_result->canonname, ast_dns_query_get_name(query)))) {
+		S_OR(ub_result->canonname, ast_dns_query_get_name(query)), ub_result->answer_packet, ub_result->answer_len)) {
 		int i;
 		char *data;
 

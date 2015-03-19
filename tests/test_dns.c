@@ -264,7 +264,8 @@ AST_TEST_DEFINE(resolver_data)
 
 static int test_results(struct ast_test *test, const struct ast_dns_query *query,
 		unsigned int expected_secure, unsigned int expected_bogus,
-		unsigned int expected_rcode, const char *expected_canonical)
+		unsigned int expected_rcode, const char *expected_canonical,
+		const char *expected_answer, size_t answer_size)
 {
 	struct ast_dns_result *result;
 
@@ -277,13 +278,21 @@ static int test_results(struct ast_test *test, const struct ast_dns_query *query
 	if (ast_dns_result_get_secure(result) != expected_secure ||
 			ast_dns_result_get_bogus(result) != expected_bogus ||
 			ast_dns_result_get_rcode(result) != expected_rcode ||
-			strcmp(ast_dns_result_get_canonical(result), expected_canonical)) {
+			strcmp(ast_dns_result_get_canonical(result), expected_canonical) ||
+			memcmp(ast_dns_result_get_answer(result), expected_answer, answer_size)) {
 		ast_test_status_update(test, "Unexpected values in result from query\n");
 		return -1;
 	}
 
 	return 0;
 }
+
+/* When setting a DNS result, we have to provide the raw DNS answer. This
+ * is not happening. Sorry. Instead, we provide a dummy string and call it
+ * a day
+ */
+#define DNS_ANSWER "Grumble Grumble"
+#define DNS_ANSWER_SIZE strlen(DNS_ANSWER)
 
 AST_TEST_DEFINE(resolver_set_result)
 {
@@ -295,10 +304,10 @@ AST_TEST_DEFINE(resolver_set_result)
 		unsigned int bogus;
 		unsigned int rcode;
 	} results[] = {
-		{ 0, 0, ns_r_noerror },
-		{ 0, 1, ns_r_noerror },
-		{ 1, 0, ns_r_noerror },
-		{ 0, 0, ns_r_nxdomain },
+		{ 0, 0, ns_r_noerror, },
+		{ 0, 1, ns_r_noerror, },
+		{ 1, 0, ns_r_noerror, },
+		{ 0, 0, ns_r_nxdomain, },
 	};
 	int i;
 	enum ast_test_result_state res = AST_TEST_PASS;
@@ -325,13 +334,13 @@ AST_TEST_DEFINE(resolver_set_result)
 
 	for (i = 0; i < ARRAY_LEN(results); ++i) {
 		if (ast_dns_resolver_set_result(&some_query, results[i].secure, results[i].bogus,
-				results[i].rcode, "asterisk.org")) {
+				results[i].rcode, "asterisk.org", DNS_ANSWER, DNS_ANSWER_SIZE)) {
 			ast_test_status_update(test, "Unable to add DNS result to query\n");
 			res = AST_TEST_FAIL;
 		}
 
 		if (test_results(test, &some_query, results[i].secure, results[i].bogus,
-				results[i].rcode, "asterisk.org")) {
+				results[i].rcode, "asterisk.org", DNS_ANSWER, DNS_ANSWER_SIZE)) {
 			res = AST_TEST_FAIL;
 		}
 	}
@@ -356,7 +365,9 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 		info->description =
 			"This test performs the following:\n"
 			"\t* Attempt to add a DNS result that is both bogus and secure\n"
-			"\t* Attempt to add a DNS result that has no canonical name\n";
+			"\t* Attempt to add a DNS result that has no canonical name\n"
+			"\t* Attempt to add a DNS result that has no answer\n"
+			"\t* Attempt to add a DNS result with a zero answer size\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
@@ -364,15 +375,33 @@ AST_TEST_DEFINE(resolver_set_result_off_nominal)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (!ast_dns_resolver_set_result(&some_query, 1, 1, ns_r_noerror, "asterisk.org")) {
+	if (!ast_dns_resolver_set_result(&some_query, 1, 1, ns_r_noerror, "asterisk.org",
+				DNS_ANSWER, DNS_ANSWER_SIZE)) {
 		ast_test_status_update(test, "Successfully added a result that was both secure and bogus\n");
 		result = ast_dns_query_get_result(&some_query);
 		ast_dns_result_free(result);
 		return AST_TEST_FAIL;
 	}
 
-	if (!ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, NULL)) {
+	if (!ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, NULL,
+				DNS_ANSWER, DNS_ANSWER_SIZE)) {
 		ast_test_status_update(test, "Successfully added result with no canonical name\n");
+		result = ast_dns_query_get_result(&some_query);
+		ast_dns_result_free(result);
+		return AST_TEST_FAIL;
+	}
+
+	if (!ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, NULL,
+				NULL, DNS_ANSWER_SIZE)) {
+		ast_test_status_update(test, "Successfully added result with no answer\n");
+		result = ast_dns_query_get_result(&some_query);
+		ast_dns_result_free(result);
+		return AST_TEST_FAIL;
+	}
+
+	if (!ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, NULL,
+				DNS_ANSWER, 0)) {
+		ast_test_status_update(test, "Successfully added result with answer size of zero\n");
 		result = ast_dns_query_get_result(&some_query);
 		ast_dns_result_free(result);
 		return AST_TEST_FAIL;
@@ -453,7 +482,8 @@ AST_TEST_DEFINE(resolver_add_record)
 
 	memset(&some_query, 0, sizeof(some_query));
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, "asterisk.org",
+				DNS_ANSWER, DNS_ANSWER_SIZE)) {
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}
@@ -571,7 +601,8 @@ AST_TEST_DEFINE(resolver_add_record_off_nominal)
 		return AST_TEST_FAIL;
 	}
 
-	if (ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, "asterisk.org")) {
+	if (ast_dns_resolver_set_result(&some_query, 0, 0, ns_r_noerror, "asterisk.org",
+				DNS_ANSWER, DNS_ANSWER_SIZE)) {
 		ast_test_status_update(test, "Unable to set result for DNS query\n");
 		return AST_TEST_FAIL;
 	}
@@ -680,7 +711,7 @@ static void *resolution_thread(void *dns_query)
 		return NULL;
 	}
 
-	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org");
+	ast_dns_resolver_set_result(query, 0, 0, ns_r_noerror, "asterisk.org", DNS_ANSWER, DNS_ANSWER_SIZE);
 
 	inet_pton(AF_INET, V4, v4_buf);
 	ast_dns_resolver_add_record(query, ns_t_a, ns_c_in, 12345, v4_buf, V4_BUFSIZE);
