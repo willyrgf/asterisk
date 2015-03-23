@@ -1210,7 +1210,10 @@ AST_TEST_DEFINE(resolve_naptr)
 
 	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
 
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 100 A \"Fake service\" \"\" goose.down");
+	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 200 200 A \"Fake service\" \"\" goose.down");
+	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 200 100 A \"Fake service\" \"\" duck.down");
+	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 200 A \"Fake service\" \"\" pheasant.down");
+	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 100 A \"Fake service\" \"\" platypus.fur");
 
 	if (ast_dns_resolve(DOMAIN1, ns_t_naptr, ns_c_in, &result)) {
 		ast_test_status_update(test, "Failed to resolve domain\n");
@@ -1228,16 +1231,18 @@ AST_TEST_DEFINE(resolve_naptr)
 		return AST_TEST_FAIL;
 	}
 
-	/* XXX This just prints data for my own inspection right now. It will need to actually
-	 * perform a check in order to really pass. This will be done once more NAPTR records
-	 * are added so I can check ordering as well as individual data
-	 */
-	ast_log(LOG_NOTICE, "order is %hu\n", ast_dns_naptr_get_order(record));
-	ast_log(LOG_NOTICE, "preference is %hu\n", ast_dns_naptr_get_preference(record));
-	ast_log(LOG_NOTICE, "flags is %s\n", ast_dns_naptr_get_flags(record));
-	ast_log(LOG_NOTICE, "service is %s\n", ast_dns_naptr_get_service(record));
-	ast_log(LOG_NOTICE, "regexp is %s\n", ast_dns_naptr_get_regexp(record));
-	ast_log(LOG_NOTICE, "replacement is %s\n", ast_dns_naptr_get_replacement(record));
+	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
+		/* XXX This just prints data for my own inspection right now. It will need to actually
+		 * perform a check in order to really pass. This will be done once more NAPTR records
+		 * are added so I can check ordering as well as individual data
+		 */
+		ast_log(LOG_NOTICE, "order is %hu\n", ast_dns_naptr_get_order(record));
+		ast_log(LOG_NOTICE, "preference is %hu\n", ast_dns_naptr_get_preference(record));
+		ast_log(LOG_NOTICE, "flags is %s\n", ast_dns_naptr_get_flags(record));
+		ast_log(LOG_NOTICE, "service is %s\n", ast_dns_naptr_get_service(record));
+		ast_log(LOG_NOTICE, "regexp is %s\n", ast_dns_naptr_get_regexp(record));
+		ast_log(LOG_NOTICE, "replacement is %s\n", ast_dns_naptr_get_replacement(record));
+	}
 
 	return AST_TEST_PASS;
 

@@ -170,3 +170,23 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
  * \param result The DNS result
  */
 void ast_dns_srv_sort(struct ast_dns_result *result);
+
+/*!
+ * \brief Allocate and parse a DNS NAPTR record
+ *
+ * \param query The DNS query
+ * \param data This specific NAPTR record
+ * \param size The size of the NAPTR record
+ *
+ * \retval non-NULL success
+ * \retval NULL failure
+ */
+struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const char *data, const size_t size);
+
+/*!
+ * \brief Sort the NAPTR records on a result
+ *
+ * \param result The DNS result
+ */
+void ast_dns_naptr_sort(struct ast_dns_result *result);
+

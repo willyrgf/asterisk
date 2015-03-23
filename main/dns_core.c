@@ -45,7 +45,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <netinet/in.h>
 #include <arpa/nameser.h>
-#include <resolv.h>
 
 AST_RWLIST_HEAD_STATIC(resolvers, ast_dns_resolver);
 
@@ -427,155 +426,6 @@ static struct ast_dns_record *generic_record_alloc(struct ast_dns_query *query, 
 	return record;
 }
 
-static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, const char *data, const size_t size)
-{
-	struct ast_dns_naptr_record *naptr;
-	char *ptr = NULL;
-	uint16_t order;
-	uint16_t preference;
-	uint8_t flags_size;
-	char *flags;
-	uint8_t services_size;
-	char *services;
-	uint8_t regexp_size;
-	char *regexp;
-	char replacement[256] = "";
-	int replacement_size;
-	char *naptr_offset;
-	char *naptr_search_base = (char *)query->result->answer;
-	size_t remaining_size = query->result->answer_size;
-	char *end_of_record;
-
-	/* 
-	 * This is bordering on the hackiest thing I've ever written.
-	 * Part of parsing a NAPTR record is to parse a potential replacement
-	 * domain name. Decoding this domain name requires the use of the
-	 * dn_expand() function. This function requires that the domain you
-	 * pass in be a pointer to within the full DNS answer. Unfortunately,
-	 * libunbound gives its RRs back as copies of data from the DNS answer
-	 * instead of pointers to within the DNS answer. This means that in order
-	 * to be able to parse the domain name correctly, I need to find the
-	 * current NAPTR record inside the DNS answer and operate on it. This
-	 * loop is designed to find the current NAPTR record within the full
-	 * DNS answer and set the "ptr" variable to the beginning of the
-	 * NAPTR RDATA
-	 */
-	while (1) {
-		naptr_offset = memchr(naptr_search_base, data[0], remaining_size);
-
-		/* Since the NAPTR record we have been given came from the DNS answer,
-		 * we should never run into a situation where we can't find ourself
-		 * in the answer
-		 */
-		ast_assert(naptr_offset != NULL);
-		ast_assert(naptr_search_base + remaining_size - naptr_offset >= size);
-		
-		if (!memcmp(naptr_offset, data, size)) {
-			/* BAM! FOUND IT! */
-			ptr = naptr_offset;
-			break;
-		}
-		/* Data didn't match us, so keep looking */
-		remaining_size -= naptr_offset - naptr_search_base;
-		naptr_search_base = naptr_offset + 1;
-	}
-
-	ast_assert(ptr != NULL);
-
-	end_of_record = ptr + size;
-
-	/* ORDER */
-	order = (ptr[1] << 0) | (ptr[0] << 8);
-	ptr += 2;
-
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-
-	/* PREFERENCE */
-	preference = (ptr[1] << 0) | (ptr[0] << 8);
-	ptr += 2;
-
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-
-	/* FLAGS */
-	flags_size = *ptr;
-	++ptr;
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-	flags = ptr;
-	ptr += flags_size;
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-
-	/* SERVICES */
-	services_size = *ptr;
-	++ptr;
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-	services = ptr;
-	ptr += services_size;
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-
-	/* REGEXP */
-	regexp_size = *ptr;
-	++ptr;
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-	regexp = ptr;
-	ptr += regexp_size;
-	if (ptr >= end_of_record) {
-		return NULL;
-	}
-
-	replacement_size = dn_expand((unsigned char *)query->result->answer, (unsigned char *) end_of_record, (unsigned char *) ptr, replacement, sizeof(replacement) - 1);
-	if (replacement_size < 0) {
-		ast_log(LOG_ERROR, "Failed to expand domain name: %s\n", strerror(errno));
-		return NULL;
-	}
-
-	naptr = ast_calloc(1, sizeof(*naptr) + size + flags_size + 1 + services_size + 1 + regexp_size + 1 + replacement_size + 1);
-	if (!naptr) {
-		return NULL;
-	}
-
-	naptr->order = order;
-	naptr->preference = preference;
-
-	ptr = naptr->data;
-	ptr += size;
-
-	strncpy(ptr, flags, flags_size);
-	ptr[flags_size] = '\0';
-	naptr->flags = ptr;
-	ptr += flags_size + 1;
-
-	strncpy(ptr, services, services_size);
-	ptr[services_size] = '\0';
-	naptr->service = ptr;
-	ptr += services_size + 1;
-
-	strncpy(ptr, regexp, regexp_size);
-	ptr[regexp_size] = '\0';
-	naptr->regexp = ptr;
-	ptr += regexp_size + 1;
-
-	strcpy(ptr, replacement);
-	naptr->replacement = ptr;
-
-	naptr->generic.data_ptr = naptr->data;
-
-	return (struct ast_dns_record *)naptr;
-}
-
 int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr_class, int ttl, const char *data, const size_t size)
 {
 	struct ast_dns_record *record;
@@ -611,7 +461,7 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
 	}
 
 	if (rr_type == ns_t_naptr) {
-		record = naptr_record_alloc(query, data, size);
+		record = ast_dns_naptr_alloc(query, data, size);
 	} else if (rr_type == ns_t_srv) {
 		record = ast_dns_srv_alloc(query, data, size);
 	} else {
@@ -637,6 +487,8 @@ void ast_dns_resolver_completed(struct ast_dns_query *query)
 {
 	if (ast_dns_query_get_rr_type(query) == ns_t_srv) {
 		ast_dns_srv_sort(query->result);
+	} else if (ast_dns_query_get_rr_type(query) == ns_t_naptr) {
+		ast_dns_naptr_sort(query->result);
 	}
 
 	query->callback(query);
