@@ -444,6 +444,7 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 	char *naptr_offset;
 	char *naptr_search_base = (char *)query->result->answer;
 	size_t remaining_size = query->result->answer_size;
+	char *end_of_record;
 
 	/* 
 	 * This is bordering on the hackiest thing I've ever written.
@@ -481,33 +482,61 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 
 	ast_assert(ptr != NULL);
 
+	end_of_record = ptr + size;
+
 	/* ORDER */
 	order = (ptr[1] << 0) | (ptr[0] << 8);
 	ptr += 2;
+
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 
 	/* PREFERENCE */
 	preference = (ptr[1] << 0) | (ptr[0] << 8);
 	ptr += 2;
 
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
+
 	/* FLAGS */
 	flags_size = *ptr;
 	++ptr;
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 	flags = ptr;
 	ptr += flags_size;
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 
 	/* SERVICES */
 	services_size = *ptr;
 	++ptr;
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 	services = ptr;
 	ptr += services_size;
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 
 	/* REGEXP */
 	regexp_size = *ptr;
 	++ptr;
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 	regexp = ptr;
 	ptr += regexp_size;
+	if (ptr >= end_of_record) {
+		return NULL;
+	}
 
-	replacement_size = dn_expand((unsigned char *)query->result->answer, (unsigned char *) (naptr_offset + size), (unsigned char *) ptr, replacement, sizeof(replacement) - 1);
+	replacement_size = dn_expand((unsigned char *)query->result->answer, (unsigned char *) end_of_record, (unsigned char *) ptr, replacement, sizeof(replacement) - 1);
 	if (replacement_size < 0) {
 		ast_log(LOG_ERROR, "Failed to expand domain name: %s\n", strerror(errno));
 		return NULL;
