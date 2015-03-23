@@ -147,3 +147,10 @@ struct ast_sched_context;
  * \return scheduler context
  */
 struct ast_sched_context *ast_dns_get_sched(void);
+
+/*!
+ * \brief Sort the NAPTR records on a result
+ *
+ * \param result The DNS result
+ */
+void ast_dns_naptr_sort(struct ast_dns_result *result);

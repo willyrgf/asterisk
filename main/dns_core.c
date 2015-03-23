@@ -485,7 +485,7 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 	end_of_record = ptr + size;
 
 	/* ORDER */
-	order = (ptr[1] << 0) | (ptr[0] << 8);
+	order = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
 	ptr += 2;
 
 	if (ptr >= end_of_record) {
@@ -493,7 +493,7 @@ static struct ast_dns_record *naptr_record_alloc(struct ast_dns_query *query, co
 	}
 
 	/* PREFERENCE */
-	preference = (ptr[1] << 0) | (ptr[0] << 8);
+	preference = ((unsigned char) (ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
 	ptr += 2;
 
 	if (ptr >= end_of_record) {
@@ -633,6 +633,9 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
 
 void ast_dns_resolver_completed(struct ast_dns_query *query)
 {
+	if (ast_dns_query_get_rr_type(query) == ns_t_naptr) {
+		ast_dns_naptr_sort(query->result);
+	}
 	query->callback(query);
 }
 
