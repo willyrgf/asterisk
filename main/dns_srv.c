@@ -131,13 +131,22 @@ void ast_dns_srv_sort(struct ast_dns_result *result)
 	while (AST_LIST_FIRST(&result->records)) {
 		unsigned int random_weight;
 		unsigned int weight_sum;
-		unsigned short cur_priority = ((struct ast_dns_srv_record *)AST_LIST_FIRST(&result->records))->priority;
+		unsigned short cur_priority = 0;
 		struct dns_records temp_list = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
 		weight_sum = 0;
 
+		/* Find the lowest current priority to work on */
+		AST_LIST_TRAVERSE(&result->records, current, list) {
+			if (!cur_priority || ((struct ast_dns_srv_record *)current)->priority < cur_priority) {
+				cur_priority = ((struct ast_dns_srv_record *)current)->priority;
+			}
+		}
+
+		/* Find all records which match this priority */
 		AST_LIST_TRAVERSE_SAFE_BEGIN(&result->records, current, list) {
-			if (((struct ast_dns_srv_record *)current)->priority != cur_priority)
-				break;
+			if (((struct ast_dns_srv_record *)current)->priority != cur_priority) {
+				continue;
+			}
 
 			AST_LIST_MOVE_CURRENT(&temp_list, list);
 		}
