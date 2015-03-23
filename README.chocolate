@@ -2,6 +2,7 @@ Edvina AB
 Olle E. Johansson
 
 Project start: Feb 1, 2015
+Latest update: March 23, 2015
 
 
 
@@ -27,6 +28,14 @@ Tasks
 * Send feedback based on RTCP
 * Forward incoming feedback across bridge and send out on other side
   for optimal video pass through
+
+Settings
+--------
+- Default and per device setting (depending on video enabled)
+  googleremb=offeranswer | no |answeronly
+	offeranswer = Offer this in outbound calls and use it if offered in our answer
+	answeronly = Don't offer this, but enable if offered
+	no	= don't bother (default)
 
 References
 ------------
