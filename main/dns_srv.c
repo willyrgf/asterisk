@@ -43,17 +43,22 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char *data, const size_t size)
 {
+	struct srv {
+		uint16_t priority;
+		uint16_t weight;
+		uint16_t port;
+	} __attribute__((__packed__)) *srv_record;
 	const char *ptr;
 	char *srv_offset;
 	char *srv_search_base = (char *)query->result->answer;
 	size_t remaining_size = query->result->answer_size;
-	size_t remaining = size;
 	struct ast_dns_srv_record *srv;
-	uint16_t priority;
-	uint16_t weight;
-	uint16_t port;
 	int host_size;
 	char host[NI_MAXHOST] = "";
+
+	if (size < sizeof(*srv_record)) {
+		return NULL;
+	}
 
 	while (1) {
 		srv_offset = memchr(srv_search_base, data[0], remaining_size);
@@ -72,25 +77,8 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 
 	ast_assert(ptr != NULL);
 
-	if (remaining < 2) {
-		return NULL;
-	}
-	priority = (ptr[1] << 0) | (ptr[0] << 8);
-	ptr += 2;
-	remaining -= 2;
-
-	if (remaining < 2) {
-		return NULL;
-	}
-	weight = (ptr[1] << 0) | (ptr[0] << 8);
-	ptr += 2;
-	remaining -= 2;
-
-	if (remaining < 2) {
-		return NULL;
-	}
-	port = (ptr[1] << 0) | (ptr[0] << 8);
-	ptr += 2;
+	srv_record = (struct srv *)ptr;
+	ptr += sizeof(*srv_record);
 
 	host_size = dn_expand((unsigned char *)query->result->answer, (unsigned char *) (srv_offset + size), (unsigned char *) ptr, host, sizeof(host) - 1);
 	if (host_size < 0) {
@@ -107,9 +95,9 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 		return NULL;
 	}
 
-	srv->priority = priority;
-	srv->weight = weight;
-	srv->port = port;
+	srv->priority = ntohs(srv_record->priority);
+	srv->weight = ntohs(srv_record->weight);
+	srv->port = ntohs(srv_record->port);
 
 	srv->host = srv->data + size;
 	strcpy((char *)srv->host, host); /* SAFE */
