@@ -52,6 +52,8 @@ struct ast_dns_srv_record {
 	unsigned short weight;
 	/*! \brief The port in the SRV record */
 	unsigned short port;
+	/*! \brief The running weight sum */
+	unsigned int weight_sum;
 	/*! \brief Additional data */
 	char data[0];
 };

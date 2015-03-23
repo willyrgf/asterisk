@@ -117,11 +117,8 @@ void ast_dns_srv_sort(struct ast_dns_result *result)
 	struct dns_records newlist = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
 
 	while (AST_LIST_FIRST(&result->records)) {
-		unsigned int random_weight;
-		unsigned int weight_sum;
 		unsigned short cur_priority = 0;
 		struct dns_records temp_list = AST_LIST_HEAD_NOLOCK_INIT_VALUE;
-		weight_sum = 0;
 
 		/* Find the lowest current priority to work on */
 		AST_LIST_TRAVERSE(&result->records, current, list) {
@@ -140,11 +137,16 @@ void ast_dns_srv_sort(struct ast_dns_result *result)
 		}
 		AST_LIST_TRAVERSE_SAFE_END;
 
+		/* Apply weighting - as each record is passed the sum of all previous weights (plus its own) is stored away, and then a random weight
+		 * is calculated. The first record with a weight sum greater than the random weight is put in the new list and the whole thing starts
+		 * once again.
+		 */
 		while (AST_LIST_FIRST(&temp_list)) {
-			weight_sum = 0;
+			unsigned int weight_sum = 0;
+			unsigned int random_weight;
 
 			AST_LIST_TRAVERSE(&temp_list, current, list) {
-				weight_sum += ((struct ast_dns_srv_record *)current)->weight;
+				((struct ast_dns_srv_record *)current)->weight_sum = weight_sum += ((struct ast_dns_srv_record *)current)->weight;
 			}
 
 			/* if all the remaining entries have weight == 0,
@@ -157,8 +159,9 @@ void ast_dns_srv_sort(struct ast_dns_result *result)
 			random_weight = 1 + (unsigned int) ((float) weight_sum * (ast_random() / ((float) RAND_MAX + 1.0)));
 
 			AST_LIST_TRAVERSE_SAFE_BEGIN(&temp_list, current, list) {
-				if (((struct ast_dns_srv_record *)current)->weight < random_weight)
+				if (((struct ast_dns_srv_record *)current)->weight_sum < random_weight) {
 					continue;
+				}
 
 				AST_LIST_MOVE_CURRENT(&newlist, list);
 				break;
