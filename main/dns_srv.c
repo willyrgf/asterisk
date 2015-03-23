@@ -47,14 +47,13 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 	char *srv_offset;
 	char *srv_search_base = (char *)query->result->answer;
 	size_t remaining_size = query->result->answer_size;
-	char *buffer;
 	size_t remaining = size;
 	struct ast_dns_srv_record *srv;
-	unsigned short priority;
-	unsigned short weight;
-	unsigned short port;
+	uint16_t priority;
+	uint16_t weight;
+	uint16_t port;
 	int host_size;
-	char host[256] = "";
+	char host[NI_MAXHOST] = "";
 
 	while (1) {
 		srv_offset = memchr(srv_search_base, data[0], remaining_size);
@@ -108,16 +107,15 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 		return NULL;
 	}
 
-	srv->priority = ntohs(priority);
-	srv->weight = ntohs(weight);
-	srv->port = ntohs(port);
+	srv->priority = priority;
+	srv->weight = weight;
+	srv->port = port;
 
-	buffer = srv->data;
-	strcpy(buffer, host); /* SAFE */
-	buffer[host_size] = '\0';
-	buffer += host_size + 1;
+	srv->host = srv->data + size;
+	strcpy((char *)srv->host, host); /* SAFE */
+	((char *)srv->host)[host_size] = '\0';
 
-	srv->generic.data_ptr = buffer;
+	srv->generic.data_ptr = srv->data;
 
 	return (struct ast_dns_record *)srv;
 }
