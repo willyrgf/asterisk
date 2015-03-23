@@ -11095,7 +11095,7 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 				ast_rtp_codecs_payloads_unset(newvideortp, NULL, codec);
 			}
 		}
-	} else if (sscanf(a, "rctp-fb: %3u %255[^\t\n]", &codec, rtcfb_string) == 2) {
+	} else if (sscanf(a, "rctp-fb: %3u %255[^\t\n]", &codec, rtcpfb_string) == 2) {
 		/*  AVPF RTCP feedback. We need to check if we really have AVPF, if not ignore these options.
 		Examples:
  		 	a=rtcp-fb:100 ccm fir
