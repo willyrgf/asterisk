@@ -44,14 +44,16 @@ struct ast_dns_record {
 struct ast_dns_srv_record {
 	/*! \brief Generic DNS record information */
 	struct ast_dns_record generic;
+	/*! \brief The hostname in the SRV record */
+	const char *host;
 	/*! \brief The priority of the SRV record */
 	unsigned short priority;
 	/*! \brief The weight of the SRV record */
 	unsigned short weight;
 	/*! \brief The port in the SRV record */
 	unsigned short port;
-	/*! \brief The hostname in the SRV record */
-	char host[0];
+	/*! \brief Additional data */
+	char data[0];
 };
 
 /*! \brief A NAPTR record */

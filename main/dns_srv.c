@@ -43,7 +43,11 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char *data, const size_t size)
 {
-	const char *ptr = data;
+	const char *ptr;
+	char *srv_offset;
+	char *srv_search_base = (char *)query->result->answer;
+	size_t remaining_size = query->result->answer_size;
+	char *buffer;
 	size_t remaining = size;
 	struct ast_dns_srv_record *srv;
 	unsigned short priority;
@@ -51,6 +55,23 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 	unsigned short port;
 	int host_size;
 	char host[256] = "";
+
+	while (1) {
+		srv_offset = memchr(srv_search_base, data[0], remaining_size);
+
+		ast_assert(srv_offset != NULL);
+		ast_assert(srv_search_base + remaining_size - srv_offset >= size);
+		
+		if (!memcmp(srv_offset, data, size)) {
+			ptr = srv_offset;
+			break;
+		}
+
+		remaining_size -= srv_offset - srv_search_base;
+		srv_search_base = srv_offset + 1;
+	}
+
+	ast_assert(ptr != NULL);
 
 	if (remaining < 2) {
 		return NULL;
@@ -72,10 +93,7 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 	port = (ptr[1] << 0) | (ptr[0] << 8);
 	ptr += 2;
 
-	/* This currently assumes that the DNS core will provide a record within the full answer, which I'm going to talk to
-	 * Mark about in a few hours
-	 */
-	host_size = dn_expand((unsigned char *)query->result->answer, (unsigned char *) data, (unsigned char *) ptr, host, sizeof(host) - 1);
+	host_size = dn_expand((unsigned char *)query->result->answer, (unsigned char *) (srv_offset + size), (unsigned char *) ptr, host, sizeof(host) - 1);
 	if (host_size < 0) {
 		ast_log(LOG_ERROR, "Failed to expand domain name: %s\n", strerror(errno));
 		return NULL;
@@ -85,7 +103,7 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 		return NULL;
 	}
 
-	srv = ast_calloc(1, sizeof(*srv) + host_size + 1);
+	srv = ast_calloc(1, sizeof(*srv) + size + host_size + 1);
 	if (!srv) {
 		return NULL;
 	}
@@ -93,7 +111,13 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 	srv->priority = ntohs(priority);
 	srv->weight = ntohs(weight);
 	srv->port = ntohs(port);
-	strcpy(srv->host, host); /* SAFE */
+
+	buffer = srv->data;
+	strcpy(buffer, host); /* SAFE */
+	buffer[host_size] = '\0';
+	buffer += host_size + 1;
+
+	srv->generic.data_ptr = buffer;
 
 	return (struct ast_dns_record *)srv;
 }
