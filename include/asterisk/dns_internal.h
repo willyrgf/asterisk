@@ -35,6 +35,7 @@ struct ast_dns_record {
 	size_t data_len;
 	/*! \brief Linked list information */
 	AST_LIST_ENTRY(ast_dns_record) list;
+	char *data_ptr;
 	/*! \brief The raw DNS record */
 	char data[0];
 };
@@ -69,6 +70,7 @@ struct ast_dns_naptr_record {
 	unsigned short order;
 	/*! \brief The preference of the NAPTR record */
 	unsigned short preference;
+	char data[0];
 };
 
 /*! \brief The result of a DNS query */
@@ -85,6 +87,8 @@ struct ast_dns_result {
 	const char *canonical;
 	/*! \brief The raw DNS answer */
 	const char *answer;
+	/*! \brief The size of the raw DNS answer */
+	size_t answer_size;
 	/*! \brief Buffer for dynamic data */
 	char buf[0];
 };

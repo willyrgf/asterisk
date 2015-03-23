@@ -299,7 +299,6 @@ static int unbound_resolver_resolve(struct ast_dns_query *query)
 
 	ao2_ref(data, -1);
 	ao2_ref(cfg, -1);
-
 	return res;
 }
 
@@ -488,6 +487,8 @@ static int unbound_config_preapply_callback(void)
 }
 
 #ifdef TEST_FRAMEWORK
+
+#include "asterisk/dns_naptr.h"
 
 /*!
  * \brief A DNS record to be used during a test
@@ -1181,6 +1182,66 @@ AST_TEST_DEFINE(resolve_cancel_off_nominal)
 
 	return AST_TEST_PASS;
 }
+
+AST_TEST_DEFINE(resolve_naptr)
+{
+	RAII_VAR(struct unbound_resolver *, resolver, NULL, ao2_cleanup);
+	RAII_VAR(struct unbound_config *, cfg, NULL, ao2_cleanup);
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+
+	const struct ast_dns_record *record;
+
+	static const char * DOMAIN1 = "goose.feathers";
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "resolve_naptr";
+		info->category = "/res/res_resolver_unbound/";
+		info->summary = "Attempt resolution of NAPTR record\n";
+		info->description = "This test performs a NAPTR lookup and ensures that\n"
+			"the returned record has the appropriate values set\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	cfg = ao2_global_obj_ref(globals);
+	resolver = ao2_bump(cfg->global->state->resolver);
+
+	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
+
+	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 100 A \"Fake service\" \"\" goose.down");
+
+	if (ast_dns_resolve(DOMAIN1, ns_t_naptr, ns_c_in, &result)) {
+		ast_test_status_update(test, "Failed to resolve domain\n");
+		return AST_TEST_FAIL;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "Successful resolution set a NULL result\n");
+		return AST_TEST_FAIL;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (!record) {
+		ast_test_status_update(test, "Failed to get any DNS records from the result\n");
+		return AST_TEST_FAIL;
+	}
+
+	/* XXX This just prints data for my own inspection right now. It will need to actually
+	 * perform a check in order to really pass. This will be done once more NAPTR records
+	 * are added so I can check ordering as well as individual data
+	 */
+	ast_log(LOG_NOTICE, "order is %hu\n", ast_dns_naptr_get_order(record));
+	ast_log(LOG_NOTICE, "preference is %hu\n", ast_dns_naptr_get_preference(record));
+	ast_log(LOG_NOTICE, "flags is %s\n", ast_dns_naptr_get_flags(record));
+	ast_log(LOG_NOTICE, "service is %s\n", ast_dns_naptr_get_service(record));
+	ast_log(LOG_NOTICE, "regexp is %s\n", ast_dns_naptr_get_regexp(record));
+	ast_log(LOG_NOTICE, "replacement is %s\n", ast_dns_naptr_get_replacement(record));
+
+	return AST_TEST_PASS;
+
+}
 #endif
 
 static int reload_module(void)
@@ -1202,6 +1263,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolve_cancel_off_nominal);
+	AST_TEST_UNREGISTER(resolve_naptr);
 	return 0;
 }
 
@@ -1258,6 +1320,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolve_sync_off_nominal);
 	AST_TEST_REGISTER(resolve_async_off_nominal);
 	AST_TEST_REGISTER(resolve_cancel_off_nominal);
+	AST_TEST_REGISTER(resolve_naptr);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
