@@ -397,10 +397,87 @@ cleanup:
 
 	return res;
 }
+
+AST_TEST_DEFINE(naptr_resolve_off_nominal_flags)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	struct naptr_record records[] = {
+		/* Non-alphanumeric flag */
+		{ 100, 100, {1, "\x0a"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		/* Mix of valid and non-alphanumeric */
+		{ 100, 100, {2, "A\x0a"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		/* Invalid combinations of flags */
+		{ 100, 100, {2, "sa"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "su"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "sp"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "as"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "au"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "ap"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "ua"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "us"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "up"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "pa"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "ps"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "pu"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+	};
+	enum ast_test_result_state res = AST_TEST_PASS;
+	const struct ast_dns_record *record;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_flags";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Ensure that NAPTR records with invalid flags are not presented in results";
+		info->description = "This test defines a set of records where the flags provided are\n"
+			"invalid in some way. This may be due to providing non-alphanumeric characters or\n"
+			"by providing clashing flags. The result should be that none of the defined records\n"
+			"are returned by the resolver\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&naptr_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_naptr, ns_c_in, &result)) {
+		ast_test_status_update(test, "Failed to perform DNS resolution, despite using valid inputs\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "Synchronous DNS resolution failed to set a result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (record) {
+		ast_test_status_update(test, "DNS resolution returned records when it was not expected to\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&naptr_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(naptr_resolve_nominal);
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_length);
+	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_flags);
 
 	return 0;
 }
@@ -409,6 +486,7 @@ static int load_module(void)
 {
 	AST_TEST_REGISTER(naptr_resolve_nominal);
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_length);
+	AST_TEST_REGISTER(naptr_resolve_off_nominal_flags);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

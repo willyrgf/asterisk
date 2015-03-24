@@ -40,6 +40,80 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_internal.h"
 #include "asterisk/utils.h"
 
+/*!
+ * \brief Result of analyzing NAPTR flags on a record
+ */
+enum flags_result {
+	/*! Terminal record, meaning the DDDS algorithm can be stopped */
+	FLAGS_TERMINAL,
+	/*! No flags provided, likely meaning another NAPTR lookup */
+	FLAGS_EMPTY,
+	/*! Unrecognized but valid flags. We cannot conclude what they mean */
+	FLAGS_UNKNOWN,
+	/*! Non-alphanumeric or invalid combination of flags */
+	FLAGS_INVALID,
+};
+
+/*!
+ * \brief Analyze and interpret NAPTR flags as per RFC 3404
+ *
+ * \note The flags string passed into this function is NOT NULL-terminated
+ *
+ * \param flags The flags string from a NAPTR record
+ * \flags_size The size of the flags string in bytes
+ * \return flag result
+ */
+static enum flags_result interpret_flags(const char *flags, uint8_t flags_size)
+{
+	int i;
+	char known_flag_found = 0;
+
+	if (flags_size == 0) {
+		return FLAGS_EMPTY;
+	}
+
+	/* Take care of the most common (and easy) case, one character */
+	if (flags_size == 1) {
+		if (*flags == 's' || *flags == 'S' ||
+				*flags == 'a' || *flags == 'A' ||
+				*flags == 'u' || *flags == 'U') {
+			return FLAGS_TERMINAL;
+		} else if (!isalnum(*flags)) {
+			return FLAGS_INVALID;
+		} else {
+			return FLAGS_UNKNOWN;
+		}
+	}
+
+	for (i = 0; i < flags_size; ++i) {
+		if (!isalnum(flags[i])) {
+			return FLAGS_INVALID;
+		} else if (flags[i] == 's' || flags[i] == 'S') {
+			if (known_flag_found && known_flag_found != 's') {
+				return FLAGS_INVALID;
+			}
+			known_flag_found = 's';
+		} else if (flags[i] == 'u' || flags[i] == 'U') {
+			if (known_flag_found && known_flag_found != 'u') {
+				return FLAGS_INVALID;
+			}
+			known_flag_found = 'u';
+		} else if (flags[i] == 'a' || flags[i] == 'A') {
+			if (known_flag_found && known_flag_found != 'a') {
+				return FLAGS_INVALID;
+			}
+			known_flag_found = 'a';
+		} else if (flags[i] == 'p' || flags[i] == 'P') {
+			if (known_flag_found && known_flag_found != 'p') {
+				return FLAGS_INVALID;
+			}
+			known_flag_found = 'p';
+		}
+	}
+
+	return (!known_flag_found || known_flag_found == 'p') ? FLAGS_UNKNOWN : FLAGS_TERMINAL;
+}
+
 struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const char *data, const size_t size)
 {
 	struct ast_dns_naptr_record *naptr;
@@ -58,6 +132,7 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 	char *naptr_search_base = (char *)query->result->answer;
 	size_t remaining_size = query->result->answer_size;
 	char *end_of_record;
+	enum flags_result flags_res;
 
 	/* 
 	 * This is bordering on the hackiest thing I've ever written.
@@ -159,6 +234,15 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 
 	if (ptr != end_of_record) {
 		ast_log(LOG_ERROR, "NAPTR record gave undersized string indications.\n");
+		return NULL;
+	}
+
+	/* We've validated the size of the NAPTR record. Now we can validate
+	 * the individual parts
+	 */
+	flags_res = interpret_flags(flags, flags_size);
+	if (flags_res == FLAGS_INVALID) {
+		ast_log(LOG_ERROR, "NAPTR Record contained invalid flags %.*s\n", flags_size, flags);
 		return NULL;
 	}
 
