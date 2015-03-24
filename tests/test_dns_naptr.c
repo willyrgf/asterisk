@@ -224,23 +224,31 @@ AST_TEST_DEFINE(naptr_resolve_nominal)
 	const struct ast_dns_record *record;
 	struct naptr_record records[] = {
 		{ 100, 100, "A", "BLAH", "", "goose.down" },
-		{ 100, 200, "A", "BLAH", "", "duck.down" },
+		{ 200, 200, "A", "BLAH", "", "duck.down" },
+		{ 100, 200, "A", "BLAH", "![^\\.]+\\.(.*)$!\\1!", "" },
+		{ 200, 100, "A", "BLAH", "!([^\\.]+\\.)(.*)$!\\1.happy.\\2!", "" },
 	};
+
+	int naptr_record_order[] = { 0, 2, 3, 1 };
 	enum ast_test_result_state res = AST_TEST_PASS;
+	int i;
 
 	switch (cmd) {
 	case TEST_INIT:
 		info->name = "naptr_resolve";
 		info->category = "/main/dns/naptr/";
-		info->summary = "Test resolution of NAPTR records";
-		info->description = "yep";
+		info->summary = "Test nominal resolution of NAPTR records";
+		info->description = "This test defines four valid NAPTR records and\n"
+			"performs a resolution of the domain to which they belong. The test\n"
+			"ensures that all fields of the NAPTR records are parsed correctly\n"
+			"and that the records are returned in sorted order\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
 	}
 
 	test_records = records;
-	num_test_records = 2;
+	num_test_records = ARRAY_LEN(records);
 	memset(ans_buffer, 0, sizeof(ans_buffer));
 
 	ast_dns_resolver_register(&naptr_resolver);
@@ -257,14 +265,38 @@ AST_TEST_DEFINE(naptr_resolve_nominal)
 		goto cleanup;
 	}
 
+	i = 0;
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		ast_log(LOG_NOTICE, "Examining record\n");
-		ast_log(LOG_NOTICE, "order is %hu\n", ast_dns_naptr_get_order(record));
-		ast_log(LOG_NOTICE, "preference is %hu\n", ast_dns_naptr_get_preference(record));
-		ast_log(LOG_NOTICE, "flags is %s\n", ast_dns_naptr_get_flags(record));
-		ast_log(LOG_NOTICE, "service is %s\n", ast_dns_naptr_get_service(record));
-		ast_log(LOG_NOTICE, "regexp is %s\n", ast_dns_naptr_get_regexp(record));
-		ast_log(LOG_NOTICE, "replacement is %s\n", ast_dns_naptr_get_replacement(record));
+		if (ast_dns_naptr_get_order(record) != records[naptr_record_order[i]].order) {
+			ast_test_status_update(test, "Unexpected order in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (ast_dns_naptr_get_preference(record) != records[naptr_record_order[i]].preference) {
+			ast_test_status_update(test, "Unexpected preference in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_flags(record), records[naptr_record_order[i]].flags)) {
+			ast_test_status_update(test, "Unexpected flags in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_service(record), records[naptr_record_order[i]].services)) {
+			ast_test_status_update(test, "Unexpected services in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_regexp(record), records[naptr_record_order[i]].regexp)) {
+			ast_test_status_update(test, "Unexpected regexp in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_replacement(record), records[naptr_record_order[i]].replacement)) {
+			ast_test_status_update(test, "Unexpected replacement in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		++i;
+	}
+
+	if (i != ARRAY_LEN(records)) {
+		ast_test_status_update(test, "Unexpected number of records returned in NAPTR lookup\n");
+		res = AST_TEST_FAIL;
 	}
 
 cleanup:
