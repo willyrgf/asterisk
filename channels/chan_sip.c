@@ -20748,7 +20748,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
 	ast_cli(a->fd, "  Allow unknown access:   %s\n", AST_CLI_YESNO(sip_cfg.allowguest));
 	ast_cli(a->fd, "  Allow subscriptions:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOWSUBSCRIBE)));
-	ast_cli(a-<fd, "  REMB Support:            %s\n", (ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_ANSWER) && ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_OFFER)) ? "offer & answer" : (ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_ANSWER) ? "answer" : "none" ));
+	ast_cli(a->fd, "  REMB Support:           %s\n", (ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_ANSWER) && ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_OFFER)) ? "offer & answer" : (ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_ANSWER) ? "answer" : "none" ));
 	ast_cli(a->fd, "  Allow overlap dialing:  %s\n", allowoverlap2str(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP)));
 	ast_cli(a->fd, "  Allow promisc. redir:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_PROMISCREDIR)));
 	ast_cli(a->fd, "  Enable call counters:   %s\n", AST_CLI_YESNO(global_callcounter));
