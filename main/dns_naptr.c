@@ -33,6 +33,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 
 #include <arpa/nameser.h>
 #include <resolv.h>
+#include <regex.h>
 
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_naptr.h"
@@ -153,6 +154,203 @@ static int services_invalid(const char *services, uint8_t services_size)
 		}
 
 		current_pos = plus_pos + 1;
+	}
+
+	return 0;
+}
+
+/*!
+ * \brief Determine if flags in the regexp are invalid
+ *
+ * A NAPTR regexp is structured like so
+ * /pattern/repl/FLAGS
+ *
+ * This ensures that the flags on the regex are valid. Regexp
+ * flags can either be zero or one character long. If the flags
+ * are one character long, that character must be "i" to indicate
+ * the regex evaluation is case-insensitive.
+ *
+ * \note The flags string passed to this function is not NULL-terminated
+ * \param flags The regexp flags from the NAPTR record
+ * \param end A pointer to the end of the flags string
+ * \retval 0 Flags are valid
+ * \retval -1 Flags are invalid
+ */
+static int regexp_flags_invalid(const char *flags, const char *end)
+{
+	if (flags >= end) {
+		return 0;
+	}
+
+	if (end - flags > 1) {
+		return -1;
+	}
+
+	if (*flags != 'i') {
+		return -1;
+	}
+
+	return 0;
+}
+
+/*!
+ * \brief Determine if the replacement in the regexp is invalid
+ *
+ * A NAPTR regexp is structured like so
+ * /pattern/REPL/flags
+ *
+ * This ensures that the replacement on the regexp is valid. The regexp
+ * replacement is free to use any character it wants, plus backreferences
+ * and an escaped regexp delimiter.
+ *
+ * This function does not attempt to ensure that the backreferences refer
+ * to valid portions of the regexp's regex pattern.
+ *
+ * \note The repl string passed to this function is NOT NULL-terminated
+ *
+ * \param repl The regexp replacement string
+ * \param end Pointer to the end of the replacement string
+ * \param delim The delimiter character for the regexp
+ *
+ * \retval 0 Replacement is valid
+ * \retval -1 Replacement is invalid
+ */
+static int regexp_repl_invalid(const char *repl, const char *end, char delim)
+{
+	const char *ptr = repl;
+
+	if (repl == end) {
+		/* Kind of weird, but this is fine */
+		return 0;
+	}
+
+	while (1) {
+		char *backslash_pos = memchr(ptr, '\\', end - ptr);
+		if (!backslash_pos) {
+			break;
+		}
+
+		ast_assert(backslash_pos < end - 1);
+
+		/* XXX RFC 3402 is unclear about whether a backslash-escaped backslash is
+		 * acceptable.
+		 */
+		if (!strchr("12345689", backslash_pos[1]) && backslash_pos[1] != delim) {
+			return -1;
+		}
+
+		ptr = backslash_pos + 1;
+	}
+	
+	return 0;
+}
+
+/*!
+ * \brief Determine if the pattern in a regexp is invalid
+ *
+ * A NAPTR regexp is structured like so
+ * /PATTERN/repl/flags
+ *
+ * This ensures that the pattern on the regexp is valid. The pattern is
+ * passed to a regex compiler to determine its validity.
+ *
+ * \note The pattern string passed to this function is NOT NULL-terminated
+ *
+ * \param pattern The pattern from the NAPTR record
+ * \param end A pointer to the end of the pattern
+ *
+ * \retval 0 Pattern is valid
+ * \retval non-zero Pattern is invalid
+ */
+static int regexp_pattern_invalid(const char *pattern, const char *end)
+{
+	int pattern_size = end - pattern;
+	char pattern_str[pattern_size + 1];
+	regex_t reg;
+	int res;
+
+	memcpy(pattern_str, pattern, pattern_size);
+	pattern_str[pattern_size] = '\0';
+
+	res = regcomp(&reg, pattern_str, REG_EXTENDED);
+
+	regfree(&reg);
+
+	return res;
+}
+
+/*!
+ * \brief Determine if the regexp in a NAPTR record is invalid
+ *
+ * The goal of this function is to divide the regexp into its
+ * constituent parts and then let validation subroutines determine
+ * if each part is valid. If all parts are valid, then the entire
+ * regexp is valid.
+ *
+ * \note The regexp string passed to this function is NOT NULL-terminated
+ *
+ * \param regexp The regexp from the NAPTR record
+ * \param regexp_size The size of the regexp string
+ *
+ * \retval 0 regexp is valid
+ * \retval non-zero regexp is invalid
+ */
+static int regexp_invalid(const char *regexp, uint8_t regexp_size)
+{
+	char delim;
+	const char *delim2_pos;
+	const char *delim3_pos;
+	const char *ptr = regexp;
+	const char *end_of_regexp = regexp + regexp_size;
+	const char *regex_pos;
+	const char *repl_pos;
+	const char *flags_pos;
+
+	if (regexp_size == 0) {
+		return 0;
+	}
+
+	delim = *ptr;
+	if (strchr("123456789\\i", delim)) {
+		return -1;
+	}
+	++ptr;
+	regex_pos = ptr;
+
+	/* Find the other two delimiters. If the delim is escaped with a backslash, it doesn't count */
+	while (1) {
+		delim2_pos = memchr(ptr, delim, end_of_regexp - ptr);
+		if (!delim2_pos) {
+			return -1;
+		}
+		ptr = delim2_pos + 1;
+		if (delim2_pos[-1] != '\\') {
+			break;
+		}
+	}
+
+	if (ptr >= end_of_regexp) {
+		return -1;
+	}
+
+	repl_pos = ptr;
+
+	while (1) {
+		delim3_pos = memchr(ptr, delim, end_of_regexp - ptr);
+		if (!delim3_pos) {
+			return -1;
+		}
+		ptr = delim3_pos + 1;
+		if (delim3_pos[-1] != '\\') {
+			break;
+		}
+	}
+	flags_pos = ptr;
+
+	if (regexp_flags_invalid(flags_pos, end_of_regexp) ||
+			regexp_repl_invalid(repl_pos, delim3_pos, delim) ||
+			regexp_pattern_invalid(regex_pos, delim2_pos)) {
+		return -1;
 	}
 
 	return 0;
@@ -292,6 +490,11 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 
 	if (services_invalid(services, services_size)) {
 		ast_log(LOG_ERROR, "NAPTR record contained invalid services %.*s\n", services_size, services);
+		return NULL;
+	}
+
+	if (regexp_invalid(regexp, regexp_size)) {
+		ast_log(LOG_ERROR, "NAPTR record contained invalid regexp %.*s\n", regexp_size, regexp);
 		return NULL;
 	}
 
