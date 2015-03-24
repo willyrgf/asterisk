@@ -488,7 +488,7 @@ AST_TEST_DEFINE(naptr_resolve_off_nominal_regexp)
 		/* Invalid regex flag */
 		{ 100, 100, {1, "A"}, {4, "BLAH"}, {16, "!.*!horse.mane!o"}, ""},
 		/* Invalid backreference */
-		{ 100, 100, {1, "A"}, {4, "BLAH"}, {14, "!.*!horse.\\0!"}, ""},
+		{ 100, 100, {1, "A"}, {4, "BLAH"}, {13, "!.*!horse.\\0!"}, ""},
 		/* Invalid regex */
 		{ 100, 100, {1, "A"}, {4, "BLAH"}, {16, "!(.*!horse.mane!"}, ""},
 	};
