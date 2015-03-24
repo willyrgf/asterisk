@@ -11095,7 +11095,7 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 				ast_rtp_codecs_payloads_unset(newvideortp, NULL, codec);
 			}
 		}
-	} else if (sscanf(a, "rctp-fb: %3u %255[^\t\n]", &codec, rtcpfb_string) == 2) {
+	} else if (sscanf(a, "rtcp-fb: %3u %255[^\t\n]", &codec, rtcpfb_string) == 2) {
 		/*  AVPF RTCP feedback. We need to check if we really have AVPF, if not ignore these options.
 		Examples:
  		 	a=rtcp-fb:100 ccm fir
@@ -11109,6 +11109,7 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 			trr-int
 			app
 			ccm (RFC 5104)
+			goog-remb	(draft)
 
 		Nack can have one of the the following parameters
 			sli, pli, rpsi, app, rai, tllei, pslei, ecn
@@ -11117,8 +11118,18 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 			rpsi, app
 		*/
 		ast_debug(2, " Got RTCP-FB parameter for codec %d : %s \n", codec, rtcpfb_string);
-		/* Do something clever with this information */
-		/* FInd out if there's a parameter */
+		if (!strncasecmp(rtcpfb_string, "goog-remb", 9)) {
+			/* Do something clever with this information */
+			/* Yes, this is an ugly hack, but for now it will have to do. This property
+			   is really a per-codec thing, not per-stream */
+			if (p->vrtp) {
+				ast_rtp_instance_set_prop(p->vrtp, AST_RTP_PROPERTY_RTCPFB_REMB, 1);
+				found = TRUE;
+			}
+		} else {
+			/* We have no clue what this is */
+			ast_debug(3, "%s : not implemented RTCP AVPF feedback property. \n", rtcpfb_string);
+		};
 	}
 
 	return found;

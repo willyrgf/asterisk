@@ -100,6 +100,8 @@ enum ast_rtp_property {
 	AST_RTP_PROPERTY_STUN,
 	/*! Enable RTCP support */
 	AST_RTP_PROPERTY_RTCP,
+	/*! Enable RTCP feedback REMB (requires AST_RTP_PROPERTY_RTCP)  */
+	AST_RTP_PROPERTY_RTCPFB_REMB,
 
 	/*!
 	 * \brief Maximum number of RTP properties supported

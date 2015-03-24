@@ -214,6 +214,18 @@ static AST_LIST_HEAD_STATIC(ioqueues, ast_rtp_ioqueue_thread);
 #define FLAG_NEED_MARKER_BIT            (1 << 3)
 #define FLAG_DTMF_COMPENSATE            (1 << 4)
 
+/* Ugly hack warning: The RTCP Feedback is per codec and stream. We can't have it in the codec/format settings,
+   since it would affect comparisions. We currently have no object per codec in a stream. The right way (TM)
+   would be to create a list of properties per codec used in the stream. In theory, one codec could have
+   the need of one AVPF/RTCPFB feature, but not another in the same stream. Like in an audio stream if we
+   change to DTMF and then back to a codec. The DTMF has separate properties.
+   These flags should not be set per RTP stream, but in a separate list that doesn't exist right now. 
+   I am doing this just to be able to start sending the feedback messages quickly while figuring out
+   if this will work at all or not.
+ */
+
+#define FLAG_RTCPFB_REMB_ENABLED	(1 << 5)
+
 #define TRANSPORT_SOCKET_RTP 0
 #define TRANSPORT_SOCKET_RTCP 1
 #define TRANSPORT_TURN_RTP 2

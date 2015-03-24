@@ -30,6 +30,10 @@ Tasks
 * Forward incoming feedback across bridge and send out on other side
   for optimal video pass through
 
+Questions
+---------
+* How do we handle video offers with different settings per codec?
+
 Settings
 --------
 - Default and per device setting (depending on video enabled)
