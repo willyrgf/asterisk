@@ -237,8 +237,11 @@ AST_TEST_DEFINE(naptr_resolve_nominal)
 	case TEST_INIT:
 		info->name = "naptr_resolve";
 		info->category = "/main/dns/naptr/";
-		info->summary = "Test resolution of NAPTR records";
-		info->description = "yep";
+		info->summary = "Test nominal resolution of NAPTR records";
+		info->description = "This test defines four valid NAPTR records and\n"
+			"performs a resolution of the domain to which they belong. The test\n"
+			"ensures that all fields of the NAPTR records are parsed correctly\n"
+			"and that the records are returned in sorted order\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
