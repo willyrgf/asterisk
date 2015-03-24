@@ -497,11 +497,10 @@ AST_TEST_DEFINE(naptr_resolve_off_nominal_regexp)
 	case TEST_INIT:
 		info->name = "naptr_resolve_off_nominal_regexp";
 		info->category = "/main/dns/naptr/";
-		info->summary = "Ensure that NAPTR records with invalid services are not presented in results";
-		info->description = "This test defines a set of records where the services provided are\n"
-			"invalid in some way. This may be due to providing non-alphanumeric characters, providing\n"
-			"protocols or resolution services that start with a non-alphabetic character, or\n"
-			"providing fields that are too long.\n";
+		info->summary = "Ensure that NAPTR records with invalid regexps are not presented in results";
+		info->description = "This test defines a set of records where the regexps provided are\n"
+			"invalid in some way. The test ensures that none of the invalid records are returned\n"
+			"when performing a NAPTR lookup\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
