@@ -104,12 +104,22 @@ static int generate_dns_answer(int ttl, char *buf)
 	return ARRAY_LEN(NAPTR_ANSWER);
 }
 
-static int write_dns_string(const char *string, char *buf)
+struct dns_string {
+	uint8_t len;
+	const char *val;
+};
+
+static int write_dns_string(const struct dns_string *string, char *buf)
 {
-	uint8_t len = strlen(string);
+	uint8_t len = string->len;
 	buf[0] = len;
-	if (len) {
-		memcpy(&buf[1], string, len);
+	/*
+	 * We use the actual length of the string instead of
+	 * the stated value since sometimes we're going to lie about
+	 * the length of the string
+	 */
+	if (strlen(string->val)) {
+		memcpy(&buf[1], string->val, strlen(string->val));
 	}
 
 	return len + 1;
@@ -120,11 +130,19 @@ static int write_dns_domain(const char *string, char *buf)
 	char *copy = ast_strdupa(string);
 	char *part;
 	char *ptr = buf;
+	static const struct dns_string null_label = {
+		.len = 0,
+		.val = "",
+	};
 
 	while ((part = strsep(&copy, "."))) {
-		ptr += write_dns_string(part, ptr);
+		struct dns_string dns_str = {
+			.len = strlen(part),
+			.val = part,
+		};
+		ptr += write_dns_string(&dns_str, ptr);
 	}
-	ptr += write_dns_string("", ptr);
+	ptr += write_dns_string(&null_label, ptr);
 
 	return ptr - buf;
 }
@@ -132,10 +150,10 @@ static int write_dns_domain(const char *string, char *buf)
 struct naptr_record {
 	uint16_t order;
 	uint16_t preference;
-	const char *flags;
-	const char *services;
-	const char *regexp;
-	const char *replacement;
+	struct dns_string flags;
+	struct dns_string services;
+	struct dns_string regexp;
+	const char * replacement;
 };
 
 static int generate_naptr_record(struct naptr_record *record, char *buf)
@@ -150,9 +168,9 @@ static int generate_naptr_record(struct naptr_record *record, char *buf)
 	memcpy(ptr, &net_preference, sizeof(net_preference));
 	ptr += sizeof(net_preference);
 
-	ptr += write_dns_string(record->flags, ptr);
-	ptr += write_dns_string(record->services, ptr);
-	ptr += write_dns_string(record->regexp, ptr);
+	ptr += write_dns_string(&record->flags, ptr);
+	ptr += write_dns_string(&record->services, ptr);
+	ptr += write_dns_string(&record->regexp, ptr);
 	ptr += write_dns_domain(record->replacement, ptr);
 
 	return ptr - buf;
@@ -223,10 +241,10 @@ AST_TEST_DEFINE(naptr_resolve_nominal)
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	const struct ast_dns_record *record;
 	struct naptr_record records[] = {
-		{ 100, 100, "A", "BLAH", "", "goose.down" },
-		{ 200, 200, "A", "BLAH", "", "duck.down" },
-		{ 100, 200, "A", "BLAH", "![^\\.]+\\.(.*)$!\\1!", "" },
-		{ 200, 100, "A", "BLAH", "!([^\\.]+\\.)(.*)$!\\1.happy.\\2!", "" },
+		{ 100, 100, {1, "A"}, {4, "BLAH"}, {0, ""}, "goose.down" },
+		{ 200, 200, {1, "A"}, {4, "BLAH"}, {0, ""}, "duck.down" },
+		{ 100, 200, {1, "A"}, {4, "BLAH"}, {18, "![^\\.]+\\.(.*)$!\\1!"}, "" },
+		{ 200, 100, {1, "A"}, {4, "BLAH"}, {29, "!([^\\.]+\\.)(.*)$!\\1.happy.\\2!"}, "" },
 	};
 
 	int naptr_record_order[] = { 0, 2, 3, 1 };
@@ -275,15 +293,15 @@ AST_TEST_DEFINE(naptr_resolve_nominal)
 			ast_test_status_update(test, "Unexpected preference in returned NAPTR record\n");
 			res = AST_TEST_FAIL;
 		}
-		if (strcmp(ast_dns_naptr_get_flags(record), records[naptr_record_order[i]].flags)) {
+		if (strcmp(ast_dns_naptr_get_flags(record), records[naptr_record_order[i]].flags.val)) {
 			ast_test_status_update(test, "Unexpected flags in returned NAPTR record\n");
 			res = AST_TEST_FAIL;
 		}
-		if (strcmp(ast_dns_naptr_get_service(record), records[naptr_record_order[i]].services)) {
+		if (strcmp(ast_dns_naptr_get_service(record), records[naptr_record_order[i]].services.val)) {
 			ast_test_status_update(test, "Unexpected services in returned NAPTR record\n");
 			res = AST_TEST_FAIL;
 		}
-		if (strcmp(ast_dns_naptr_get_regexp(record), records[naptr_record_order[i]].regexp)) {
+		if (strcmp(ast_dns_naptr_get_regexp(record), records[naptr_record_order[i]].regexp.val)) {
 			ast_test_status_update(test, "Unexpected regexp in returned NAPTR record\n");
 			res = AST_TEST_FAIL;
 		}
