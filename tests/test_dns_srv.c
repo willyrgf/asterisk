@@ -535,7 +535,110 @@ AST_TEST_DEFINE(srv_resolve_same_priority_different_weights)
 	if (srv_record_occurence[0] > srv_record_occurence[1]) {
 		ast_test_status_update(test, "SRV sorting resulted in lesser weight being returned more often\n");
 		res = AST_TEST_FAIL;
-		goto cleanup;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
+AST_TEST_DEFINE(srv_resolve_different_priorities_different_weights)
+{
+	struct srv_record records[] = {
+		{ 10, 10, 5060, "tacos" },
+		{ 10, 20, 5060, "goose.down" },
+		{ 5, 80, 5060, "moo" },
+		{ 5, 10, 5060, "Canada" },
+	};
+
+	int srv_record_priority[4] = { 5, 5, 10, 10 };
+	int srv_record_occurence[4] = { 0, };
+	enum ast_test_result_state res = AST_TEST_PASS;
+	int count = 0;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_different_priorities_different_weights";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns four records with different priority and different weights";
+		info->description = "This test defines four SRV records, two with one priority and two with another priority,\n"
+			"and different weights and performs a resolution of the domain to which they belong.\n"
+			"The test ensures that the priorities are sorted properly and that the records with higher weight\n"
+			"occur more often than the ones of less weight.\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	for (count = 0; count < 100; count++) {
+		struct ast_dns_result *result;
+		const struct ast_dns_record *record;
+		int i;
+
+		memset(ans_buffer, 0, sizeof(ans_buffer));
+
+		if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+			ast_test_status_update(test, "DNS resolution failed\n");
+			res = AST_TEST_FAIL;
+			goto cleanup;
+		}
+
+		if (!result) {
+			ast_test_status_update(test, "DNS resolution returned no result\n");
+			res = AST_TEST_FAIL;
+			goto cleanup;
+		}
+
+		i = 0;
+		for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
+			if (ast_dns_srv_get_priority(record) != srv_record_priority[i]) {
+				ast_test_status_update(test, "Unexpected priority in returned SRV record\n");
+				res = AST_TEST_FAIL;
+			}
+			i++;
+		}
+
+		record = ast_dns_result_get_records(result);
+		for (i = 0; i < ARRAY_LEN(records); i++) {
+			if (ast_dns_srv_get_priority(record) != records[i].priority) {
+				continue;
+			}
+			if (ast_dns_srv_get_weight(record) != records[i].weight) {
+				continue;
+			}
+			if (ast_dns_srv_get_port(record) != records[i].port) {
+				continue;
+			}
+			if (strcmp(ast_dns_srv_get_host(record), records[i].host)) {
+				continue;
+			}
+
+			srv_record_occurence[i]++;
+			break;
+		}
+
+		ast_dns_result_free(result);
+	}
+
+	if (srv_record_occurence[0] > srv_record_occurence[1]) {
+		ast_test_status_update(test, "SRV sorting resulted in lesser weight being returned more often for priority 10\n");
+		res = AST_TEST_FAIL;
+	}
+
+	if (srv_record_occurence[3] > srv_record_occurence[2]) {
+		ast_test_status_update(test, "SRV sorting resulted in lesser weight being returned more often for priority 5\n");
+		res = AST_TEST_FAIL;
 	}
 
 cleanup:
@@ -555,6 +658,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(srv_resolve_sort_priority);
 	AST_TEST_UNREGISTER(srv_resolve_same_priority_zero_weight);
 	AST_TEST_UNREGISTER(srv_resolve_same_priority_different_weights);
+	AST_TEST_UNREGISTER(srv_resolve_different_priorities_different_weights);
 
 	return 0;
 }
@@ -565,6 +669,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(srv_resolve_sort_priority);
 	AST_TEST_REGISTER(srv_resolve_same_priority_zero_weight);
 	AST_TEST_REGISTER(srv_resolve_same_priority_different_weights);
+	AST_TEST_REGISTER(srv_resolve_different_priorities_different_weights);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
