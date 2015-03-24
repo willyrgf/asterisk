@@ -462,11 +462,99 @@ cleanup:
 	return res;
 }
 
+AST_TEST_DEFINE(srv_resolve_same_priority_different_weights)
+{
+	struct srv_record records[] = {
+		{ 10, 10, 5060, "tacos" },
+		{ 10, 20, 5060, "goose.down" },
+	};
+
+	int srv_record_occurence[2] = { 0, };
+	enum ast_test_result_state res = AST_TEST_PASS;
+	int count = 0;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_same_priority_different_weights";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns two records with same priority but different weights";
+		info->description = "This test defines two SRV records with same priority but different weights and\n"
+			"performs a resolution of the domain to which they belong. The test ensures that\n"
+			"the record with higher weight occurs more often than the one of lesser weight\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	for (count = 0; count < 100; count++) {
+		struct ast_dns_result *result;
+		const struct ast_dns_record *record;
+		int i;
+
+		memset(ans_buffer, 0, sizeof(ans_buffer));
+
+		if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+			ast_test_status_update(test, "DNS resolution failed\n");
+			res = AST_TEST_FAIL;
+			goto cleanup;
+		}
+
+		if (!result) {
+			ast_test_status_update(test, "DNS resolution returned no result\n");
+			res = AST_TEST_FAIL;
+			goto cleanup;
+		}
+
+		record = ast_dns_result_get_records(result);
+		for (i = 0; i < ARRAY_LEN(records); i++) {
+			if (ast_dns_srv_get_priority(record) != records[i].priority) {
+				continue;
+			}
+			if (ast_dns_srv_get_weight(record) != records[i].weight) {
+				continue;
+			}
+			if (ast_dns_srv_get_port(record) != records[i].port) {
+				continue;
+			}
+			if (strcmp(ast_dns_srv_get_host(record), records[i].host)) {
+				continue;
+			}
+
+			srv_record_occurence[i]++;
+			break;
+		}
+
+		ast_dns_result_free(result);
+	}
+
+	if (srv_record_occurence[0] > srv_record_occurence[1]) {
+		ast_test_status_update(test, "SRV sorting resulted in lesser weight being returned more often\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(srv_resolve_single_record);
 	AST_TEST_UNREGISTER(srv_resolve_sort_priority);
 	AST_TEST_UNREGISTER(srv_resolve_same_priority_zero_weight);
+	AST_TEST_UNREGISTER(srv_resolve_same_priority_different_weights);
 
 	return 0;
 }
@@ -476,6 +564,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(srv_resolve_single_record);
 	AST_TEST_REGISTER(srv_resolve_sort_priority);
 	AST_TEST_REGISTER(srv_resolve_same_priority_zero_weight);
+	AST_TEST_REGISTER(srv_resolve_same_priority_different_weights);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
