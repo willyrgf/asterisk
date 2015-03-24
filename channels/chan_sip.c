@@ -20153,6 +20153,7 @@ static char *_sip_show_peer(int type, int fd, struct mansession *s, const struct
 		ast_cli(fd, "  Send RPID    : %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[0], SIP_SENDRPID)));
 		ast_cli(fd, "  TrustIDOutbnd: %s\n", trust_id_outbound2str(ast_test_flag(&peer->flags[1], SIP_PAGE2_TRUST_ID_OUTBOUND)));
 		ast_cli(fd, "  Subscriptions: %s\n", AST_CLI_YESNO(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWSUBSCRIBE)));
+		ast_cli(fd, "  REMB Support : %s\n", (ast_test_flag(&peer->flags[2], SIP_PAGE3_REMB_ANSWER) && ast_test_flag(&peer->flags[2], SIP_PAGE3_REMB_OFFER)) ? "offer & answer" : (ast_test_flag(&peer->flags[2], SIP_PAGE3_REMB_ANSWER) ? "answer" : "none" ));
 		ast_cli(fd, "  Overlap dial : %s\n", allowoverlap2str(ast_test_flag(&peer->flags[1], SIP_PAGE2_ALLOWOVERLAP)));
 		if (peer->outboundproxy)
 			ast_cli(fd, "  Outb. proxy  : %s %s\n", ast_strlen_zero(peer->outboundproxy->name) ? "<not set>" : peer->outboundproxy->name,
@@ -20747,6 +20748,7 @@ static char *sip_show_settings(struct ast_cli_entry *e, int cmd, struct ast_cli_
 	ast_cli(a->fd, "  Match Auth Username:    %s\n", AST_CLI_YESNO(global_match_auth_username));
 	ast_cli(a->fd, "  Allow unknown access:   %s\n", AST_CLI_YESNO(sip_cfg.allowguest));
 	ast_cli(a->fd, "  Allow subscriptions:    %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOWSUBSCRIBE)));
+	ast_cli(a-<fd, "  REMB Support:            %s\n", (ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_ANSWER) && ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_OFFER)) ? "offer & answer" : (ast_test_flag(&global_flags[2], SIP_PAGE3_REMB_ANSWER) ? "answer" : "none" ));
 	ast_cli(a->fd, "  Allow overlap dialing:  %s\n", allowoverlap2str(ast_test_flag(&global_flags[1], SIP_PAGE2_ALLOWOVERLAP)));
 	ast_cli(a->fd, "  Allow promisc. redir:   %s\n", AST_CLI_YESNO(ast_test_flag(&global_flags[0], SIP_PROMISCREDIR)));
 	ast_cli(a->fd, "  Enable call counters:   %s\n", AST_CLI_YESNO(global_callcounter));
@@ -30373,6 +30375,14 @@ static int handle_common_options(struct ast_flags *flags, struct ast_flags *mask
 	} else if (!strcasecmp(v->name, "buggymwi")) {
 		ast_set_flag(&mask[1], SIP_PAGE2_BUGGY_MWI);
 		ast_set2_flag(&flags[1], ast_true(v->value), SIP_PAGE2_BUGGY_MWI);
+	} else if (!strcasecmp(v->name, "googleremb")) {
+		ast_set_flag(&mask[2], SIP_PAGE3_REMB_ANSWER | SIP_PAGE3_REMB_OFFER);
+		ast_clear_flag(&flags[2], SIP_PAGE3_REMB_ANSWER | SIP_PAGE3_REMB_OFFER);
+		if (!strcasecmp(v->value, "offeranswer")){
+			ast_set_flag(&flags[2], SIP_PAGE3_REMB_ANSWER | SIP_PAGE3_REMB_OFFER);
+		} else if (!strcasecmp(v->value, "answeronly")){
+			ast_set_flag(&flags[2], SIP_PAGE3_REMB_ANSWER);
+		}
 	} else
 		res = 0;
 

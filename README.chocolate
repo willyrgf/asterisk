@@ -25,6 +25,7 @@ Tasks
   - ENUMs for feedback messages
 * Add SDP parameters for rtcp-fb
 * Add sip.conf options for rtcp-fb enabling
+* Add test command (CLI or something) to force sending backoff
 * Send feedback based on RTCP
 * Forward incoming feedback across bridge and send out on other side
   for optimal video pass through
