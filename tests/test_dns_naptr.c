@@ -332,38 +332,14 @@ cleanup:
 	return res;
 }
 
-AST_TEST_DEFINE(naptr_resolve_off_nominal_length)
+static enum ast_test_result_state off_nominal_test(struct ast_test *test, struct naptr_record *records, int num_records)
 {
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
-	struct naptr_record records[] = {
-		{ 100, 100, {255, "A"}, {4, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {0, "A"},   {4, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {1, "A"},   {255, "BLAH"}, {15, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {1, "A"},   {2, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {1, "A"},   {4, "BLAH"},   {255, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {1, "A"},   {4, "BLAH"},   {3, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {255, "A"}, {255, "BLAH"}, {255, "!.*!horse.mane!"}, "" },
-		{ 100, 100, {0, "A"},   {2, "BLAH"},   {3, "!.*!horse.mane!"}, "" },
-	};
 	enum ast_test_result_state res = AST_TEST_PASS;
 	const struct ast_dns_record *record;
 
-	switch (cmd) {
-	case TEST_INIT:
-		info->name = "naptr_resolve_off_nominal_length";
-		info->category = "/main/dns/naptr/";
-		info->summary = "Test resolution of NAPTR records with off-nominal lengths";
-		info->description = "This test defines a set of records where the strings provided\n"
-			"within the record are valid, but the lengths of the strings in the record are\n"
-			"invalid, either too large or too small. The goal of this test is to ensure that\n"
-			"these invalid lengths result in resolution failures\n";
-		return AST_TEST_NOT_RUN;
-	case TEST_EXECUTE:
-		break;
-	}
-
 	test_records = records;
-	num_test_records = ARRAY_LEN(records);
+	num_test_records = num_records;
 	memset(ans_buffer, 0, sizeof(ans_buffer));
 
 	ast_dns_resolver_register(&naptr_resolver);
@@ -388,7 +364,6 @@ AST_TEST_DEFINE(naptr_resolve_off_nominal_length)
 	}
 
 cleanup:
-
 	ast_dns_resolver_unregister(&naptr_resolver);
 
 	test_records = NULL;
@@ -397,10 +372,114 @@ cleanup:
 
 	return res;
 }
+
+AST_TEST_DEFINE(naptr_resolve_off_nominal_length)
+{
+	struct naptr_record records[] = {
+		{ 100, 100, {255, "A"}, {4, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {0, "A"},   {4, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {255, "BLAH"}, {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {2, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {4, "BLAH"},   {255, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {4, "BLAH"},   {3, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {255, "A"}, {255, "BLAH"}, {255, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {0, "A"},   {2, "BLAH"},   {3, "!.*!horse.mane!"}, "" },
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_length";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Test resolution of NAPTR records with off-nominal lengths";
+		info->description = "This test defines a set of records where the strings provided\n"
+			"within the record are valid, but the lengths of the strings in the record are\n"
+			"invalid, either too large or too small. The goal of this test is to ensure that\n"
+			"these invalid lengths result in resolution failures\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return off_nominal_test(test, records, ARRAY_LEN(records));
+}
+
+AST_TEST_DEFINE(naptr_resolve_off_nominal_flags)
+{
+	struct naptr_record records[] = {
+		/* Non-alphanumeric flag */
+		{ 100, 100, {1, "!"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		/* Mix of valid and non-alphanumeric */
+		{ 100, 100, {2, "A!"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "!A"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		/* Invalid combinations of flags */
+		{ 100, 100, {2, "sa"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "su"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "sp"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "as"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "au"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "ap"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "ua"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "us"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "up"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "pa"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "ps"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "pu"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_flags";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Ensure that NAPTR records with invalid flags are not presented in results";
+		info->description = "This test defines a set of records where the flags provided are\n"
+			"invalid in some way. This may be due to providing non-alphanumeric characters or\n"
+			"by providing clashing flags. The result should be that none of the defined records\n"
+			"are returned by the resolver\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return off_nominal_test(test, records, ARRAY_LEN(records));
+}
+
+AST_TEST_DEFINE(naptr_resolve_off_nominal_services)
+{
+	struct naptr_record records[] = {
+		{ 100, 100, {1, "A"}, {5, "BLAH!"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {5, "BL!AH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {8, "1SIP+D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {8, "SIP+1D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {4, "+D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {4, "SIP+"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {8, "SIP++D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {37, "SIPSIPSIPSIPSIPSIPSIPSIPSIPSIPSIP+D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {37, "SIP+D2UD2UD2UD2UD2UD2UD2UD2UD2UD2UD2U"}, {15, "!.*!horse.mane!"}, ""},
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_services";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Ensure that NAPTR records with invalid services are not presented in results";
+		info->description = "This test defines a set of records where the services provided are\n"
+			"invalid in some way. This may be due to providing non-alphanumeric characters, providing\n"
+			"protocols or resolution services that start with a non-alphabetic character, or\n"
+			"providing fields that are too long.\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return off_nominal_test(test, records, ARRAY_LEN(records));
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(naptr_resolve_nominal);
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_length);
+	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_flags);
+	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_services);
 
 	return 0;
 }
@@ -409,6 +488,8 @@ static int load_module(void)
 {
 	AST_TEST_REGISTER(naptr_resolve_nominal);
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_length);
+	AST_TEST_REGISTER(naptr_resolve_off_nominal_flags);
+	AST_TEST_REGISTER(naptr_resolve_off_nominal_services);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
