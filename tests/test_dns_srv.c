@@ -298,9 +298,92 @@ cleanup:
 	return res;
 }
 
+AST_TEST_DEFINE(srv_resolve_sort_priority)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	const struct ast_dns_record *record;
+	struct srv_record records[] = {
+		{ 20, 10, 5060, "tacos" },
+		{ 10, 10, 5060, "goose.down" },
+	};
+
+	int srv_record_order[] = { 1, 0};
+	enum ast_test_result_state res = AST_TEST_PASS;
+	int i;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_sort_priority";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns two records with differing priorities";
+		info->description = "This test defines two SRV records with differing priorities and\n"
+			"performs a resolution of the domain to which they belong. The test ensures that\n"
+			"the two records are sorted according to priority and that all fields of the SRV\n"
+			"records are parsed correctly\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "DNS resolution returned no result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	i = 0;
+	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
+		if (ast_dns_srv_get_priority(record) != records[srv_record_order[i]].priority) {
+			ast_test_status_update(test, "Unexpected priority in returned SRV record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (ast_dns_srv_get_weight(record) != records[srv_record_order[i]].weight) {
+			ast_test_status_update(test, "Unexpected weight in returned SRV record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (ast_dns_srv_get_port(record) != records[srv_record_order[i]].port) {
+			ast_test_status_update(test, "Unexpected port in returned SRV record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_srv_get_host(record), records[srv_record_order[i]].host)) {
+			ast_test_status_update(test, "Unexpected host in returned SRV record\n");
+			res = AST_TEST_FAIL;
+		}
+		++i;
+	}
+
+	if (i != ARRAY_LEN(records)) {
+		ast_test_status_update(test, "Unexpected number of records returned in SRV lookup\n");
+		res = AST_TEST_FAIL;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(srv_resolve_single_record);
+	AST_TEST_UNREGISTER(srv_resolve_sort_priority);
 
 	return 0;
 }
@@ -308,6 +391,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	AST_TEST_REGISTER(srv_resolve_single_record);
+	AST_TEST_REGISTER(srv_resolve_sort_priority);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
