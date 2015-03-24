@@ -114,6 +114,50 @@ static enum flags_result interpret_flags(const char *flags, uint8_t flags_size)
 	return (!known_flag_found || known_flag_found == 'p') ? FLAGS_UNKNOWN : FLAGS_TERMINAL;
 }
 
+/*!
+ * \brief Analyze NAPTR services for validity as defined by RFC 3404
+ *
+ * \note The services string passed to this function is NOT NULL-terminated
+ * \param services The services string parsed from a NAPTR record
+ * \param services_size The size of the services string
+ * \retval 0 Services are valid
+ * \retval -1 Services are invalid
+ */
+static int services_invalid(const char *services, uint8_t services_size)
+{
+	const char *current_pos = services;
+	uint8_t remaining_size = services_size;
+
+	while (1) {
+		char *plus_pos = memchr(current_pos, '+', remaining_size);
+		uint8_t current_size = plus_pos ? plus_pos - current_pos : remaining_size;
+		int i;
+
+		if (!isalpha(current_pos[0])) {
+			return -1;
+		}
+
+		if (current_size > 32) {
+			return -1;
+		}
+
+		for (i = 1; i < current_size; ++i) {
+			if (!isalnum(current_pos[i])) {
+				return -1;
+			}
+		}
+
+		remaining_size -= current_size;
+		if (!remaining_size) {
+			break;
+		}
+
+		current_pos = plus_pos + 1;
+	}
+
+	return 0;
+}
+
 struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const char *data, const size_t size)
 {
 	struct ast_dns_naptr_record *naptr;
@@ -243,6 +287,11 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 	flags_res = interpret_flags(flags, flags_size);
 	if (flags_res == FLAGS_INVALID) {
 		ast_log(LOG_ERROR, "NAPTR Record contained invalid flags %.*s\n", flags_size, flags);
+		return NULL;
+	}
+
+	if (services_invalid(services, services_size)) {
+		ast_log(LOG_ERROR, "NAPTR record contained invalid services %.*s\n", services_size, services);
 		return NULL;
 	}
 

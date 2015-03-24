@@ -407,9 +407,10 @@ AST_TEST_DEFINE(naptr_resolve_off_nominal_flags)
 {
 	struct naptr_record records[] = {
 		/* Non-alphanumeric flag */
-		{ 100, 100, {1, "\x0a"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "!"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
 		/* Mix of valid and non-alphanumeric */
-		{ 100, 100, {2, "A\x0a"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "A!"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {2, "!A"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
 		/* Invalid combinations of flags */
 		{ 100, 100, {2, "sa"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
 		{ 100, 100, {2, "su"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, ""},
@@ -442,11 +443,43 @@ AST_TEST_DEFINE(naptr_resolve_off_nominal_flags)
 	return off_nominal_test(test, records, ARRAY_LEN(records));
 }
 
+AST_TEST_DEFINE(naptr_resolve_off_nominal_services)
+{
+	struct naptr_record records[] = {
+		{ 100, 100, {1, "A"}, {5, "BLAH!"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {5, "BL!AH"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {8, "1SIP+D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {8, "SIP+1D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {4, "+D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {4, "SIP+"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {8, "SIP++D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {37, "SIPSIPSIPSIPSIPSIPSIPSIPSIPSIPSIP+D2U"}, {15, "!.*!horse.mane!"}, ""},
+		{ 100, 100, {1, "A"}, {37, "SIP+D2UD2UD2UD2UD2UD2UD2UD2UD2UD2UD2U"}, {15, "!.*!horse.mane!"}, ""},
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_services";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Ensure that NAPTR records with invalid services are not presented in results";
+		info->description = "This test defines a set of records where the services provided are\n"
+			"invalid in some way. This may be due to providing non-alphanumeric characters, providing\n"
+			"protocols or resolution services that start with a non-alphabetic character, or\n"
+			"providing fields that are too long.\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return off_nominal_test(test, records, ARRAY_LEN(records));
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(naptr_resolve_nominal);
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_length);
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_flags);
+	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_services);
 
 	return 0;
 }
@@ -456,6 +489,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(naptr_resolve_nominal);
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_length);
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_flags);
+	AST_TEST_REGISTER(naptr_resolve_off_nominal_services);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
