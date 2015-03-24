@@ -122,7 +122,7 @@ static int write_dns_string(const struct dns_string *string, char *buf)
 		memcpy(&buf[1], string->val, strlen(string->val));
 	}
 
-	return len + 1;
+	return strlen(string->val) + 1;
 }
 
 static int write_dns_domain(const char *string, char *buf)
@@ -135,11 +135,15 @@ static int write_dns_domain(const char *string, char *buf)
 		.val = "",
 	};
 
-	while ((part = strsep(&copy, "."))) {
-		struct dns_string dns_str = {
-			.len = strlen(part),
-			.val = part,
-		};
+	while (1) {
+		struct dns_string dns_str;
+		part = strsep(&copy, ".");
+		if (ast_strlen_zero(part)) {
+			break;
+		}
+		dns_str.len = strlen(part);
+		dns_str.val = part;
+
 		ptr += write_dns_string(&dns_str, ptr);
 	}
 	ptr += write_dns_string(&null_label, ptr);
@@ -328,9 +332,75 @@ cleanup:
 	return res;
 }
 
+AST_TEST_DEFINE(naptr_resolve_off_nominal_length)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	struct naptr_record records[] = {
+		{ 100, 100, {255, "A"}, {4, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {0, "A"},   {4, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {255, "BLAH"}, {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {2, "BLAH"},   {15, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {4, "BLAH"},   {255, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {1, "A"},   {4, "BLAH"},   {3, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {255, "A"}, {255, "BLAH"}, {255, "!.*!horse.mane!"}, "" },
+		{ 100, 100, {0, "A"},   {2, "BLAH"},   {3, "!.*!horse.mane!"}, "" },
+	};
+	enum ast_test_result_state res = AST_TEST_PASS;
+	const struct ast_dns_record *record;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_length";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Test resolution of NAPTR records with off-nominal lengths";
+		info->description = "This test defines a set of records where the strings provided\n"
+			"within the record are valid, but the lengths of the strings in the record are\n"
+			"invalid, either too large or too small. The goal of this test is to ensure that\n"
+			"these invalid lengths result in resolution failures\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&naptr_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_naptr, ns_c_in, &result)) {
+		ast_test_status_update(test, "Failed to perform DNS resolution, despite using valid inputs\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "Synchronous DNS resolution failed to set a result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (record) {
+		ast_test_status_update(test, "DNS resolution returned records when it was not expected to\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&naptr_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(naptr_resolve_nominal);
+	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_length);
 
 	return 0;
 }
@@ -338,6 +408,7 @@ static int unload_module(void)
 static int load_module(void)
 {
 	AST_TEST_REGISTER(naptr_resolve_nominal);
+	AST_TEST_REGISTER(naptr_resolve_off_nominal_length);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

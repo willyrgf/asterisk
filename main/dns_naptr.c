@@ -155,6 +155,13 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 		return NULL;
 	}
 
+	ptr += replacement_size;
+
+	if (ptr != end_of_record) {
+		ast_log(LOG_ERROR, "NAPTR record gave undersized string indications.\n");
+		return NULL;
+	}
+
 	naptr = ast_calloc(1, sizeof(*naptr) + size + flags_size + 1 + services_size + 1 + regexp_size + 1 + replacement_size + 1);
 	if (!naptr) {
 		return NULL;
