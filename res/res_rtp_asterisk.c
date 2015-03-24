@@ -3815,6 +3815,9 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 		struct timeval now;
 		double rttsec, reported_jitter, reported_normdev_jitter_current, normdevrtt_current, reported_lost, reported_normdev_lost_current;
 		uint64_t rtt = 0;
+		/* For REMB support */
+		int fmt = 0;
+		int version = 0;
 
 		i = position;
 		length = ntohl(rtcpheader[i]);
@@ -4034,12 +4037,6 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 			break;
 
 		case RTCP_PT_RTPFB:	/* RTP feedback */
-			int fmt = 0;
-			int version = 0;
-			int length = 0;
-			int pt;
-
-			
 
 			/* From RFC 4585, section 6.1
  			0                   1                   2                   3
