@@ -1,0 +1,32 @@
+INVITE sip:100@edvina.net SIP/2.0 
+Via: SIP/2.0/UDP 192.168.40.17;branch=z9hG4bKkajsfdh3j34j
+From: "Diamant Vxl"<sip:200@192.168.40.18;user=phone>;tag=234883486-1414680350855- 
+To: "Anders Johansson"<sip:300@192.168.40.19:5060;user=phone> 
+Call-ID: BW154550855301014-619807475@192.168.40.19 
+CSeq: 818055236 INVITE 
+Contact: <sip:192.168.40.18:5060;line=4949;skrep=blåbär> 
+Allow: ACK,BYE,CANCEL,INFO,INVITE,OPTIONS,PRACK,REFER,NOTIFY,UPDATE 
+Accept: application/sdp
+Max-Forwards: 8 
+Content-Type: application/sdp 
+Content-Length: 260 
+
+v=0 
+o=Edvina 347649229 1 IN IP4 192.168.40.18
+s=-
+c=IN IP4 192.168.40.18
+t=0 0
+m=audio 64544 RTP/AVPF 8 0 18 101
+a=rtpmap:8 PCMA/8000
+a=rtpmap:0 PCMU/8000
+a=rtpmap:18 G729/8000
+a=rtpmap:101 telephone-event/8000
+a=fmtp:101 0-15
+a=sendrecv
+a=maxptime:20
+m=video 64544 RTP/AVPF 100
+a=rtpmap:100 VP8/90000
+a=rtcp-fb:100 ccm fir
+a=rtcp-fb:100 nack
+a=rtcp-fb:100 nack pli
+a=rtcp-fb:100 goog-remb
