@@ -245,13 +245,25 @@ AST_TEST_DEFINE(naptr_resolve_nominal)
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	const struct ast_dns_record *record;
 	struct naptr_record records[] = {
-		{ 100, 100, {1, "A"}, {4, "BLAH"}, {0, ""}, "goose.down" },
-		{ 200, 200, {1, "A"}, {4, "BLAH"}, {0, ""}, "duck.down" },
-		{ 100, 200, {1, "A"}, {4, "BLAH"}, {18, "![^\\.]+\\.(.*)$!\\1!"}, "" },
-		{ 200, 100, {1, "A"}, {4, "BLAH"}, {29, "!([^\\.]+\\.)(.*)$!\\1.happy.\\2!"}, "" },
+		/* Incredibly plain record */
+		{ 200, 100, {1, "A"}, {4, "BLAH"}, {0, ""}, "goose.down" },
+		/* Records with valid but unusual flags */
+		{ 300,   8, {0, ""}, {4, "BLAH"}, {0, ""}, "goose.down" },
+		{ 300,   6, {1, "3"}, {4, "BLAH"}, {0, ""}, "goose.down" },
+		{ 100,   2, {2, "32"}, {4, "BLAH"}, {0, ""}, "goose.down" },
+		{ 400, 100, {3, "A32"}, {4, "BLAH"}, {0, ""}, "goose.down" },
+		/* Records with valid but unusual services */
+		{ 100, 700, {0, ""}, {0, ""}, {0, ""}, "goose.down" },
+		//{ 500, 100, {1, "A"}, {42, "A+B12+C+D+EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE"}, {0, ""}, "goose.down" },
+		{ 500, 100, {1, "A"}, {14, "A+B12+C+D+EEEE"}, {0, ""}, "goose.down" },
+		/* Records with valid regexes (regexes are always unusual) */
+		{ 500, 101, {1, "A"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, "" },
+		{ 500,  99, {1, "A"}, {4, "BLAH"}, {15, "0.*0horse.mane0"}, "" },
+		{  10, 100, {1, "A"}, {4, "BLAH"}, {11, "!.*!\\!\\!\\!!"}, "" },
+		{ 700, 999, {1, "A"}, {4, "BLAH"}, {30, "!(.)(.)(.)(.)!\\1.m.\\2.n\\3.o\\4!"}, "" },
 	};
 
-	int naptr_record_order[] = { 0, 2, 3, 1 };
+	int naptr_record_order[] = { 9, 3, 5, 0, 2, 1, 4, 8, 6, 7, 10};
 	enum ast_test_result_state res = AST_TEST_PASS;
 	int i;
 
@@ -509,6 +521,32 @@ AST_TEST_DEFINE(naptr_resolve_off_nominal_regexp)
 	return off_nominal_test(test, records, ARRAY_LEN(records));
 }
 
+AST_TEST_DEFINE(naptr_resolve_off_nominal_interactions)
+{
+	struct naptr_record records[] = {
+		/* Both regexp and replacement are specified */
+		{ 100, 100, {1, "A"}, {4, "BLAH"}, {15, "!.*!horse.mane!"}, "goose.down"},
+		/* XXX RFC 2915 says that a service MUST be present if terminal flags are
+		 * specified. However, RFCs 3401-3404 do not specify this behavior, so
+		 * I am not putting in a test for it
+		 */
+	};
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "naptr_resolve_off_nominal_interactions";
+		info->category = "/main/dns/naptr/";
+		info->summary = "Ensure that NAPTR records with invalid interactions are not presented in results";
+		info->description = "This test defines a set of records where all parts are individually valid,\n"
+			"but when combined do not make sense and are thus invalid.\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return off_nominal_test(test, records, ARRAY_LEN(records));
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(naptr_resolve_nominal);
@@ -516,6 +554,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_flags);
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_services);
 	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_regexp);
+	AST_TEST_UNREGISTER(naptr_resolve_off_nominal_interactions);
 
 	return 0;
 }
@@ -527,6 +566,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_flags);
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_services);
 	AST_TEST_REGISTER(naptr_resolve_off_nominal_regexp);
+	AST_TEST_REGISTER(naptr_resolve_off_nominal_interactions);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

@@ -127,11 +127,15 @@ static enum flags_result interpret_flags(const char *flags, uint8_t flags_size)
 static int services_invalid(const char *services, uint8_t services_size)
 {
 	const char *current_pos = services;
-	uint8_t remaining_size = services_size;
+	const char *end_of_services = services + services_size;
+
+	if (services_size == 0) {
+		return 0;
+	}
 
 	while (1) {
-		char *plus_pos = memchr(current_pos, '+', remaining_size);
-		uint8_t current_size = plus_pos ? plus_pos - current_pos : remaining_size;
+		char *plus_pos = memchr(current_pos, '+', end_of_services - current_pos);
+		uint8_t current_size = plus_pos ? plus_pos - current_pos : end_of_services - current_pos;
 		int i;
 
 		if (!isalpha(current_pos[0])) {
@@ -148,11 +152,9 @@ static int services_invalid(const char *services, uint8_t services_size)
 			}
 		}
 
-		remaining_size -= current_size;
-		if (!remaining_size) {
+		if (!plus_pos) {
 			break;
 		}
-
 		current_pos = plus_pos + 1;
 	}
 
@@ -495,6 +497,14 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 
 	if (regexp_invalid(regexp, regexp_size)) {
 		ast_log(LOG_ERROR, "NAPTR record contained invalid regexp %.*s\n", regexp_size, regexp);
+		return NULL;
+	}
+
+	/* replacement_size takes into account the NULL label, so a NAPTR record with no replacement
+	 * will have a replacement_size of 1.
+	 */
+	if (regexp_size && replacement_size > 1) {
+		ast_log(LOG_ERROR, "NAPTR record contained both a regexp and replacement\n");
 		return NULL;
 	}
 
