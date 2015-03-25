@@ -11119,10 +11119,11 @@ static int process_sdp_a_video(const char *a, struct sip_pvt *p, struct ast_rtp_
 		*/
 		ast_debug(2, " Got RTCP-FB parameter for codec %d : %s \n", codec, rtcpfb_string);
 		if (!strncasecmp(rtcpfb_string, "goog-remb", 9)) {
-			/* Do something clever with this information */
 			/* Yes, this is an ugly hack, but for now it will have to do. This property
 			   is really a per-codec thing, not per-stream */
-			if (p->vrtp) {
+			/* OEJ Note: This should only be enabled for offers - not if this is an answer and we did not offer it */
+			if (p->vrtp && ast_test_flag(&p->flags[2], SIP_PAGE3_REMB_ANSWER)) {
+				ast_debug(4, "%s: Enabling RTCP Feedback google REMB \n", ast_channel_name(p->owner));
 				ast_rtp_instance_set_prop(p->vrtp, AST_RTP_PROPERTY_RTCPFB_REMB, 1);
 				found = TRUE;
 			}
@@ -12769,6 +12770,13 @@ static void add_vcodec_to_sdp(const struct sip_pvt *p, struct ast_format *format
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%u\r\n", rtp_code, subtype, rate);
 
+	if (format == AST_FORMAT_H264 /* || format == AST_FORMAT_VP8 */ ) {
+		if (ast_rtp_instance_get_prop(p->vrtp, AST_RTP_PROPERTY_RTCPFB_REMB)) {
+			/* NOte: Will only be added for answers. */
+			ast_str_append(&a_video, 0, " a=rtcp-fb:%d goog-remb\r\n", rtp_code);
+		}
+	}
+
 	ast_format_sdp_generate(format, rtp_code, a_buf);
 }
 
@@ -13284,6 +13292,7 @@ static enum sip_result add_sdp(struct sip_request *resp, struct sip_pvt *p, int 
 		if (min_video_packet_size)
 			ast_str_append(&a_video, 0, "a=ptime:%d\r\n", min_video_packet_size);
 
+	
 		/* XXX don't think you can have ptime for text */
 		if (min_text_packet_size)
 			ast_str_append(&a_text, 0, "a=ptime:%d\r\n", min_text_packet_size);
