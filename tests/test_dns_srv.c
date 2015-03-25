@@ -135,6 +135,10 @@ struct srv_record {
 	uint16_t weight;
 	uint16_t port;
 	const char *host;
+	unsigned int ignore_priority;
+	unsigned int ignore_weight;
+	unsigned int ignore_port;
+	unsigned int ignore_host;
 };
 
 static int generate_srv_record(struct srv_record *record, char *buf)
@@ -144,16 +148,24 @@ static int generate_srv_record(struct srv_record *record, char *buf)
 	uint16_t port = htons(record->port);
 	char *ptr = buf;
 
-	memcpy(ptr, &priority, sizeof(priority));
-	ptr += sizeof(priority);
+	if (!record->ignore_priority) {
+		memcpy(ptr, &priority, sizeof(priority));
+		ptr += sizeof(priority);
+	}
 
-	memcpy(ptr, &weight, sizeof(weight));
-	ptr += sizeof(weight);
+	if (!record->ignore_weight) {
+		memcpy(ptr, &weight, sizeof(weight));
+		ptr += sizeof(weight);
+	}
 
-	memcpy(ptr, &port, sizeof(port));
-	ptr += sizeof(port);
+	if (!record->ignore_port) {
+		memcpy(ptr, &port, sizeof(port));
+		ptr += sizeof(port);
+	}
 
-	ptr += write_dns_domain(record->host, ptr);
+	if (!record->ignore_host) {
+		ptr += write_dns_domain(record->host, ptr);
+	}
 
 	return ptr - buf;
 }
@@ -652,6 +664,181 @@ cleanup:
 	return res;
 }
 
+AST_TEST_DEFINE(srv_resolve_record_missing_weight_port_host)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	const struct ast_dns_record *record;
+	struct srv_record records[] = {
+		{ 10, 10, 5060, "tacos.com", 0, 1, 1, 1 },
+	};
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_record_missing_weight_port_host";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns a single invalid record";
+		info->description = "This test defines a single SRV record and performs a\n"
+			"resolution of the domain to which they belong. The test ensures that the\n"
+			"record is determined to be corrupt as it contains only a priority\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "DNS resolution returned no result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (record) {
+		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
+		res = AST_TEST_FAIL;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
+AST_TEST_DEFINE(srv_resolve_record_missing_port_host)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	const struct ast_dns_record *record;
+	struct srv_record records[] = {
+		{ 10, 10, 5060, "tacos.com", 0, 0, 1, 1 },
+	};
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_record_missing_port_host";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns a single invalid record";
+		info->description = "This test defines a single SRV record and performs a\n"
+			"resolution of the domain to which they belong. The test ensures that the\n"
+			"record is determined to be corrupt as it contains only a priority and weight\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "DNS resolution returned no result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (record) {
+		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
+		res = AST_TEST_FAIL;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
+AST_TEST_DEFINE(srv_resolve_record_missing_host)
+{
+	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
+	const struct ast_dns_record *record;
+	struct srv_record records[] = {
+		{ 10, 10, 5060, "tacos.com", 0, 0, 0, 1 },
+	};
+
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_record_missing_host";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns a single invalid record";
+		info->description = "This test defines a single SRV record and performs a\n"
+			"resolution of the domain to which they belong. The test ensures that the\n"
+			"record is determined to be corrupt as it contains only a priority, weight,\n"
+			"and port\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	test_records = records;
+	num_test_records = ARRAY_LEN(records);
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "DNS resolution returned no result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (record) {
+		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
+		res = AST_TEST_FAIL;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
 static int unload_module(void)
 {
 	AST_TEST_UNREGISTER(srv_resolve_single_record);
@@ -659,6 +846,9 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(srv_resolve_same_priority_zero_weight);
 	AST_TEST_UNREGISTER(srv_resolve_same_priority_different_weights);
 	AST_TEST_UNREGISTER(srv_resolve_different_priorities_different_weights);
+	AST_TEST_UNREGISTER(srv_resolve_record_missing_weight_port_host);
+	AST_TEST_UNREGISTER(srv_resolve_record_missing_port_host);
+	AST_TEST_UNREGISTER(srv_resolve_record_missing_host);
 
 	return 0;
 }
@@ -670,6 +860,9 @@ static int load_module(void)
 	AST_TEST_REGISTER(srv_resolve_same_priority_zero_weight);
 	AST_TEST_REGISTER(srv_resolve_same_priority_different_weights);
 	AST_TEST_REGISTER(srv_resolve_different_priorities_different_weights);
+	AST_TEST_REGISTER(srv_resolve_record_missing_weight_port_host);
+	AST_TEST_REGISTER(srv_resolve_record_missing_port_host);
+	AST_TEST_REGISTER(srv_resolve_record_missing_host);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }

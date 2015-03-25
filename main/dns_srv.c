@@ -65,7 +65,7 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 
 		ast_assert(srv_offset != NULL);
 		ast_assert(srv_search_base + remaining_size - srv_offset >= size);
-		
+
 		if (!memcmp(srv_offset, data, size)) {
 			ptr = srv_offset;
 			break;
