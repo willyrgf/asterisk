@@ -2863,6 +2863,81 @@ static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw)
 	*lsw = frac;
 }
 
+
+/*! \brief Send RTCP Feedback message (RTP payload specific feedback  / AVPF profile) 
+ *  
+ */
+static int ast_rtcp_write_fb(struct ast_rtp_instance *instance, int type)
+{
+	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
+	int res;
+	int len = 0;
+	unsigned int now_lsw;
+	unsigned int now_msw;
+	unsigned int *rtcpheader;
+	char bdata[512];
+	int rate = rtp_get_rate(&rtp->f.subclass.format);
+	int ice;
+	char brexp;
+	int brmantissa;
+	struct ast_sockaddr remote_address = { {0,} };
+
+	if (!rtp || !rtp->rtcp)
+		return 0;
+
+	if (ast_sockaddr_isnull(&rtp->rtcp->them)) {  /* This'll stop rtcp for this rtp session */
+		/*
+		 * RTCP was stopped.
+		 */
+		return 0;
+	}
+/*
+ 0                   1                   2                   3
+    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  1 |V=2|P|   FMT   |       PT      |          length               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  2|                  SSRC of packet sender                        |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  3|                  SSRC of media source                         |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  4|  Unique identifier 'R' 'E' 'M' 'B'                            |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  5|  Num SSRC     | BR Exp    |  BR Mantissa                      |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+  6|   SSRC feedback                                               |
+   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+   |  ...                                                          |
+
+	REMB is hex 52 45 4d 42
+*/
+
+	rtcpheader = (unsigned int *)bdata;
+	rtcpheader[1] = htonl(rtp->ssrc);               /* Our SSRC */
+	rtcpheader[2] = htonl(rtp->themssrc);
+	rtcpheader[3] = htonl(0x52 << 24 | 0x45 << 16 | 0x4d << 8 | 0x42); /* R E M B */
+	rtcpheader[4] = htonl(1 << 24 ); 	/* BR exp and mantissa goes here as well */
+	len += 40;
+	/* Add the header and paylod data  - including the length */
+	rtcpheader[0] = htonl((2 << 30) | (1 << 24) | (RTCP_PT_PSFB << 16) | ((len/4)-1));
+	/* Generic RTCP header done. Now add FCI */
+
+	ast_sockaddr_copy(&remote_address, &rtp->rtcp->them);
+
+	res = rtcp_sendto(instance, (unsigned int *)rtcpheader, len, 0, &remote_address, &ice);
+	if (res < 0) {
+		ast_log(LOG_ERROR, "RTCP FB transmission error to %s:  %s\n",
+			ast_sockaddr_stringify(&rtp->rtcp->them),
+			strerror(errno));
+		return 0;
+	}
+	if (rtcp_debug_test_addr(&rtp->rtcp->them)) {
+		ast_verbose("* Sent RTCP FB REMB to %s%s\n", ast_sockaddr_stringify(&remote_address), ice ? " (via ICE)" : "");
+		ast_verbose("  Our SSRC: %u\n", rtp->ssrc);
+	}
+	return res;
+}
+
 /*! \brief Send RTCP recipient's report */
 static int ast_rtcp_write_rr(struct ast_rtp_instance *instance)
 {
@@ -4081,6 +4156,8 @@ static struct ast_frame *ast_rtcp_read(struct ast_rtp_instance *instance)
 					    ast_sockaddr_stringify(&rtp->rtcp->them), fmt, length);
 			}
 			
+			/* At this point we do nothing with this information. */
+			/* We should propably propagate it over the bridge */
 			break;
 
 		case RTCP_PT_PSFB:	/* Payload specific data */
