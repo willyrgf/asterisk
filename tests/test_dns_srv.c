@@ -230,33 +230,16 @@ static struct ast_dns_resolver srv_resolver = {
 	.cancel = srv_cancel,
 };
 
-AST_TEST_DEFINE(srv_resolve_single_record)
+static enum ast_test_result_state nominal_test(struct ast_test *test, struct srv_record *records, 
+	int *srv_record_order, int num_records)
 {
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	const struct ast_dns_record *record;
-	struct srv_record records[] = {
-		{ 10, 10, 5060, "goose.down" },
-	};
-
-	int srv_record_order[] = { 0, };
 	enum ast_test_result_state res = AST_TEST_PASS;
 	int i;
 
-	switch (cmd) {
-	case TEST_INIT:
-		info->name = "srv_resolve_single_record";
-		info->category = "/main/dns/srv/";
-		info->summary = "Test an SRV lookup which returns a single record";
-		info->description = "This test defines a single SRV record and performs a\n"
-			"resolution of the domain to which they belong. The test ensures that all\n"
-			"fields of the SRV record are parsed correctly\n";
-		return AST_TEST_NOT_RUN;
-	case TEST_EXECUTE:
-		break;
-	}
-
 	test_records = records;
-	num_test_records = ARRAY_LEN(records);
+	num_test_records = num_records;
 	memset(ans_buffer, 0, sizeof(ans_buffer));
 
 	ast_dns_resolver_register(&srv_resolver);
@@ -294,7 +277,7 @@ AST_TEST_DEFINE(srv_resolve_single_record)
 		++i;
 	}
 
-	if (i != ARRAY_LEN(records)) {
+	if (i != num_records) {
 		ast_test_status_update(test, "Unexpected number of records returned in SRV lookup\n");
 		res = AST_TEST_FAIL;
 	}
@@ -310,18 +293,37 @@ cleanup:
 	return res;
 }
 
+AST_TEST_DEFINE(srv_resolve_single_record)
+{
+	struct srv_record records[] = {
+		{ 10, 10, 5060, "goose.down" },
+	};
+
+	int srv_record_order[] = { 0, };
+
+	switch (cmd) {
+	case TEST_INIT:
+		info->name = "srv_resolve_single_record";
+		info->category = "/main/dns/srv/";
+		info->summary = "Test an SRV lookup which returns a single record";
+		info->description = "This test defines a single SRV record and performs a\n"
+			"resolution of the domain to which they belong. The test ensures that all\n"
+			"fields of the SRV record are parsed correctly\n";
+		return AST_TEST_NOT_RUN;
+	case TEST_EXECUTE:
+		break;
+	}
+
+	return nominal_test(test, records, srv_record_order, ARRAY_LEN(records));
+}
+
 AST_TEST_DEFINE(srv_resolve_sort_priority)
 {
-	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
-	const struct ast_dns_record *record;
 	struct srv_record records[] = {
 		{ 20, 10, 5060, "tacos" },
 		{ 10, 10, 5060, "goose.down" },
 	};
-
 	int srv_record_order[] = { 1, 0};
-	enum ast_test_result_state res = AST_TEST_PASS;
-	int i;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -337,73 +339,16 @@ AST_TEST_DEFINE(srv_resolve_sort_priority)
 		break;
 	}
 
-	test_records = records;
-	num_test_records = ARRAY_LEN(records);
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	ast_dns_resolver_register(&srv_resolver);
-
-	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
-		ast_test_status_update(test, "DNS resolution failed\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	if (!result) {
-		ast_test_status_update(test, "DNS resolution returned no result\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	i = 0;
-	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		if (ast_dns_srv_get_priority(record) != records[srv_record_order[i]].priority) {
-			ast_test_status_update(test, "Unexpected priority in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		if (ast_dns_srv_get_weight(record) != records[srv_record_order[i]].weight) {
-			ast_test_status_update(test, "Unexpected weight in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		if (ast_dns_srv_get_port(record) != records[srv_record_order[i]].port) {
-			ast_test_status_update(test, "Unexpected port in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		if (strcmp(ast_dns_srv_get_host(record), records[srv_record_order[i]].host)) {
-			ast_test_status_update(test, "Unexpected host in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		++i;
-	}
-
-	if (i != ARRAY_LEN(records)) {
-		ast_test_status_update(test, "Unexpected number of records returned in SRV lookup\n");
-		res = AST_TEST_FAIL;
-	}
-
-cleanup:
-
-	ast_dns_resolver_unregister(&srv_resolver);
-
-	test_records = NULL;
-	num_test_records = 0;
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	return res;
+	return nominal_test(test, records, srv_record_order, ARRAY_LEN(records));
 }
 
 AST_TEST_DEFINE(srv_resolve_same_priority_zero_weight)
 {
-	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
-	const struct ast_dns_record *record;
 	struct srv_record records[] = {
 		{ 10, 0, 5060, "tacos" },
 		{ 10, 10, 5060, "goose.down" },
 	};
-
 	int srv_record_order[] = { 1, 0};
-	enum ast_test_result_state res = AST_TEST_PASS;
-	int i;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -419,59 +364,7 @@ AST_TEST_DEFINE(srv_resolve_same_priority_zero_weight)
 		break;
 	}
 
-	test_records = records;
-	num_test_records = ARRAY_LEN(records);
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	ast_dns_resolver_register(&srv_resolver);
-
-	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
-		ast_test_status_update(test, "DNS resolution failed\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	if (!result) {
-		ast_test_status_update(test, "DNS resolution returned no result\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	i = 0;
-	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		if (ast_dns_srv_get_priority(record) != records[srv_record_order[i]].priority) {
-			ast_test_status_update(test, "Unexpected priority in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		if (ast_dns_srv_get_weight(record) != records[srv_record_order[i]].weight) {
-			ast_test_status_update(test, "Unexpected weight in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		if (ast_dns_srv_get_port(record) != records[srv_record_order[i]].port) {
-			ast_test_status_update(test, "Unexpected port in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		if (strcmp(ast_dns_srv_get_host(record), records[srv_record_order[i]].host)) {
-			ast_test_status_update(test, "Unexpected host in returned SRV record\n");
-			res = AST_TEST_FAIL;
-		}
-		++i;
-	}
-
-	if (i != ARRAY_LEN(records)) {
-		ast_test_status_update(test, "Unexpected number of records returned in SRV lookup\n");
-		res = AST_TEST_FAIL;
-	}
-
-cleanup:
-
-	ast_dns_resolver_unregister(&srv_resolver);
-
-	test_records = NULL;
-	num_test_records = 0;
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	return res;
+	return nominal_test(test, records, srv_record_order, ARRAY_LEN(records));
 }
 
 AST_TEST_DEFINE(srv_resolve_same_priority_different_weights)
@@ -664,15 +557,53 @@ cleanup:
 	return res;
 }
 
-AST_TEST_DEFINE(srv_resolve_record_missing_weight_port_host)
+static enum ast_test_result_state invalid_record_test(struct ast_test *test, struct srv_record *records,
+	int num_records)
 {
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
 	const struct ast_dns_record *record;
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	test_records = records;
+	num_test_records = num_records;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	ast_dns_resolver_register(&srv_resolver);
+
+	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
+		ast_test_status_update(test, "DNS resolution failed\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	if (!result) {
+		ast_test_status_update(test, "DNS resolution returned no result\n");
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+	record = ast_dns_result_get_records(result);
+	if (record) {
+		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
+		res = AST_TEST_FAIL;
+	}
+
+cleanup:
+
+	ast_dns_resolver_unregister(&srv_resolver);
+
+	test_records = NULL;
+	num_test_records = 0;
+	memset(ans_buffer, 0, sizeof(ans_buffer));
+
+	return res;
+}
+
+AST_TEST_DEFINE(srv_resolve_record_missing_weight_port_host)
+{
 	struct srv_record records[] = {
 		{ 10, 10, 5060, "tacos.com", 0, 1, 1, 1 },
 	};
-
-	enum ast_test_result_state res = AST_TEST_PASS;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -687,50 +618,14 @@ AST_TEST_DEFINE(srv_resolve_record_missing_weight_port_host)
 		break;
 	}
 
-	test_records = records;
-	num_test_records = ARRAY_LEN(records);
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	ast_dns_resolver_register(&srv_resolver);
-
-	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
-		ast_test_status_update(test, "DNS resolution failed\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	if (!result) {
-		ast_test_status_update(test, "DNS resolution returned no result\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	record = ast_dns_result_get_records(result);
-	if (record) {
-		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
-		res = AST_TEST_FAIL;
-	}
-
-cleanup:
-
-	ast_dns_resolver_unregister(&srv_resolver);
-
-	test_records = NULL;
-	num_test_records = 0;
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	return res;
+	return invalid_record_test(test, records, ARRAY_LEN(records));
 }
 
 AST_TEST_DEFINE(srv_resolve_record_missing_port_host)
 {
-	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
-	const struct ast_dns_record *record;
 	struct srv_record records[] = {
 		{ 10, 10, 5060, "tacos.com", 0, 0, 1, 1 },
 	};
-
-	enum ast_test_result_state res = AST_TEST_PASS;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -745,50 +640,14 @@ AST_TEST_DEFINE(srv_resolve_record_missing_port_host)
 		break;
 	}
 
-	test_records = records;
-	num_test_records = ARRAY_LEN(records);
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	ast_dns_resolver_register(&srv_resolver);
-
-	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
-		ast_test_status_update(test, "DNS resolution failed\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	if (!result) {
-		ast_test_status_update(test, "DNS resolution returned no result\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	record = ast_dns_result_get_records(result);
-	if (record) {
-		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
-		res = AST_TEST_FAIL;
-	}
-
-cleanup:
-
-	ast_dns_resolver_unregister(&srv_resolver);
-
-	test_records = NULL;
-	num_test_records = 0;
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	return res;
+	return invalid_record_test(test, records, ARRAY_LEN(records));
 }
 
 AST_TEST_DEFINE(srv_resolve_record_missing_host)
 {
-	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
-	const struct ast_dns_record *record;
 	struct srv_record records[] = {
 		{ 10, 10, 5060, "tacos.com", 0, 0, 0, 1 },
 	};
-
-	enum ast_test_result_state res = AST_TEST_PASS;
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -804,39 +663,7 @@ AST_TEST_DEFINE(srv_resolve_record_missing_host)
 		break;
 	}
 
-	test_records = records;
-	num_test_records = ARRAY_LEN(records);
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	ast_dns_resolver_register(&srv_resolver);
-
-	if (ast_dns_resolve("goose.feathers", ns_t_srv, ns_c_in, &result)) {
-		ast_test_status_update(test, "DNS resolution failed\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	if (!result) {
-		ast_test_status_update(test, "DNS resolution returned no result\n");
-		res = AST_TEST_FAIL;
-		goto cleanup;
-	}
-
-	record = ast_dns_result_get_records(result);
-	if (record) {
-		ast_test_status_update(test, "Unexpected record returned from SRV query\n");
-		res = AST_TEST_FAIL;
-	}
-
-cleanup:
-
-	ast_dns_resolver_unregister(&srv_resolver);
-
-	test_records = NULL;
-	num_test_records = 0;
-	memset(ans_buffer, 0, sizeof(ans_buffer));
-
-	return res;
+	return invalid_record_test(test, records, ARRAY_LEN(records));
 }
 
 static int unload_module(void)
