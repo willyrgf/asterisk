@@ -12770,10 +12770,10 @@ static void add_vcodec_to_sdp(const struct sip_pvt *p, struct ast_format *format
 	ast_str_append(m_buf, 0, " %d", rtp_code);
 	ast_str_append(a_buf, 0, "a=rtpmap:%d %s/%u\r\n", rtp_code, subtype, rate);
 
-	if (format == AST_FORMAT_H264 /* || format == AST_FORMAT_VP8 */ ) {
+	if (format->id == AST_FORMAT_H264 /* || format == AST_FORMAT_VP8 */ ) {
 		if (ast_rtp_instance_get_prop(p->vrtp, AST_RTP_PROPERTY_RTCPFB_REMB)) {
 			/* NOte: Will only be added for answers. */
-			ast_str_append(&a_video, 0, " a=rtcp-fb:%d goog-remb\r\n", rtp_code);
+			ast_str_append(a_buf, 0, " a=rtcp-fb:%d goog-remb\r\n", rtp_code);
 		}
 	}
 
