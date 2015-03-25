@@ -23,9 +23,14 @@ Tasks
 * Implement infrastructure
   - Parse feedback message in RTCP
   - ENUMs for feedback messages
+	- Done
 * Add SDP parameters for rtcp-fb
+	- Done
 * Add sip.conf options for rtcp-fb enabling
+	- Done
 * Add test command (CLI or something) to force sending backoff
+* Add bitrate estimator 
+	- See notes below. What's the best way?
 * Send feedback based on RTCP
 * Forward incoming feedback across bridge and send out on other side
   for optimal video pass through
@@ -52,6 +57,7 @@ References
 	https://tools.ietf.org/html/draft-alvestrand-rmcat-congestion-02
 * RTP - RFC 3550
 	https://tools.ietf.org/html/rfc3550
+
 SDP example:
 ------------
 Chrome:
@@ -69,3 +75,33 @@ Mozilla nightly:
 	a=rtcp-fb:120 ccm fir
 
 No "goog-remb" support
+
+Jitsi meet supports goog-remb
+
+Definitions from RFC 5104
+=========================
+Total media bit rate:
+          The total bits per second transferred in a media stream,
+          measured at an observer-selected protocol layer and averaged
+          over a reasonable timescale, the length of which depends on
+          the application.  In general, a media sender and a media
+          receiver will observe different total media bit rates for the
+          same stream, first because they may have selected different
+          reference protocol layers, and second, because of changes in
+          per-packet overhead along the transmission path.  The goal
+          with bit rate averaging is to be able to ignore any burstiness
+          on very short timescales (e.g., below 100 ms) introduced by
+          scheduling or link layer packetization effects.
+
+   Maximum total media bit rate:
+          The upper limit on total media bit rate for a given media
+          stream at a particular receiver and for its selected protocol
+          layer.  Note that this value cannot be measured on the
+          received media stream.  Instead, it needs to be calculated or
+          determined through other means, such as quality of service
+          (QoS) negotiations or local resource limitations.  Also note
+          that this value is an average (on a timescale that is
+          reasonable for the application) and that it may be different
+          from the instantaneous bit rate seen by packets in the media
+          stream.
+

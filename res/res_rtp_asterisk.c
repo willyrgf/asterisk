@@ -2867,19 +2867,17 @@ static void timeval2ntp(struct timeval tv, unsigned int *msw, unsigned int *lsw)
 /*! \brief Send RTCP Feedback message (RTP payload specific feedback  / AVPF profile) 
  *  
  */
-static int ast_rtcp_write_fb(struct ast_rtp_instance *instance, int type)
+static int ast_rtcp_write_fb(struct ast_rtp_instance *instance)
 {
 	struct ast_rtp *rtp = ast_rtp_instance_get_data(instance);
 	int res;
 	int len = 0;
-	unsigned int now_lsw;
-	unsigned int now_msw;
 	unsigned int *rtcpheader;
 	char bdata[512];
 	int rate = rtp_get_rate(&rtp->f.subclass.format);
 	int ice;
-	char brexp;
-	int brmantissa;
+	char brexp = 0;
+	int brmantissa = 0;
 	struct ast_sockaddr remote_address = { {0,} };
 
 	if (!rtp || !rtp->rtcp)
@@ -2914,7 +2912,7 @@ static int ast_rtcp_write_fb(struct ast_rtp_instance *instance, int type)
 
 	rtcpheader = (unsigned int *)bdata;
 	rtcpheader[1] = htonl(rtp->ssrc);               /* Our SSRC */
-	rtcpheader[2] = htonl(rtp->themssrc);
+	rtcpheader[2] = 0;				/* Set to zero in the draft */
 	rtcpheader[3] = htonl(0x52 << 24 | 0x45 << 16 | 0x4d << 8 | 0x42); /* R E M B */
 	rtcpheader[4] = htonl(1 << 24 ); 	/* BR exp and mantissa goes here as well */
 	len += 40;
