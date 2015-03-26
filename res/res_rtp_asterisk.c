@@ -255,8 +255,11 @@ struct ast_rtp {
 	unsigned int ssrc;		/*!< Synchronization source, RFC 3550, page 10. */
 	unsigned int themssrc;		/*!< Their SSRC */
 	unsigned int rxssrc;
-	unsigned int lastts;
-	unsigned int lastrxts;
+	unsigned int lastts;		/*!< Last sent time stamp. */
+	unsigned int lastrxts;		/*!< Last received time stamp. Time stamps can be repeated with different seqno's */
+	unsigned int lastrxts_reuse;	/*!< The number of packets with the same time stamp but different seqno's */
+	unsigned int multi_payload_size;	/*!< For RTP frames delivered in multiple payloads, the combined size */
+	unsigned int multi_payload_startts;	/*!< Our time stamp when the multiple payload started */
 	unsigned int lastividtimestamp;
 	unsigned int lastovidtimestamp;
 	unsigned int lastitexttimestamp;
@@ -293,6 +296,7 @@ struct ast_rtp {
 	char send_digit;	/*!< digit we are sending */
 	int send_payload;
 	int send_duration;
+
 	unsigned int flags;
 	struct timeval rxcore;
 	struct timeval txcore;
@@ -4556,7 +4560,32 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			return AST_LIST_FIRST(&frames);
 		}
 	}
+	if (rtp->f.seqno != seqno && rtp->lastrxts == timestamp && AST_FORMAT_GET_TYPE(rtp->f.subclass.format.id) == AST_FORMAT_TYPE_VIDEO) ) {
+		/* This is a new part of a larger video frame sent in multiple RTP payloads */
+		/* We need to count these and when the frame is over, send to the bitrate estimator */
+		lastrxts_reuse++;
+		if (multi_payload_size == 0) {
+			/* Second frame */
+			multi_payload_size = rtp->f.datalen + (res - hdrlen);
+		} else {
+			multi_payload_size += res - hdrlen;
+		}
+		multi_payload_startts = rtp->lastrxts;	/* When the first packet arrived */
 
+		/* IF this stream is marked for REMB, process the bandwidth estimator */
+		if (ast_rtp_instance_get_prop(rtp, AST_RTP_PROPERTY_RTCPFB_REMB)) {
+			ast_rtp_remb_estimate(rtp );
+		}
+	}
+	if (lastrxts_reuse && rtp->lastrxts != timestamp) {
+		unsigned int transmissiontime = timestamp - multi_payload_startts;
+		/* We have a new time stamp. */
+		/* Do something with the data we have */
+		ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
+		/* Reset counters */
+		lastrxts_reuse = 0;
+		multi_payload_size = 0;
+	}
 	rtp->lastrxts = timestamp;
 
 	rtp->f.src = "RTP";
@@ -4645,6 +4674,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		if (mark) {
 			ast_format_set_video_mark(&rtp->f.subclass.format);
 		}
+
 	} else {
 		/* TEXT -- samples is # of samples vs. 1000 */
 		if (!rtp->lastitexttimestamp)
@@ -5018,6 +5048,19 @@ static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level)
 	rtp->seqno++;
 
 	return res;
+} 
+
+/*! \brief Implement some sort of bandwidth estimation based on the time stamps */
+static void ast_rtp_remb_estimate(struct ast_rtp_instance *instance)
+{
+	/* Get the timestamp of this packet.
+		If it's the same as the one before, it's the same frame. If it's not, it's a new
+		packet.
+	   We need to estimate the time it takes to send a complete frame and the size of that 
+	   video frame. 
+	*/
+	;
+
 }
 
 #ifdef HAVE_OPENSSL_SRTP
