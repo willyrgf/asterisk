@@ -4560,31 +4560,48 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			return AST_LIST_FIRST(&frames);
 		}
 	}
-	if (rtp->f.seqno != seqno && rtp->lastrxts == timestamp && AST_FORMAT_GET_TYPE(rtp->f.subclass.format.id) == AST_FORMAT_TYPE_VIDEO) ) {
-		/* This is a new part of a larger video frame sent in multiple RTP payloads */
-		/* We need to count these and when the frame is over, send to the bitrate estimator */
-		lastrxts_reuse++;
-		if (multi_payload_size == 0) {
-			/* Second frame */
-			multi_payload_size = rtp->f.datalen + (res - hdrlen);
-		} else {
-			multi_payload_size += res - hdrlen;
-		}
-		multi_payload_startts = rtp->lastrxts;	/* When the first packet arrived */
+	if (AST_FORMAT_GET_TYPE(rtp->f.subclass.format.id) == AST_FORMAT_TYPE_VIDEO) {
+		if (rtp->f.seqno != seqno && rtp->lastrxts == timestamp) {
+			/* This is a new part of a larger video frame sent in multiple RTP payloads */
+			/* We need to count these and when the frame is over, send to the bitrate estimator */
+			if (lastrxts_reuse == 0) {
+				lastrxts_reuse=2;
+			} else {
+				lastrxts_reuse++;
+			}
+			if (multi_payload_size == 0) {
+				/* Second frame */
+				multi_payload_size = rtp->f.datalen + (res - hdrlen);
+			} else {
+				multi_payload_size += res - hdrlen;
+			}
+			multi_payload_startts = rtp->lastrxts;	/* When the first packet arrived to us */
+			/* OEJ question: How do we measure the relative transmission time, network wise ? 
+				Answer is propably hidden in RTCP code in this file.
+			*/
 
-		/* IF this stream is marked for REMB, process the bandwidth estimator */
-		if (ast_rtp_instance_get_prop(rtp, AST_RTP_PROPERTY_RTCPFB_REMB)) {
-			ast_rtp_remb_estimate(rtp );
+			/* IF this stream is marked for REMB, process the bandwidth estimator */
+			if (ast_rtp_instance_get_prop(rtp, AST_RTP_PROPERTY_RTCPFB_REMB)) {
+				ast_rtp_remb_estimate(rtp );
+			}
 		}
-	}
-	if (lastrxts_reuse && rtp->lastrxts != timestamp) {
-		unsigned int transmissiontime = timestamp - multi_payload_startts;
-		/* We have a new time stamp. */
-		/* Do something with the data we have */
-		ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
-		/* Reset counters */
-		lastrxts_reuse = 0;
-		multi_payload_size = 0;
+		if (rtp->lastrxts != timestamp) {
+			/* We have a new frame */
+			unsigned int transmissiontime = 0;
+			if (lastrxts_reuse) {
+				transmissiontime = timestamp - multi_payload_startts;
+			} else {
+				lastrxts_reuse=1;
+				multi_payload_size += res - hdrlen;
+				transmissiontime = timestamp;	/* Wrong - where's the network transmission? */
+			}
+			/* We have a new time stamp. */
+			/* Do something with the data we have */
+			ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
+			/* Reset counters */
+			lastrxts_reuse = 0;
+			multi_payload_size = 0;
+		}
 	}
 	rtp->lastrxts = timestamp;
 
