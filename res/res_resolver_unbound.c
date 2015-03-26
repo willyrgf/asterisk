@@ -36,6 +36,10 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/config_options.h"
 #include "asterisk/test.h"
 
+#ifdef TEST_FRAMEWORK
+#include "asterisk/dns_srv.h"
+#endif
+
 /*** DOCUMENTATION
 	<configInfo name="res_resolver_unbound" language="en_US">
 		<configFile name="resolver_unbound.conf">
@@ -299,6 +303,7 @@ static int unbound_resolver_resolve(struct ast_dns_query *query)
 
 	ao2_ref(data, -1);
 	ao2_ref(cfg, -1);
+
 	return res;
 }
 
@@ -487,8 +492,6 @@ static int unbound_config_preapply_callback(void)
 }
 
 #ifdef TEST_FRAMEWORK
-
-#include "asterisk/dns_naptr.h"
 
 /*!
  * \brief A DNS record to be used during a test
@@ -1183,23 +1186,25 @@ AST_TEST_DEFINE(resolve_cancel_off_nominal)
 	return AST_TEST_PASS;
 }
 
-AST_TEST_DEFINE(resolve_naptr)
+AST_TEST_DEFINE(resolve_srv)
 {
 	RAII_VAR(struct unbound_resolver *, resolver, NULL, ao2_cleanup);
 	RAII_VAR(struct unbound_config *, cfg, NULL, ao2_cleanup);
 	RAII_VAR(struct ast_dns_result *, result, NULL, ast_dns_result_free);
-
 	const struct ast_dns_record *record;
-
-	static const char * DOMAIN1 = "goose.feathers";
+	static const char *DOMAIN1 = "taco.bananas";
+	static const char *DOMAIN1_SRV = "taco.bananas 12345 IN SRV 10 20 5060 sip.taco.bananas";
+	enum ast_test_result_state res = AST_TEST_PASS;
 
 	switch (cmd) {
 	case TEST_INIT:
-		info->name = "resolve_naptr";
+		info->name = "resolve_srv";
 		info->category = "/res/res_resolver_unbound/";
-		info->summary = "Attempt resolution of NAPTR record\n";
-		info->description = "This test performs a NAPTR lookup and ensures that\n"
-			"the returned record has the appropriate values set\n";
+		info->summary = "Test synchronous SRV resolution using libunbound\n";
+		info->description = "This test performs the following:\n"
+			"\t* Set one SRV record on one domain\n"
+			"\t* Perform an SRV lookup on the domain\n"
+			"\t* Ensure that the SRV record returned matches the expected value\n";
 		return AST_TEST_NOT_RUN;
 	case TEST_EXECUTE:
 		break;
@@ -1209,43 +1214,44 @@ AST_TEST_DEFINE(resolve_naptr)
 	resolver = ao2_bump(cfg->global->state->resolver);
 
 	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
+	ub_ctx_data_add(resolver->context, DOMAIN1_SRV);
 
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 200 200 A \"Fake service\" \"\" goose.down");
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 200 100 A \"Fake service\" \"\" duck.down");
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 200 A \"Fake service\" \"\" pheasant.down");
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 100 A \"Fake service\" \"\" platypus.fur");
-
-	if (ast_dns_resolve(DOMAIN1, ns_t_naptr, ns_c_in, &result)) {
-		ast_test_status_update(test, "Failed to resolve domain\n");
-		return AST_TEST_FAIL;
-	}
-
-	if (!result) {
-		ast_test_status_update(test, "Successful resolution set a NULL result\n");
-		return AST_TEST_FAIL;
+	if (ast_dns_resolve(DOMAIN1, ns_t_srv, ns_c_in, &result)) {
+		ast_test_status_update(test, "Failed to synchronously resolve SRV for domain '%s'\n", DOMAIN1);
+		res = AST_TEST_FAIL;
+		goto cleanup;
 	}
 
 	record = ast_dns_result_get_records(result);
-	if (!record) {
-		ast_test_status_update(test, "Failed to get any DNS records from the result\n");
-		return AST_TEST_FAIL;
+	if (ast_dns_srv_get_priority(record) != 10) {
+		ast_test_status_update(test, "SRV Record returned priority '%d' when we expected 10\n", ast_dns_srv_get_priority(record));
+		res = AST_TEST_FAIL;
+		goto cleanup;
 	}
 
-	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		/* XXX This just prints data for my own inspection right now. It will need to actually
-		 * perform a check in order to really pass. This will be done once more NAPTR records
-		 * are added so I can check ordering as well as individual data
-		 */
-		ast_log(LOG_NOTICE, "order is %hu\n", ast_dns_naptr_get_order(record));
-		ast_log(LOG_NOTICE, "preference is %hu\n", ast_dns_naptr_get_preference(record));
-		ast_log(LOG_NOTICE, "flags is %s\n", ast_dns_naptr_get_flags(record));
-		ast_log(LOG_NOTICE, "service is %s\n", ast_dns_naptr_get_service(record));
-		ast_log(LOG_NOTICE, "regexp is %s\n", ast_dns_naptr_get_regexp(record));
-		ast_log(LOG_NOTICE, "replacement is %s\n", ast_dns_naptr_get_replacement(record));
+	if (ast_dns_srv_get_weight(record) != 20) {
+		ast_test_status_update(test, "SRV Record returned weight '%d' when we expected 20\n", ast_dns_srv_get_weight(record));
+		res = AST_TEST_FAIL;
+		goto cleanup;
 	}
 
-	return AST_TEST_PASS;
+	if (ast_dns_srv_get_port(record) != 5060) {
+		ast_test_status_update(test, "SRV Record returned port '%d' when we expected 5060\n", ast_dns_srv_get_port(record));
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
 
+	if (strcmp(ast_dns_srv_get_host(record), "sip.taco.bananas")) {
+		ast_test_status_update(test, "SRV Record returned host '%s' when we expected sip.taco.bananas\n", ast_dns_srv_get_host(record));
+		res = AST_TEST_FAIL;
+		goto cleanup;
+	}
+
+cleanup:
+	ub_ctx_data_remove(resolver->context, DOMAIN1_SRV);
+	ub_ctx_zone_remove(resolver->context, DOMAIN1);
+
+	return res;
 }
 #endif
 
@@ -1268,7 +1274,7 @@ static int unload_module(void)
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolve_sync_off_nominal);
 	AST_TEST_UNREGISTER(resolve_cancel_off_nominal);
-	AST_TEST_UNREGISTER(resolve_naptr);
+	AST_TEST_UNREGISTER(resolve_srv);
 	return 0;
 }
 
@@ -1325,7 +1331,7 @@ static int load_module(void)
 	AST_TEST_REGISTER(resolve_sync_off_nominal);
 	AST_TEST_REGISTER(resolve_async_off_nominal);
 	AST_TEST_REGISTER(resolve_cancel_off_nominal);
-	AST_TEST_REGISTER(resolve_naptr);
+	AST_TEST_REGISTER(resolve_srv);
 
 	return AST_MODULE_LOAD_SUCCESS;
 }
