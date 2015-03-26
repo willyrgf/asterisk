@@ -1192,6 +1192,24 @@ AST_TEST_DEFINE(resolve_naptr)
 	const struct ast_dns_record *record;
 
 	static const char * DOMAIN1 = "goose.feathers";
+	int i;
+	enum ast_test_result_state res = AST_TEST_PASS;
+
+	struct naptr_record {
+		const char *zone_entry;
+		uint16_t order;
+		uint16_t preference;
+		const char *flags;
+		const char *services;
+		const char *regexp;
+		const char *replacement;
+		int visited;
+	} records [] = {
+		{ "goose.feathers 12345 IN NAPTR 100 100 A SIP+D2U \"\" goose.down", 100, 100, "A", "SIP+D2U", "", "goose.down", 0},
+		{ "goose.feathers 12345 IN NAPTR 100 200 A SIP+D2T \"\" duck.down", 100, 200, "A", "SIP+D2T", "", "duck.down", 0},
+		{ "goose.feathers 12345 IN NAPTR 200 100 A SIPS+D2U \"\" pheasant.down", 200, 100, "A", "SIPS+D2U", "", "pheasant.down", 0},
+		{ "goose.feathers 12345 IN NAPTR 200 200 A SIPS+D2T \"\" platypus.fur", 200, 200, "A", "SIPS+D2T", "", "platypus.fur", 0},
+	};
 
 	switch (cmd) {
 	case TEST_INIT:
@@ -1210,10 +1228,9 @@ AST_TEST_DEFINE(resolve_naptr)
 
 	ub_ctx_zone_add(resolver->context, DOMAIN1, "static");
 
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 200 200 A \"Fake service\" \"\" goose.down");
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 200 100 A \"Fake service\" \"\" duck.down");
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 200 A \"Fake service\" \"\" pheasant.down");
-	ub_ctx_data_add(resolver->context, "goose.feathers 12345 IN NAPTR 100 100 A \"Fake service\" \"\" platypus.fur");
+	for (i = 0; i < ARRAY_LEN(records); ++i) {
+		ub_ctx_data_add(resolver->context, records[i].zone_entry);
+	}
 
 	if (ast_dns_resolve(DOMAIN1, ns_t_naptr, ns_c_in, &result)) {
 		ast_test_status_update(test, "Failed to resolve domain\n");
@@ -1231,20 +1248,49 @@ AST_TEST_DEFINE(resolve_naptr)
 		return AST_TEST_FAIL;
 	}
 
+	i = 0;
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-		/* XXX This just prints data for my own inspection right now. It will need to actually
-		 * perform a check in order to really pass. This will be done once more NAPTR records
-		 * are added so I can check ordering as well as individual data
-		 */
-		ast_log(LOG_NOTICE, "order is %hu\n", ast_dns_naptr_get_order(record));
-		ast_log(LOG_NOTICE, "preference is %hu\n", ast_dns_naptr_get_preference(record));
-		ast_log(LOG_NOTICE, "flags is %s\n", ast_dns_naptr_get_flags(record));
-		ast_log(LOG_NOTICE, "service is %s\n", ast_dns_naptr_get_service(record));
-		ast_log(LOG_NOTICE, "regexp is %s\n", ast_dns_naptr_get_regexp(record));
-		ast_log(LOG_NOTICE, "replacement is %s\n", ast_dns_naptr_get_replacement(record));
+		if (ast_dns_naptr_get_order(record) != records[i].order) {
+			ast_test_status_update(test, "Unexpected order in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (ast_dns_naptr_get_preference(record) != records[i].preference) {
+			ast_test_status_update(test, "Unexpected preference in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_flags(record), records[i].flags)) {
+			ast_test_status_update(test, "Unexpected flags in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_service(record), records[i].services)) {
+			ast_test_status_update(test, "Unexpected services in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_regexp(record), records[i].regexp)) {
+			ast_test_status_update(test, "Unexpected regexp in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		if (strcmp(ast_dns_naptr_get_replacement(record), records[i].replacement)) {
+			ast_test_status_update(test, "Unexpected replacement in returned NAPTR record\n");
+			res = AST_TEST_FAIL;
+		}
+		records[i].visited = 1;
+		++i;
 	}
 
-	return AST_TEST_PASS;
+	if (i != ARRAY_LEN(records)) {
+		ast_test_status_update(test, "Unexpected number of records visited\n");
+		res = AST_TEST_FAIL;
+	}
+
+	for (i = 0; i < ARRAY_LEN(records); ++i) {
+		if (!records[i].visited) {
+			ast_test_status_update(test, "Did not visit all expected NAPTR records\n");
+			res = AST_TEST_FAIL;
+		}
+	}
+
+	return res;
 
 }
 #endif
