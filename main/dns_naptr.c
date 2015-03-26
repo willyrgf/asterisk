@@ -86,6 +86,10 @@ static enum flags_result interpret_flags(const char *flags, uint8_t flags_size)
 		}
 	}
 
+	/*
+	 * Multiple flags are allowed, but you cannot mix the
+	 * S, A, U, and P flags together.
+	 */
 	for (i = 0; i < flags_size; ++i) {
 		if (!isalnum(flags[i])) {
 			return FLAGS_INVALID;
@@ -133,6 +137,11 @@ static int services_invalid(const char *services, uint8_t services_size)
 		return 0;
 	}
 
+	/* Services are broken into sections divided by a + sign. Each section
+	 * must start with an alphabetic character, and then can only contain
+	 * alphanumeric characters. The size of any section is limited to
+	 * 32 characters
+	 */
 	while (1) {
 		char *plus_pos = memchr(current_pos, '+', end_of_services - current_pos);
 		uint8_t current_size = plus_pos ? plus_pos - current_pos : end_of_services - current_pos;
@@ -167,7 +176,7 @@ static int services_invalid(const char *services, uint8_t services_size)
  * A NAPTR regexp is structured like so
  * /pattern/repl/FLAGS
  *
- * This ensures that the flags on the regex are valid. Regexp
+ * This ensures that the flags on the regexp are valid. Regexp
  * flags can either be zero or one character long. If the flags
  * are one character long, that character must be "i" to indicate
  * the regex evaluation is case-insensitive.
@@ -234,8 +243,8 @@ static int regexp_repl_invalid(const char *repl, const char *end, char delim)
 
 		ast_assert(backslash_pos < end - 1);
 
-		/* XXX RFC 3402 is unclear about whether a backslash-escaped backslash is
-		 * acceptable.
+		/* XXX RFC 3402 is unclear about whether other backslash-escaped characters
+		 * (such as a backslash-escaped backslash) are legal
 		 */
 		if (!strchr("12345689", backslash_pos[1]) && backslash_pos[1] != delim) {
 			return -1;
@@ -271,6 +280,7 @@ static int regexp_pattern_invalid(const char *pattern, const char *end)
 	regex_t reg;
 	int res;
 
+	/* regcomp requires a NULL-terminated string */
 	memcpy(pattern_str, pattern, pattern_size);
 	pattern_str[pattern_size] = '\0';
 
@@ -312,6 +322,14 @@ static int regexp_invalid(const char *regexp, uint8_t regexp_size)
 		return 0;
 	}
 
+	/* The delimiter will be a ! or / in most cases, but the rules allow
+	 * for the delimiter to be nearly any character. It cannot be 'i' because
+	 * the delimiter cannot be the same as regexp flags. The delimiter cannot
+	 * be 1-9 because the delimiter cannot be a backreference number. RFC
+	 * 2915 specified that backslash was also not allowed as a delimiter, but
+	 * RFC 3402 does not say this. We've gone ahead and made the character
+	 * illegal for our purposes.
+	 */
 	delim = *ptr;
 	if (strchr("123456789\\i", delim)) {
 		return -1;
@@ -417,6 +435,12 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 	end_of_record = ptr + size;
 
 	/* ORDER */
+	/* This assignment takes a big-endian 16-bit value and stores it in the
+	 * machine's native byte order. Using this method allows us to avoid potential
+	 * alignment issues in case the order is not on a short-addressable boundary.
+	 * See http://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html for
+	 * more information
+	 */
 	order = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
 	ptr += 2;
 
