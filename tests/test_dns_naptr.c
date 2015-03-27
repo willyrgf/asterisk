@@ -60,7 +60,7 @@ const char DNS_HEADER[] = {
  * There is no buffer size passed to this function since we provide
  * the data ourselves and have sized the buffer to be way larger
  * than necessary for the tests.
- * 
+ *
  * \param num_records The number of DNS records in this DNS response
  * \param buf The buffer to write the header into
  * \retval The number of bytes written to the buffer
@@ -99,7 +99,7 @@ const char DNS_QUESTION [] = {
  * There is no buffer size passed to this function since we provide
  * the data ourselves and have sized the buffer to be way larger
  * than necessary for the tests.
- * 
+ *
  * \param buf The buffer to write the question into
  * \retval The number of bytes written to the buffer
  */
@@ -132,7 +132,7 @@ const char NAPTR_ANSWER [] = {
  * There is no buffer size passed to this function since we provide
  * the data ourselves and have sized the buffer to be way larger
  * than necessary for the tests.
- * 
+ *
  * \param buf The buffer to write the answer into
  * \retval The number of bytes written to the buffer
  */
@@ -287,7 +287,7 @@ static int generate_naptr_record(struct naptr_record *record, char *buf)
 static struct naptr_record *test_records;
 /*!
  * \brief The number of records in the test_records array.
- * 
+ *
  * Each test must set this to the appropriate value at the
  * beginning of the test and must set this back to zero at
  * the end of the test.
@@ -313,7 +313,7 @@ static void *naptr_thread(void *dns_query)
 	struct ast_dns_query *query = dns_query;
 	int i;
 	char *ptr = ans_buffer;
-	
+
 	ptr += generate_dns_header(num_test_records, ptr);
 	ptr += generate_dns_question(ptr);
 

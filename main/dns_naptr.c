@@ -252,7 +252,7 @@ static int regexp_repl_invalid(const char *repl, const char *end, char delim)
 
 		ptr = backslash_pos + 1;
 	}
-	
+
 	return 0;
 }
 
@@ -396,7 +396,7 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 	char *end_of_record;
 	enum flags_result flags_res;
 
-	/* 
+	/*
 	 * This is bordering on the hackiest thing I've ever written.
 	 * Part of parsing a NAPTR record is to parse a potential replacement
 	 * domain name. Decoding this domain name requires the use of the
@@ -419,7 +419,7 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 		 */
 		ast_assert(naptr_offset != NULL);
 		ast_assert(naptr_search_base + remaining_size - naptr_offset >= size);
-		
+
 		if (!memcmp(naptr_offset, data, size)) {
 			/* BAM! FOUND IT! */
 			ptr = naptr_offset;
