@@ -4582,8 +4582,8 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			*/
 
 			/* IF this stream is marked for REMB, process the bandwidth estimator */
-			if (ast_rtp_instance_get_prop(rtp, AST_RTP_PROPERTY_RTCPFB_REMB)) {
-				ast_rtp_remb_estimate(rtp );
+			if (ast_rtp_instance_get_prop(instance, AST_RTP_PROPERTY_RTCPFB_REMB)) {
+				// ast_rtp_remb_estimate( );
 			}
 		}
 		if (rtp->lastrxts != timestamp) {
@@ -4606,7 +4606,7 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			if (rtp->lastrxts_reuse == 1) {
 				ast_debug(1, " ===> Got single frame with a payload size (bytes) of %d. \n", (int) rtp->multi_payload_size);
 			} else {
-				ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
+				ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) rtp->lastrxts_reuse, (int) rtp->multi_payload_size, (int) transmissiontime);
 			}
 			/* Reset counters */
 			rtp->lastrxts_reuse = 0;
