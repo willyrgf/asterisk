@@ -4564,18 +4564,18 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		if (rtp->f.seqno != seqno && rtp->lastrxts == timestamp) {
 			/* This is a new part of a larger video frame sent in multiple RTP payloads */
 			/* We need to count these and when the frame is over, send to the bitrate estimator */
-			if (lastrxts_reuse == 0) {
-				lastrxts_reuse=2;
+			if (rtp->lastrxts_reuse == 0) {
+				rtp->lastrxts_reuse=2;
 			} else {
-				lastrxts_reuse++;
+				rtp->lastrxts_reuse++;
 			}
-			if (multi_payload_size == 0) {
+			if (rtp->multi_payload_size == 0) {
 				/* Second frame */
-				multi_payload_size = rtp->f.datalen + (res - hdrlen);
+				rtp->multi_payload_size = rtp->f.datalen + (res - hdrlen);
 			} else {
-				multi_payload_size += res - hdrlen;
+				rtp->multi_payload_size += res - hdrlen;
 			}
-			multi_payload_startts = rtp->lastrxts;	/* When the first packet arrived to us */
+			rtp->multi_payload_startts = rtp->lastrxts;	/* When the first packet arrived to us */
 			/* OEJ question: How do we measure the relative transmission time, network wise ? 
 				Answer is propably hidden in RTCP code in this file.
 			*/
@@ -4589,14 +4589,11 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 			/* We have a new frame */
 			unsigned int transmissiontime = 0;
 			unsigned int bitspersec = 0;
-			if (lastrxts_reuse) {
+			if (rtp->lastrxts_reuse) {
 				/* Calculate total transmission time for this payload */
-				transmissiontime = timestamp - multi_payload_startts;
+				transmissiontime = timestamp - rtp->multi_payload_startts;
 				/* Can we get an idea of something here? */
-				/* payload_size * 8 = bits 
-				   transmissiontime = milliseconds */
-
-				   bitspersec = (unsigned int) (payload_size * 8) / (transmissiontime * 1000);
+				bitspersec = (unsigned int) (rtp->multi_payload_size * 8) / (transmissiontime * 1000);
 			
 			} else {
 				lastrxts_reuse=1;
