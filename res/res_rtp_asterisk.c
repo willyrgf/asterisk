@@ -4588,16 +4588,28 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 		if (rtp->lastrxts != timestamp) {
 			/* We have a new frame */
 			unsigned int transmissiontime = 0;
+			unsigned int bitspersec = 0;
 			if (lastrxts_reuse) {
+				/* Calculate total transmission time for this payload */
 				transmissiontime = timestamp - multi_payload_startts;
+				/* Can we get an idea of something here? */
+				/* payload_size * 8 = bits 
+				   transmissiontime = milliseconds */
+
+				   bitspersec = (unsigned int) (payload_size * 8) / (transmissiontime * 1000);
+			
 			} else {
 				lastrxts_reuse=1;
 				multi_payload_size += res - hdrlen;
-				transmissiontime = timestamp;	/* Wrong - where's the network transmission? */
+				transmissiontime = 0;	/* Wrong - where's the network transmission? */
 			}
 			/* We have a new time stamp. */
 			/* Do something with the data we have */
-			ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
+			if (lastrxts_reuse == 1) {
+				ast_debug(1, " ===> Got single frame with a payload size (bytes) of %d. \n", (int) multi_payload_size);
+			} else {
+				ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
+			}
 			/* Reset counters */
 			lastrxts_reuse = 0;
 			multi_payload_size = 0;
