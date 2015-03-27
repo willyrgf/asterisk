@@ -477,6 +477,7 @@ static void ast_rtp_stun_request(struct ast_rtp_instance *instance, struct ast_s
 static void ast_rtp_stop(struct ast_rtp_instance *instance);
 static int ast_rtp_qos_set(struct ast_rtp_instance *instance, int tos, int cos, const char* desc);
 static int ast_rtp_sendcng(struct ast_rtp_instance *instance, int level);
+static void ast_rtp_remb_estimate(struct ast_rtp_instance *instance);
 
 #ifdef HAVE_OPENSSL_SRTP
 static int ast_rtp_activate(struct ast_rtp_instance *instance);
@@ -4596,20 +4597,20 @@ static struct ast_frame *ast_rtp_read(struct ast_rtp_instance *instance, int rtc
 				bitspersec = (unsigned int) (rtp->multi_payload_size * 8) / (transmissiontime * 1000);
 			
 			} else {
-				lastrxts_reuse=1;
-				multi_payload_size += res - hdrlen;
+				rtp->lastrxts_reuse=1;
+				rtp->multi_payload_size += res - hdrlen;
 				transmissiontime = 0;	/* Wrong - where's the network transmission? */
 			}
 			/* We have a new time stamp. */
 			/* Do something with the data we have */
-			if (lastrxts_reuse == 1) {
-				ast_debug(1, " ===> Got single frame with a payload size (bytes) of %d. \n", (int) multi_payload_size);
+			if (rtp->lastrxts_reuse == 1) {
+				ast_debug(1, " ===> Got single frame with a payload size (bytes) of %d. \n", (int) rtp->multi_payload_size);
 			} else {
 				ast_debug(1, " ===> Combined %d frames with an aggregated payload size (bytes) of %d. Transmission time %d millisecs\n", (int) lastrxts_reuse, (int) multi_payload_size, (int) transmissiontime);
 			}
 			/* Reset counters */
-			lastrxts_reuse = 0;
-			multi_payload_size = 0;
+			rtp->lastrxts_reuse = 0;
+			rtp->multi_payload_size = 0;
 		}
 	}
 	rtp->lastrxts = timestamp;
