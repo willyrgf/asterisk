@@ -243,7 +243,7 @@ struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family, enum
 	struct ast_db_shared_family *shared_family;
 
 	shared_family = ao2_alloc_options(sizeof(*shared_family) + strlen(family) + 1,
-		shared_db_family_dtor, OBJ_NOLOCK);
+		shared_db_family_dtor, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!shared_family) {
 		return NULL;
 	}
@@ -275,16 +275,19 @@ static int db_shared_family_sort_fn(const void *obj_left, const void *obj_right,
 	const char *right_key = obj_right;
 	int cmp;
 
-	switch (flags & (OBJ_POINTER | OBJ_KEY | OBJ_PARTIAL_KEY)) {
-	default:
-	case OBJ_POINTER:
+	switch (flags & OBJ_SEARCH_MASK) {
+	case OBJ_SEARCH_OBJECT:
 		right_key = right->name;
 		/* Fall through */
-	case OBJ_KEY:
+	case OBJ_SEARCH_KEY:
 		cmp = strcmp(left->name, right_key);
 		break;
-	case OBJ_PARTIAL_KEY:
+	case OBJ_SEARCH_PARTIAL_KEY:
 		cmp = strncmp(left->name, right_key, strlen(right_key));
+		break;
+	default:
+		ast_assert(0);
+		cmp = 0;
 		break;
 	}
 	return cmp;
@@ -488,6 +491,7 @@ static int db_entry_put_shared(const char *family, const char *key, const char *
 	ast_db_publish_shared_message(ast_db_put_shared_type(), clone, NULL);
 
 	ao2_ref(shared_family, -1);
+	ao2_ref(clone, -1);
 
 	return 0;
 }
@@ -534,6 +538,7 @@ static int db_entry_del_shared(const char *family, const char *key)
 	ast_db_publish_shared_message(ast_db_del_shared_type(), clone, NULL);
 
 	ao2_ref(shared_family, -1);
+	ao2_ref(clone, -1);
 
 	return 0;
 }
@@ -1530,7 +1535,7 @@ static void db_put_shared_msg_cb(void *data, struct stasis_subscription *sub, st
 	}
 
 	/* Don't update if we don't have this area shared on this server */
-	shared_check = ao2_find(shared_families, shared_family->name, OBJ_KEY);
+	shared_check = ao2_find(shared_families, shared_family->name, OBJ_SEARCH_KEY);
 	if (!shared_check) {
 		return;
 	}

@@ -1258,10 +1258,31 @@ static struct ast_sip_event_publisher_handler *event_publisher_handlers[] = {
 	&asterisk_db_publisher_handler,
 };
 
+static int unload_module(void)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_LEN(publish_handlers); i++) {
+		ast_sip_unregister_publish_handler(publish_handlers[i]);
+	}
+
+	for (i = 0; i < ARRAY_LEN(event_publisher_handlers); i++) {
+		ast_sip_unregister_event_publisher_handler(event_publisher_handlers[i]);
+	}
+
+	return 0;
+}
+
+static int reload_module(void)
+{
+	ast_sorcery_reload_object(ast_sip_get_sorcery(), "asterisk-publication");
+	asterisk_publication_send_refresh();
+	return 0;
+}
+
 static int load_module(void)
 {
 	int i;
-	int j;
 
 	CHECK_PJSIP_PUBSUB_MODULE_LOADED();
 
@@ -1288,9 +1309,7 @@ static int load_module(void)
 		if (ast_sip_register_publish_handler(publish_handlers[i])) {
 			ast_log(LOG_WARNING, "Unable to register event publication handler %s\n",
 				publish_handlers[i]->event_name);
-			for (j = 0; j < i; j++) {
-				ast_sip_unregister_publish_handler(publish_handlers[j]);
-			}
+			unload_module();
 			return AST_MODULE_LOAD_DECLINE;
 		}
 	}
@@ -1299,12 +1318,7 @@ static int load_module(void)
 		if (ast_sip_register_event_publisher_handler(event_publisher_handlers[i])) {
 			ast_log(LOG_WARNING, "Unable to register event publisher handler %s\n",
 				event_publisher_handlers[i]->event_name);
-			for (j = 0; j < ARRAY_LEN(&publish_handlers); j++) {
-				ast_sip_unregister_publish_handler(publish_handlers[j]);
-			}
-			for (j = 0; j < i; j++) {
-				ast_sip_unregister_event_publisher_handler(event_publisher_handlers[j]);
-			}
+			unload_module();
 			return AST_MODULE_LOAD_DECLINE;
 		}
 	}
@@ -1312,28 +1326,6 @@ static int load_module(void)
 	asterisk_publication_send_refresh();
 
 	return AST_MODULE_LOAD_SUCCESS;
-}
-
-static int reload_module(void)
-{
-	ast_sorcery_reload_object(ast_sip_get_sorcery(), "asterisk-publication");
-	asterisk_publication_send_refresh();
-	return 0;
-}
-
-static int unload_module(void)
-{
-	int i;
-
-	for (i = 0; i < ARRAY_LEN(publish_handlers); i++) {
-		ast_sip_unregister_publish_handler(publish_handlers[i]);
-	}
-
-	for (i = 0; i < ARRAY_LEN(event_publisher_handlers); i++) {
-		ast_sip_unregister_event_publisher_handler(event_publisher_handlers[i]);
-	}
-
-	return 0;
 }
 
 AST_MODULE_INFO(ASTERISK_GPL_KEY, AST_MODFLAG_LOAD_ORDER, "PJSIP Asterisk Event PUBLISH Support",

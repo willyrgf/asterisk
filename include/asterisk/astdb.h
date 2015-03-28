@@ -34,7 +34,7 @@ struct stasis_topic;
 struct stasis_message_type;
 
 enum ast_db_shared_type {
-	/* Items in the shared family are common across all Asterisk instances */
+	/*! Items in the shared family are common across all Asterisk instances */
 	DB_SHARE_TYPE_GLOBAL = 0,
 	/*! Items in the shared family are made unique across all Asterisk instances */
 	DB_SHARE_TYPE_UNIQUE,

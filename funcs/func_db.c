@@ -230,7 +230,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 		</syntax>
 		<description>
 			<para>This function will check to see if a family is shared between
-			Asteris instances. If so, the function will return <literal>1</literal>.
+			Asterisk instances. If so, the function will return <literal>1</literal>.
 			If not, it will return <literal>0</literal>.</para>
 		</description>
 		<see-also>
