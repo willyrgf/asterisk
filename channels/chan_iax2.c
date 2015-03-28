@@ -2022,11 +2022,6 @@ static struct iax2_user *find_user(const char *name)
 {
 	return ao2_find(users, name, OBJ_KEY);
 }
-static inline struct iax2_user *user_ref(struct iax2_user *user)
-{
-	ao2_ref(user, +1);
-	return user;
-}
 
 static inline struct iax2_user *user_unref(struct iax2_user *user)
 {
@@ -11895,7 +11890,7 @@ immediatedial:
 		if (iaxdebug && iaxs[fr->callno]) {
 			ast_debug(1, "Received out of order packet... (type=%u, subclass %d, ts = %u, last = %u)\n", f.frametype, f.subclass.integer, fr->ts, iaxs[fr->callno]->last);
 		}
-		fr->outoforder = -1;
+		fr->outoforder = 1;
 	}
 	fr->cacheable = ((f.frametype == AST_FRAME_VOICE) || (f.frametype == AST_FRAME_VIDEO));
 	if (iaxs[fr->callno]) {
