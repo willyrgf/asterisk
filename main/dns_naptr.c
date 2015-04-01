@@ -376,7 +376,9 @@ static int regexp_invalid(const char *regexp, uint8_t regexp_size)
 	return 0;
 }
 
-struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const char *data, const size_t size)
+#define PAST_END_OF_RECORD ptr >= end_of_record
+
+struct ast_dns_record *dns_naptr_alloc(struct ast_dns_query *query, const char *data, const size_t size)
 {
 	struct ast_dns_naptr_record *naptr;
 	char *ptr = NULL;
@@ -420,6 +422,14 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 		ast_assert(naptr_offset != NULL);
 		ast_assert(naptr_search_base + remaining_size - naptr_offset >= size);
 
+		/* ... but just to be on the safe side, let's be sure we can break
+		 * out if the assertion doesn't hold
+		 */
+		if (!naptr_offset || naptr_search_base + remaining_size - naptr_offset < size) {
+			ast_log(LOG_ERROR, "Failed to locate NAPTR record within DNS result\n");
+			return NULL;
+		}
+
 		if (!memcmp(naptr_offset, data, size)) {
 			/* BAM! FOUND IT! */
 			ptr = naptr_offset;
@@ -444,7 +454,7 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 	order = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
 	ptr += 2;
 
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
@@ -452,43 +462,43 @@ struct ast_dns_record *ast_dns_naptr_alloc(struct ast_dns_query *query, const ch
 	preference = ((unsigned char) (ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
 	ptr += 2;
 
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* FLAGS */
 	flags_size = *ptr;
 	++ptr;
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 	flags = ptr;
 	ptr += flags_size;
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* SERVICES */
 	services_size = *ptr;
 	++ptr;
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 	services = ptr;
 	ptr += services_size;
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* REGEXP */
 	regexp_size = *ptr;
 	++ptr;
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 	regexp = ptr;
 	ptr += regexp_size;
-	if (ptr >= end_of_record) {
+	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
@@ -595,7 +605,7 @@ static int compare_preference(const void *record1, const void *record2)
 	}
 }
 
-void ast_dns_naptr_sort(struct ast_dns_result *result)
+void dns_naptr_sort(struct ast_dns_result *result)
 {
 	struct ast_dns_record *current;
 	size_t num_records = 0;
@@ -607,6 +617,11 @@ void ast_dns_naptr_sort(struct ast_dns_result *result)
 	/* Determine the number of records */
 	AST_LIST_TRAVERSE(&result->records, current, list) {
 		++num_records;
+	}
+
+	/* No point in continuing if there are no records */
+	if (num_records == 0) {
+		return;
 	}
 
 	/* Allocate an array with that number of records */

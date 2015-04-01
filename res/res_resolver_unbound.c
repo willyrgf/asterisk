@@ -1251,27 +1251,33 @@ AST_TEST_DEFINE(resolve_naptr)
 	i = 0;
 	for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
 		if (ast_dns_naptr_get_order(record) != records[i].order) {
-			ast_test_status_update(test, "Unexpected order in returned NAPTR record\n");
+			ast_test_status_update(test, "Expected order %hu, got order %hu from NAPTR record\n",
+					records[i].order, ast_dns_naptr_get_order(record));
 			res = AST_TEST_FAIL;
 		}
 		if (ast_dns_naptr_get_preference(record) != records[i].preference) {
-			ast_test_status_update(test, "Unexpected preference in returned NAPTR record\n");
+			ast_test_status_update(test, "Expected preference %hu, got preference %hu from NAPTR record\n",
+					records[i].preference, ast_dns_naptr_get_preference(record));
 			res = AST_TEST_FAIL;
 		}
 		if (strcmp(ast_dns_naptr_get_flags(record), records[i].flags)) {
-			ast_test_status_update(test, "Unexpected flags in returned NAPTR record\n");
+			ast_test_status_update(test, "Expected flags %s, got flags %s from NAPTR record\n",
+					records[i].flags, ast_dns_naptr_get_flags(record));
 			res = AST_TEST_FAIL;
 		}
 		if (strcmp(ast_dns_naptr_get_service(record), records[i].services)) {
-			ast_test_status_update(test, "Unexpected services in returned NAPTR record\n");
+			ast_test_status_update(test, "Expected services %s, got services %s from NAPTR record\n",
+					records[i].services, ast_dns_naptr_get_service(record));
 			res = AST_TEST_FAIL;
 		}
 		if (strcmp(ast_dns_naptr_get_regexp(record), records[i].regexp)) {
-			ast_test_status_update(test, "Unexpected regexp in returned NAPTR record\n");
+			ast_test_status_update(test, "Expected regexp %s, got regexp %s from NAPTR record\n",
+					records[i].regexp, ast_dns_naptr_get_regexp(record));
 			res = AST_TEST_FAIL;
 		}
 		if (strcmp(ast_dns_naptr_get_replacement(record), records[i].replacement)) {
-			ast_test_status_update(test, "Unexpected replacement in returned NAPTR record\n");
+			ast_test_status_update(test, "Expected replacement %s, got replacement %s from NAPTR record\n",
+					records[i].replacement, ast_dns_naptr_get_replacement(record));
 			res = AST_TEST_FAIL;
 		}
 		records[i].visited = 1;
