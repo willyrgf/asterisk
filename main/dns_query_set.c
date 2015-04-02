@@ -97,6 +97,9 @@ static void dns_query_set_callback(const struct ast_dns_query *query)
 
 	/* All queries have been completed, invoke final callback */
 	query_set->callback(query_set->user_data);
+
+	ao2_cleanup(query_set->user_data);
+	query_set->user_data = NULL;
 }
 
 int ast_dns_query_set_add(struct ast_dns_query_set *query_set, const char *name, int rr_type, int rr_class)
