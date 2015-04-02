@@ -170,4 +170,24 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
  */
 void ast_dns_srv_sort(struct ast_dns_result *result);
 
-
+/*!
+ * \brief Allocate a DNS query (but do not start resolution)
+ *
+ * \param name The name of what to resolve
+ * \param rr_type Resource record type
+ * \param rr_class Resource record class
+ * \param callback The callback to invoke upon completion
+ * \param data User data to make available on the query
+ *
+ * \retval non-NULL success
+ * \retval NULL failure
+ *
+ * \note The result passed to the callback does not need to be freed
+ *
+ * \note The user data MUST be an ao2 object
+ *
+ * \note This function increments the reference count of the user data, it does NOT steal
+ *
+ * \note The query must be released upon completion or cancellation using ao2_ref
+ */
+struct ast_dns_query *dns_query_alloc(const char *name, int rr_type, int rr_class, ast_dns_resolve_callback callback, void *data);
