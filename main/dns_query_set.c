@@ -40,10 +40,18 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_internal.h"
 #include "asterisk/dns_resolver.h"
 
+/*! \brief A DNS query, which includes its state */
+struct dns_query_set_query {
+	/*! \brief Whether the query started successfully or not */
+	unsigned int started;
+	/*! \brief THe query itself */
+	struct ast_dns_query *query;
+};
+
 /*! \brief A set of DNS queries */
 struct ast_dns_query_set {
 	/*! \brief DNS queries */
-	AST_VECTOR(, struct ast_dns_query *) queries;
+	AST_VECTOR(, struct dns_query_set_query) queries;
 	/*! \brief The total number of completed queries */
 	int queries_completed;
 	/*! \brief Callback to invoke upon completion */
@@ -52,19 +60,26 @@ struct ast_dns_query_set {
 	void *user_data;
 };
 
+/*! \brief Release all queries held in a query set */
+static void dns_query_set_release(struct ast_dns_query_set *query_set)
+{
+	int idx;
+
+	for (idx = 0; idx < AST_VECTOR_SIZE(&query_set->queries); ++idx) {
+		struct dns_query_set_query *query = AST_VECTOR_GET_ADDR(&query_set->queries, idx);
+
+		ao2_ref(query->query, -1);
+	}
+
+	AST_VECTOR_FREE(&query_set->queries);
+}
+
 /*! \brief Destructor for DNS query set */
 static void dns_query_set_destroy(void *data)
 {
 	struct ast_dns_query_set *query_set = data;
-	int idx;
 
-	for (idx = 0; idx < AST_VECTOR_SIZE(&query_set->queries); ++idx) {
-		struct ast_dns_query *query = AST_VECTOR_GET(&query_set->queries, idx);
-
-		ao2_ref(query, -1);
-	}
-	AST_VECTOR_FREE(&query_set->queries);
-
+	dns_query_set_release(query_set);
 	ao2_cleanup(query_set->user_data);
 }
 
@@ -100,14 +115,18 @@ static void dns_query_set_callback(const struct ast_dns_query *query)
 
 	ao2_cleanup(query_set->user_data);
 	query_set->user_data = NULL;
+
+	dns_query_set_release(query_set);
 }
 
 int ast_dns_query_set_add(struct ast_dns_query_set *query_set, const char *name, int rr_type, int rr_class)
 {
-	struct ast_dns_query *query;
+	struct dns_query_set_query query = {
+		.started = 0,
+	};
 
-	query = dns_query_alloc(name, rr_type, rr_class, dns_query_set_callback, query_set);
-	if (!query) {
+	query.query = dns_query_alloc(name, rr_type, rr_class, dns_query_set_callback, query_set);
+	if (!query.query) {
 		return -1;
 	}
 
@@ -133,7 +152,7 @@ struct ast_dns_query *ast_dns_query_set_get(const struct ast_dns_query_set *quer
 		return NULL;
 	}
 
-	return AST_VECTOR_GET(&query_set->queries, index);
+	return AST_VECTOR_GET_ADDR(&query_set->queries, index)->query;
 }
 
 void *ast_dns_query_set_get_data(const struct ast_dns_query_set *query_set)
@@ -149,13 +168,14 @@ void ast_dns_query_set_resolve_async(struct ast_dns_query_set *query_set, ast_dn
 	query_set->user_data = ao2_bump(data);
 
 	for (idx = 0; idx < AST_VECTOR_SIZE(&query_set->queries); ++idx) {
-		struct ast_dns_query *query = AST_VECTOR_GET(&query_set->queries, idx);
+		struct dns_query_set_query *query = AST_VECTOR_GET_ADDR(&query_set->queries, idx);
 
-		if (!query->resolver->resolve(query)) {
+		if (!query->query->resolver->resolve(query->query)) {
+			query->started = 1;
 			continue;
 		}
 
-		dns_query_set_callback(query);
+		dns_query_set_callback(query->query);
 	}
 }
 
@@ -220,9 +240,16 @@ int ast_dns_query_set_resolve_cancel(struct ast_dns_query_set *query_set)
 	int res = 0, idx;
 
 	for (idx = 0; idx < AST_VECTOR_SIZE(&query_set->queries); ++idx) {
-		struct ast_dns_query *query = AST_VECTOR_GET(&query_set->queries, idx);
+		struct dns_query_set_query *query = AST_VECTOR_GET_ADDR(&query_set->queries, idx);
 
-		res |= query->resolver->cancel(query);
+		if (query->started) {
+			res |= query->query->resolver->cancel(query->query);
+		}
+
+	}
+
+	if (!res) {
+		dns_query_set_release(query_set);
 	}
 
 	return res;
