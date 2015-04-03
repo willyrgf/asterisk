@@ -2978,17 +2978,73 @@ static int send_out_of_dialog_request(pjsip_tx_data *tdata, struct ast_sip_endpo
 	return 0;
 }
 
+struct sip_send_request_data {
+	struct pjsip_dialog *dlg;
+	struct ast_sip_endpoint *endpoint;
+	void *token;
+	void (*callback)(void *token, pjsip_event *e);
+	pjsip_tx_data *tdata;
+};
+
+static void sip_send_request_data_destroy(void *data)
+{
+	struct sip_send_request_data *send_request_data = data;
+
+	if (send_request_data->dlg) {
+		pjsip_dlg_dec_session(send_request_data->dlg, &supplement_module);
+	}
+
+	ao2_cleanup(send_request_data->endpoint);
+	ao2_cleanup(send_request_data->token);
+}
+
+static void sip_send_request_resolve_cb(void *data, pjsip_server_addresses *addresses)
+{
+	struct sip_send_request_data *send_request_data = data;
+
+	memcpy(&(send_request_data->tdata->dest_info.addr), addresses, sizeof(send_request_data->tdata->dest_info.addr));
+
+	if (send_request_data->dlg) {
+		send_in_dialog_request(send_request_data->tdata, send_request_data->dlg);
+	} else {
+		send_out_of_dialog_request(send_request_data->tdata, send_request_data->endpoint,
+			send_request_data->token, send_request_data->callback);
+	}
+}
+
 int ast_sip_send_request(pjsip_tx_data *tdata, struct pjsip_dialog *dlg,
 	struct ast_sip_endpoint *endpoint, void *token,
 	void (*callback)(void *token, pjsip_event *e))
 {
+	pjsip_host_info target;
+	struct sip_send_request_data *send_request_data;
+	int res;
+
 	ast_assert(tdata->msg->type == PJSIP_REQUEST_MSG);
 
-	if (dlg) {
-		return send_in_dialog_request(tdata, dlg);
-	} else {
-		return send_out_of_dialog_request(tdata, endpoint, token, callback);
+	if (pjsip_get_request_dest(tdata, &target) != PJ_SUCCESS) {
+		return -1;
 	}
+
+	send_request_data = ao2_alloc_options(sizeof(*send_request_data), sip_send_request_data_destroy,
+		AO2_ALLOC_OPT_LOCK_NOLOCK);
+	if (!send_request_data) {
+		return -1;
+	}
+
+	if (dlg) {
+		send_request_data->dlg = dlg;
+		pjsip_dlg_inc_session(dlg, &supplement_module);
+	}
+	send_request_data->endpoint = ao2_bump(endpoint);
+	send_request_data->token = ao2_bump(token);
+	send_request_data->callback = callback;
+	send_request_data->tdata = tdata;
+
+	res = ast_sip_resolve(&target, sip_send_request_resolve_cb, send_request_data);
+	ao2_ref(send_request_data, -1);
+
+	return res;
 }
 
 int ast_sip_set_outbound_proxy(pjsip_tx_data *tdata, const char *proxy)
