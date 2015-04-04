@@ -270,18 +270,22 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 	/* If it's already an address call the callback immediately */
 	if (ip_addr_ver) {
 		pjsip_server_addresses addresses = {
-			.entry[0].type = PJSIP_TRANSPORT_UDP,
+			.entry[0].type = type,
 			.count = 1,
 		};
 
 		if (ip_addr_ver == 4) {
+			addresses.entry[0].addr_len = sizeof(pj_sockaddr_in);
 			pj_sockaddr_init(pj_AF_INET(), &addresses.entry[0].addr, NULL, 0);
 			pj_inet_aton(&target->addr.host, &addresses.entry[0].addr.ipv4.sin_addr);
 		} else {
+			addresses.entry[0].addr_len = sizeof(pj_sockaddr_in6);
 			pj_sockaddr_init(pj_AF_INET6(), &addresses.entry[0].addr, NULL, 0);
 			pj_inet_pton(pj_AF_INET6(), &target->addr.host, &addresses.entry[0].addr.ipv6.sin6_addr);
 			addresses.entry[0].type = (pjsip_transport_type_e)((int)addresses.entry[0].type + PJSIP_TRANSPORT_IPV6);
 		}
+
+		pj_sockaddr_set_port(&addresses.entry[0].addr, !target->addr.port ? pjsip_transport_get_default_port_for_type(type) : target->addr.port);
 
 		ast_debug(2, "Target '%s' is an IP address, skipping resolution\n", host);
 
