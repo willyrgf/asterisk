@@ -3441,8 +3441,6 @@ static int load_module(void)
 		return AST_MODULE_LOAD_DECLINE;
 	}
 
-	ast_sip_initialize_resolver();
-
 	pjsip_tsx_layer_init_module(ast_pjsip_endpoint);
 	pjsip_ua_init_module(ast_pjsip_endpoint, NULL);
 
@@ -3474,6 +3472,9 @@ static int load_module(void)
 		pj_caching_pool_destroy(&caching_pool);
 		return AST_MODULE_LOAD_DECLINE;
 	}
+
+	ast_sip_initialize_resolver();
+	ast_sip_initialize_dns();
 
 	if (ast_sip_initialize_distributor()) {
 		ast_log(LOG_ERROR, "Failed to register distributor module. Aborting load\n");

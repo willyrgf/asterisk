@@ -29,32 +29,42 @@
 #include "asterisk/res_pjsip.h"
 #include "include/res_pjsip_private.h"
 
-/*! \brief Structure which contains resolved target information */
-struct sip_resolved_target {
-	/*! \brief The record type that this target originated from */
+/*! \brief Structure which contains transport+port information for an active query */
+struct sip_target {
 	/*! \brief The transport to be used */
 	pjsip_transport_type_e transport;
 	/*! \brief The port */
 	int port;
-	/*! \brief Resulting addresses */
-	pjsip_server_addresses addresses;
 };
 
-/*! \brief The vector used for addresses */
-AST_VECTOR(addresses, struct sip_resolved_target);
+/*! \brief The vector used for current targets */
+AST_VECTOR(targets, struct sip_target);
 
 /*! \brief Structure which keeps track of resolution */
 struct sip_resolve {
 	/*! \brief Addresses currently being resolved, indexed based on index of queries in query set */
-	struct addresses resolving;
-	/*! \brief Addresses that have been resolved, to ensure proper sorting go from back to front */
-	struct addresses resolved;
+	struct targets resolving;
 	/*! \brief Active queries */
 	struct ast_dns_query_set *queries;
+	/*! \brief Current viable server addresses */
+	pjsip_server_addresses addresses;
 	/*! \brief Callback to invoke upon completion */
 	pjsip_resolver_callback *callback;
 	/*! \brief User provided data */
 	void *token;
+};
+
+/*! \brief Available transports on the system */
+static int sip_available_transports[] = {
+	/* This is a list of transports understood by the resolver, with whether they are
+	 * available as a valid transport stored
+	 */
+	[PJSIP_TRANSPORT_UDP] = 0,
+	[PJSIP_TRANSPORT_TCP] = 0,
+	[PJSIP_TRANSPORT_TLS] = 0,
+	[PJSIP_TRANSPORT_UDP6] = 0,
+	[PJSIP_TRANSPORT_TCP6] = 0,
+	[PJSIP_TRANSPORT_TLS6] = 0,
 };
 
 /*! \brief Destructor for resolution data */
@@ -63,14 +73,13 @@ static void sip_resolve_destroy(void *data)
 	struct sip_resolve *resolve = data;
 
 	AST_VECTOR_FREE(&resolve->resolving);
-	AST_VECTOR_FREE(&resolve->resolved);
 	ao2_cleanup(resolve->queries);
 }
 
 /*! \brief Perform resolution but keep transport and port information */
 static int sip_resolve_add(struct sip_resolve *resolve, const char *name, int rr_type, int rr_class, pjsip_transport_type_e transport, int port)
 {
-	struct sip_resolved_target target = {
+	struct sip_target target = {
 		.transport = transport,
 		.port = port,
 	};
@@ -101,31 +110,18 @@ static int sip_resolve_add(struct sip_resolve *resolve, const char *name, int rr
 static int sip_resolve_invoke_user_callback(void *data)
 {
 	struct sip_resolve *resolve = data;
-	pjsip_server_addresses addresses = {
-		.count = 0,
-	};
 	int idx;
 
-	/* We start from the end because the records with the highest preference are there */
-	for (idx = AST_VECTOR_SIZE(&resolve->resolved) - 1; idx >= 0; --idx) {
-		struct sip_resolved_target *target = AST_VECTOR_GET_ADDR(&resolve->resolved, idx);
-		int address_pos;
-		char addr[256];
+	for (idx = 0; idx < resolve->addresses.count; ++idx) {
+		char addr[PJ_INET6_ADDRSTRLEN + 10];
 
-		for (address_pos = 0; address_pos < target->addresses.count; ++address_pos) {
-			ast_debug(2, "[%p] Address '%d' is '%s' port '%d' with transport '%s'\n",
-				resolve, addresses.count, pj_sockaddr_print(&target->addresses.entry[address_pos].addr, addr, sizeof(addr), 0),
-				pj_sockaddr_get_port(&target->addresses.entry[address_pos].addr), pjsip_transport_get_type_name(target->addresses.entry[address_pos].type));
-			addresses.entry[addresses.count++] = target->addresses.entry[address_pos];
-		}
-
-		if (addresses.count == PJSIP_MAX_RESOLVED_ADDRESSES) {
-			break;
-		}
+		ast_debug(2, "[%p] Address '%d' is %s with transport '%s'\n",
+			resolve, idx, pj_sockaddr_print(&resolve->addresses.entry[idx].addr, addr, sizeof(addr), 3),
+			pjsip_transport_get_type_name(resolve->addresses.entry[idx].type));
 	}
 
-	ast_debug(2, "[%p] Invoking user callback with '%d' addresses\n", resolve, addresses.count);
-	resolve->callback(PJ_SUCCESS, resolve->token, &addresses);
+	ast_debug(2, "[%p] Invoking user callback with '%d' addresses\n", resolve, resolve->addresses.count);
+	resolve->callback(PJ_SUCCESS, resolve->token, &resolve->addresses);
 
 	ao2_ref(resolve, -1);
 
@@ -137,8 +133,8 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 {
 	struct sip_resolve *resolve = ast_dns_query_set_get_data(query_set);
 	struct ast_dns_query_set *queries = resolve->queries;
-	struct addresses resolving;
-	int idx;
+	struct targets resolving;
+	int idx, address_count = 0;
 
 	ast_debug(2, "[%p] All parallel queries completed\n", resolve);
 
@@ -148,13 +144,16 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 	 * to the old.
 	 */
 	resolving = resolve->resolving;
-	AST_VECTOR_INIT(&resolve->resolving, 1);
+	AST_VECTOR_INIT(&resolve->resolving, 0);
 
-	/* Add any AAAA/A records to the resolved list */
+	/* The order of queries is what defines the preference order for the records within this invocation.
+	 * The preference order overall is defined as a result of drilling down from other records. Each
+	 * invocation starts placing records at the beginning, moving others that may have already been present.
+	 */
 	for (idx = 0; idx < ast_dns_query_set_num_queries(queries); ++idx) {
 		struct ast_dns_query *query = ast_dns_query_set_get(queries, idx);
 		struct ast_dns_result *result = ast_dns_query_get_result(query);
-		struct sip_resolved_target *target;
+		struct sip_target *target;
 		const struct ast_dns_record *record;
 
 		if (!result) {
@@ -165,31 +164,66 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 
 		target = AST_VECTOR_GET_ADDR(&resolving, idx);
 		for (record = ast_dns_result_get_records(result); record; record = ast_dns_record_get_next(record)) {
-			if (ast_dns_record_get_rr_type(record) == ns_t_a) {
-				ast_debug(2, "[%p] A record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
-				target->addresses.entry[target->addresses.count].type = target->transport;
-				target->addresses.entry[target->addresses.count].addr_len = sizeof(pj_sockaddr_in);
-				pj_sockaddr_init(pj_AF_INET(), &target->addresses.entry[target->addresses.count].addr, NULL, target->port);
-				target->addresses.entry[target->addresses.count++].addr.ipv4.sin_addr = *(struct pj_in_addr*)ast_dns_record_get_data(record);
-			} else if (ast_dns_record_get_rr_type(record) == ns_t_aaaa) {
-				ast_debug(2, "[%p] AAAA record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
-				target->addresses.entry[target->addresses.count].type = target->transport;
-				target->addresses.entry[target->addresses.count].addr_len = sizeof(pj_sockaddr_in6);
-				pj_sockaddr_init(pj_AF_INET6(), &target->addresses.entry[target->addresses.count].addr, NULL, target->port);
-				pj_memcpy(&target->addresses.entry[target->addresses.count++].addr.ipv6.sin6_addr, ast_dns_record_get_data(record),
-					sizeof(pj_sockaddr_in6));
+
+			if (ast_dns_record_get_rr_type(record) == ns_t_a ||
+				ast_dns_record_get_rr_type(record) == ns_t_aaaa) {
+
+				/* If the maximum number of addresses has already been reached by this query set, skip subsequent
+				 * records as they have lower preference - any existing ones may get replaced/moved if another
+				 * invocation occurs after this one
+				 */
+				if (address_count == PJSIP_MAX_RESOLVED_ADDRESSES) {
+					continue;
+				}
+
+				/* Move any existing addresses so we can make room for this record, this may hurt your head slightly but
+				 * essentially it figures out the maximum number of previous addresses that can exist and caps the
+				 * the memmove operation to that
+				 */
+				memmove(&resolve->addresses.entry[address_count + 1], &resolve->addresses.entry[address_count],
+					sizeof(resolve->addresses.entry[0]) *
+					MIN(resolve->addresses.count, PJSIP_MAX_RESOLVED_ADDRESSES - address_count - 1));
+
+				resolve->addresses.entry[address_count].type = target->transport;
+
+				/* Populate address information for the new address entry */
+				if (ast_dns_record_get_rr_type(record) == ns_t_a) {
+					ast_debug(2, "[%p] A record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
+					resolve->addresses.entry[address_count].addr_len = sizeof(pj_sockaddr_in);
+					pj_sockaddr_init(pj_AF_INET(), &resolve->addresses.entry[address_count].addr, NULL,
+						target->port);
+					resolve->addresses.entry[address_count].addr.ipv4.sin_addr = *(struct pj_in_addr*)ast_dns_record_get_data(record);
+				} else {
+					ast_debug(2, "[%p] AAAA record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
+					resolve->addresses.entry[address_count].addr_len = sizeof(pj_sockaddr_in6);
+					pj_sockaddr_init(pj_AF_INET6(), &resolve->addresses.entry[address_count].addr, NULL,
+						target->port);
+					pj_memcpy(&resolve->addresses.entry[address_count].addr.ipv6.sin6_addr, ast_dns_record_get_data(record),
+						ast_dns_record_get_data_size(record));
+				}
+
+				address_count++;
 			} else if (ast_dns_record_get_rr_type(record) == ns_t_srv) {
+				/* SRV records just create new queries for AAAA+A, nothing fancy */
 				ast_debug(2, "[%p] SRV record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
-				sip_resolve_add(resolve, ast_dns_srv_get_host(record), ns_t_a, ns_c_in, target->transport, ast_dns_srv_get_port(record));
-				sip_resolve_add(resolve, ast_dns_srv_get_host(record), ns_t_aaaa, ns_c_in, target->transport, ast_dns_srv_get_port(record));
+
+				if (sip_available_transports[target->transport + PJSIP_TRANSPORT_IPV6]) {
+					sip_resolve_add(resolve, ast_dns_srv_get_host(record), ns_t_aaaa, ns_c_in, target->transport + PJSIP_TRANSPORT_IPV6,
+						ast_dns_srv_get_port(record));
+				}
+
+				if (sip_available_transports[target->transport]) {
+					sip_resolve_add(resolve, ast_dns_srv_get_host(record), ns_t_a, ns_c_in, target->transport,
+						ast_dns_srv_get_port(record));
+				}
 			}
 		}
-
-		/* Only add this finished result if there's actually addresses on it */
-		if (target->addresses.count) {
-			AST_VECTOR_APPEND(&resolve->resolved, *target);
-		}
 	}
+
+	/* Update the server addresses to include any new entries, but since it's limited to the maximum resolved
+	 * it must never exceed that
+	 */
+	resolve->addresses.count = MIN(resolve->addresses.count + address_count, PJSIP_MAX_RESOLVED_ADDRESSES);
 
 	/* Free the vector we stole as we are responsible for it */
 	AST_VECTOR_FREE(&resolving);
@@ -202,8 +236,7 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 		return;
 	}
 
-	/* Invoke callback with target resolved addresses */
-	ast_debug(2, "[%p] Resolution completed - %zd viable targets\n", resolve, AST_VECTOR_SIZE(&resolve->resolved));
+	ast_debug(2, "[%p] Resolution completed - %d viable targets\n", resolve, resolve->addresses.count);
 
 	/* Push a task to invoke the callback, we do this so it is guaranteed to run in a PJSIP thread */
 	ao2_ref(resolve, +1);
@@ -237,7 +270,7 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 	int ip_addr_ver;
 	pjsip_transport_type_e type = target->type;
 	struct sip_resolve *resolve;
-	char host[NI_MAXHOST], srv[NI_MAXHOST];
+	char host[NI_MAXHOST];
 	int res = 0;
 
 	ast_copy_pj_str(host, &target->addr.host, sizeof(host));
@@ -303,7 +336,7 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 	resolve->callback = cb;
 	resolve->token = token;
 
-	if (AST_VECTOR_INIT(&resolve->resolving, 2) || AST_VECTOR_INIT(&resolve->resolved, 2)) {
+	if (AST_VECTOR_INIT(&resolve->resolving, 2)) {
 		ao2_ref(resolve, -1);
 		cb(PJ_EINVAL, token, NULL);
 		return;
@@ -311,23 +344,33 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 
 	ast_debug(2, "[%p] Created resolution tracking for target '%s'\n", resolve, host);
 
-	res |= sip_resolve_add(resolve, host, ns_t_a, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP : type), target->addr.port);
-	res |= sip_resolve_add(resolve, host, ns_t_aaaa, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP : type), target->addr.port);
-
 	/* If no port has been specified we can do NAPTR + SRV */
 	if (!target->addr.port) {
-		if (type == PJSIP_TRANSPORT_UDP || type == PJSIP_TRANSPORT_UNSPECIFIED) {
-			snprintf(srv, sizeof(srv), "_sip._udp.%s", host);
-			res |= sip_resolve_add(resolve, srv, ns_t_srv, ns_c_in, PJSIP_TRANSPORT_UDP, 0);
-		}
-		if (type == PJSIP_TRANSPORT_TCP || type == PJSIP_TRANSPORT_UNSPECIFIED) {
-			snprintf(srv, sizeof(srv), "_sip._tcp.%s", host);
-			res |= sip_resolve_add(resolve, srv, ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TCP, 0);
-		}
-		if (type == PJSIP_TRANSPORT_TLS || type == PJSIP_TRANSPORT_UNSPECIFIED) {
+		char srv[NI_MAXHOST];
+
+		if ((type == PJSIP_TRANSPORT_TLS || type == PJSIP_TRANSPORT_UNSPECIFIED) &&
+			(sip_available_transports[PJSIP_TRANSPORT_TLS] || sip_available_transports[PJSIP_TRANSPORT_TLS6])) {
 			snprintf(srv, sizeof(srv), "_sips._tcp.%s", host);
 			res |= sip_resolve_add(resolve, srv, ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TLS, 0);
 		}
+		if ((type == PJSIP_TRANSPORT_TCP || type == PJSIP_TRANSPORT_UNSPECIFIED) &&
+			(sip_available_transports[PJSIP_TRANSPORT_TCP] || sip_available_transports[PJSIP_TRANSPORT_TCP6])) {
+			snprintf(srv, sizeof(srv), "_sip._tcp.%s", host);
+			res |= sip_resolve_add(resolve, srv, ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TCP, 0);
+		}
+		if ((type == PJSIP_TRANSPORT_UDP || type == PJSIP_TRANSPORT_UNSPECIFIED) &&
+			(sip_available_transports[PJSIP_TRANSPORT_UDP] || sip_available_transports[PJSIP_TRANSPORT_UDP6])) {
+			snprintf(srv, sizeof(srv), "_sip._udp.%s", host);
+			res |= sip_resolve_add(resolve, srv, ns_t_srv, ns_c_in, PJSIP_TRANSPORT_UDP, 0);
+		}
+	}
+
+	if (sip_available_transports[PJSIP_TRANSPORT_UDP6]) {
+		res |= sip_resolve_add(resolve, host, ns_t_aaaa, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP6 : type), target->addr.port);
+	}
+
+	if (sip_available_transports[PJSIP_TRANSPORT_UDP]) {
+		res |= sip_resolve_add(resolve, host, ns_t_a, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP : type), target->addr.port);
 	}
 
 	if (res) {
@@ -342,8 +385,45 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 	ao2_ref(resolve, -1);
 }
 
+/*! \brief Internal function used to determine if a transport is available */
+static void sip_check_transport(pj_pool_t *pool, pjsip_transport_type_e type, const char *name)
+{
+	pjsip_tpmgr_fla2_param prm;
+
+	pjsip_tpmgr_fla2_param_default(&prm);
+	prm.tp_type = type;
+
+	if (pjsip_tpmgr_find_local_addr2(pjsip_endpt_get_tpmgr(ast_sip_get_pjsip_endpoint()),
+		pool, &prm) == PJ_SUCCESS) {
+		ast_verb(2, "'%s' is an available SIP transport\n", name);
+		sip_available_transports[type] = 1;
+	} else {
+		ast_verb(2, "'%s' is not an available SIP transport, disabling resolver support for it\n",
+			name);
+	}
+}
+
 static int sip_replace_resolver(void *data)
 {
+	pj_pool_t *pool;
+
+
+	pool = pjsip_endpt_create_pool(ast_sip_get_pjsip_endpoint(), "Transport Availability", 256, 256);
+	if (!pool) {
+		return -1;
+	}
+
+	/* Determine what transports are available on the system */
+	sip_check_transport(pool, PJSIP_TRANSPORT_UDP, "UDP+IPv4");
+	sip_check_transport(pool, PJSIP_TRANSPORT_TCP, "TCP+IPv4");
+	sip_check_transport(pool, PJSIP_TRANSPORT_TLS, "TLS+IPv4");
+	sip_check_transport(pool, PJSIP_TRANSPORT_UDP6, "UDP+IPv6");
+	sip_check_transport(pool, PJSIP_TRANSPORT_TCP6, "TCP+IPv6");
+	sip_check_transport(pool, PJSIP_TRANSPORT_TLS6, "TLS+IPv6");
+
+	pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
+
+	/* Replace the PJSIP resolver with our own implementation */
 	pjsip_endpt_set_resolver_implementation(ast_sip_get_pjsip_endpoint(), sip_resolve);
 	return 0;
 }

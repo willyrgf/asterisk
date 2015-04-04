@@ -163,6 +163,11 @@ const char *ast_dns_record_get_data(const struct ast_dns_record *record)
 	return record->data_ptr;
 }
 
+size_t ast_dns_record_get_data_size(const struct ast_dns_record *record)
+{
+	return record->data_len;
+}
+
 const struct ast_dns_record *ast_dns_record_get_next(const struct ast_dns_record *record)
 {
 	return AST_LIST_NEXT(record, list);
