@@ -40,6 +40,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_srv.h"
 #include "asterisk/dns_tlsa.h"
 #include "asterisk/dns_recurring.h"
+#include "asterisk/dns_query_set.h"
 #include "asterisk/dns_resolver.h"
 #include "asterisk/dns_internal.h"
 

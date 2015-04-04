@@ -40,28 +40,6 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_internal.h"
 #include "asterisk/dns_resolver.h"
 
-/*! \brief A DNS query, which includes its state */
-struct dns_query_set_query {
-	/*! \brief Whether the query started successfully or not */
-	unsigned int started;
-	/*! \brief THe query itself */
-	struct ast_dns_query *query;
-};
-
-/*! \brief A set of DNS queries */
-struct ast_dns_query_set {
-	/*! \brief DNS queries */
-	AST_VECTOR(, struct dns_query_set_query) queries;
-	/*! \brief The total number of completed queries */
-	int queries_completed;
-	/*! \brief The total number of cancelled queries */
-	int queries_cancelled;
-	/*! \brief Callback to invoke upon completion */
-	ast_dns_query_set_callback callback;
-	/*! \brief User-specific data */
-	void *user_data;
-};
-
 /*! \brief Release all queries held in a query set */
 static void dns_query_set_release(struct ast_dns_query_set *query_set)
 {
@@ -113,7 +91,7 @@ static void dns_query_set_callback(const struct ast_dns_query *query)
 	}
 
 	/* All queries have been completed, invoke final callback */
-	if (query_set->queries_cancelled != query_set->queries_completed) {
+	if (query_set->queries_cancelled != AST_VECTOR_SIZE(&query_set->queries)) {
 		query_set->callback(query_set);
 	}
 
@@ -242,23 +220,20 @@ int ast_query_set_resolve(struct ast_dns_query_set *query_set)
 int ast_dns_query_set_resolve_cancel(struct ast_dns_query_set *query_set)
 {
 	int idx;
+	size_t query_count = AST_VECTOR_SIZE(&query_set->queries);
 
 	for (idx = 0; idx < AST_VECTOR_SIZE(&query_set->queries); ++idx) {
 		struct dns_query_set_query *query = AST_VECTOR_GET_ADDR(&query_set->queries, idx);
 
 		if (query->started) {
 			if (!query->query->resolver->cancel(query->query)) {
-				ast_atomic_fetchadd_int(&query_set->queries_cancelled, +1);
+				query_set->queries_cancelled++;
 				dns_query_set_callback(query->query);
 			}
 		} else {
-			ast_atomic_fetchadd_int(&query_set->queries_cancelled, +1);
+			query_set->queries_cancelled++;
 		}
 	}
 
-	if (query_set->queries_cancelled == query_set->queries_completed) {
-		dns_query_set_release(query_set);
-	}
-
-	return (query_set->queries_cancelled == query_set->queries_completed) ? 0 : -1;
+	return (query_set->queries_cancelled == query_count) ? 0 : -1;
 }

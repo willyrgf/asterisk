@@ -136,6 +136,28 @@ struct ast_dns_query_recurring {
 	char name[0];
 };
 
+/*! \brief A DNS query set query, which includes its state */
+struct dns_query_set_query {
+	/*! \brief Whether the query started successfully or not */
+	unsigned int started;
+	/*! \brief THe query itself */
+	struct ast_dns_query *query;
+};
+
+/*! \brief A set of DNS queries */
+struct ast_dns_query_set {
+	/*! \brief DNS queries */
+	AST_VECTOR(, struct dns_query_set_query) queries;
+	/*! \brief The total number of completed queries */
+	int queries_completed;
+	/*! \brief The total number of cancelled queries */
+	int queries_cancelled;
+	/*! \brief Callback to invoke upon completion */
+	ast_dns_query_set_callback callback;
+	/*! \brief User-specific data */
+	void *user_data;
+};
+
 /*! \brief An active DNS query */
 struct ast_dns_query_active {
 	/*! \brief The underlying DNS query */
