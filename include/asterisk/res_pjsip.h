@@ -1954,26 +1954,4 @@ char *ast_sip_get_endpoint_identifier_order(void);
  */
 unsigned int ast_sip_get_keep_alive_interval(void);
 
-/*!
- * \brief Callback which is invoked upon completion of the resolution process
- *
- * \param data The user specific data
- * \param addresses The resolved target addresses
- */
-typedef void (*ast_sip_resolve_callback)(void *data, pjsip_server_addresses *addresses);
-
-/*!
- * \brief Perform DNS resolution according to RFC3263 and invoke a callback upon completion
- *
- * \param target The target we are looking up
- * \param callback The callback to invoke upon completion
- * \param data User specific data (must be ao2 allocated)
- *
- * \retval 0 success
- * \retval -1 failure
- *
- * \note This function bumps the reference count of user data, it does not steal
- */
-int ast_sip_resolve(const pjsip_host_info *target, ast_sip_resolve_callback callback, void *user_data);
-
 #endif /* _RES_PJSIP_H */

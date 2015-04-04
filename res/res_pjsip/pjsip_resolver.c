@@ -52,9 +52,9 @@ struct sip_resolve {
 	/*! \brief Active queries */
 	struct ast_dns_query_set *queries;
 	/*! \brief Callback to invoke upon completion */
-	ast_sip_resolve_callback callback;
+	pjsip_resolver_callback *callback;
 	/*! \brief User provided data */
-	void *user_data;
+	void *token;
 };
 
 /*! \brief Destructor for resolution data */
@@ -65,7 +65,6 @@ static void sip_resolve_destroy(void *data)
 	AST_VECTOR_FREE(&resolve->resolving);
 	AST_VECTOR_FREE(&resolve->resolved);
 	ao2_cleanup(resolve->queries);
-	ao2_cleanup(resolve->user_data);
 }
 
 /*! \brief Perform resolution but keep transport and port information */
@@ -126,7 +125,7 @@ static int sip_resolve_invoke_user_callback(void *data)
 	}
 
 	ast_debug(2, "[%p] Invoking user callback with '%d' addresses\n", resolve, addresses.count);
-	resolve->callback(resolve->user_data, &addresses);
+	resolve->callback(PJ_SUCCESS, resolve->token, &addresses);
 
 	ao2_ref(resolve, -1);
 
@@ -232,7 +231,8 @@ static int sip_resolve_get_ip_addr_ver(const pj_str_t *host)
 	return 0;
 }
 
-int ast_sip_resolve(const pjsip_host_info *target, ast_sip_resolve_callback callback, void *user_data)
+static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip_host_info *target,
+	void *token, pjsip_resolver_callback *cb)
 {
 	int ip_addr_ver;
 	pjsip_transport_type_e type = target->type;
@@ -269,7 +269,10 @@ int ast_sip_resolve(const pjsip_host_info *target, ast_sip_resolve_callback call
 
 	/* If it's already an address call the callback immediately */
 	if (ip_addr_ver) {
-		pjsip_server_addresses addresses;
+		pjsip_server_addresses addresses = {
+			.entry[0].type = PJSIP_TRANSPORT_UDP,
+			.count = 1,
+		};
 
 		if (ip_addr_ver == 4) {
 			pj_sockaddr_init(pj_AF_INET(), &addresses.entry[0].addr, NULL, 0);
@@ -277,28 +280,29 @@ int ast_sip_resolve(const pjsip_host_info *target, ast_sip_resolve_callback call
 		} else {
 			pj_sockaddr_init(pj_AF_INET6(), &addresses.entry[0].addr, NULL, 0);
 			pj_inet_pton(pj_AF_INET6(), &target->addr.host, &addresses.entry[0].addr.ipv6.sin6_addr);
-			type = (pjsip_transport_type_e)((int)type + PJSIP_TRANSPORT_IPV6);
+			addresses.entry[0].type = (pjsip_transport_type_e)((int)addresses.entry[0].type + PJSIP_TRANSPORT_IPV6);
 		}
-		addresses.count++;
 
 		ast_debug(2, "Target '%s' is an IP address, skipping resolution\n", host);
 
-		callback(user_data, &addresses);
+		cb(PJ_SUCCESS, token, &addresses);
 
-		return 0;
+		return;
 	}
 
 	resolve = ao2_alloc_options(sizeof(*resolve), sip_resolve_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!resolve) {
-		return -1;
+		cb(PJ_EINVAL, token, NULL);
+		return;
 	}
 
-	resolve->callback = callback;
-	resolve->user_data = ao2_bump(user_data);
+	resolve->callback = cb;
+	resolve->token = token;
 
 	if (AST_VECTOR_INIT(&resolve->resolving, 2) || AST_VECTOR_INIT(&resolve->resolved, 2)) {
 		ao2_ref(resolve, -1);
-		return -1;
+		cb(PJ_EINVAL, token, NULL);
+		return;
 	}
 
 	ast_debug(2, "[%p] Created resolution tracking for target '%s'\n", resolve, host);
@@ -324,13 +328,24 @@ int ast_sip_resolve(const pjsip_host_info *target, ast_sip_resolve_callback call
 
 	if (res) {
 		ao2_ref(resolve, -1);
-		return -1;
+		cb(PJ_EINVAL, token, NULL);
+		return;
 	}
 
 	ast_debug(2, "[%p] Starting initial resolution using parallel queries for target '%s'\n", resolve, host);
 	ast_dns_query_set_resolve_async(resolve->queries, sip_resolve_callback, resolve);
 
 	ao2_ref(resolve, -1);
+}
 
+static int sip_replace_resolver(void *data)
+{
+	pjsip_endpt_set_resolver_implementation(ast_sip_get_pjsip_endpoint(), sip_resolve);
 	return 0;
+}
+
+void ast_sip_initialize_resolver(void)
+{
+	/* Replace the existing PJSIP resolver with our own implementation */
+	ast_sip_push_task_synchronous(NULL, sip_replace_resolver, NULL);
 }

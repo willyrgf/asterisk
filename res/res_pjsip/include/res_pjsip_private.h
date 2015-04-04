@@ -232,6 +232,12 @@ void ast_sip_initialize_dns(void);
 
 /*!
  * \internal
+ * \brief Initialize our own resolver support
+ */
+void ast_sip_initialize_resolver(void);
+
+/*!
+ * \internal
  * \brief Initialize global configuration
  *
  * \retval 0 Success

@@ -1050,15 +1050,10 @@ static pjsip_module session_reinvite_module = {
 	.on_rx_request = session_reinvite_on_rx_request,
 };
 
-static void sip_session_resolve_cb(void *data, pjsip_server_addresses *addresses)
-{
-}
-
 void ast_sip_session_send_request_with_cb(struct ast_sip_session *session, pjsip_tx_data *tdata,
 		ast_sip_session_response_cb on_response)
 {
 	pjsip_inv_session *inv_session = session->inv_session;
-	pjsip_host_info target;
 
 	if (inv_session->state == PJSIP_INV_STATE_DISCONNECTED) {
 		/* Don't try to do anything with a hung-up call */
@@ -1082,9 +1077,6 @@ void ast_sip_session_send_request_with_cb(struct ast_sip_session *session, pjsip
 	}
 
 	handle_outgoing_request(session, tdata);
-
-	pjsip_get_request_dest(tdata, &target);
-	ast_sip_resolve(&target, sip_session_resolve_cb, NULL);
 
 	pjsip_inv_send_msg(session->inv_session, tdata);
 	return;
