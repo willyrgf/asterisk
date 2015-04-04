@@ -54,6 +54,8 @@ struct ast_dns_query_set {
 	AST_VECTOR(, struct dns_query_set_query) queries;
 	/*! \brief The total number of completed queries */
 	int queries_completed;
+	/*! \brief The total number of cancelled queries */
+	int queries_cancelled;
 	/*! \brief Callback to invoke upon completion */
 	ast_dns_query_set_callback callback;
 	/*! \brief User-specific data */
@@ -111,7 +113,9 @@ static void dns_query_set_callback(const struct ast_dns_query *query)
 	}
 
 	/* All queries have been completed, invoke final callback */
-	query_set->callback(query_set);
+	if (query_set->queries_cancelled != query_set->queries_completed) {
+		query_set->callback(query_set);
+	}
 
 	ao2_cleanup(query_set->user_data);
 	query_set->user_data = NULL;
@@ -237,20 +241,24 @@ int ast_query_set_resolve(struct ast_dns_query_set *query_set)
 
 int ast_dns_query_set_resolve_cancel(struct ast_dns_query_set *query_set)
 {
-	int res = 0, idx;
+	int idx;
 
 	for (idx = 0; idx < AST_VECTOR_SIZE(&query_set->queries); ++idx) {
 		struct dns_query_set_query *query = AST_VECTOR_GET_ADDR(&query_set->queries, idx);
 
 		if (query->started) {
-			res |= query->query->resolver->cancel(query->query);
+			if (!query->query->resolver->cancel(query->query)) {
+				ast_atomic_fetchadd_int(&query_set->queries_cancelled, +1);
+				dns_query_set_callback(query->query);
+			}
+		} else {
+			ast_atomic_fetchadd_int(&query_set->queries_cancelled, +1);
 		}
-
 	}
 
-	if (!res) {
+	if (query_set->queries_cancelled == query_set->queries_completed) {
 		dns_query_set_release(query_set);
 	}
 
-	return res;
+	return (query_set->queries_cancelled == query_set->queries_completed) ? 0 : -1;
 }
