@@ -41,6 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_internal.h"
 #include "asterisk/utils.h"
 
+<<<<<<< .working
 /*!
  * \brief Result of analyzing NAPTR flags on a record
  */
