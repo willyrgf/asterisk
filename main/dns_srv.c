@@ -41,7 +41,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/dns_internal.h"
 #include "asterisk/utils.h"
 
-struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char *data, const size_t size)
+struct ast_dns_record *dns_srv_alloc(struct ast_dns_query *query, const char *data, const size_t size)
 {
 	uint16_t priority;
 	uint16_t weight;
@@ -129,7 +129,7 @@ struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char
 /* This implementation was taken from the existing srv.c which, after reading the RFC, implements it
  * as it should.
  */
-void ast_dns_srv_sort(struct ast_dns_result *result)
+void dns_srv_sort(struct ast_dns_result *result)
 {
 	struct ast_dns_record *current;
 	struct dns_records newlist = AST_LIST_HEAD_NOLOCK_INIT_VALUE;

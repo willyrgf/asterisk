@@ -195,12 +195,12 @@ void dns_naptr_sort(struct ast_dns_result *result);
  * \retval non-NULL success
  * \retval NULL failure
  */
-struct ast_dns_record *ast_dns_srv_alloc(struct ast_dns_query *query, const char *data, const size_t size);
+struct ast_dns_record *dns_srv_alloc(struct ast_dns_query *query, const char *data, const size_t size);
 
 /*!
  * \brief Sort the SRV records on a result
  *
  * \param result The DNS result
  */
-void ast_dns_srv_sort(struct ast_dns_result *result);
+void dns_srv_sort(struct ast_dns_result *result);
 
