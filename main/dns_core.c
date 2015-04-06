@@ -462,6 +462,8 @@ int ast_dns_resolver_add_record(struct ast_dns_query *query, int rr_type, int rr
 
 	if (rr_type == ns_t_naptr) {
 		record = dns_naptr_alloc(query, data, size);
+	} else if (rr_type == ns_t_srv) {
+		record = ast_dns_srv_alloc(query, data, size);
 	} else {
 		record = generic_record_alloc(query, data, size);
 	}
@@ -485,7 +487,10 @@ void ast_dns_resolver_completed(struct ast_dns_query *query)
 {
 	if (ast_dns_query_get_rr_type(query) == ns_t_naptr) {
 		dns_naptr_sort(query->result);
+	} else if (ast_dns_query_get_rr_type(query) == ns_t_srv) {
+		ast_dns_srv_sort(query->result);
 	}
+
 	query->callback(query);
 }
 
