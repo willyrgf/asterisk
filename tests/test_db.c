@@ -137,7 +137,7 @@ static int consumer_wait_for(struct consumer *consumer, size_t expected_len)
 		if (r == ETIMEDOUT) {
 			break;
 		}
-		ast_assert(r == 0); /* Not expecting any othet types of errors */
+		ast_assert(r == 0); /* Not expecting any other types of errors */
 	}
 	return consumer->messages_rxed_len;
 }
@@ -390,7 +390,7 @@ AST_TEST_DEFINE(put_get_long)
  * As annoying as it is, it's actually really hard to synchronize on when the
  * AstDB updates itself from the received publication of a shared family value.
  * This is because while we can synchronize on the delivery to a topic, we can't
- * synchronize that the AstDB handler's for that topic has written the value out.
+ * synchronize that the AstDB handlers for that topic have written the value out.
  * Hence, we use this loop - if we don't get a value written within 1000 usec,
  * something is definitely wrong and we should just fail the unit test.
  */
@@ -410,6 +410,8 @@ AST_TEST_DEFINE(put_get_long)
 
 AST_TEST_DEFINE(test_ast_db_put_shared_create)
 {
+	RAII_VAR(const char *, global_family, GLOBAL_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, unique_family, UNIQUE_SHARED_FAMILY, ast_db_del_shared);
 	int res;
 
 	switch (cmd) {
@@ -442,14 +444,13 @@ AST_TEST_DEFINE(test_ast_db_put_shared_create)
 	res = ast_db_put_shared(UNIQUE_SHARED_FAMILY, DB_SHARE_TYPE_GLOBAL);
 	ast_test_validate(test, res != 0, "Creating duplicate global of unique shared area");
 
-	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
-	ast_db_del_shared(UNIQUE_SHARED_FAMILY);
-
 	return AST_TEST_PASS;
 }
 
 AST_TEST_DEFINE(test_ast_db_put_shared_delete)
 {
+	RAII_VAR(const char *, global_family, GLOBAL_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, unique_family, UNIQUE_SHARED_FAMILY, ast_db_del_shared);
 	int res;
 
 	switch (cmd) {
@@ -485,8 +486,15 @@ AST_TEST_DEFINE(test_ast_db_put_shared_delete)
 	return AST_TEST_PASS;
 }
 
+static void tree_cleanup(const char *name)
+{
+	ast_db_deltree(name, "");
+}
+
 AST_TEST_DEFINE(test_ast_db_put_shared_unique)
 {
+	RAII_VAR(const char *, unique_family, UNIQUE_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, tree_family, UNIQUE_SHARED_FAMILY, tree_cleanup);
 	RAII_VAR(struct consumer *, consumer, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_subscription *, uut, NULL, stasis_unsubscribe);
 	int res;
@@ -534,14 +542,13 @@ AST_TEST_DEFINE(test_ast_db_put_shared_unique)
 	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[0]) == ast_db_put_shared_type());
 	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[1]) == ast_db_put_shared_type());
 
-	ast_db_del_shared(UNIQUE_SHARED_FAMILY);
-	ast_db_deltree(UNIQUE_SHARED_FAMILY, "");
-
 	return AST_TEST_PASS;
 }
 
 AST_TEST_DEFINE(test_ast_db_put_shared_global)
 {
+	RAII_VAR(const char *, global_family, GLOBAL_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, tree_family, GLOBAL_SHARED_FAMILY, tree_cleanup);
 	RAII_VAR(struct consumer *, consumer, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_subscription *, uut, NULL, stasis_unsubscribe);
 	int res;
@@ -589,17 +596,17 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global)
 	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[0]) == ast_db_put_shared_type());
 	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[1]) == ast_db_put_shared_type());
 
-	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
-	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
-
 	return AST_TEST_PASS;
 }
 
 AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
 {
+	RAII_VAR(const char *, unique_family, UNIQUE_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, tree_family, "astdbtest_unique", tree_cleanup);
+	RAII_VAR(const char *, eid_tree_family, TEST_EID, tree_cleanup);
 	RAII_VAR(struct ast_db_shared_family *, shared_family, NULL, ao2_cleanup);
+	RAII_VAR(char *, value, NULL, ast_free);
 	char eid_family[256];
-	char *value = NULL;
 	struct ast_eid eid;
 	int res;
 
@@ -634,6 +641,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
 	TEST_FOR_VALUE(eid_family, "foo", value);
 	ast_test_validate(test, strcmp(value, "bar") == 0);
 	ast_free(value);
+	value = NULL;
 
 	res = ast_db_del_shared(UNIQUE_SHARED_FAMILY);
 	ast_test_validate(test, res == 0, "Removal of unique shared area");
@@ -652,18 +660,17 @@ AST_TEST_DEFINE(test_ast_db_put_shared_unique_update)
 	/* Make sure we didn't update the value */
 	TEST_FOR_VALUE(eid_family, "foo", value);
 	ast_test_validate(test, strcmp(value, "bar") == 0);
-	ast_free(value);
 
-	ast_db_deltree("astdbtest_unique", "");
-	ast_db_deltree(TEST_EID, "");
 	return AST_TEST_PASS;
 }
 
 AST_TEST_DEFINE(test_ast_db_put_shared_global_update)
 {
+	RAII_VAR(const char *, global_family, GLOBAL_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, tree_family, GLOBAL_SHARED_FAMILY, tree_cleanup);
 	RAII_VAR(struct ast_db_shared_family *, shared_family, NULL, ao2_cleanup);
+	RAII_VAR(char *, value, NULL, ast_free);
 	struct ast_eid eid;
-	char *value = NULL;
 	int res;
 
 	switch (cmd) {
@@ -696,6 +703,7 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global_update)
 	TEST_FOR_VALUE(GLOBAL_SHARED_FAMILY, "foo", value);
 	ast_test_validate(test, strcmp(value, "bar") == 0);
 	ast_free(value);
+	value = NULL;
 
 	res = ast_db_del_shared(GLOBAL_SHARED_FAMILY);
 	ast_test_validate(test, res == 0, "Removal of global shared area");
@@ -714,9 +722,6 @@ AST_TEST_DEFINE(test_ast_db_put_shared_global_update)
 	/* Make sure we didn't update the value */
 	TEST_FOR_VALUE(GLOBAL_SHARED_FAMILY, "foo", value);
 	ast_test_validate(test, strcmp(value, "bar") == 0);
-	ast_free(value);
-
-	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
 
 	return AST_TEST_PASS;
 }
@@ -725,6 +730,10 @@ AST_TEST_DEFINE(test_ast_db_refresh_shared)
 {
 	RAII_VAR(struct consumer *, consumer, NULL, ao2_cleanup);
 	RAII_VAR(struct stasis_subscription *, uut, NULL, stasis_unsubscribe);
+	RAII_VAR(const char *, global_family, GLOBAL_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, global_tree_family, GLOBAL_SHARED_FAMILY, tree_cleanup);
+	RAII_VAR(const char *, unique_family, UNIQUE_SHARED_FAMILY, ast_db_del_shared);
+	RAII_VAR(const char *, unique_tree_family, UNIQUE_SHARED_FAMILY, tree_cleanup);
 	int res;
 	int actual_len;
 
@@ -767,11 +776,6 @@ AST_TEST_DEFINE(test_ast_db_refresh_shared)
 
 	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[0]) == ast_db_put_shared_type());
 	ast_test_validate(test, stasis_message_type(consumer->messages_rxed[1]) == ast_db_put_shared_type());
-
-	ast_db_del_shared(UNIQUE_SHARED_FAMILY);
-	ast_db_del_shared(GLOBAL_SHARED_FAMILY);
-	ast_db_deltree(UNIQUE_SHARED_FAMILY, "");
-	ast_db_deltree(GLOBAL_SHARED_FAMILY, "");
 
 	return AST_TEST_PASS;
 }

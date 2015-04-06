@@ -450,27 +450,16 @@ static struct ast_custom_function db_delete_function = {
 };
 
 static int function_db_shared_exists_read(struct ast_channel *chan,
-	const char *cmd, char *parse, char *buf, size_t len)
+	const char *cmd, char *args, char *buf, size_t len)
 {
-	AST_DECLARE_APP_ARGS(args,
-		AST_APP_ARG(family);
-	);
-
 	buf[0] = '\0';
 
-	if (ast_strlen_zero(parse)) {
+	if (ast_strlen_zero(args)) {
 		ast_log(LOG_WARNING, "DB_SHARED_EXISTS requires an argument, DB_SHARED_EXISTS(<family>)\n");
 		return -1;
 	}
 
-	AST_STANDARD_APP_ARGS(args, parse);
-
-	if (args.argc != 1) {
-		ast_log(LOG_WARNING, "DB_SHARED_EXISTS requires an argument, DB_SHARED_EXISTS(<family>)\n");
-		return -1;
-	}
-
-	if (ast_db_is_shared(args.family)) {
+	if (ast_db_is_shared(args)) {
 		ast_copy_string(buf, "1", len);
 	} else {
 		ast_copy_string(buf, "0", len);
@@ -494,6 +483,11 @@ static int function_db_shared_write(struct ast_channel *chan, const char *cmd, c
 		AST_APP_ARG(type);
 	);
 
+	if (ast_strlen_zero(value)) {
+		ast_log(LOG_WARNING, "DB_SHARED requires a value, DB_SHARED(<action>[,<type>])=<family>\n");
+		return -1;
+	}
+
 	if (ast_strlen_zero(parse)) {
 		ast_log(LOG_WARNING, "DB_SHARED requires an argument, DB_SHARED(<action>[,<type>])=<family>\n");
 		return -1;
@@ -501,18 +495,14 @@ static int function_db_shared_write(struct ast_channel *chan, const char *cmd, c
 
 	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (args.argc < 1) {
-		ast_log(LOG_WARNING, "DB_SHARED requires an argument, DB_SHARED(<action>[,<type>])=<family>\n");
-		return -1;
-	}
-
-	if (ast_strlen_zero(value)) {
-		ast_log(LOG_WARNING, "DB_SHARED requires a value, DB_SHARED(<action>[,<type>])=<family>\n");
-		return -1;
-	}
-
 	if (!strcasecmp(args.action, "put")) {
-		if (ast_strlen_zero(args.type) || !strcasecmp(args.type, "global")) {
+
+		if (ast_strlen_zero(args.type)) {
+			ast_log(LOG_WARNING, "DB_SHARED: No 'type' provided.\n");
+			return -1;
+		}
+
+		if (!strcasecmp(args.type, "global")) {
 			share_type = DB_SHARE_TYPE_GLOBAL;
 		} else if (!strcasecmp(args.type, "unique")) {
 			share_type = DB_SHARE_TYPE_UNIQUE;

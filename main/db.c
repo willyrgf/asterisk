@@ -258,11 +258,7 @@ struct ast_db_shared_family *ast_db_shared_family_alloc(const char *family, enum
  */
 static struct ast_db_shared_family *db_shared_family_clone(const struct ast_db_shared_family *shared_family)
 {
-	struct ast_db_shared_family *clone;
-
-	clone = ast_db_shared_family_alloc(shared_family->name, shared_family->share_type);
-
-	return clone;
+	return ast_db_shared_family_alloc(shared_family->name, shared_family->share_type);
 }
 
 /*! \internal
@@ -427,13 +423,12 @@ int ast_db_put_shared(const char *family, enum ast_db_shared_type share_type)
 	}
 
 	ao2_link_flags(shared_families, shared_family, OBJ_NOLOCK);
+	ao2_unlock(shared_families);
 
 	db_put_common(SHARED_FAMILY, shared_family->name,
 		share_type == DB_SHARE_TYPE_UNIQUE ? "UNIQUE" : "GLOBAL", 0);
 
 	ao2_ref(shared_family, -1);
-
-	ao2_unlock(shared_families);
 
 	return 0;
 }
@@ -559,13 +554,14 @@ int ast_db_del_shared(const char *family)
 	shared_family = ao2_find(shared_families, family, OBJ_SEARCH_KEY | OBJ_NOLOCK);
 	if (shared_family) {
 		ao2_unlink_flags(shared_families, shared_family, OBJ_NOLOCK);
+		ao2_unlock(shared_families);
+
 		db_del_common(SHARED_FAMILY, shared_family->name, 0);
 		ao2_ref(shared_family, -1);
 	} else {
+		ao2_unlock(shared_families);
 		res = -1;
 	}
-
-	ao2_unlock(shared_families);
 
 	return res;
 }
@@ -1429,7 +1425,6 @@ void ast_db_refresh_shared(void)
 			ao2_ref(shared_family, -1);
 			continue;
 		}
-
 		ast_db_publish_shared_message(ast_db_put_shared_type(), clone, NULL);
 
 		ao2_ref(clone, -1);
@@ -1641,10 +1636,11 @@ static void restore_shared_families(void)
 		const char *family;
 
 		/* Find the 'key', which is the name of the shared family */
-		family = strchr(cur->key + 1, '/') + 1;
+		family = strchr(cur->key + 1, '/');
 		if (!family) {
 			continue;
 		}
+		family++;
 
 		if (!strcasecmp(cur->data, "unique")) {
 			share_type = DB_SHARE_TYPE_UNIQUE;
