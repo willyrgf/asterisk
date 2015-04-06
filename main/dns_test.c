@@ -22,12 +22,12 @@
  	<support_level>core</support_level>
  ***/
 
-#ifdef TEST_FRAMEWORK
-
 #include "asterisk.h"
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_test.h"
 #include "asterisk/utils.h"
+
+#ifdef TEST_FRAMEWORK
 
 const char DNS_HEADER[] = {
 	/* ID  == 0 */
@@ -243,4 +243,22 @@ int ast_dns_test_generate_result(struct ast_dns_query *query, void *records, siz
 	return ptr - buffer;
 }
 
-#endif /* TEST_FRAMEWORK */
+#else /* TEST_FRAMEWORK */
+
+int ast_dns_test_write_string(struct ast_dns_test_string *string, char *buf)
+{
+	return 0;
+}
+
+int ast_dns_test_write_domain(const char *string, char *buf)
+{
+	return 0;
+}
+
+int ast_dns_test_generate_result(struct ast_dns_query *query, void *records, size_t num_records,
+		size_t record_size, record_fn generate, char *buffer)
+{
+	return 0;
+}
+
+#endif
