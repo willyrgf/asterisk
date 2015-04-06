@@ -204,3 +204,18 @@ struct ast_dns_record *dns_srv_alloc(struct ast_dns_query *query, const char *da
  */
 void dns_srv_sort(struct ast_dns_result *result);
 
+/*!
+ * \brief Find the location of a DNS record within the entire DNS answer
+ *
+ * The DNS record that has been returned by the resolver may be a copy of the record that was
+ * found in the complete DNS response. If so, then some DNS record types (specifically those that
+ * parse domains) will need to locate the DNS record within the complete DNS response. This is so
+ * that if the domain contains pointers to other sections of the DNS response, then the referenced
+ * domains may be located.
+ *
+ * \param record The DNS record returned by a resolver implementation
+ * \param record_size The size of the DNS record in bytes
+ * \param response The complete DNS answer
+ * \param response_size The size of the complete DNS response
+ */
+char *dns_find_record(const char *record, size_t record_size, const char *response, size_t response_size);

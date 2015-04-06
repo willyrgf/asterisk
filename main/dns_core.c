@@ -610,3 +610,24 @@ void ast_dns_resolver_unregister(struct ast_dns_resolver *resolver)
 
 	ast_verb(2, "Unregistered DNS resolver '%s'\n", resolver->name);
 }
+
+char *dns_find_record(const char *record, size_t record_size, const char *response, size_t response_size)
+{
+	size_t remaining_size = response_size;
+	const char *search_base = response;
+	char *record_offset;
+
+	while (1) {
+		record_offset = memchr(search_base, record[0], remaining_size);
+
+		ast_assert(record_offset != NULL);
+		ast_assert(search_base + remaining_size - record_offset >= record_size);
+
+		if (!memcmp(record_offset, record, record_size)) {
+			return record_offset;
+		}
+
+		remaining_size -= record_offset - search_base;
+		search_base = record_offset + 1;
+	}
+}

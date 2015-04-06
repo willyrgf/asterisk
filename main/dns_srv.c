@@ -47,29 +47,12 @@ struct ast_dns_record *dns_srv_alloc(struct ast_dns_query *query, const char *da
 	uint16_t weight;
 	uint16_t port;
 	const char *ptr;
-	char *srv_offset;
-	char *srv_search_base = (char *)query->result->answer;
-	size_t remaining_size = query->result->answer_size;
 	const char *end_of_record;
 	struct ast_dns_srv_record *srv;
 	int host_size;
 	char host[NI_MAXHOST] = "";
 
-	while (1) {
-		srv_offset = memchr(srv_search_base, data[0], remaining_size);
-
-		ast_assert(srv_offset != NULL);
-		ast_assert(srv_search_base + remaining_size - srv_offset >= size);
-
-		if (!memcmp(srv_offset, data, size)) {
-			ptr = srv_offset;
-			break;
-		}
-
-		remaining_size -= srv_offset - srv_search_base;
-		srv_search_base = srv_offset + 1;
-	}
-
+	ptr = dns_find_record(data, size, query->result->answer, query->result->answer_size);
 	ast_assert(ptr != NULL);
 
 	end_of_record = ptr + size;
