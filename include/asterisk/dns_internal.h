@@ -219,3 +219,25 @@ void dns_srv_sort(struct ast_dns_result *result);
  * \param response_size The size of the complete DNS response
  */
 char *dns_find_record(const char *record, size_t record_size, const char *response, size_t response_size);
+
+/*!
+ * \brief Parse a 16-bit unsigned value from a DNS record
+ *
+ * \param cur Pointer to the location of the 16-bit value in the DNS record
+ * \param[out] val The parsed 16-bit unsigned integer
+ * \return The number of bytes consumed while parsing
+ */
+int dns_parse_short(unsigned char *cur, uint16_t *val);
+
+/*!
+ * \brief Parse a DNS string from a DNS record
+ *
+ * A DNS string consists of an 8-bit size, followed by the
+ * string value (not NULL-terminated).
+ *
+ * \param cur Pointer to the location of the DNS string
+ * \param[out] size The parsed size of the DNS string
+ * \param[out] val The contained string (not NULL-terminated)
+ * \return The number of bytes consumed while parsing
+ */
+int dns_parse_string(char *cur, uint8_t *size, char **val);

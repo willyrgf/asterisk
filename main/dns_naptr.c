@@ -407,54 +407,31 @@ struct ast_dns_record *dns_naptr_alloc(struct ast_dns_query *query, const char *
 	 * See http://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html for
 	 * more information
 	 */
-	order = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
-	ptr += 2;
-
+	ptr += dns_parse_short((unsigned char *) ptr, &order);
 	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* PREFERENCE */
-	preference = ((unsigned char) (ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
-	ptr += 2;
-
+	ptr += dns_parse_short((unsigned char *) ptr, &preference);
 	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* FLAGS */
-	flags_size = *ptr;
-	++ptr;
-	if (PAST_END_OF_RECORD) {
-		return NULL;
-	}
-
-	flags = ptr;
-	ptr += flags_size;
+	ptr += dns_parse_string(ptr, &flags_size, &flags);
 	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* SERVICES */
-	services_size = *ptr;
-	++ptr;
-	if (PAST_END_OF_RECORD) {
-		return NULL;
-	}
-	services = ptr;
-	ptr += services_size;
+	ptr += dns_parse_string(ptr, &services_size, &services);
 	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}
 
 	/* REGEXP */
-	regexp_size = *ptr;
-	++ptr;
-	if (PAST_END_OF_RECORD) {
-		return NULL;
-	}
-	regexp = ptr;
-	ptr += regexp_size;
+	ptr += dns_parse_string(ptr, &regexp_size, &regexp);
 	if (PAST_END_OF_RECORD) {
 		return NULL;
 	}

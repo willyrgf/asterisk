@@ -631,3 +631,22 @@ char *dns_find_record(const char *record, size_t record_size, const char *respon
 		search_base = record_offset + 1;
 	}
 }
+
+int dns_parse_short(unsigned char *cur, uint16_t *val)
+{
+	/* This assignment takes a big-endian 16-bit value and stores it in the
+	 * machine's native byte order. Using this method allows us to avoid potential
+	 * alignment issues in case the order is not on a short-addressable boundary.
+	 * See http://commandcenter.blogspot.com/2012/04/byte-order-fallacy.html for
+	 * more information
+	 */
+	*val = (cur[1] << 0) | (cur[0] << 8);
+	return sizeof(*val);
+}
+
+int dns_parse_string(char *cur, uint8_t *size, char **val)
+{
+	*size = *cur++;
+	*val = cur;
+	return *size + 1;
+}

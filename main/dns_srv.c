@@ -58,25 +58,19 @@ struct ast_dns_record *dns_srv_alloc(struct ast_dns_query *query, const char *da
 	end_of_record = ptr + size;
 
 	/* PRIORITY */
-	priority = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
-	ptr += 2;
-
+	ptr += dns_parse_short((unsigned char *) ptr, &priority);
 	if (ptr >= end_of_record) {
 		return NULL;
 	}
 
 	/* WEIGHT */
-	weight = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
-	ptr += 2;
-
+	ptr += dns_parse_short((unsigned char *) ptr, &weight);
 	if (ptr >= end_of_record) {
 		return NULL;
 	}
 
 	/* PORT */
-	port = ((unsigned char)(ptr[1]) << 0) | ((unsigned char)(ptr[0]) << 8);
-	ptr += 2;
-
+	ptr += dns_parse_short((unsigned char *) ptr, &port);
 	if (ptr >= end_of_record) {
 		return NULL;
 	}
