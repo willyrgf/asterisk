@@ -221,6 +221,7 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 				ast_debug(2, "[%p] NAPTR record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
 
 				if (!strcasecmp(ast_dns_naptr_get_service(record), "sip+d2u") &&
+					(target->transport == PJSIP_TRANSPORT_UNSPECIFIED || target->transport == PJSIP_TRANSPORT_UDP) &&
 					(sip_available_transports[PJSIP_TRANSPORT_UDP] || sip_available_transports[PJSIP_TRANSPORT_UDP6])) {
 					if (!strcasecmp(ast_dns_naptr_get_flags(record), "s")) {
 						sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_srv, ns_c_in,
@@ -239,6 +240,7 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 							resolve, ast_dns_naptr_get_flags(record));
 					}
 				} else if (!strcasecmp(ast_dns_naptr_get_service(record), "sip+d2t") &&
+					(target->transport == PJSIP_TRANSPORT_UNSPECIFIED || target->transport == PJSIP_TRANSPORT_TCP) &&
 					(sip_available_transports[PJSIP_TRANSPORT_TCP] || sip_available_transports[PJSIP_TRANSPORT_TCP6])) {
 					if (!strcasecmp(ast_dns_naptr_get_flags(record), "s")) {
 						sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TCP,
@@ -257,6 +259,7 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 							resolve, ast_dns_naptr_get_flags(record));
 					}
 				} else if (!strcasecmp(ast_dns_naptr_get_service(record), "sips+d2t") &&
+					(target->transport == PJSIP_TRANSPORT_UNSPECIFIED || target->transport == PJSIP_TRANSPORT_TLS) &&
 					(sip_available_transports[PJSIP_TRANSPORT_TLS] || sip_available_transports[PJSIP_TRANSPORT_TLS6])) {
 					if (!strcasecmp(ast_dns_naptr_get_flags(record), "s")) {
 						sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TLS,
