@@ -358,6 +358,10 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 		if (ip_addr_ver || target->addr.port) {
 			type = PJSIP_TRANSPORT_UDP;
 		}
+
+		if (ip_addr_ver == 6) {
+			type = (pjsip_transport_type_e)((int) type + PJSIP_TRANSPORT_IPV6);
+		}
 	}
 
 	ast_debug(2, "Transport type for target '%s' is '%s'\n", host, pjsip_transport_get_type_name(type));
@@ -377,7 +381,6 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 			addresses.entry[0].addr_len = sizeof(pj_sockaddr_in6);
 			pj_sockaddr_init(pj_AF_INET6(), &addresses.entry[0].addr, NULL, 0);
 			pj_inet_pton(pj_AF_INET6(), &target->addr.host, &addresses.entry[0].addr.ipv6.sin6_addr);
-			addresses.entry[0].type = (pjsip_transport_type_e)((int)addresses.entry[0].type + PJSIP_TRANSPORT_IPV6);
 		}
 
 		pj_sockaddr_set_port(&addresses.entry[0].addr, !target->addr.port ? pjsip_transport_get_default_port_for_type(type) : target->addr.port);
