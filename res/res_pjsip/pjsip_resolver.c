@@ -26,6 +26,7 @@
 #include "asterisk/dns_core.h"
 #include "asterisk/dns_query_set.h"
 #include "asterisk/dns_srv.h"
+#include "asterisk/dns_naptr.h"
 #include "asterisk/res_pjsip.h"
 #include "include/res_pjsip_private.h"
 
@@ -216,6 +217,64 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 					sip_resolve_add(resolve, ast_dns_srv_get_host(record), ns_t_a, ns_c_in, target->transport,
 						ast_dns_srv_get_port(record));
 				}
+			} else if (ast_dns_record_get_rr_type(record) == ns_t_naptr) {
+				ast_debug(2, "[%p] NAPTR record received on target '%s'\n", resolve, ast_dns_query_get_name(query));
+
+				if (!strcasecmp(ast_dns_naptr_get_service(record), "sip+d2u") &&
+					(sip_available_transports[PJSIP_TRANSPORT_UDP] || sip_available_transports[PJSIP_TRANSPORT_UDP6])) {
+					if (!strcasecmp(ast_dns_naptr_get_flags(record), "s")) {
+						sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_srv, ns_c_in,
+							PJSIP_TRANSPORT_UDP, 0);
+					} else if (!strcasecmp(ast_dns_naptr_get_flags(record), "a")) {
+						if (sip_available_transports[PJSIP_TRANSPORT_UDP6]) {
+							sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_aaaa, ns_c_in,
+								PJSIP_TRANSPORT_UDP6, 0);
+						}
+						if (sip_available_transports[PJSIP_TRANSPORT_UDP]) {
+							sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_a, ns_c_in,
+								PJSIP_TRANSPORT_UDP, 0);
+						}
+					} else {
+						ast_debug(2, "[%p] NAPTR service SIP+D2U received with unsupported flags '%s'\n",
+							resolve, ast_dns_naptr_get_flags(record));
+					}
+				} else if (!strcasecmp(ast_dns_naptr_get_service(record), "sip+d2t") &&
+					(sip_available_transports[PJSIP_TRANSPORT_TCP] || sip_available_transports[PJSIP_TRANSPORT_TCP6])) {
+					if (!strcasecmp(ast_dns_naptr_get_flags(record), "s")) {
+						sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TCP,
+							0);
+					} else if (!strcasecmp(ast_dns_naptr_get_flags(record), "a")) {
+						if (sip_available_transports[PJSIP_TRANSPORT_TCP6]) {
+							sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_aaaa, ns_c_in,
+								PJSIP_TRANSPORT_TCP6, 0);
+						}
+						if (sip_available_transports[PJSIP_TRANSPORT_TCP]) {
+							sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_a, ns_c_in,
+								PJSIP_TRANSPORT_TCP, 0);
+						}
+					} else {
+						ast_debug(2, "[%p] NAPTR service SIP+D2T received with unsupported flags '%s'\n",
+							resolve, ast_dns_naptr_get_flags(record));
+					}
+				} else if (!strcasecmp(ast_dns_naptr_get_service(record), "sips+d2t") &&
+					(sip_available_transports[PJSIP_TRANSPORT_TLS] || sip_available_transports[PJSIP_TRANSPORT_TLS6])) {
+					if (!strcasecmp(ast_dns_naptr_get_flags(record), "s")) {
+						sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_srv, ns_c_in, PJSIP_TRANSPORT_TLS,
+							0);
+					} else if (!strcasecmp(ast_dns_naptr_get_flags(record), "a")) {
+						if (sip_available_transports[PJSIP_TRANSPORT_TLS6]) {
+							sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_aaaa, ns_c_in,
+								PJSIP_TRANSPORT_TLS6, 0);
+						}
+						if (sip_available_transports[PJSIP_TRANSPORT_TLS]) {
+							sip_resolve_add(resolve, ast_dns_naptr_get_replacement(record), ns_t_a, ns_c_in,
+								PJSIP_TRANSPORT_TLS, 0);
+						}
+					} else {
+						ast_debug(2, "[%p] NAPTR service SIPS+D2T received with unsupported flags '%s'\n",
+							resolve, ast_dns_naptr_get_flags(record));
+					}
+				}
 			}
 		}
 	}
@@ -347,6 +406,8 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 	/* If no port has been specified we can do NAPTR + SRV */
 	if (!target->addr.port) {
 		char srv[NI_MAXHOST];
+
+		res |= sip_resolve_add(resolve, host, ns_t_naptr, ns_c_in, type, 0);
 
 		if ((type == PJSIP_TRANSPORT_TLS || type == PJSIP_TRANSPORT_UNSPECIFIED) &&
 			(sip_available_transports[PJSIP_TRANSPORT_TLS] || sip_available_transports[PJSIP_TRANSPORT_TLS6])) {
