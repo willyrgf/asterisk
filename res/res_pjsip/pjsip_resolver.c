@@ -429,11 +429,13 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 		}
 	}
 
-	if (sip_available_transports[PJSIP_TRANSPORT_UDP6]) {
-		res |= sip_resolve_add(resolve, host, ns_t_aaaa, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP6 : type), target->addr.port);
+	if ((type == PJSIP_TRANSPORT_UNSPECIFIED && sip_available_transports[PJSIP_TRANSPORT_UDP6]) ||
+		sip_available_transports[type + PJSIP_TRANSPORT_IPV6]) {
+		res |= sip_resolve_add(resolve, host, ns_t_aaaa, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP6 : type + PJSIP_TRANSPORT_IPV6), target->addr.port);
 	}
 
-	if (sip_available_transports[PJSIP_TRANSPORT_UDP]) {
+	if ((type == PJSIP_TRANSPORT_UNSPECIFIED && sip_available_transports[PJSIP_TRANSPORT_UDP]) ||
+		sip_available_transports[type]) {
 		res |= sip_resolve_add(resolve, host, ns_t_a, ns_c_in, (type == PJSIP_TRANSPORT_UNSPECIFIED ? PJSIP_TRANSPORT_UDP : type), target->addr.port);
 	}
 
