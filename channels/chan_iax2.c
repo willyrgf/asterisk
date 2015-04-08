@@ -12325,14 +12325,10 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 	callno = peer->callno = find_callno(0, 0, &peer->addr, NEW_FORCE, peer->sockfd, 0);
 	if (heldcall)
 		ast_mutex_lock(&iaxsl[heldcall]);
-	if (peer->callno < 1) {
+	if (callno < 1) {
 		ast_log(LOG_WARNING, "Unable to allocate call for poking peer '%s'\n", peer->name);
 		return -1;
 	}
-
-	/* Speed up retransmission times for this qualify call */
-	iaxs[peer->callno]->pingtime = peer->maxms / 4 + 1;
-	iaxs[peer->callno]->peerpoke = peer;
 
 	if (peer->pokeexpire > -1) {
 		if (!AST_SCHED_DEL(sched, peer->pokeexpire)) {
@@ -12358,6 +12354,11 @@ static int iax2_poke_peer(struct iax2_peer *peer, int heldcall)
 			.buf = { 0 },
 			.pos = 0,
 		};
+
+		/* Speed up retransmission times for this qualify call */
+		iaxs[callno]->pingtime = peer->maxms / 4 + 1;
+		iaxs[callno]->peerpoke = peer;
+
 		add_empty_calltoken_ie(iaxs[callno], &ied); /* this _MUST_ be the last ie added */
 		send_command(iaxs[callno], AST_FRAME_IAX, IAX_COMMAND_POKE, 0, ied.buf, ied.pos, -1);
 	}
