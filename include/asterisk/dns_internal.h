@@ -23,6 +23,12 @@
  * \author Joshua Colp <jcolp@digium.com>
  */
 
+/*! \brief For AST_VECTOR */
+#include "asterisk/vector.h"
+
+/*! \brief For ast_dns_query_set_callback */
+#include "asterisk/dns_query_set.h"
+
 /*! \brief Generic DNS record information */
 struct ast_dns_record {
 	/*! \brief Resource record type */
