@@ -30,6 +30,8 @@
 #include "asterisk/res_pjsip.h"
 #include "include/res_pjsip_private.h"
 
+#ifdef HAVE_PJSIP_EXTERNAL_RESOLVER
+
 /*! \brief Structure which contains transport+port information for an active query */
 struct sip_target {
 	/*! \brief The transport to be used */
@@ -472,6 +474,11 @@ static void sip_check_transport(pj_pool_t *pool, pjsip_transport_type_e type, co
 	}
 }
 
+/*! \brief External resolver implementation for PJSIP */
+static pjsip_ext_resolver resolver = {
+	.resolve = sip_resolve,
+};
+
 static int sip_replace_resolver(void *data)
 {
 	pj_pool_t *pool;
@@ -493,7 +500,7 @@ static int sip_replace_resolver(void *data)
 	pjsip_endpt_release_pool(ast_sip_get_pjsip_endpoint(), pool);
 
 	/* Replace the PJSIP resolver with our own implementation */
-	pjsip_endpt_set_resolver_implementation(ast_sip_get_pjsip_endpoint(), sip_resolve);
+	pjsip_endpt_set_ext_resolver(ast_sip_get_pjsip_endpoint(), &resolver);
 	return 0;
 }
 
@@ -502,3 +509,13 @@ void ast_sip_initialize_resolver(void)
 	/* Replace the existing PJSIP resolver with our own implementation */
 	ast_sip_push_task_synchronous(NULL, sip_replace_resolver, NULL);
 }
+
+#else
+
+void ast_sip_initialize_resolver(void)
+{
+	/* External resolver support does not exist in the version of PJSIP in use */
+	ast_log(LOG_NOTICE, "The version of PJSIP in use does not support external resolvers, using PJSIP provided resolver\n");
+}
+
+#endif
