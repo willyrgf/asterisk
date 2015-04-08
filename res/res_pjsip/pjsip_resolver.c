@@ -19,6 +19,7 @@
 #include "asterisk.h"
 
 #include <pjsip.h>
+#include <pjlib-util/errno.h>
 
 #include <arpa/nameser.h>
 
@@ -60,7 +61,8 @@ struct sip_resolve {
 /*! \brief Available transports on the system */
 static int sip_available_transports[] = {
 	/* This is a list of transports understood by the resolver, with whether they are
-	 * available as a valid transport stored
+	 * available as a valid transport stored. This array is only manipulated at startup,
+	 * thus why it does not have a lock to protect it.
 	 */
 	[PJSIP_TRANSPORT_UDP] = 0,
 	[PJSIP_TRANSPORT_TCP] = 0,
@@ -70,7 +72,14 @@ static int sip_available_transports[] = {
 	[PJSIP_TRANSPORT_TLS6] = 0,
 };
 
-/*! \brief Destructor for resolution data */
+/*!
+ * \internal
+ * \brief Destroy resolution data
+ *
+ * \param data The resolution data to destroy
+ *
+ * \return Nothing
+ */
 static void sip_resolve_destroy(void *data)
 {
 	struct sip_resolve *resolve = data;
@@ -79,7 +88,20 @@ static void sip_resolve_destroy(void *data)
 	ao2_cleanup(resolve->queries);
 }
 
-/*! \brief Perform resolution but keep transport and port information */
+/*!
+ * \internal
+ * \brief Add a query to be resolved
+ *
+ * \param resolve The ongoing resolution
+ * \param name What to resolve
+ * \param rr_type The type of record to look up
+ * \param rr_class The type of class to look up
+ * \param transport The transport to use for any resulting records
+ * \param port The port to use for any resulting records - if not specified the default for the transport is used
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
 static int sip_resolve_add(struct sip_resolve *resolve, const char *name, int rr_type, int rr_class, pjsip_transport_type_e transport, int port)
 {
 	struct sip_target target = {
@@ -109,7 +131,14 @@ static int sip_resolve_add(struct sip_resolve *resolve, const char *name, int rr
 	return ast_dns_query_set_add(resolve->queries, name, rr_type, rr_class);
 }
 
-/*! \brief Invoke the user specific callback from inside of a SIP thread */
+/*!
+ * \internal
+ * \brief Task used to invoke the user specific callback
+ *
+ * \param data The complete resolution
+ *
+ * \return Nothing
+ */
 static int sip_resolve_invoke_user_callback(void *data)
 {
 	struct sip_resolve *resolve = data;
@@ -124,14 +153,21 @@ static int sip_resolve_invoke_user_callback(void *data)
 	}
 
 	ast_debug(2, "[%p] Invoking user callback with '%d' addresses\n", resolve, resolve->addresses.count);
-	resolve->callback(PJ_SUCCESS, resolve->token, &resolve->addresses);
+	resolve->callback(resolve->addresses.count ? PJ_SUCCESS : PJLIB_UTIL_EDNSNOANSWERREC, resolve->token, &resolve->addresses);
 
 	ao2_ref(resolve, -1);
 
 	return 0;
 }
 
-/*! \brief Callback for when the first pass query set completes */
+/*!
+ * \internal
+ * \brief Query set callback function, invoked when all queries have completed
+ *
+ * \param query_set The completed query set
+ *
+ * \return Nothing
+ */
 static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 {
 	struct sip_resolve *resolve = ast_dns_query_set_get_data(query_set);
@@ -149,9 +185,9 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 	resolving = resolve->resolving;
 	AST_VECTOR_INIT(&resolve->resolving, 0);
 
-	/* The order of queries is what defines the preference order for the records within this invocation.
+	/* The order of queries is what defines the preference order for the records within this specific query set.
 	 * The preference order overall is defined as a result of drilling down from other records. Each
-	 * invocation starts placing records at the beginning, moving others that may have already been present.
+	 * completed query set starts placing records at the beginning, moving others that may have already been present.
 	 */
 	for (idx = 0; idx < ast_dns_query_set_num_queries(queries); ++idx) {
 		struct ast_dns_query *query = ast_dns_query_set_get(queries, idx);
@@ -173,7 +209,7 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 
 				/* If the maximum number of addresses has already been reached by this query set, skip subsequent
 				 * records as they have lower preference - any existing ones may get replaced/moved if another
-				 * invocation occurs after this one
+				 * query set is resolved after this one
 				 */
 				if (address_count == PJSIP_MAX_RESOLVED_ADDRESSES) {
 					continue;
@@ -311,7 +347,16 @@ static void sip_resolve_callback(const struct ast_dns_query_set *query_set)
 	ao2_ref(queries, -1);
 }
 
-/*! \brief Determine if the host is already an IP address */
+/*!
+ * \internal
+ * \brief Determine what address family a host may be if it is already an IP address
+ *
+ * \param host The host (which may be an IP address)
+ *
+ * \retval 6 The host is an IPv6 address
+ * \retval 4 The host is an IPv4 address
+ * \retval 0 The host is not an IP address
+ */
 static int sip_resolve_get_ip_addr_ver(const pj_str_t *host)
 {
 	pj_in_addr dummy;
@@ -328,6 +373,16 @@ static int sip_resolve_get_ip_addr_ver(const pj_str_t *host)
 	return 0;
 }
 
+/*!
+ * \internal
+ * \brief Perform SIP resolution of a host
+ *
+ * \param resolver Configured resolver instance
+ * \param pool Memory pool to allocate things from
+ * \param target The target we are resolving
+ * \param token User data to pass to the resolver callback
+ * \param cb User resolver callback to invoke upon resolution completion
+ */
 static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip_host_info *target,
 	void *token, pjsip_resolver_callback *cb)
 {
@@ -396,7 +451,7 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 
 	resolve = ao2_alloc_options(sizeof(*resolve), sip_resolve_destroy, AO2_ALLOC_OPT_LOCK_NOLOCK);
 	if (!resolve) {
-		cb(PJ_EINVAL, token, NULL);
+		cb(PJ_ENOMEM, token, NULL);
 		return;
 	}
 
@@ -405,7 +460,7 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 
 	if (AST_VECTOR_INIT(&resolve->resolving, 2)) {
 		ao2_ref(resolve, -1);
-		cb(PJ_EINVAL, token, NULL);
+		cb(PJ_ENOMEM, token, NULL);
 		return;
 	}
 
@@ -446,7 +501,7 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 
 	if (res) {
 		ao2_ref(resolve, -1);
-		cb(PJ_EINVAL, token, NULL);
+		cb(PJ_ENOMEM, token, NULL);
 		return;
 	}
 
@@ -456,7 +511,16 @@ static void sip_resolve(pjsip_resolver_t *resolver, pj_pool_t *pool, const pjsip
 	ao2_ref(resolve, -1);
 }
 
-/*! \brief Internal function used to determine if a transport is available */
+/*!
+ * \internal
+ * \brief Determine if a specific transport is configured on the system
+ *
+ * \param pool A memory pool to allocate things from
+ * \param type The type of transport to check
+ * \param name A friendly name to print in the verbose message
+ *
+ * \return Nothing
+ */
 static void sip_check_transport(pj_pool_t *pool, pjsip_transport_type_e type, const char *name)
 {
 	pjsip_tpmgr_fla2_param prm;
@@ -479,6 +543,13 @@ static pjsip_ext_resolver resolver = {
 	.resolve = sip_resolve,
 };
 
+/*!
+ * \internal
+ * \brief Task to determine available transports and set ourselves an external resolver
+ *
+ * \retval 0 success
+ * \retval -1 failure
+ */
 static int sip_replace_resolver(void *data)
 {
 	pj_pool_t *pool;
