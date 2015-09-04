@@ -2712,11 +2712,32 @@ static const pjsip_method *get_pjsip_method(const char *method)
 	return NULL;
 }
 
-static int create_in_dialog_request(const pjsip_method *method, struct pjsip_dialog *dlg, pjsip_tx_data **tdata)
+static int create_in_dialog_request(const pjsip_method *method, struct ast_sip_endpoint *endpoint,
+	struct pjsip_dialog *dlg, pjsip_tx_data **tdata)
 {
+	const char *outbound_proxy = endpoint->outbound_proxy;
+	
 	if (pjsip_dlg_create_request(dlg, method, -1, tdata) != PJ_SUCCESS) {
 		ast_log(LOG_WARNING, "Unable to create in-dialog request.\n");
 		return -1;
+	}
+
+	if (!ast_strlen_zero(outbound_proxy)) {
+		pjsip_route_hdr route_set, *route;
+		static const pj_str_t ROUTE_HNAME = { "Route", 5 };
+		pj_str_t tmp;
+
+		pj_list_init(&route_set);
+
+		pj_strdup2_with_null(dlg->pool, &tmp, outbound_proxy);
+		if (!(route = pjsip_parse_hdr(dlg->pool, &ROUTE_HNAME, tmp.ptr, tmp.slen, NULL))) {
+			dlg->sess_count--;
+			pjsip_dlg_terminate(dlg);
+			return -1;
+		}
+		pj_list_insert_nodes_before(&route_set, route);
+
+		pjsip_dlg_set_route_set(dlg, &route_set);
 	}
 
 	return 0;
@@ -2825,7 +2846,7 @@ int ast_sip_create_request(const char *method, struct pjsip_dialog *dlg,
 	}
 
 	if (dlg) {
-		return create_in_dialog_request(pmethod, dlg, tdata);
+		return create_in_dialog_request(pmethod, endpoint, dlg, tdata);
 	} else {
 		return create_out_of_dialog_request(pmethod, endpoint, uri, contact, tdata);
 	}
