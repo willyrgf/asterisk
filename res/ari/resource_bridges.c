@@ -37,6 +37,7 @@ ASTERISK_FILE_VERSION(__FILE__, "$Revision$")
 #include "asterisk/stasis.h"
 #include "asterisk/stasis_bridges.h"
 #include "asterisk/stasis_app.h"
+#include "asterisk/stasis_app_impl.h"
 #include "asterisk/stasis_app_playback.h"
 #include "asterisk/stasis_app_recording.h"
 #include "asterisk/stasis_channels.h"
@@ -989,6 +990,96 @@ void ast_ari_bridges_create_with_id(struct ast_variable *headers,
 		return;
 	}
 
+	ast_ari_response_ok(response,
+		ast_bridge_snapshot_to_json(snapshot, stasis_app_get_sanitizer()));
+}
+
+static int bridges_set_video_source_cb(struct stasis_app_control *control,
+	struct ast_channel *chan, void *data)
+{
+	struct ast_bridge *bridge = data;
+
+	ast_bridge_lock(bridge);
+	ast_bridge_set_single_src_video_mode(bridge, chan);
+	ast_bridge_unlock(bridge);
+
+	return 0;
+}
+
+void ast_ari_bridges_set_video_source(struct ast_variable *headers,
+	struct ast_ari_bridges_set_video_source_args *args, struct ast_ari_response *response)
+{
+	struct ast_bridge *bridge;
+	struct stasis_app_control *control;
+	struct ast_bridge_snapshot *snapshot;
+
+	bridge = find_bridge(response, args->bridge_id);
+	if (!bridge) {
+		return;		
+	}
+
+	control = find_channel_control(response, args->channel);
+	if (!control) {
+		ao2_ref(bridge, -1);
+		return;
+	}
+
+	if (stasis_app_get_bridge(control) != bridge) {
+		ast_log(LOG_WARNING, "Channel %s not in bridge %s\n",
+			args->channel, args->bridge_id);
+		ast_ari_response_error(response, 422,
+			"Unprocessable Entity",
+			"Channel not in this bridge");
+		ao2_ref(bridge, -1);
+		ao2_ref(control, -1);
+		return;
+	}
+
+	stasis_app_send_command(control, bridges_set_video_source_cb, ao2_bump(bridge), __ao2_cleanup);
+	ast_bridge_lock(bridge);
+	snapshot = ast_bridge_snapshot_create(bridge);
+	ast_bridge_unlock(bridge);
+
+	if (!snapshot) {
+		ast_ari_response_error(
+			response, 500, "Internal Error",
+			"Unable to create snapshot for new bridge");
+		ao2_ref(bridge, -1);
+		ao2_ref(control, -1);
+		return;
+	}
+
+	ao2_ref(bridge, -1);
+	ao2_ref(control, -1);
+	ast_ari_response_ok(response,
+		ast_bridge_snapshot_to_json(snapshot, stasis_app_get_sanitizer()));
+}
+
+void ast_ari_bridges_clear_video_source(struct ast_variable *headers,
+	struct ast_ari_bridges_clear_video_source_args *args, struct ast_ari_response *response)
+{
+	struct ast_bridge *bridge;
+	struct ast_bridge_snapshot *snapshot;
+
+	bridge = find_bridge(response, args->bridge_id);
+	if (!bridge) {
+		return;		
+	}
+
+	ast_bridge_lock(bridge);
+	ast_bridge_set_talker_src_video_mode(bridge);
+	snapshot = ast_bridge_snapshot_create(bridge);
+	ast_bridge_unlock(bridge);
+
+	if (!snapshot) {
+		ast_ari_response_error(
+			response, 500, "Internal Error",
+			"Unable to create snapshot for new bridge");
+		ao2_ref(bridge, -1);
+		return;
+	}
+
+	ao2_ref(bridge, -1);
 	ast_ari_response_ok(response,
 		ast_bridge_snapshot_to_json(snapshot, stasis_app_get_sanitizer()));
 }

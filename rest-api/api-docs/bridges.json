@@ -193,6 +193,80 @@
 			]
 		},
 		{
+			"path": "/bridges/{bridgeId}/videoSource",
+			"description": "Manipulate the video source in a bridge. This only has an affect on multi-party bridges.",
+			"operations": [
+				{
+					"httpMethod": "POST",
+					"summary": "Set a channel as the video source.",
+					"nickname": "setVideoSource",
+					"responseClass": "Bridge",
+					"parameters": [
+						{
+							"name": "bridgeId",
+							"description": "Bridge's id",
+							"paramType": "path",
+							"required": true,
+							"allowMultiple": false,
+							"dataType": "string"
+						},
+						{
+							"name": "channel",
+							"description": "ID of channel to set as the video source",
+							"paramType": "query",
+							"required": true,
+							"allowMultiple": false,
+							"dataType": "string"
+						}
+					],
+					"errorResponses": [
+						{
+							"code": 400,
+							"reason": "Channel not found"
+						},
+						{
+							"code": 404,
+							"reason": "Bridge not found"
+						},
+						{
+							"code": 409,
+							"reason": "Bridge not in Stasis application"
+						},
+						{
+							"code": 422,
+							"reason": "Channel not in this bridge"
+						}
+					]
+				},
+				{
+					"httpMethod": "DELETE",
+					"summary": "Remove any explicit video source.",
+					"nickname": "clearVideoSource",
+					"responseClass": "Bridge",
+					"parameters": [
+						{
+							"name": "bridgeId",
+							"description": "Bridge's id",
+							"paramType": "path",
+							"required": true,
+							"allowMultiple": false,
+							"dataType": "string"
+						}
+					],
+					"errorResponses": [
+						{
+							"code": 404,
+							"reason": "Bridge not found"
+						},
+						{
+							"code": 409,
+							"reason": "Bridge not in Stasis application"
+						}
+					]
+				}
+			]
+		},
+		{
 			"path": "/bridges/{bridgeId}/removeChannel",
 			"description": "Remove a channel from a bridge",
 			"operations": [

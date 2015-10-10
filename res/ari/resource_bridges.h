@@ -170,6 +170,45 @@ int ast_ari_bridges_add_channel_parse_body(
  * \param[out] response HTTP response
  */
 void ast_ari_bridges_add_channel(struct ast_variable *headers, struct ast_ari_bridges_add_channel_args *args, struct ast_ari_response *response);
+/*! Argument struct for ast_ari_bridges_set_video_source() */
+struct ast_ari_bridges_set_video_source_args {
+	/*! Bridge's id */
+	const char *bridge_id;
+	/*! ID of channel to set as the video source */
+	const char *channel;
+};
+/*!
+ * \brief Body parsing function for /bridges/{bridgeId}/videoSource.
+ * \param body The JSON body from which to parse parameters.
+ * \param[out] args The args structure to parse into.
+ * \retval zero on success
+ * \retval non-zero on failure
+ */
+int ast_ari_bridges_set_video_source_parse_body(
+	struct ast_json *body,
+	struct ast_ari_bridges_set_video_source_args *args);
+
+/*!
+ * \brief Set a channel as the video source.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_bridges_set_video_source(struct ast_variable *headers, struct ast_ari_bridges_set_video_source_args *args, struct ast_ari_response *response);
+/*! Argument struct for ast_ari_bridges_clear_video_source() */
+struct ast_ari_bridges_clear_video_source_args {
+	/*! Bridge's id */
+	const char *bridge_id;
+};
+/*!
+ * \brief Remove any explicit video source.
+ *
+ * \param headers HTTP headers
+ * \param args Swagger parameters
+ * \param[out] response HTTP response
+ */
+void ast_ari_bridges_clear_video_source(struct ast_variable *headers, struct ast_ari_bridges_clear_video_source_args *args, struct ast_ari_response *response);
 /*! Argument struct for ast_ari_bridges_remove_channel() */
 struct ast_ari_bridges_remove_channel_args {
 	/*! Bridge's id */
